@@ -1,0 +1,33 @@
+background = "#111111"
+
+[[widgets]]
+type = "label"
+text = "sliver"
+color = "#ff88aa"
+width = 160
+
+[[widgets]]
+type = "spacer"
+flex = 1
+
+[[widgets]]
+type = "clock"
+format = "%a %H:%M"
+color = "#aaddff"
+width = 260
+
+[[widgets]]
+type = "label"
+text = "74% battery"
+color = "#88ffcc"
+width = 240
+
+[[widgets]]
+type = "spacer"
+flex = 1
+
+[[widgets]]
+type = "label"
+text = "vol"
+color = "#dddddd"
+width = 80
