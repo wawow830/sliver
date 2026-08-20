@@ -1,7 +1,7 @@
-# asahi-custom-touchbar
+# sliver
 
 A create/edit/apply widget customizer for the MacBook Pro Touch Bar,
-running on Asahi Linux. Codename **sliver**.
+running on Asahi Linux.
 
 ## Anatomy
 - **sliver-core** — widget types, TOML layout config, one shared renderer
