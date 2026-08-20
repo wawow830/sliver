@@ -7,3 +7,6 @@ license.workspace = true
 [dependencies]
 sliver-core = { path = "../sliver-core" }
 anyhow = "1"
+cairo-rs = "0.20"
+drm = "0.14"
+ctrlc = "3"
