@@ -15,13 +15,19 @@ fn main() -> Result<()> {
     let mut config_path = "sliver.toml".to_string();
     let mut out = "preview.png".to_string();
     let mut drm = false;
+    let mut probe = false;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--drm" => drm = true,
+            "--probe" => probe = true,
             a if config_path == "sliver.toml" => config_path = a.to_string(),
             a => out = a.to_string(),
         }
+    }
+
+    if probe {
+        return drm_out::probe();
     }
 
     let cfg = sliver_core::load_config(std::path::Path::new(&config_path))?;

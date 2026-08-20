@@ -13,5 +13,8 @@ running on Asahi Linux.
 
 ## Status
 Milestone zero: `sliverd sliver.toml` renders `preview.png` (2008x60).
-Milestone one: `sliverd sliver.toml --drm` claims the real panel —
-DRM master, native 60x2008 mode, rotated painting, holds until Ctrl-C.
+Milestone one — DONE: `sliverd sliver.toml --drm` claims the panel,
+paints the layout upright, holds until Ctrl-C. Hard-won truths:
+the DSI panel freezes its last frame (dead processes haunt the glass),
+the driver rounds the dumb buffer up (paint by mode height, 2008), and
+`--probe` paints calibration bands when orientation is in doubt.
