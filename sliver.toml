@@ -2,23 +2,41 @@ background = "#111111"
 
 [[widgets]]
 type = "label"
-text = "asdfoasdf"
-color = "#ff88aa"
+text = "meow"
+color = "#9fbaf2"
 width = 160.0
+font_size = 24.0
+bold = false
+align = "center"
+
+[[widgets]]
+type = "spacer"
+flex = 1.0
+
+[[widgets]]
+type = "button"
+text = ">.<"
+action = 'notify-send "meow"'
+color = "#d7a88d"
+width = 160.0
+font_size = 24.0
+bold = true
+align = "center"
 
 [[widgets]]
 type = "clock"
-format = "%a %H:%M"
+format = "%H:%M"
 color = "#aaddff"
 width = 260.0
+font_size = 24.0
+bold = false
+align = "center"
 
 [[widgets]]
 type = "battery"
 format = "{capacity}%"
+color = "#f5e4ec"
 width = 200.0
-
-[[widgets]]
-type = "label"
-text = "vol"
-color = "#dddddd"
-width = 80.0
+font_size = 24.0
+bold = false
+align = "center"
