@@ -4,7 +4,7 @@
 //! (preview), so what you see in the editor is what lands under your finger.
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The touchbar's real estate, after rotation.
 pub const STRIP_W: f64 = 2008.0;
@@ -13,7 +13,7 @@ pub const STRIP_H: f64 = 60.0;
 const PAD: f64 = 16.0;
 const GAP: f64 = 8.0;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Background color, "#rrggbb".
     #[serde(default = "default_bg")]
@@ -25,7 +25,7 @@ fn default_bg() -> String {
     "#000000".into()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WidgetCfg {
     /// Static text.
@@ -44,7 +44,8 @@ pub enum WidgetCfg {
         width: Option<f64>,
     },
     /// Live battery level from /sys/class/power_supply. Colors itself by
-    /// level unless told otherwise: mint, amber, red.
+    /// level unless told otherwise: mint, amber, red. An empty `format`
+    /// gets the default.
     Battery {
         #[serde(default = "default_battery_fmt")]
         format: String,

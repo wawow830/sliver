@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sliver-core", "crates/sliverd"]
+members = ["crates/sliver-core", "crates/sliverd", "crates/sliver-edit"]
 
 [workspace.package]
 edition = "2021"

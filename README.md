@@ -8,8 +8,10 @@ running on Asahi Linux.
   (cairo/pango) so editor preview and real strip always agree.
 - **sliverd** — daemon: DRM master on the touchbar panel, touch input,
   live layout application over a unix socket.
-- **customizer** (planned) — GUI for building and applying layouts
-  (GTK4 + libadwaita; decided).
+- **customizer** — `sliver-edit`, a GTK4 + libadwaita GUI: live preview
+  (the same sliver-core renderer the daemon uses), widget list with
+  reorder/delete, property editing, "Apply to strip" over the socket,
+  and save-to-TOML.
 
 ## Status
 Milestone zero: `sliverd sliver.toml` renders `preview.png` (2008x60).
@@ -18,6 +20,10 @@ paints the layout upright, holds until Ctrl-C.
 Milestone two — DONE: heartbeat re-renders, live battery widget
 (/sys/class/power_supply, self-coloring), touch taps on event2 with
 press highlights (evdev grab, hit-tested against the layout).
+Milestone three — DONE: `/run/user/*/sliver.sock` accepts a TOML doc
+per connection: `sliverd --apply cfg.toml`, ok/error reply.
+Milestone four — DONE, v1: the customizer GUI runs; drag-and-drop
+reordering is the obvious v2.
 
 Hard-won truths: the DSI panel freezes its last frame (dead processes
 haunt the glass); the driver rounds the dumb buffer up (paint by mode

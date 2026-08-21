@@ -1,0 +1,12 @@
+[package]
+name = "sliver-edit"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sliver-core = { path = "../sliver-core" }
+gtk4 = "0.9"
+libadwaita = "0.7"
+anyhow = "1"
+toml = "0.8"
