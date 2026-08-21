@@ -330,7 +330,7 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
     ctrlc::set_handler(move || r.store(false, Ordering::SeqCst))?;
 
     let mut pressed: Option<(usize, Instant)> = None;
-    let mut last_minute = String::new();
+    let mut last_tick = String::new();
     let mut dirty = true;
 
     while running.load(Ordering::SeqCst) {
@@ -341,6 +341,13 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
                 eprintln!("tap at x={x:.0} -> widget {i}");
                 pressed = Some((i, Instant::now()));
                 dirty = true;
+                if let Some(cmd) = cfg.action_at(i) {
+                    let cmd = cmd.to_string();
+                    eprintln!("running action: {cmd}");
+                    std::thread::spawn(move || {
+                        let _ = std::process::Command::new("sh").arg("-c").arg(&cmd).status();
+                    });
+                }
             }
         }
         while let Ok((text, reply)) = socket.try_recv() {
@@ -365,9 +372,10 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
                 dirty = true;
             }
         }
-        let minute = chrono::Local::now().format("%H:%M").to_string();
-        if minute != last_minute {
-            last_minute = minute;
+        // Seconds, not minutes: someone will inevitably want %H:%M:%S.
+        let tick = chrono::Local::now().format("%H:%M:%S").to_string();
+        if tick != last_tick {
+            last_tick = tick;
             dirty = true;
         }
 

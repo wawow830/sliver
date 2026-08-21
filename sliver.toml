@@ -2,30 +2,23 @@ background = "#111111"
 
 [[widgets]]
 type = "label"
-text = "sliver"
+text = "asdfoasdf"
 color = "#ff88aa"
-width = 160
-
-[[widgets]]
-type = "spacer"
-flex = 1
+width = 160.0
 
 [[widgets]]
 type = "clock"
 format = "%a %H:%M"
 color = "#aaddff"
-width = 260
+width = 260.0
 
 [[widgets]]
 type = "battery"
-width = 200
-
-[[widgets]]
-type = "spacer"
-flex = 1
+format = "{capacity}%"
+width = 200.0
 
 [[widgets]]
 type = "label"
 text = "vol"
 color = "#dddddd"
-width = 80
+width = 80.0
