@@ -43,6 +43,16 @@ const F_KEYS: [Key; 12] = [
     Key::KEY_F11,
     Key::KEY_F12,
 ];
+const MOD_KEYS: [Key; 8] = [
+    Key::KEY_LEFTCTRL,
+    Key::KEY_RIGHTCTRL,
+    Key::KEY_LEFTALT,
+    Key::KEY_RIGHTALT,
+    Key::KEY_LEFTSHIFT,
+    Key::KEY_RIGHTSHIFT,
+    Key::KEY_LEFTMETA,
+    Key::KEY_RIGHTMETA,
+];
 /// How long a tapped widget stays lit.
 const FLASH: Duration = Duration::from_millis(220);
 
@@ -237,9 +247,15 @@ fn open_main_keyboard() -> io::Result<(std::path::PathBuf, evdev::Device)> {
     ))
 }
 
-/// Observe Fn/Globe press/release without grabbing the keyboard away from
-/// Hyprland or applications.
-fn spawn_fn_key() -> mpsc::Receiver<bool> {
+#[derive(Debug, Clone, Copy)]
+enum KeyboardMsg {
+    Fn(bool),
+    Modifier { index: usize, active: bool },
+}
+
+/// Observe Fn/Globe and modifier press/release without grabbing the keyboard
+/// away from Hyprland or applications.
+fn spawn_keyboard() -> mpsc::Receiver<KeyboardMsg> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let (path, mut dev) = match open_main_keyboard() {
@@ -259,15 +275,26 @@ fn spawn_fn_key() -> mpsc::Receiver<bool> {
                 }
             };
             for event in events {
-                if event.event_type() == EventType::KEY && event.code() == Key::KEY_FN.code() {
-                    let active = match event.value() {
-                        1 => Some(true),
-                        0 => Some(false),
-                        _ => None,
-                    };
-                    if let Some(active) = active {
-                        let _ = tx.send(active);
-                    }
+                if event.event_type() != EventType::KEY {
+                    continue;
+                }
+                let active = match event.value() {
+                    1 => Some(true),
+                    0 => Some(false),
+                    _ => None,
+                };
+                let Some(active) = active else { continue };
+
+                let msg = if event.code() == Key::KEY_FN.code() {
+                    Some(KeyboardMsg::Fn(active))
+                } else {
+                    MOD_KEYS
+                        .iter()
+                        .position(|key| event.code() == key.code())
+                        .map(|index| KeyboardMsg::Modifier { index, active })
+                };
+                if let Some(msg) = msg {
+                    let _ = tx.send(msg);
                 }
             }
         }
@@ -282,7 +309,7 @@ struct FnEmitter {
 
 impl FnEmitter {
     fn new() -> Result<Self> {
-        let keys: AttributeSet<Key> = F_KEYS.into_iter().collect();
+        let keys: AttributeSet<Key> = F_KEYS.into_iter().chain(MOD_KEYS).collect();
         let device = VirtualDeviceBuilder::new()?
             .name("Sliver Function Row")
             .with_keys(&keys)?
@@ -291,17 +318,39 @@ impl FnEmitter {
         Ok(Self { device })
     }
 
-    fn tap(&mut self, index: usize) -> io::Result<()> {
+    fn tap(&mut self, index: usize, modifiers: &[bool]) -> io::Result<()> {
         let key = *F_KEYS.get(index).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "function-key index out of range",
             )
         })?;
+
+        let modifier_down: Vec<_> = MOD_KEYS
+            .iter()
+            .zip(modifiers)
+            .filter(|(_, active)| **active)
+            .map(|(key, _)| InputEvent::new(EventType::KEY, key.code(), 1))
+            .collect();
+        if !modifier_down.is_empty() {
+            self.device.emit(&modifier_down)?;
+        }
         self.device
             .emit(&[InputEvent::new(EventType::KEY, key.code(), 1)])?;
         self.device
-            .emit(&[InputEvent::new(EventType::KEY, key.code(), 0)])
+            .emit(&[InputEvent::new(EventType::KEY, key.code(), 0)])?;
+
+        let modifier_up: Vec<_> = MOD_KEYS
+            .iter()
+            .zip(modifiers)
+            .rev()
+            .filter(|(_, active)| **active)
+            .map(|(key, _)| InputEvent::new(EventType::KEY, key.code(), 0))
+            .collect();
+        if !modifier_up.is_empty() {
+            self.device.emit(&modifier_up)?;
+        }
+        Ok(())
     }
 }
 
@@ -445,7 +494,7 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
 
     let touch = spawn_touch();
     let socket = spawn_socket();
-    let fn_events = spawn_fn_key();
+    let keyboard_events = spawn_keyboard();
     let fn_layer = sliver_core::function_row_config();
     let mut fn_emitter = match FnEmitter::new() {
         Ok(emitter) => Some(emitter),
@@ -461,18 +510,23 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
 
     let mut pressed: Option<(usize, Instant)> = None;
     let mut fn_active = false;
+    let mut modifiers = [false; MOD_KEYS.len()];
     let mut last_tick = String::new();
     let mut dirty = true;
 
     while running.load(Ordering::SeqCst) {
         std::thread::park_timeout(Duration::from_millis(50));
 
-        while let Ok(active) = fn_events.try_recv() {
-            if active != fn_active {
-                fn_active = active;
-                pressed = None;
-                dirty = true;
-                eprintln!("fn layer: {}", if active { "on" } else { "off" });
+        while let Ok(event) = keyboard_events.try_recv() {
+            match event {
+                KeyboardMsg::Fn(active) if active != fn_active => {
+                    fn_active = active;
+                    pressed = None;
+                    dirty = true;
+                    eprintln!("fn layer: {}", if active { "on" } else { "off" });
+                }
+                KeyboardMsg::Modifier { index, active } => modifiers[index] = active,
+                KeyboardMsg::Fn(_) => {}
             }
         }
 
@@ -484,7 +538,7 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
                 if fn_active {
                     eprintln!("fn tap at x={x:.0} -> F{}", i + 1);
                     if let Some(emitter) = &mut fn_emitter {
-                        if let Err(e) = emitter.tap(i) {
+                        if let Err(e) = emitter.tap(i, &modifiers) {
                             eprintln!("fn: failed to emit F{}: {e}", i + 1);
                         }
                     }
