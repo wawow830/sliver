@@ -57,8 +57,7 @@ fn claim_card() -> Result<CardClaim> {
         .open("/dev/dri/card1")
         .context("opening /dev/dri/card1 (need root, or the video group)")?;
     let card = Card(file);
-    card.acquire_master_lock()
-        .context("becoming DRM master")?;
+    card.acquire_master_lock().context("becoming DRM master")?;
 
     let res = card.resource_handles().context("drm resources")?;
     let conn = res
@@ -69,7 +68,7 @@ fn claim_card() -> Result<CardClaim> {
             (info.state() == connector::State::Connected
                 && info.interface() == connector::Interface::DSI)
                 .then_some(info)
-            })
+        })
         .context("no connected DSI connector")?;
     let mode = *conn.modes().first().context("connector has no modes")?;
     let (w, h) = mode.size();
@@ -83,7 +82,13 @@ fn claim_card() -> Result<CardClaim> {
         .context("no crtc available")?;
     let old_crtc = card.get_crtc(crtc).ok();
 
-    Ok(CardClaim { card, conn: conn.handle(), crtc, old_crtc, mode })
+    Ok(CardClaim {
+        card,
+        conn: conn.handle(),
+        crtc,
+        old_crtc,
+        mode,
+    })
 }
 
 impl CardClaim {
@@ -94,7 +99,11 @@ impl CardClaim {
         Ok(())
     }
 
-    fn release(&self, fb: Option<framebuffer::Handle>, db: Option<control::dumbbuffer::DumbBuffer>) {
+    fn release(
+        &self,
+        fb: Option<framebuffer::Handle>,
+        db: Option<control::dumbbuffer::DumbBuffer>,
+    ) {
         if let Some(old) = &self.old_crtc {
             let _ = self.card.set_crtc(
                 self.crtc,
@@ -170,15 +179,13 @@ fn spawn_touch() -> mpsc::Receiver<f64> {
                             touching = ev.value() == 1;
                         }
                     }
-                    EventType::SYNCHRONIZATION => {
-                        // A touch that just ended with a position on record
-                        // is a tap. (If taps land mirrored, flip the mapping.)
-                        if !touching {
-                            if let Some(raw) = last_x.take() {
-                                let (min, max) = range;
-                                let t = (raw - min) as f64 / (max - min).max(1) as f64;
-                                let _ = tx.send(t.clamp(0.0, 1.0) * sliver_core::STRIP_W);
-                            }
+                    // A touch that just ended with a position on record
+                    // is a tap. (If taps land mirrored, flip the mapping.)
+                    EventType::SYNCHRONIZATION if !touching => {
+                        if let Some(raw) = last_x.take() {
+                            let (min, max) = range;
+                            let t = (raw - min) as f64 / (max - min).max(1) as f64;
+                            let _ = tx.send(t.clamp(0.0, 1.0) * sliver_core::STRIP_W);
                         }
                     }
                     _ => {}
@@ -261,7 +268,12 @@ impl Takeover {
             px_stride as i32,
         )?;
 
-        let mut t = Takeover { claim, fb, db, surface };
+        let mut t = Takeover {
+            claim,
+            fb,
+            db,
+            surface,
+        };
         t.repaint(cfg, None)?;
         t.claim.show(t.fb)?;
         Ok(t)
@@ -345,7 +357,10 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
                     let cmd = cmd.to_string();
                     eprintln!("running action: {cmd}");
                     std::thread::spawn(move || {
-                        let _ = std::process::Command::new("sh").arg("-c").arg(&cmd).status();
+                        let _ = std::process::Command::new("sh")
+                            .arg("-c")
+                            .arg(&cmd)
+                            .status();
                     });
                 }
             }

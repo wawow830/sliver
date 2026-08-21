@@ -21,20 +21,22 @@ fn main() -> Result<()> {
         return drm_out::probe();
     }
     if let Some(pos) = args.iter().position(|a| a == "--apply") {
-        let path = args.get(pos + 1).map(String::as_str).unwrap_or("sliver.toml");
+        let path = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or("sliver.toml");
         return apply(path);
     }
 
     let mut config_path = "sliver.toml".to_string();
     let mut out = "preview.png".to_string();
-    let mut drm = false;
-
-    for arg in &args {
-        match arg.as_str() {
-            "--drm" => drm = true,
-            a if config_path == "sliver.toml" => config_path = a.to_string(),
-            a => out = a.to_string(),
-        }
+    let drm = args.iter().any(|a| a == "--drm");
+    let mut positional = args.iter().filter(|a| !a.starts_with("--"));
+    if let Some(path) = positional.next() {
+        config_path = path.clone();
+    }
+    if let Some(path) = positional.next() {
+        out = path.clone();
     }
 
     let cfg = sliver_core::load_config(std::path::Path::new(&config_path))?;
@@ -52,8 +54,7 @@ fn main() -> Result<()> {
 /// Push a config to the running daemon: one connection, one document,
 /// one-word reply.
 fn apply(path: &str) -> Result<()> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {path}"))?;
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
     let mut stream = std::os::unix::net::UnixStream::connect(sliver_core::socket_path())
         .context("connecting to sliverd (is the daemon running?)")?;
     stream.write_all(text.as_bytes())?;

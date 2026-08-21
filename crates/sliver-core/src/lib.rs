@@ -56,6 +56,16 @@ pub struct Style {
     pub align: Align,
 }
 
+/// Mutable view of those same knobs, named instead of smuggled around as
+/// an unreadable five-reference tuple.
+pub struct StyleMut<'a> {
+    pub color: &'a mut Option<String>,
+    pub font_size: &'a mut f64,
+    pub bold: &'a mut bool,
+    pub bg: &'a mut Option<String>,
+    pub align: &'a mut Align,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WidgetCfg {
@@ -137,10 +147,38 @@ pub enum WidgetCfg {
 impl WidgetCfg {
     pub fn style(&self) -> Option<Style> {
         match self {
-            WidgetCfg::Label { color, font_size, bold, bg, align, .. }
-            | WidgetCfg::Clock { color, font_size, bold, bg, align, .. }
-            | WidgetCfg::Battery { color, font_size, bold, bg, align, .. }
-            | WidgetCfg::Button { color, font_size, bold, bg, align, .. } => Some(Style {
+            WidgetCfg::Label {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+                ..
+            }
+            | WidgetCfg::Clock {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+                ..
+            }
+            | WidgetCfg::Battery {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+                ..
+            }
+            | WidgetCfg::Button {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+                ..
+            } => Some(Style {
                 color: color.clone(),
                 font_size: *font_size,
                 bold: *bold,
@@ -162,22 +200,54 @@ impl WidgetCfg {
     }
 
     /// Mutable handle to style fields, for the editor's benefit.
-    pub fn style_mut(&mut self) -> Option<(&mut Option<String>, &mut f64, &mut bool, &mut Option<String>, &mut Align)> {
+    pub fn style_mut(&mut self) -> Option<StyleMut<'_>> {
         match self {
-            WidgetCfg::Label { color, font_size, bold, bg, align, .. }
-            | WidgetCfg::Clock { color, font_size, bold, bg, align, .. }
-            | WidgetCfg::Battery { color, font_size, bold, bg, align, .. }
-            | WidgetCfg::Button { color, font_size, bold, bg, align, .. } => {
-                Some((color, font_size, bold, bg, align))
+            WidgetCfg::Label {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+                ..
             }
+            | WidgetCfg::Clock {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+                ..
+            }
+            | WidgetCfg::Battery {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+                ..
+            }
+            | WidgetCfg::Button {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+                ..
+            } => Some(StyleMut {
+                color,
+                font_size,
+                bold,
+                bg,
+                align,
+            }),
             WidgetCfg::Spacer { .. } => None,
         }
     }
 }
 
 pub fn load_config(path: &std::path::Path) -> Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
@@ -198,8 +268,12 @@ impl Config {
     /// The shell command bound to a widget, if it has one.
     pub fn action_at(&self, i: usize) -> Option<&str> {
         match self.widgets.get(i) {
-            Some(WidgetCfg::Label { action: Some(a), .. })
-            | Some(WidgetCfg::Button { action: Some(a), .. }) => Some(a.as_str()),
+            Some(WidgetCfg::Label {
+                action: Some(a), ..
+            })
+            | Some(WidgetCfg::Button {
+                action: Some(a), ..
+            }) => Some(a.as_str()),
             _ => None,
         }
     }
@@ -208,7 +282,11 @@ impl Config {
 fn hex(color: &str) -> (f64, f64, f64) {
     let c = color.trim_start_matches('#');
     let p = |i: usize| f64::from(u8::from_str_radix(&c[i..i + 2], 16).unwrap_or(0xff)) / 255.0;
-    if c.len() == 6 { (p(0), p(2), p(4)) } else { (1.0, 1.0, 1.0) }
+    if c.len() == 6 {
+        (p(0), p(2), p(4))
+    } else {
+        (1.0, 1.0, 1.0)
+    }
 }
 
 /// First Battery-type entry under /sys/class/power_supply, as 0..=100.
@@ -316,7 +394,9 @@ pub fn render(cfg: &Config, cr: &cairo::Context, pressed: Option<usize>) -> Resu
     for (i, ((x, w), widget)) in layout_rects(cfg).iter().zip(cfg.widgets.iter()).enumerate() {
         let (x, w) = (*x, *w);
 
-        let Some(style) = widget.style() else { continue };
+        let Some(style) = widget.style() else {
+            continue;
+        };
 
         if let Some(c) = &style.bg {
             let (r, g, b) = hex(c);
@@ -361,14 +441,98 @@ pub fn render(cfg: &Config, cr: &cairo::Context, pressed: Option<usize>) -> Resu
 
 /// Milestone zero: render straight to a PNG, no hardware required.
 pub fn render_preview(cfg: &Config, path: &std::path::Path) -> Result<()> {
-    let surface = cairo::ImageSurface::create(
-        cairo::Format::ARgb32,
-        STRIP_W as i32,
-        STRIP_H as i32,
-    )?;
+    let surface =
+        cairo::ImageSurface::create(cairo::Format::ARgb32, STRIP_W as i32, STRIP_H as i32)?;
     let cr = cairo::Context::new(&surface)?;
     render(cfg, &cr, None)?;
     let mut f = std::fs::File::create(path)?;
     surface.write_to_png(&mut f)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_configs_get_modern_style_defaults() {
+        let cfg = parse_config(
+            r##"
+            background = "#000000"
+            [[widgets]]
+            type = "label"
+            text = "hello"
+            width = 160
+            "##,
+        )
+        .unwrap();
+
+        let WidgetCfg::Label {
+            action,
+            font_size,
+            bold,
+            bg,
+            align,
+            ..
+        } = &cfg.widgets[0]
+        else {
+            panic!("expected label")
+        };
+        assert_eq!(action, &None);
+        assert_eq!(*font_size, 24.0);
+        assert!(!bold);
+        assert_eq!(bg, &None);
+        assert_eq!(*align, Align::Center);
+    }
+
+    #[test]
+    fn button_round_trip_preserves_action_and_style() {
+        let source = r##"
+            background = "#101010"
+            [[widgets]]
+            type = "button"
+            text = "QA"
+            action = "touch /tmp/fired"
+            color = "#ff88aa"
+            width = 160
+            font_size = 30
+            bold = true
+            bg = "#3a2233"
+            align = "right"
+        "##;
+        let cfg = parse_config(source).unwrap();
+        assert_eq!(cfg.action_at(0), Some("touch /tmp/fired"));
+
+        let encoded = toml::to_string(&cfg).unwrap();
+        let decoded = parse_config(&encoded).unwrap();
+        assert_eq!(decoded.action_at(0), Some("touch /tmp/fired"));
+        let style = decoded.widgets[0].style().unwrap();
+        assert_eq!(style.font_size, 30.0);
+        assert!(style.bold);
+        assert_eq!(style.bg.as_deref(), Some("#3a2233"));
+        assert_eq!(style.align, Align::Right);
+    }
+
+    #[test]
+    fn hit_testing_respects_widget_gaps() {
+        let cfg = parse_config(
+            r##"
+            [[widgets]]
+            type = "label"
+            text = "first"
+            width = 160
+
+            [[widgets]]
+            type = "button"
+            text = "second"
+            width = 160
+            "##,
+        )
+        .unwrap();
+
+        assert_eq!(hit(&cfg, 16.0), Some(0));
+        assert_eq!(hit(&cfg, 175.0), Some(0));
+        assert_eq!(hit(&cfg, 180.0), None); // eight-pixel inter-widget gap
+        assert_eq!(hit(&cfg, 184.0), Some(1));
+    }
 }

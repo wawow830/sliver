@@ -6,11 +6,10 @@ use std::cell::{Cell, RefCell};
 use std::io::{Read, Write};
 use std::rc::Rc;
 
+use adw::prelude::*;
 use anyhow::{Context, Result};
 use gtk4 as gtk;
-use gtk::prelude::*;
 use libadwaita as adw;
-use adw::prelude::*;
 
 use sliver_core::{Config, WidgetCfg};
 
@@ -41,9 +40,26 @@ fn load_or_default() -> Config {
     sliver_core::load_config(CONFIG_PATH.as_ref()).unwrap_or_else(|_| Config {
         background: "#111111".into(),
         widgets: vec![
-            WidgetCfg::Label { text: "sliver".into(), action: None, color: Some("#ff88aa".into()), width: Some(160.0), font_size: 24.0, bold: false, bg: None, align: Default::default() },
+            WidgetCfg::Label {
+                text: "sliver".into(),
+                action: None,
+                color: Some("#ff88aa".into()),
+                width: Some(160.0),
+                font_size: 24.0,
+                bold: false,
+                bg: None,
+                align: Default::default(),
+            },
             WidgetCfg::Spacer { flex: 1.0 },
-            WidgetCfg::Clock { format: "%a %H:%M".into(), color: Some("#aaddff".into()), width: Some(260.0), font_size: 24.0, bold: false, bg: None, align: Default::default() },
+            WidgetCfg::Clock {
+                format: "%a %H:%M".into(),
+                color: Some("#aaddff".into()),
+                width: Some(260.0),
+                font_size: 24.0,
+                bold: false,
+                bg: None,
+                align: Default::default(),
+            },
         ],
     })
 }
@@ -62,7 +78,7 @@ fn build_ui(app: &adw::Application) {
         let cfg = cfg.clone();
         preview.set_draw_func(move |area, cr, _w, _h| {
             let scale = f64::from(area.width()) / sliver_core::STRIP_W;
-            let _ = cr.scale(scale, scale);
+            cr.scale(scale, scale);
             let _ = sliver_core::render(&cfg.borrow(), cr, None);
         });
     }
@@ -137,11 +153,60 @@ fn build_ui(app: &adw::Application) {
 
     // Palette buttons add widgets and select them.
     for (label, make) in [
-        ("+ Label", (|| WidgetCfg::Label { text: "new label".into(), action: None, color: None, width: Some(160.0), font_size: 24.0, bold: false, bg: None, align: Default::default() }) as fn() -> WidgetCfg),
-        ("+ Button", (|| WidgetCfg::Button { text: "tap me".into(), action: Some("notify-send 'the strip says hi'".into()), color: None, width: Some(160.0), font_size: 24.0, bold: true, bg: Some("#3a2233".into()), align: Default::default() }) as fn() -> WidgetCfg),
-        ("+ Clock", (|| WidgetCfg::Clock { format: "%H:%M".into(), color: None, width: Some(160.0), font_size: 24.0, bold: false, bg: None, align: Default::default() }) as fn() -> WidgetCfg),
-        ("+ Battery", (|| WidgetCfg::Battery { format: "{capacity}%".into(), color: None, width: Some(160.0), font_size: 24.0, bold: false, bg: None, align: Default::default() }) as fn() -> WidgetCfg),
-        ("+ Spacer", (|| WidgetCfg::Spacer { flex: 1.0 }) as fn() -> WidgetCfg),
+        (
+            "+ Label",
+            (|| WidgetCfg::Label {
+                text: "new label".into(),
+                action: None,
+                color: None,
+                width: Some(160.0),
+                font_size: 24.0,
+                bold: false,
+                bg: None,
+                align: Default::default(),
+            }) as fn() -> WidgetCfg,
+        ),
+        (
+            "+ Button",
+            (|| WidgetCfg::Button {
+                text: "tap me".into(),
+                action: Some("notify-send 'the strip says hi'".into()),
+                color: None,
+                width: Some(160.0),
+                font_size: 24.0,
+                bold: true,
+                bg: Some("#3a2233".into()),
+                align: Default::default(),
+            }) as fn() -> WidgetCfg,
+        ),
+        (
+            "+ Clock",
+            (|| WidgetCfg::Clock {
+                format: "%H:%M".into(),
+                color: None,
+                width: Some(160.0),
+                font_size: 24.0,
+                bold: false,
+                bg: None,
+                align: Default::default(),
+            }) as fn() -> WidgetCfg,
+        ),
+        (
+            "+ Battery",
+            (|| WidgetCfg::Battery {
+                format: "{capacity}%".into(),
+                color: None,
+                width: Some(160.0),
+                font_size: 24.0,
+                bold: false,
+                bg: None,
+                align: Default::default(),
+            }) as fn() -> WidgetCfg,
+        ),
+        (
+            "+ Spacer",
+            (|| WidgetCfg::Spacer { flex: 1.0 }) as fn() -> WidgetCfg,
+        ),
     ] {
         let btn = gtk::Button::with_label(label);
         let ed = editor.clone_rc();
@@ -206,9 +271,21 @@ fn build_ui(app: &adw::Application) {
 
     refresh_list(&editor);
 
+    // Dynamic widgets deserve a dynamic preview too: redraw once a second
+    // so strftime formats containing %S tick in the customizer itself.
+    {
+        let preview = editor.preview.clone();
+        gtk::glib::timeout_add_seconds_local(1, move || {
+            preview.queue_draw();
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&preview_frame);
-    content.append(&gtk::Label::new(Some("widgets — order is left-to-right on the strip")));
+    content.append(&gtk::Label::new(Some(
+        "widgets — order is left-to-right on the strip",
+    )));
     content.append(&editor.list);
     content.append(&palette);
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
@@ -287,21 +364,28 @@ fn summarize(w: &WidgetCfg) -> String {
 }
 
 fn refresh_list(ed: &Editor) {
+    // Removing the selected row emits row-selected(None) synchronously;
+    // capture the desired selection before that signal clears our Cell.
+    let sel = ed.selected.get();
     while let Some(row) = ed.list.row_at_index(0) {
         ed.list.remove(&row);
     }
-    let sel = ed.selected.get();
-    for (i, w) in ed.cfg.borrow().widgets.iter().enumerate() {
+    ed.selected.set(sel);
+    // Collect summaries first: select_row fires row-selected *synchronously*,
+    // and rebuilding that handler mid-borrow is how the last crash happened.
+    let rows: Vec<String> = ed.cfg.borrow().widgets.iter().map(summarize).collect();
+    for text in &rows {
         let label = gtk::Label::builder()
-            .label(summarize(w))
+            .label(text)
             .xalign(0.0)
             .margin_top(8)
             .margin_bottom(8)
             .margin_start(12)
             .build();
         ed.list.append(&label);
-        if sel == Some(i) {
-            let row = ed.list.row_at_index(i as i32).unwrap();
+    }
+    if let Some(i) = sel {
+        if let Some(row) = ed.list.row_at_index(i as i32) {
             ed.list.select_row(Some(&row));
         }
     }
@@ -325,31 +409,71 @@ fn rebuild_editor(ed: &Editor) {
         ed.editor_box.remove(&child);
     }
     let Some(i) = ed.selected.get() else { return };
-    let mut cfg = ed.cfg.borrow_mut();
-    let Some(widget) = cfg.widgets.get_mut(i) else { return };
+    // Signals reenter: if some caller already holds the config, bow out
+    // rather than abort the whole app over a redraw.
+    let Ok(mut cfg) = ed.cfg.try_borrow_mut() else {
+        return;
+    };
+    let Some(widget) = cfg.widgets.get_mut(i) else {
+        return;
+    };
 
     match widget {
-        WidgetCfg::Label { text, action, width, color, font_size, bold, bg, align } => {
+        WidgetCfg::Label {
+            text,
+            action,
+            width,
+            color,
+            font_size,
+            bold,
+            bg,
+            align,
+        } => {
             add_text_row(ed, i, "text", text);
             add_action_row(ed, i, action);
             add_color_row(ed, i, color);
             add_style_rows(ed, i, *font_size, *bold, bg.clone(), *align);
             add_width_row(ed, i, width);
         }
-        WidgetCfg::Button { text, action, width, color, font_size, bold, bg, align } => {
+        WidgetCfg::Button {
+            text,
+            action,
+            width,
+            color,
+            font_size,
+            bold,
+            bg,
+            align,
+        } => {
             add_text_row(ed, i, "text", text);
             add_action_row(ed, i, action);
             add_color_row(ed, i, color);
             add_style_rows(ed, i, *font_size, *bold, bg.clone(), *align);
             add_width_row(ed, i, width);
         }
-        WidgetCfg::Clock { format, width, color, font_size, bold, bg, align } => {
+        WidgetCfg::Clock {
+            format,
+            width,
+            color,
+            font_size,
+            bold,
+            bg,
+            align,
+        } => {
             add_text_row(ed, i, "format (strftime)", format);
             add_color_row(ed, i, color);
             add_style_rows(ed, i, *font_size, *bold, bg.clone(), *align);
             add_width_row(ed, i, width);
         }
-        WidgetCfg::Battery { format, width, color, font_size, bold, bg, align } => {
+        WidgetCfg::Battery {
+            format,
+            width,
+            color,
+            font_size,
+            bold,
+            bg,
+            align,
+        } => {
             add_text_row(ed, i, "format ({capacity})", format);
             add_color_row(ed, i, color);
             add_style_rows(ed, i, *font_size, *bold, bg.clone(), *align);
@@ -374,8 +498,8 @@ fn after_edit(ed: &Editor, i: usize) {
     }
 }
 
-fn add_text_row(ed: &Editor, i: usize, caption: &str, field: &mut String) {
-    let entry = gtk::Entry::builder().text(field.as_str()).build();
+fn add_text_row(ed: &Editor, i: usize, caption: &str, field: &str) {
+    let entry = gtk::Entry::builder().text(field).build();
     let cb = ed.clone_rc();
     entry.connect_changed(move |e| {
         let text = e.text().to_string();
@@ -383,7 +507,9 @@ fn add_text_row(ed: &Editor, i: usize, caption: &str, field: &mut String) {
         if let Some(w) = cfg.widgets.get_mut(i) {
             match w {
                 WidgetCfg::Label { text: t, .. } | WidgetCfg::Button { text: t, .. } => *t = text,
-                WidgetCfg::Clock { format: f, .. } | WidgetCfg::Battery { format: f, .. } => *f = text,
+                WidgetCfg::Clock { format: f, .. } | WidgetCfg::Battery { format: f, .. } => {
+                    *f = text
+                }
                 _ => {}
             }
         }
@@ -403,14 +529,14 @@ fn add_color_row(ed: &Editor, i: usize, field: &mut Option<String>) {
         let raw = e.text().to_string();
         let value = (!raw.trim().is_empty()).then_some(raw);
         let mut cfg = cb.cfg.borrow_mut();
-        if let Some(w) = cfg.widgets.get_mut(i) {
-            match w {
-                WidgetCfg::Label { color, .. }
-                | WidgetCfg::Button { color, .. }
-                | WidgetCfg::Clock { color, .. }
-                | WidgetCfg::Battery { color, .. } => *color = value,
-                _ => {}
-            }
+        if let Some(
+            WidgetCfg::Label { color, .. }
+            | WidgetCfg::Button { color, .. }
+            | WidgetCfg::Clock { color, .. }
+            | WidgetCfg::Battery { color, .. },
+        ) = cfg.widgets.get_mut(i)
+        {
+            *color = value;
         }
         drop(cfg);
         after_edit(&cb, i);
@@ -425,19 +551,20 @@ fn add_width_row(ed: &Editor, i: usize, field: &mut Option<f64>) {
     spin.connect_value_changed(move |s| {
         let v = s.value();
         let mut cfg = cb.cfg.borrow_mut();
-        if let Some(w) = cfg.widgets.get_mut(i) {
-            match w {
-                WidgetCfg::Label { width, .. }
-                | WidgetCfg::Button { width, .. }
-                | WidgetCfg::Clock { width, .. }
-                | WidgetCfg::Battery { width, .. } => *width = (v > 0.0).then_some(v),
-                _ => {}
-            }
+        if let Some(
+            WidgetCfg::Label { width, .. }
+            | WidgetCfg::Button { width, .. }
+            | WidgetCfg::Clock { width, .. }
+            | WidgetCfg::Battery { width, .. },
+        ) = cfg.widgets.get_mut(i)
+        {
+            *width = (v > 0.0).then_some(v);
         }
         drop(cfg);
         after_edit(&cb, i);
     });
-    ed.editor_box.append(&prop_row("width px (0 = flex)", &spin));
+    ed.editor_box
+        .append(&prop_row("width px (0 = flex)", &spin));
 }
 
 fn add_action_row(ed: &Editor, i: usize, field: &mut Option<String>) {
@@ -450,13 +577,10 @@ fn add_action_row(ed: &Editor, i: usize, field: &mut Option<String>) {
         let raw = e.text().to_string();
         let value = (!raw.trim().is_empty()).then_some(raw);
         let mut cfg = cb.cfg.borrow_mut();
-        if let Some(w) = cfg.widgets.get_mut(i) {
-            match w {
-                WidgetCfg::Label { action, .. } | WidgetCfg::Button { action, .. } => {
-                    *action = value
-                }
-                _ => {}
-            }
+        if let Some(WidgetCfg::Label { action, .. } | WidgetCfg::Button { action, .. }) =
+            cfg.widgets.get_mut(i)
+        {
+            *action = value;
         }
         drop(cfg);
         after_edit(&cb, i);
@@ -481,8 +605,8 @@ fn add_style_rows(
     let cb = ed.clone_rc();
     spin.connect_value_changed(move |s| {
         if let Some(w) = cb.cfg.borrow_mut().widgets.get_mut(i) {
-            if let Some((_c, fs, _b, _bg, _a)) = w.style_mut() {
-                *fs = s.value();
+            if let Some(style) = w.style_mut() {
+                *style.font_size = s.value();
             }
         }
         after_edit(&cb, i);
@@ -495,8 +619,8 @@ fn add_style_rows(
     let cb = ed.clone_rc();
     check.connect_toggled(move |c| {
         if let Some(w) = cb.cfg.borrow_mut().widgets.get_mut(i) {
-            if let Some((_c, _fs, b, _bg, _a)) = w.style_mut() {
-                *b = c.is_active();
+            if let Some(style) = w.style_mut() {
+                *style.bold = c.is_active();
             }
         }
         after_edit(&cb, i);
@@ -513,8 +637,8 @@ fn add_style_rows(
         let raw = e.text().to_string();
         let value = (!raw.trim().is_empty()).then_some(raw);
         if let Some(w) = cb.cfg.borrow_mut().widgets.get_mut(i) {
-            if let Some((_c, _fs, _b, bg, _a)) = w.style_mut() {
-                *bg = value;
+            if let Some(style) = w.style_mut() {
+                *style.bg = value;
             }
         }
         after_edit(&cb, i);
@@ -536,8 +660,8 @@ fn add_style_rows(
             _ => sliver_core::Align::Center,
         };
         if let Some(w) = cb.cfg.borrow_mut().widgets.get_mut(i) {
-            if let Some((_c, _fs, _b, _bg, a)) = w.style_mut() {
-                *a = align;
+            if let Some(style) = w.style_mut() {
+                *style.align = align;
             }
         }
         after_edit(&cb, i);
