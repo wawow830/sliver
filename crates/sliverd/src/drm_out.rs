@@ -9,7 +9,9 @@
 //!   - `--probe` paints calibration bands when orientation is in doubt.
 
 use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::os::unix::io::{AsFd, BorrowedFd};
+use std::os::unix::net::UnixListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -187,6 +189,48 @@ fn spawn_touch() -> mpsc::Receiver<f64> {
     rx
 }
 
+/// A config arriving over the socket, plus the reply line the
+/// listener thread owes its client.
+type SockMsg = (String, mpsc::Sender<Result<(), String>>);
+
+/// Listen for live config application: read a whole TOML document per
+/// connection, hand it to the render loop, report ok/error back.
+fn spawn_socket() -> mpsc::Receiver<SockMsg> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let path = sliver_core::socket_path();
+        let _ = std::fs::remove_file(&path);
+        let listener = match UnixListener::bind(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("socket: can't bind {}: {e}", path.display());
+                return;
+            }
+        };
+        eprintln!("socket: listening on {}", path.display());
+        for conn in listener.incoming() {
+            let Ok(mut stream) = conn else { continue };
+            let mut text = String::new();
+            if stream.read_to_string(&mut text).is_err() {
+                continue;
+            }
+            let (reply_tx, reply_rx) = mpsc::channel();
+            if tx.send((text, reply_tx)).is_err() {
+                break;
+            }
+            let reply = reply_rx
+                .recv()
+                .unwrap_or_else(|_| Err("daemon wandered off".into()));
+            let msg = match reply {
+                Ok(()) => "ok\n".to_string(),
+                Err(e) => format!("error: {e}\n"),
+            };
+            let _ = stream.write_all(msg.as_bytes());
+        }
+    });
+    rx
+}
+
 pub struct Takeover {
     claim: CardClaim,
     fb: framebuffer::Handle,
@@ -272,12 +316,14 @@ impl Drop for Takeover {
 }
 
 /// Claim the strip and give it a pulse: heartbeat re-renders, touch
-/// highlights, live battery numbers. Ctrl-C lets go.
-pub fn run(cfg: &sliver_core::Config) -> Result<()> {
-    let mut t = Takeover::claim(cfg)?;
+/// highlights, live battery numbers, live configs over the socket.
+/// Ctrl-C lets go.
+pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
+    let mut t = Takeover::claim(&cfg)?;
     eprintln!("the strip is ours — Ctrl-C to let go");
 
     let touch = spawn_touch();
+    let socket = spawn_socket();
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -291,10 +337,26 @@ pub fn run(cfg: &sliver_core::Config) -> Result<()> {
         std::thread::park_timeout(Duration::from_millis(50));
 
         while let Ok(x) = touch.try_recv() {
-            if let Some(i) = sliver_core::hit(cfg, x) {
+            if let Some(i) = sliver_core::hit(&cfg, x) {
                 eprintln!("tap at x={x:.0} -> widget {i}");
                 pressed = Some((i, Instant::now()));
                 dirty = true;
+            }
+        }
+        while let Ok((text, reply)) = socket.try_recv() {
+            match sliver_core::parse_config(&text) {
+                Ok(new_cfg) => {
+                    let n = new_cfg.widgets.len();
+                    cfg = new_cfg;
+                    pressed = None;
+                    dirty = true;
+                    eprintln!("socket: applied a config ({n} widgets)");
+                    let _ = reply.send(Ok(()));
+                }
+                Err(e) => {
+                    eprintln!("socket: rejected a config: {e}");
+                    let _ = reply.send(Err(format!("{e:#}")));
+                }
             }
         }
         if let Some((_, since)) = pressed {
@@ -310,7 +372,7 @@ pub fn run(cfg: &sliver_core::Config) -> Result<()> {
         }
 
         if dirty {
-            t.repaint(cfg, pressed.map(|(i, _)| i))?;
+            t.repaint(&cfg, pressed.map(|(i, _)| i))?;
             dirty = false;
         }
     }

@@ -72,6 +72,19 @@ pub fn load_config(path: &std::path::Path) -> Result<Config> {
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
+/// Parse a config from raw TOML text — what the daemon's socket receives.
+pub fn parse_config(text: &str) -> Result<Config> {
+    toml::from_str(text).context("parsing config")
+}
+
+/// Where sliverd listens for live config application.
+pub fn socket_path() -> std::path::PathBuf {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "/tmp".into());
+    base.join("sliver.sock")
+}
+
 fn hex(color: &str) -> (f64, f64, f64) {
     let c = color.trim_start_matches('#');
     let p = |i: usize| f64::from(u8::from_str_radix(&c[i..i + 2], 16).unwrap_or(0xff)) / 255.0;
