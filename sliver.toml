@@ -17,10 +17,8 @@ color = "#aaddff"
 width = 260
 
 [[widgets]]
-type = "label"
-text = "74% battery"
-color = "#88ffcc"
-width = 240
+type = "battery"
+width = 200
 
 [[widgets]]
 type = "spacer"

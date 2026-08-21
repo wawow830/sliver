@@ -1,17 +1,18 @@
 //! Hardware takeover: claim the touchbar panel and hold it.
 //!
 //! The M2 13" touchbar is a MIPI DSI panel, natively portrait with a
-//! 60x2008 mode. Lessons borrowed from tiny-dfr's display.rs:
-//!   - the dumb buffer should be 64px wide (pitch alignment); the CRTC
-//!     only scans the first 60 columns,
-//!   - orientation is settled not by theory but by `--probe`: raw bands
-//!     painted straight into the buffer, read off a photo of the glass.
+//! 60x2008 mode. Hard-won truths, kept close:
+//!   - the driver rounds the dumb buffer up (2008 -> 2048 rows): paint by
+//!     the *mode's* height, never the allocation's,
+//!   - the buffer wants to be 64px wide (pitch 256); only 60 show,
+//!   - the DSI glass freezes its last frame: dead processes haunt it,
+//!   - `--probe` paints calibration bands when orientation is in doubt.
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, BorrowedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use drm::buffer::{Buffer as _, DrmFourcc};
@@ -21,6 +22,10 @@ use drm::Device as _;
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
 const PANEL_W: u32 = 60;
 const FB_PAD: u32 = 4;
+
+const TOUCH_DEV: &str = "/dev/input/event2";
+/// How long a tapped widget stays lit.
+const FLASH: Duration = Duration::from_millis(220);
 
 #[derive(Debug)]
 struct Card(File);
@@ -107,17 +112,79 @@ impl CardClaim {
     }
 }
 
-/// Hold the strip until Ctrl-C, then let the caller's cleanup run.
-fn hold() -> Result<()> {
-    eprintln!("the strip is ours — Ctrl-C to let go");
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || r.store(false, Ordering::SeqCst))?;
-    while running.load(Ordering::SeqCst) {
-        std::thread::park_timeout(Duration::from_millis(250));
-    }
-    eprintln!("releasing the strip");
-    Ok(())
+/// Read touch taps off the touchbar input device, mapped to strip
+/// x-coordinates. Runs its own thread; taps arrive on the returned channel.
+/// If the device can't be opened, the daemon lives on without touch.
+fn spawn_touch() -> mpsc::Receiver<f64> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        use evdev::{AbsoluteAxisType, EventType, Key};
+
+        let mut dev = match evdev::Device::open(TOUCH_DEV) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)");
+                return;
+            }
+        };
+        // Exclusive: taps on the strip are ours, not the compositor's cursor.
+        if let Err(e) = dev.grab() {
+            eprintln!("touch: grab failed: {e} (sharing, then)");
+        }
+
+        let range = dev
+            .get_abs_state()
+            .ok()
+            .and_then(|s| {
+                let mt = &s[AbsoluteAxisType::ABS_MT_POSITION_X.0 as usize];
+                let plain = &s[AbsoluteAxisType::ABS_X.0 as usize];
+                let pick = if mt.maximum > mt.minimum { mt } else { plain };
+                (pick.maximum > pick.minimum).then_some((pick.minimum, pick.maximum))
+            })
+            .unwrap_or((0, sliver_core::STRIP_W as i32));
+        eprintln!("touch: x range {range:?}");
+
+        let mut last_x: Option<i32> = None;
+        let mut touching = false;
+        loop {
+            let events = match dev.fetch_events() {
+                Ok(e) => e,
+                Err(_) => break,
+            };
+            for ev in events {
+                match ev.event_type() {
+                    EventType::ABSOLUTE => {
+                        let c = ev.code();
+                        if c == AbsoluteAxisType::ABS_MT_POSITION_X.0
+                            || c == AbsoluteAxisType::ABS_X.0
+                        {
+                            last_x = Some(ev.value());
+                        } else if c == AbsoluteAxisType::ABS_MT_TRACKING_ID.0 {
+                            touching = ev.value() >= 0;
+                        }
+                    }
+                    EventType::KEY => {
+                        if ev.code() == Key::BTN_TOUCH.code() {
+                            touching = ev.value() == 1;
+                        }
+                    }
+                    EventType::SYNCHRONIZATION => {
+                        // A touch that just ended with a position on record
+                        // is a tap. (If taps land mirrored, flip the mapping.)
+                        if !touching {
+                            if let Some(raw) = last_x.take() {
+                                let (min, max) = range;
+                                let t = (raw - min) as f64 / (max - min).max(1) as f64;
+                                let _ = tx.send(t.clamp(0.0, 1.0) * sliver_core::STRIP_W);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+    rx
 }
 
 pub struct Takeover {
@@ -137,8 +204,6 @@ impl Takeover {
         let db = claim
             .card
             .create_dumb_buffer((pw + FB_PAD, ph), DrmFourcc::Xrgb8888, 32)?;
-        eprintln!("dumb buffer: requested {}x{}, got size {:?} pitch {}",
-            pw + FB_PAD, ph, db.size(), db.pitch());
         let fb = claim.card.add_framebuffer(&db, 24, 32)?;
 
         // Canvas spans only the visible panel width; the 4px pad is padding.
@@ -153,23 +218,21 @@ impl Takeover {
         )?;
 
         let mut t = Takeover { claim, fb, db, surface };
-        t.repaint(cfg)?;
+        t.repaint(cfg, None)?;
         t.claim.show(t.fb)?;
         Ok(t)
     }
 
     /// Render the strip into the panel buffer, then push it out.
-    pub fn repaint(&mut self, cfg: &sliver_core::Config) -> Result<()> {
+    pub fn repaint(&mut self, cfg: &sliver_core::Config, pressed: Option<usize>) -> Result<()> {
         {
             let cr = cairo::Context::new(&self.surface)?;
             // Probe-settled truth (see probe()): buffer scanout rows run
             // along the strip left->right, scanlines bottom->top, and the
-            // 64-wide pad never shows. So logical (x,y) -> buffer (60-y, x):
-            // translate, then rotate. The earlier "sideways" photos were a
-            // dead process's frozen frame, not this code's output.
+            // 64-wide pad never shows. So logical (x,y) -> buffer (60-y, x).
             cr.translate(f64::from(PANEL_W), 0.0);
             cr.rotate(std::f64::consts::FRAC_PI_2);
-            sliver_core::render(cfg, &cr)?;
+            sliver_core::render(cfg, &cr, pressed)?;
         }
         self.surface.flush();
 
@@ -177,14 +240,26 @@ impl Takeover {
         let row = (PANEL_W * 4) as usize;
         let sstride = row;
         let dstride = self.db.pitch() as usize;
-        // NOTE: paint by the *mode's* height — the driver may round the
-        // allocation up (2008 -> 2048 here), and those pad rows are not ours.
+        // Paint by the *mode's* height — the driver rounds the allocation up
+        // (2008 -> 2048), and those pad rows are not ours to touch.
         let height = u32::from(self.claim.mode.size().1) as usize;
-        let mut map = self.claim.card.map_dumb_buffer(&mut self.db)?;
-        let dst: &mut [u8] = map.as_mut();
-        for y in 0..height {
-            dst[y * dstride..y * dstride + row]
-                .copy_from_slice(&src[y * sstride..y * sstride + row]);
+        {
+            let mut map = self.claim.card.map_dumb_buffer(&mut self.db)?;
+            let dst: &mut [u8] = map.as_mut();
+            for y in 0..height {
+                dst[y * dstride..y * dstride + row]
+                    .copy_from_slice(&src[y * sstride..y * sstride + row]);
+            }
+        }
+
+        // Command-mode DSI: nothing reaches the glass until we say the
+        // framebuffer is dirty. set_crtc flushes the first frame; every
+        // heartbeat after that goes through here.
+        if let Err(e) = self.claim.card.dirty_framebuffer(
+            self.fb,
+            &[control::ClipRect::new(0, 0, PANEL_W as u16, height as u16)],
+        ) {
+            eprintln!("dirty flush failed: {e}");
         }
         Ok(())
     }
@@ -196,10 +271,52 @@ impl Drop for Takeover {
     }
 }
 
-/// Claim the strip and hold it until Ctrl-C.
+/// Claim the strip and give it a pulse: heartbeat re-renders, touch
+/// highlights, live battery numbers. Ctrl-C lets go.
 pub fn run(cfg: &sliver_core::Config) -> Result<()> {
-    let _takeover = Takeover::claim(cfg)?;
-    hold()
+    let mut t = Takeover::claim(cfg)?;
+    eprintln!("the strip is ours — Ctrl-C to let go");
+
+    let touch = spawn_touch();
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || r.store(false, Ordering::SeqCst))?;
+
+    let mut pressed: Option<(usize, Instant)> = None;
+    let mut last_minute = String::new();
+    let mut dirty = true;
+
+    while running.load(Ordering::SeqCst) {
+        std::thread::park_timeout(Duration::from_millis(50));
+
+        while let Ok(x) = touch.try_recv() {
+            if let Some(i) = sliver_core::hit(cfg, x) {
+                eprintln!("tap at x={x:.0} -> widget {i}");
+                pressed = Some((i, Instant::now()));
+                dirty = true;
+            }
+        }
+        if let Some((_, since)) = pressed {
+            if since.elapsed() > FLASH {
+                pressed = None;
+                dirty = true;
+            }
+        }
+        let minute = chrono::Local::now().format("%H:%M").to_string();
+        if minute != last_minute {
+            last_minute = minute;
+            dirty = true;
+        }
+
+        if dirty {
+            t.repaint(cfg, pressed.map(|(i, _)| i))?;
+            dirty = false;
+        }
+    }
+
+    eprintln!("releasing the strip");
+    Ok(())
 }
 
 /// Calibration pattern, straight into the raw buffer. One photo of the
@@ -256,5 +373,18 @@ pub fn probe() -> Result<()> {
     eprintln!("probe on glass: red/blue ends, green/white flanks, magenta pad");
     hold()?;
     claim.release(Some(fb), Some(db));
+    Ok(())
+}
+
+/// Hold until Ctrl-C (probe's simpler pulse).
+fn hold() -> Result<()> {
+    eprintln!("holding — Ctrl-C to let go");
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || r.store(false, Ordering::SeqCst))?;
+    while running.load(Ordering::SeqCst) {
+        std::thread::park_timeout(Duration::from_millis(250));
+    }
+    eprintln!("releasing the strip");
     Ok(())
 }

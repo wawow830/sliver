@@ -43,6 +43,15 @@ pub enum WidgetCfg {
         color: Option<String>,
         width: Option<f64>,
     },
+    /// Live battery level from /sys/class/power_supply. Colors itself by
+    /// level unless told otherwise: mint, amber, red.
+    Battery {
+        #[serde(default = "default_battery_fmt")]
+        format: String,
+        #[serde(default)]
+        color: Option<String>,
+        width: Option<f64>,
+    },
     /// Empty space. `flex` shares leftover width across all flex widgets.
     Spacer { #[serde(default = "one")] flex: f64 },
 }
@@ -52,6 +61,9 @@ fn one() -> f64 {
 }
 fn default_clock_fmt() -> String {
     "%H:%M".into()
+}
+fn default_battery_fmt() -> String {
+    "{capacity}%".into()
 }
 
 pub fn load_config(path: &std::path::Path) -> Result<Config> {
@@ -66,23 +78,38 @@ fn hex(color: &str) -> (f64, f64, f64) {
     if c.len() == 6 { (p(0), p(2), p(4)) } else { (1.0, 1.0, 1.0) }
 }
 
-struct Placed<'a> {
-    cfg: &'a WidgetCfg,
-    x: f64,
-    w: f64,
+/// First Battery-type entry under /sys/class/power_supply, as 0..=100.
+fn battery_capacity() -> Option<i64> {
+    std::fs::read_dir("/sys/class/power_supply")
+        .ok()?
+        .filter_map(|e| e.ok())
+        .find(|e| {
+            std::fs::read_to_string(e.path().join("type"))
+                .map(|t| t.trim() == "Battery")
+                .unwrap_or(false)
+        })
+        .and_then(|e| {
+            std::fs::read_to_string(e.path().join("capacity"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        })
 }
 
-fn layout(cfg: &Config) -> Vec<Placed<'_>> {
+/// (x, width) of every widget in strip coordinates — used for painting,
+/// hit-testing, and one day the customizer's drag handles.
+pub fn layout_rects(cfg: &Config) -> Vec<(f64, f64)> {
     let mut fixed = PAD * 2.0;
     let mut flex_total = 0.0;
     for w in &cfg.widgets {
         match w {
-            WidgetCfg::Label { width, .. } | WidgetCfg::Clock { width, .. } => {
-                match width {
-                    Some(px) => fixed += px,
-                    None => flex_total += 1.0, // text widgets default to flex 1
-                }
-            }
+            WidgetCfg::Label { width, .. }
+            | WidgetCfg::Clock { width, .. }
+            | WidgetCfg::Battery { width, .. } => match width {
+                Some(px) => fixed += px,
+                None => flex_total += 1.0,
+            },
             WidgetCfg::Spacer { flex } => flex_total += flex,
         }
         fixed += GAP;
@@ -90,34 +117,55 @@ fn layout(cfg: &Config) -> Vec<Placed<'_>> {
     fixed -= GAP; // no gap after the last widget
     let flex_px = (STRIP_W - fixed).max(0.0) / flex_total.max(1.0);
 
-    let mut placed = Vec::new();
+    let mut rects = Vec::new();
     let mut x = PAD;
     for w in &cfg.widgets {
         let wpx = match w {
             WidgetCfg::Label { width: Some(px), .. }
-            | WidgetCfg::Clock { width: Some(px), .. } => *px,
-            WidgetCfg::Label { .. } | WidgetCfg::Clock { .. } => flex_px,
+            | WidgetCfg::Clock { width: Some(px), .. }
+            | WidgetCfg::Battery { width: Some(px), .. } => *px,
+            WidgetCfg::Label { .. } | WidgetCfg::Clock { .. } | WidgetCfg::Battery { .. } => flex_px,
             WidgetCfg::Spacer { flex } => flex * flex_px,
         };
-        placed.push(Placed { cfg: w, x, w: wpx });
+        rects.push((x, wpx));
         x += wpx + GAP;
     }
-    placed
+    rects
 }
 
-fn widget_text(cfg: &WidgetCfg) -> Option<(String, Option<&str>)> {
+/// Which widget owns strip-x, if any. Whole-height hit boxes; the strip
+/// is sixty pixels of pure horizontal intent.
+pub fn hit(cfg: &Config, x: f64) -> Option<usize> {
+    layout_rects(cfg)
+        .iter()
+        .position(|(rx, rw)| x >= *rx && x < rx + rw)
+}
+
+fn widget_text(cfg: &WidgetCfg) -> Option<(String, Option<String>)> {
     match cfg {
-        WidgetCfg::Label { text, color, .. } => Some((text.clone(), color.as_deref())),
+        WidgetCfg::Label { text, color, .. } => Some((text.clone(), color.clone())),
         WidgetCfg::Clock { format, color, .. } => Some((
             chrono::Local::now().format(format).to_string(),
-            color.as_deref(),
+            color.clone(),
         )),
+        WidgetCfg::Battery { format, color, .. } => {
+            let cap = battery_capacity()?;
+            let text = format.replace("{capacity}", &cap.to_string());
+            let auto = match cap {
+                51..=100 => "#88ffcc",
+                21..=50 => "#ffcc66",
+                _ => "#ff6677",
+            };
+            Some((text, Some(color.clone().unwrap_or_else(|| auto.into()))))
+        }
         WidgetCfg::Spacer { .. } => None,
     }
 }
 
 /// Render the strip to any cairo surface sized STRIP_W x STRIP_H.
-pub fn render(cfg: &Config, cr: &cairo::Context) -> Result<()> {
+/// `pressed` highlights one widget's rect — the daemon's way of saying
+/// "yes, I felt that."
+pub fn render(cfg: &Config, cr: &cairo::Context, pressed: Option<usize>) -> Result<()> {
     let (r, g, b) = hex(&cfg.background);
     cr.set_source_rgb(r, g, b);
     cr.paint()?;
@@ -126,18 +174,23 @@ pub fn render(cfg: &Config, cr: &cairo::Context) -> Result<()> {
     let font = pango::FontDescription::from_string("Sans 24");
     layout_ctx.set_font_description(Some(&font));
 
-    for p in layout(cfg) {
-        if let Some((text, color)) = widget_text(p.cfg) {
+    for (i, ((x, w), widget)) in layout_rects(cfg).iter().zip(cfg.widgets.iter()).enumerate() {
+        if pressed == Some(i) {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.18);
+            cr.rectangle(x + 2.0, 4.0, w - 4.0, STRIP_H - 8.0);
+            cr.fill()?;
+        }
+        if let Some((text, color)) = widget_text(widget) {
             let layout = pango::Layout::new(&layout_ctx);
             layout.set_text(&text);
 
-            let (r, g, b) = hex(color.unwrap_or("#ffffff"));
+            let (r, g, b) = hex(color.as_deref().unwrap_or("#ffffff"));
             cr.set_source_rgb(r, g, b);
 
             let (tw, th) = layout.pixel_size();
-            let x = p.x + (p.w - f64::from(tw)).max(0.0) / 2.0;
-            let y = (STRIP_H - f64::from(th)).max(0.0) / 2.0;
-            cr.move_to(x, y);
+            let tx = x + (w - f64::from(tw)).max(0.0) / 2.0;
+            let ty = (STRIP_H - f64::from(th)).max(0.0) / 2.0;
+            cr.move_to(tx, ty);
             pangocairo::functions::show_layout(cr, &layout);
         }
     }
@@ -152,7 +205,7 @@ pub fn render_preview(cfg: &Config, path: &std::path::Path) -> Result<()> {
         STRIP_H as i32,
     )?;
     let cr = cairo::Context::new(&surface)?;
-    render(cfg, &cr)?;
+    render(cfg, &cr, None)?;
     let mut f = std::fs::File::create(path)?;
     surface.write_to_png(&mut f)?;
     Ok(())
