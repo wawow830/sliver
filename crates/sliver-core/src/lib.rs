@@ -279,6 +279,26 @@ impl Config {
     }
 }
 
+/// The momentary layer shown while the physical Fn/Globe key is held.
+pub fn function_row_config() -> Config {
+    let widgets = (1..=12)
+        .map(|n| WidgetCfg::Button {
+            text: format!("F{n}"),
+            action: None,
+            color: Some("#ffffff".into()),
+            width: None,
+            font_size: 20.0,
+            bold: true,
+            bg: Some("#24242b".into()),
+            align: Align::Center,
+        })
+        .collect();
+    Config {
+        background: "#000000".into(),
+        widgets,
+    }
+}
+
 fn hex(color: &str) -> (f64, f64, f64) {
     let c = color.trim_start_matches('#');
     let p = |i: usize| f64::from(u8::from_str_radix(&c[i..i + 2], 16).unwrap_or(0xff)) / 255.0;
@@ -534,5 +554,22 @@ mod tests {
         assert_eq!(hit(&cfg, 175.0), Some(0));
         assert_eq!(hit(&cfg, 180.0), None); // eight-pixel inter-widget gap
         assert_eq!(hit(&cfg, 184.0), Some(1));
+    }
+
+    #[test]
+    fn function_row_has_twelve_evenly_hit_testable_keys() {
+        let cfg = function_row_config();
+        assert_eq!(cfg.widgets.len(), 12);
+        for (i, widget) in cfg.widgets.iter().enumerate() {
+            let WidgetCfg::Button { text, action, .. } = widget else {
+                panic!("function row contained a non-button")
+            };
+            assert_eq!(text, &format!("F{}", i + 1));
+            assert!(action.is_none());
+        }
+
+        for (i, (x, width)) in layout_rects(&cfg).iter().copied().enumerate() {
+            assert_eq!(hit(&cfg, x + width / 2.0), Some(i));
+        }
     }
 }

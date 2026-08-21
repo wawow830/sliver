@@ -9,7 +9,7 @@
 //!   - `--probe` paints calibration bands when orientation is in doubt.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::io::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,12 +20,29 @@ use anyhow::{Context, Result};
 use drm::buffer::{Buffer as _, DrmFourcc};
 use drm::control::{self, connector, crtc, framebuffer, Device as _, Mode};
 use drm::Device as _;
+use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
+use evdev::{AttributeSet, EventType, InputEvent, Key};
 
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
 const PANEL_W: u32 = 60;
 const FB_PAD: u32 = 4;
 
 const TOUCH_DEV: &str = "/dev/input/event2";
+const KEYBOARD_NAME: &str = "Apple MTP keyboard";
+const F_KEYS: [Key; 12] = [
+    Key::KEY_F1,
+    Key::KEY_F2,
+    Key::KEY_F3,
+    Key::KEY_F4,
+    Key::KEY_F5,
+    Key::KEY_F6,
+    Key::KEY_F7,
+    Key::KEY_F8,
+    Key::KEY_F9,
+    Key::KEY_F10,
+    Key::KEY_F11,
+    Key::KEY_F12,
+];
 /// How long a tapped widget stays lit.
 const FLASH: Duration = Duration::from_millis(220);
 
@@ -129,7 +146,7 @@ impl CardClaim {
 fn spawn_touch() -> mpsc::Receiver<f64> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        use evdev::{AbsoluteAxisType, EventType, Key};
+        use evdev::AbsoluteAxisType;
 
         let mut dev = match evdev::Device::open(TOUCH_DEV) {
             Ok(d) => d,
@@ -194,6 +211,98 @@ fn spawn_touch() -> mpsc::Receiver<f64> {
         }
     });
     rx
+}
+
+/// Find the internal keyboard by identity rather than assuming event1 will
+/// remain event1 forever.
+fn open_main_keyboard() -> io::Result<(std::path::PathBuf, evdev::Device)> {
+    for entry in std::fs::read_dir("/dev/input")? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("event") {
+            continue;
+        }
+        let Ok(dev) = evdev::Device::open(&path) else {
+            continue;
+        };
+        if dev.name() == Some(KEYBOARD_NAME) {
+            return Ok((path, dev));
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("input device {KEYBOARD_NAME:?} not found"),
+    ))
+}
+
+/// Observe Fn/Globe press/release without grabbing the keyboard away from
+/// Hyprland or applications.
+fn spawn_fn_key() -> mpsc::Receiver<bool> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let (path, mut dev) = match open_main_keyboard() {
+            Ok(found) => found,
+            Err(e) => {
+                eprintln!("fn: can't find keyboard: {e}");
+                return;
+            }
+        };
+        eprintln!("fn: watching {} ({KEYBOARD_NAME})", path.display());
+        loop {
+            let events = match dev.fetch_events() {
+                Ok(events) => events,
+                Err(e) => {
+                    eprintln!("fn: keyboard reader stopped: {e}");
+                    return;
+                }
+            };
+            for event in events {
+                if event.event_type() == EventType::KEY && event.code() == Key::KEY_FN.code() {
+                    let active = match event.value() {
+                        1 => Some(true),
+                        0 => Some(false),
+                        _ => None,
+                    };
+                    if let Some(active) = active {
+                        let _ = tx.send(active);
+                    }
+                }
+            }
+        }
+    });
+    rx
+}
+
+/// Virtual keyboard used solely to emit real F1-F12 key events.
+struct FnEmitter {
+    device: VirtualDevice,
+}
+
+impl FnEmitter {
+    fn new() -> Result<Self> {
+        let keys: AttributeSet<Key> = F_KEYS.into_iter().collect();
+        let device = VirtualDeviceBuilder::new()?
+            .name("Sliver Function Row")
+            .with_keys(&keys)?
+            .build()?;
+        eprintln!("fn: virtual F-key keyboard ready");
+        Ok(Self { device })
+    }
+
+    fn tap(&mut self, index: usize) -> io::Result<()> {
+        let key = *F_KEYS.get(index).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "function-key index out of range",
+            )
+        })?;
+        self.device
+            .emit(&[InputEvent::new(EventType::KEY, key.code(), 1)])?;
+        self.device
+            .emit(&[InputEvent::new(EventType::KEY, key.code(), 0)])
+    }
 }
 
 /// A config arriving over the socket, plus the reply line the
@@ -336,32 +445,61 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
 
     let touch = spawn_touch();
     let socket = spawn_socket();
+    let fn_events = spawn_fn_key();
+    let fn_layer = sliver_core::function_row_config();
+    let mut fn_emitter = match FnEmitter::new() {
+        Ok(emitter) => Some(emitter),
+        Err(e) => {
+            eprintln!("fn: can't create virtual keyboard: {e:#}");
+            None
+        }
+    };
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || r.store(false, Ordering::SeqCst))?;
 
     let mut pressed: Option<(usize, Instant)> = None;
+    let mut fn_active = false;
     let mut last_tick = String::new();
     let mut dirty = true;
 
     while running.load(Ordering::SeqCst) {
         std::thread::park_timeout(Duration::from_millis(50));
 
+        while let Ok(active) = fn_events.try_recv() {
+            if active != fn_active {
+                fn_active = active;
+                pressed = None;
+                dirty = true;
+                eprintln!("fn layer: {}", if active { "on" } else { "off" });
+            }
+        }
+
         while let Ok(x) = touch.try_recv() {
-            if let Some(i) = sliver_core::hit(&cfg, x) {
-                eprintln!("tap at x={x:.0} -> widget {i}");
+            let active_cfg = if fn_active { &fn_layer } else { &cfg };
+            if let Some(i) = sliver_core::hit(active_cfg, x) {
                 pressed = Some((i, Instant::now()));
                 dirty = true;
-                if let Some(cmd) = cfg.action_at(i) {
-                    let cmd = cmd.to_string();
-                    eprintln!("running action: {cmd}");
-                    std::thread::spawn(move || {
-                        let _ = std::process::Command::new("sh")
-                            .arg("-c")
-                            .arg(&cmd)
-                            .status();
-                    });
+                if fn_active {
+                    eprintln!("fn tap at x={x:.0} -> F{}", i + 1);
+                    if let Some(emitter) = &mut fn_emitter {
+                        if let Err(e) = emitter.tap(i) {
+                            eprintln!("fn: failed to emit F{}: {e}", i + 1);
+                        }
+                    }
+                } else {
+                    eprintln!("tap at x={x:.0} -> widget {i}");
+                    if let Some(cmd) = cfg.action_at(i) {
+                        let cmd = cmd.to_string();
+                        eprintln!("running action: {cmd}");
+                        std::thread::spawn(move || {
+                            let _ = std::process::Command::new("sh")
+                                .arg("-c")
+                                .arg(&cmd)
+                                .status();
+                        });
+                    }
                 }
             }
         }
@@ -395,7 +533,8 @@ pub fn run(mut cfg: sliver_core::Config) -> Result<()> {
         }
 
         if dirty {
-            t.repaint(&cfg, pressed.map(|(i, _)| i))?;
+            let active_cfg = if fn_active { &fn_layer } else { &cfg };
+            t.repaint(active_cfg, pressed.map(|(i, _)| i))?;
             dirty = false;
         }
     }

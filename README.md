@@ -7,7 +7,8 @@ running on Asahi Linux.
 - **sliver-core** — widget types, TOML layout config, one shared renderer
   (cairo/pango) so editor preview and real strip always agree.
 - **sliverd** — daemon: DRM master on the touchbar panel, touch input,
-  live layout application over a unix socket.
+  Fn/Globe function-row layer through uinput, and live layout application
+  over a unix socket.
 - **customizer** — `sliver-edit`, a GTK4 + libadwaita GUI: live preview
   (the same sliver-core renderer the daemon uses), widget list with
   reorder/delete, property editing, "Apply to strip" over the socket,
@@ -24,6 +25,17 @@ Milestone three — DONE: `/run/user/*/sliver.sock` accepts a TOML doc
 per connection: `sliverd --apply cfg.toml`, ok/error reply.
 Milestone four — DONE, v1: the customizer GUI runs; drag-and-drop
 reordering is the obvious v2.
+Milestone five — DONE: hold Fn/Globe for a momentary F1–F12 layer;
+tapping a key emits its real Linux keycode through a Sliver uinput
+keyboard, and releasing Fn restores the custom layout.
+
+## Function keys
+
+With `sliverd` running, hold the physical **Fn/Globe** key. The strip
+changes to F1–F12. Tap a key, then release Fn to return to your widgets.
+The user running Sliver needs read access to `/dev/input/event*` and
+read/write access to `/dev/uinput` (the Fedora `input` group provides
+both on this machine).
 
 Hard-won truths: the DSI panel freezes its last frame (dead processes
 haunt the glass); the driver rounds the dumb buffer up (paint by mode
