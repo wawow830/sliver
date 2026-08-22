@@ -849,6 +849,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             HardwareEvent::Touch(touch) => self.route_touch(touch),
             HardwareEvent::Fn { active } => {
                 self.route_input(ObservedKey::Fn, active, now);
+                if !active
+                    && self
+                        .recovery
+                        .as_ref()
+                        .is_some_and(|recovery| recovery.owner_is_healthy())
+                {
+                    self.exit_recovery(now)?;
+                }
                 Ok(())
             }
             HardwareEvent::Modifier { modifier, active } => {
@@ -1953,6 +1961,42 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(&log)?, "render\nvisibility:false\n");
         assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn healthy_recovery_exits_before_later_same_batch_touch_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+        assert!(supervisor.recovery.is_some());
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(4.1)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
+        supervisor.step_at(5.0)?;
+
+        assert!(supervisor.recovery.is_none());
+        assert!(supervisor.hardware().synthetic_keys().is_empty());
         supervisor.shutdown()?;
         Ok(())
     }
