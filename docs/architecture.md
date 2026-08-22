@@ -195,5 +195,5 @@ processes without a qualifying session, and root are rejected.
 The supervisor checks the session before staging and again immediately before
 commit. A session switch cancels candidates that are staging or waiting in the
 FIFO request queue. Workers run with the supervisor's systemd user-manager
-environment. The client cannot send environment variables, tokens, or network
-requests through this protocol.
+environment. The protocol has no TCP listener or token field and carries no
+client environment.
