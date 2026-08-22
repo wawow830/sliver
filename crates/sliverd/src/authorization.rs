@@ -115,4 +115,87 @@ mod tests {
         assert!(format!("{error:#}").contains("root is not authorized"));
         Ok(())
     }
+
+    #[test]
+    fn non_qualifying_logind_callers_are_rejected() -> Result<()> {
+        let uid = unsafe { libc::getuid() };
+        let cases = [
+            (
+                "inactive",
+                Some(Session {
+                    id: "inactive".into(),
+                    uid,
+                    seat: Some("seat0".into()),
+                    remote: false,
+                    active: false,
+                }),
+                Some(ActiveSession {
+                    id: "inactive".into(),
+                    uid,
+                }),
+                "session is inactive",
+            ),
+            (
+                "remote",
+                Some(Session {
+                    id: "ssh".into(),
+                    uid,
+                    seat: Some("seat0".into()),
+                    remote: true,
+                    active: true,
+                }),
+                Some(ActiveSession {
+                    id: "ssh".into(),
+                    uid,
+                }),
+                "remote sessions",
+            ),
+            ("cron", None, None, "does not belong to a logind session"),
+            (
+                "no-seat",
+                Some(Session {
+                    id: "background".into(),
+                    uid,
+                    seat: None,
+                    remote: false,
+                    active: true,
+                }),
+                None,
+                "not attached to a local seat",
+            ),
+            (
+                "background-seat-session",
+                Some(Session {
+                    id: "background".into(),
+                    uid,
+                    seat: Some("seat0".into()),
+                    remote: false,
+                    active: true,
+                }),
+                Some(ActiveSession {
+                    id: "other-active".into(),
+                    uid,
+                }),
+                "not the active session",
+            ),
+        ];
+
+        for (name, session, active, expected) in cases {
+            let logind = FakeLogind::new();
+            logind.set_session(peer(uid).pid, session);
+            if let Some(active) = active {
+                logind.set_active("seat0", Some(active));
+            }
+
+            let error = match SessionAuthorizer::new(logind).authorize(peer(uid)) {
+                Ok(grant) => panic!("{name} caller was accepted: {grant:?}"),
+                Err(error) => error,
+            };
+            assert!(
+                format!("{error:#}").contains(expected),
+                "{name} caller returned the wrong rejection: {error:#}"
+            );
+        }
+        Ok(())
+    }
 }

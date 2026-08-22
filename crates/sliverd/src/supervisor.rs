@@ -626,6 +626,311 @@ mod tests {
     }
 
     #[test]
+    fn session_change_during_staging_cancels_the_candidate_before_commit() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let marker = directory.path().join("staging");
+        let gate = directory.path().join("release");
+        let source = directory.path().join("config.lua");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local marker = assert(io.open({marker:?}, "w"))
+                marker:close()
+                while true do
+                    local gate = io.open({gate:?})
+                    if gate then gate:close(); break end
+                end
+                require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }}
+                "#,
+                marker = marker.to_string_lossy(),
+                gate = gate.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let uid = unsafe { libc::getuid() };
+        let pid = std::process::id() as libc::pid_t;
+        let logind = FakeLogind::new();
+        logind.set_session(
+            pid,
+            Some(Session {
+                id: "old-session".into(),
+                uid,
+                seat: Some("seat0".into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "old-session".into(),
+                uid,
+            }),
+        );
+        let server_logind = logind.clone();
+        let server_socket = socket.clone();
+        let server_state = state_file.clone();
+        let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
+            let mut supervisor =
+                Supervisor::new_with_logind(FakeTouchBar::new(), server_state, server_logind)?;
+            let (mut stream, _) = listener.accept()?;
+            serve_connection(&mut stream, &mut supervisor)?;
+            Ok(supervisor)
+        });
+        let client_source = source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&server_socket, &client_source)
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        anyhow::ensure!(marker.exists(), "candidate never entered staging");
+
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "new-session".into(),
+                uid,
+            }),
+        );
+        std::fs::write(&gate, "continue")?;
+
+        let error = client
+            .join()
+            .expect("apply client panicked")
+            .expect_err("candidate committed after the active session changed");
+        assert!(format!("{error:#}").contains("not the active session"));
+        let supervisor = server.join().expect("supervisor thread panicked")?;
+        assert!(!state_file.exists());
+        assert!(supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn queued_apply_is_cancelled_after_the_active_session_changes() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let marker = directory.path().join("staging");
+        let gate = directory.path().join("release");
+        let first = directory.path().join("first.lua");
+        std::fs::write(
+            &first,
+            format!(
+                r#"
+                local marker = assert(io.open({marker:?}, "w"))
+                marker:close()
+                while true do
+                    local gate = io.open({gate:?})
+                    if gate then gate:close(); break end
+                end
+                require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }}
+                "#,
+                marker = marker.to_string_lossy(),
+                gate = gate.to_string_lossy(),
+            ),
+        )?;
+        let second = directory.path().join("second.lua");
+        std::fs::write(
+            &second,
+            r#"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let uid = unsafe { libc::getuid() };
+        let pid = std::process::id() as libc::pid_t;
+        let logind = FakeLogind::new();
+        logind.set_session(
+            pid,
+            Some(Session {
+                id: "old-session".into(),
+                uid,
+                seat: Some("seat0".into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "old-session".into(),
+                uid,
+            }),
+        );
+        let server_logind = logind.clone();
+        let server_state = state_file.clone();
+        let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
+            let mut supervisor =
+                Supervisor::new_with_logind(FakeTouchBar::new(), server_state, server_logind)?;
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept()?;
+                serve_connection(&mut stream, &mut supervisor)?;
+            }
+            Ok(supervisor)
+        });
+        let first_socket = socket.clone();
+        let first_client_source = first.clone();
+        let first_client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&first_socket, &first_client_source)
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        anyhow::ensure!(marker.exists(), "first candidate never entered staging");
+
+        let second_socket = socket.clone();
+        let second_client_source = second.clone();
+        let second_client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&second_socket, &second_client_source)
+        });
+        thread::sleep(Duration::from_millis(50));
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "new-session".into(),
+                uid,
+            }),
+        );
+        std::fs::write(&gate, "continue")?;
+
+        let first_error = first_client
+            .join()
+            .expect("first apply client panicked")
+            .expect_err("staged apply committed after session change");
+        let second_error = second_client
+            .join()
+            .expect("second apply client panicked")
+            .expect_err("queued apply committed after session change");
+        assert!(format!("{first_error:#}").contains("not the active session"));
+        assert!(format!("{second_error:#}").contains("not the active session"));
+        let supervisor = server.join().expect("supervisor thread panicked")?;
+        assert!(!state_file.exists());
+        assert!(supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn rapid_active_session_changes_do_not_leave_stale_apply_state() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let old_source = directory.path().join("old.lua");
+        let new_source = directory.path().join("new.lua");
+        let config = |red: f64, blue: f64| {
+            format!(
+                "require('sliver.v1'); return {{ api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, {red}, 0, {blue}, 1) end }}"
+            )
+        };
+        std::fs::write(&old_source, config(1.0, 0.0))?;
+        std::fs::write(&new_source, config(0.0, 1.0))?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let uid = unsafe { libc::getuid() };
+        let pid = std::process::id() as libc::pid_t;
+        let logind = FakeLogind::new();
+        logind.set_session(
+            pid,
+            Some(Session {
+                id: "old-session".into(),
+                uid,
+                seat: Some("seat0".into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "old-session".into(),
+                uid,
+            }),
+        );
+        let server_logind = logind.clone();
+        let server_state = state_file.clone();
+        let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
+            let mut supervisor =
+                Supervisor::new_with_logind(FakeTouchBar::new(), server_state, server_logind)?;
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept()?;
+                serve_connection(&mut stream, &mut supervisor)?;
+            }
+            Ok(supervisor)
+        });
+
+        let apply = |path: &std::path::Path| {
+            let socket = socket.clone();
+            let path = path.to_path_buf();
+            thread::spawn(move || crate::apply_ipc::request_apply_at(&socket, &path))
+                .join()
+                .expect("apply client panicked")
+        };
+        apply(&old_source)?;
+
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "new-session".into(),
+                uid,
+            }),
+        );
+        let rejected = apply(&new_source).expect_err("inactive old session was accepted");
+        assert!(format!("{rejected:#}").contains("not the active session"));
+
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "old-session".into(),
+                uid,
+            }),
+        );
+        apply(&new_source)?;
+
+        let supervisor = server.join().expect("supervisor thread panicked")?;
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            new_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(supervisor.hardware().presented_frames().len(), 2);
+        assert_eq!(
+            supervisor.hardware().presented_frames()[0].rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            supervisor.hardware().presented_frames()[1].rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn successful_candidate_commits_frame_and_selected_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("config.lua");
