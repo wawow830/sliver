@@ -553,7 +553,10 @@ mod tests {
         assert!(pixel[0] > 0, "source color was not written: {pixel:?}");
         assert_eq!(pixel[1], 0);
         assert_eq!(pixel[2], 0);
-        assert!(pixel[3] < 200, "source replacement retained the destination alpha: {pixel:?}");
+        assert!(
+            pixel[3] < 200,
+            "source replacement retained the destination alpha: {pixel:?}"
+        );
         Ok(())
     }
 
@@ -642,6 +645,48 @@ mod tests {
         assert_eq!(frames[0].rgba_at(15, 15), [255, 0, 0, 255]);
         assert_eq!(frames[1].rgba_at(5, 5), [0, 255, 0, 255]);
         assert_eq!(frames[1].rgba_at(15, 15), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_resets_drawing_state_for_each_frame() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("frame-state.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            local frame = 0
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    frame = frame + 1
+                    if frame == 1 then
+                        canvas:translate(100, 0)
+                        canvas:alpha(0.5)
+                        canvas:operator("source")
+                        canvas:rectangle(0, 0, 10, 10, "#ff0000")
+                    else
+                        canvas:rectangle(0, 0, 10, 10, "#00ff00")
+                    end
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        let crate::lua_worker::StagedLuaWorker { worker, frame } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        hardware.present(&frame)?;
+        let frame = worker.render_next()?;
+        hardware.present(&frame)?;
+        worker.shutdown()?;
+        hardware.release()?;
+
+        let frames = hardware.presented_frames();
+        assert!(frames[0].rgba_at(105, 5)[0] > 0);
+        assert_eq!(frames[1].rgba_at(5, 5), [0, 255, 0, 255]);
+        assert_eq!(frames[1].rgba_at(105, 5), [0, 0, 0, 255]);
         Ok(())
     }
 

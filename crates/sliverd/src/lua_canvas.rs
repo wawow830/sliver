@@ -305,12 +305,9 @@ impl UserData for Canvas {
             canvas.set_source(color);
             canvas.context.new_path();
             canvas.context.rectangle(x, y, width, height);
-            canvas
-                .context
-                .fill()
-                .map_err(|error| mlua::Error::runtime(format!(
-                    "canvas:rectangle fill failed: {error}"
-                )))
+            canvas.context.fill().map_err(|error| {
+                mlua::Error::runtime(format!("canvas:rectangle fill failed: {error}"))
+            })
         });
         methods.add_method("fill", |_, canvas, args: MultiValue| {
             if canvas.invalidated.get() {
@@ -320,9 +317,7 @@ impl UserData for Canvas {
             }
             let values = args.into_vec();
             if values.len() < 2 {
-                return Err(mlua::Error::runtime(
-                    "canvas:fill needs a path and a color",
-                ));
+                return Err(mlua::Error::runtime("canvas:fill needs a path and a color"));
             }
             let path = match &values[0] {
                 Value::UserData(path) => path.borrow::<Path>()?,
@@ -340,9 +335,7 @@ impl UserData for Canvas {
             canvas
                 .context
                 .fill()
-                .map_err(|error| mlua::Error::runtime(format!(
-                    "canvas:fill failed: {error}"
-                )))
+                .map_err(|error| mlua::Error::runtime(format!("canvas:fill failed: {error}")))
         });
         methods.add_method("clip", |_, canvas, args: MultiValue| {
             if canvas.invalidated.get() {
@@ -352,9 +345,7 @@ impl UserData for Canvas {
             }
             let values = args.into_vec();
             if values.len() != 1 {
-                return Err(mlua::Error::runtime(
-                    "canvas:clip needs exactly one path",
-                ));
+                return Err(mlua::Error::runtime("canvas:clip needs exactly one path"));
             }
             let path = match &values[0] {
                 Value::UserData(path) => path.borrow::<Path>()?,
@@ -405,9 +396,7 @@ impl UserData for Canvas {
             canvas
                 .context
                 .stroke()
-                .map_err(|error| mlua::Error::runtime(format!(
-                    "canvas:stroke failed: {error}"
-                )))
+                .map_err(|error| mlua::Error::runtime(format!("canvas:stroke failed: {error}")))
         });
         methods.add_method("save", |_, canvas, ()| {
             if canvas.invalidated.get() {
@@ -429,13 +418,12 @@ impl UserData for Canvas {
                 ));
             }
             if canvas.saved.borrow().is_empty() {
-                return Err(mlua::Error::runtime(
-                    "canvas:restore has no matching save",
-                ));
+                return Err(mlua::Error::runtime("canvas:restore has no matching save"));
             }
-            canvas.context.restore().map_err(|error| {
-                mlua::Error::runtime(format!("canvas:restore failed: {error}"))
-            })?;
+            canvas
+                .context
+                .restore()
+                .map_err(|error| mlua::Error::runtime(format!("canvas:restore failed: {error}")))?;
             let alpha = canvas
                 .saved
                 .borrow_mut()
@@ -483,9 +471,7 @@ impl UserData for Canvas {
                 ));
             }
             if !angle.is_finite() {
-                return Err(mlua::Error::runtime(
-                    "canvas:rotate angle must be finite",
-                ));
+                return Err(mlua::Error::runtime("canvas:rotate angle must be finite"));
             }
             canvas.context.rotate(angle);
             Canvas::status(&canvas.context, "rotate")
@@ -554,21 +540,24 @@ impl UserData for Canvas {
             pangocairo::functions::show_layout(&canvas.context, &layout);
             Canvas::status(&canvas.context, "text")
         });
-        methods.add_method("measure_text", |_, canvas, (text, font_size): (String, f64)| {
-            if canvas.invalidated.get() {
-                return Err(mlua::Error::runtime(
-                    "canvas:measure_text cannot be called after canvas invalidation",
-                ));
-            }
-            if !font_size.is_finite() || font_size <= 0.0 {
-                return Err(mlua::Error::runtime(
-                    "canvas:measure_text font size must be finite and positive",
-                ));
-            }
-            let layout = Canvas::text_layout(&canvas.context, &text, font_size)?;
-            let (width, height) = layout.size();
-            let scale = f64::from(pango::SCALE);
-            Ok((f64::from(width) / scale, f64::from(height) / scale))
-        });
+        methods.add_method(
+            "measure_text",
+            |_, canvas, (text, font_size): (String, f64)| {
+                if canvas.invalidated.get() {
+                    return Err(mlua::Error::runtime(
+                        "canvas:measure_text cannot be called after canvas invalidation",
+                    ));
+                }
+                if !font_size.is_finite() || font_size <= 0.0 {
+                    return Err(mlua::Error::runtime(
+                        "canvas:measure_text font size must be finite and positive",
+                    ));
+                }
+                let layout = Canvas::text_layout(&canvas.context, &text, font_size)?;
+                let (width, height) = layout.size();
+                let scale = f64::from(pango::SCALE);
+                Ok((f64::from(width) / scale, f64::from(height) / scale))
+            },
+        );
     }
 }
