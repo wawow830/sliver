@@ -87,7 +87,7 @@ impl SyntheticState {
             match request.operation {
                 KeyOperation::Down => {
                     ensure!(
-                        !next.held.iter().any(|(key, _)| *key == request.key),
+                        !next.is_key_held(request.key),
                         "synthetic key is already held"
                     );
                     let modifiers = next.resolve_modifiers(&request.modifiers, input_state)?;
@@ -96,7 +96,7 @@ impl SyntheticState {
                         "a synthetic key cannot mirror itself"
                     );
                     for modifier in &modifiers {
-                        if !next.is_held(*modifier) {
+                        if next.modifier_count(*modifier) == 0 {
                             events.push(SyntheticKeyEvent {
                                 key: *modifier,
                                 active: true,
@@ -121,7 +121,7 @@ impl SyntheticState {
                         active: false,
                     });
                     for modifier in modifiers.into_iter().rev() {
-                        if !next.is_held(modifier) {
+                        if next.modifier_count(modifier) == 0 {
                             events.push(SyntheticKeyEvent {
                                 key: modifier,
                                 active: false,
@@ -137,7 +137,7 @@ impl SyntheticState {
                     );
                     let mirrored: Vec<_> = modifiers
                         .into_iter()
-                        .filter(|modifier| !next.is_held(*modifier))
+                        .filter(|modifier| next.modifier_count(*modifier) == 0)
                         .collect();
                     events.extend(
                         mirrored
@@ -192,22 +192,30 @@ impl SyntheticState {
         Ok(modifiers)
     }
 
-    fn is_held(&self, key: OutputKey) -> bool {
+    fn is_key_held(&self, key: OutputKey) -> bool {
         self.held.iter().any(|(held, _)| *held == key)
     }
 
+    fn modifier_count(&self, modifier: OutputKey) -> usize {
+        self.held
+            .iter()
+            .flat_map(|(_, modifiers)| modifiers)
+            .filter(|held| **held == modifier)
+            .count()
+    }
+
     fn release(&self) -> (Self, Vec<SyntheticKeyEvent>) {
+        let mut remaining = self.clone();
         let mut events = Vec::new();
-        for (key, modifiers) in self.held.iter().rev() {
-            events.push(SyntheticKeyEvent {
-                key: *key,
-                active: false,
-            });
-            for modifier in modifiers.iter().rev() {
-                events.push(SyntheticKeyEvent {
-                    key: *modifier,
-                    active: false,
-                });
+        while let Some((key, modifiers)) = remaining.held.pop() {
+            events.push(SyntheticKeyEvent { key, active: false });
+            for modifier in modifiers.into_iter().rev() {
+                if remaining.modifier_count(modifier) == 0 {
+                    events.push(SyntheticKeyEvent {
+                        key: modifier,
+                        active: false,
+                    });
+                }
             }
         }
         (Self::default(), events)
@@ -1386,6 +1394,127 @@ mod tests {
         );
         supervisor.shutdown()?;
         Ok(())
+    }
+
+    #[test]
+    fn overlapping_held_keys_reference_count_inherited_and_explicit_modifiers() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("overlapping-keys.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local keys = sliver.input.keys
+            local explicit = { modifiers = { keys.keyboard.right_ctrl } }
+            return {
+                api_version = 1,
+                touch = function(event)
+                    local key = ({
+                        [1] = keys.keyboard.f2,
+                        [2] = keys.keyboard.f3,
+                        [3] = keys.keyboard.f4,
+                        [4] = keys.keyboard.f5,
+                    })[event.id]
+                    local options = event.id >= 3 and explicit or nil
+                    if event.phase == "down" then
+                        sliver.input.key.down(key, options)
+                    elseif event.phase == "up" then
+                        sliver.input.key.up(key)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&source)?;
+        for id in 1..=4 {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Down)));
+        }
+        for id in 1..=4 {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Up)));
+        }
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions(),
+            &[vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::RightCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F4),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F5),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F4),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F5),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::RightCtrl),
+                    active: false,
+                },
+            ]]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    fn overlap_touch(id: u32, phase: TouchPhase) -> TouchEvent {
+        TouchEvent {
+            phase,
+            id,
+            time: 0.0,
+            x: f64::from(id),
+            y: 1.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        }
     }
 
     #[test]
