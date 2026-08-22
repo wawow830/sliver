@@ -760,6 +760,35 @@ fn function_key_events(index: usize, modifiers: ModifierState) -> io::Result<Vec
         .collect())
 }
 
+struct PersistentEmitter<T> {
+    value: Option<T>,
+}
+
+impl<T> Default for PersistentEmitter<T> {
+    fn default() -> Self {
+        Self { value: None }
+    }
+}
+
+impl<T> PersistentEmitter<T> {
+    fn ensure(&mut self, create: impl FnOnce() -> Result<T>) -> Result<()> {
+        if self.as_ref().is_none() {
+            self.value = Some(create()?);
+        }
+        Ok(())
+    }
+
+    fn as_ref(&self) -> Option<&T> {
+        self.value.as_ref()
+    }
+
+    fn as_mut(&mut self) -> Option<&mut T> {
+        self.value.as_mut()
+    }
+
+    fn release(&mut self) {}
+}
+
 /// One virtual keyboard shared by the Lua worker and the fixed Fn row.
 struct KeyboardEmitter {
     device: VirtualDevice,
@@ -920,7 +949,7 @@ pub(crate) struct M2TouchBar {
     touch: Option<TouchInput>,
     keyboard: Option<KeyboardInput>,
     modifiers: ModifierState,
-    keyboard_emitter: Option<KeyboardEmitter>,
+    keyboard_emitter: PersistentEmitter<KeyboardEmitter>,
 }
 
 impl M2TouchBar {
@@ -934,7 +963,7 @@ impl M2TouchBar {
             touch: None,
             keyboard: None,
             modifiers: ModifierState::default(),
-            keyboard_emitter: None,
+            keyboard_emitter: PersistentEmitter::default(),
         }
     }
 
@@ -1005,10 +1034,8 @@ impl M2TouchBar {
         let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
         self.modifiers = keyboard.initial_modifiers();
         self.keyboard = Some(keyboard);
-        if self.keyboard_emitter.is_none() {
-            self.keyboard_emitter =
-                Some(KeyboardEmitter::new().context("creating Sliver Keyboard")?);
-        }
+        self.keyboard_emitter
+            .ensure(|| KeyboardEmitter::new().context("creating Sliver Keyboard"))?;
         Ok(())
     }
 
@@ -1128,6 +1155,7 @@ impl M2TouchBar {
         self.touch = None;
         self.keyboard = None;
         self.modifiers = ModifierState::default();
+        self.keyboard_emitter.release();
 
         let framebuffer = self.framebuffer.take();
         let dumb_buffer = self.dumb_buffer.take();
@@ -1332,22 +1360,18 @@ mod tests {
 
     #[test]
     fn release_keeps_keyboard_emitter_for_reclaim() -> Result<()> {
-        let mut hardware = M2TouchBar::new();
-        hardware.keyboard_emitter = Some(KeyboardEmitter::new()?);
-        let first = hardware
-            .keyboard_emitter
-            .as_ref()
-            .expect("keyboard emitter was not created")
-            as *const KeyboardEmitter;
+        let mut emitter = PersistentEmitter::default();
+        emitter.ensure(|| Ok(7_u8))?;
+        let first = emitter.as_ref().expect("keyboard emitter was not created") as *const u8;
 
-        hardware.release_inner()?;
+        emitter.release();
+        emitter.ensure(|| Ok(8_u8))?;
 
-        let second = hardware
-            .keyboard_emitter
+        let second = emitter
             .as_ref()
-            .expect("release discarded the keyboard emitter")
-            as *const KeyboardEmitter;
+            .expect("release discarded the keyboard emitter") as *const u8;
         assert_eq!(first, second);
+        assert_eq!(*emitter.as_ref().expect("emitter disappeared"), 7);
         Ok(())
     }
 
