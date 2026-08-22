@@ -639,14 +639,32 @@ fn open_main_keyboard() -> io::Result<(PathBuf, evdev::Device)> {
 struct KeyboardInput {
     path: PathBuf,
     device: evdev::Device,
+    pending: Vec<HardwareEvent>,
 }
 
 impl KeyboardInput {
     fn open() -> io::Result<Self> {
         let (path, device) = open_main_keyboard()?;
         set_nonblocking(device.as_raw_fd())?;
+        let key_state = device.get_key_state().unwrap_or_default();
+        let mut pending = Vec::new();
+        if key_state.contains(Key::KEY_FN) {
+            pending.push(HardwareEvent::Fn { active: true });
+        }
+        for (key, modifier) in MOD_KEYS.into_iter().zip(Modifier::ALL) {
+            if key_state.contains(key) {
+                pending.push(HardwareEvent::Modifier {
+                    modifier,
+                    active: true,
+                });
+            }
+        }
         eprintln!("fn: watching {} ({KEYBOARD_NAME})", path.display());
-        Ok(Self { path, device })
+        Ok(Self {
+            path,
+            device,
+            pending,
+        })
     }
 
     fn drain(
@@ -654,14 +672,19 @@ impl KeyboardInput {
         output: &mut Vec<HardwareEvent>,
         modifiers: &mut ModifierState,
     ) -> io::Result<bool> {
+        let mut progress = false;
+        if !self.pending.is_empty() {
+            output.append(&mut self.pending);
+            progress = true;
+        }
         let events: Vec<InputEvent> = match self.device.fetch_events() {
             Ok(events) => events.collect(),
-            Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(false),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(progress),
             Err(e) => return Err(e),
         };
 
         if events.is_empty() {
-            return Ok(false);
+            return Ok(progress);
         }
 
         for event in events {
