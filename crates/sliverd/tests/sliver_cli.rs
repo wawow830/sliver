@@ -18,6 +18,74 @@ fn missing_config_path_is_a_usage_error() {
 }
 
 #[test]
+fn invalid_usage_and_supervisor_failures_use_distinct_statuses() {
+    let directory = tempfile::tempdir().expect("failed to create temporary directory");
+    let source = directory.path().join("config.lua");
+    std::fs::write(&source, "return {}").expect("failed to create config");
+
+    let usage = Command::new(env!("CARGO_BIN_EXE_sliver"))
+        .args([source.as_os_str(), "extra".as_ref()])
+        .output()
+        .expect("failed to run sliver with invalid usage");
+    assert_eq!(usage.status.code(), Some(2));
+    assert!(usage.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&usage.stderr).contains("usage: sliver FILE"));
+
+    let runtime = directory.path().join("missing-runtime");
+    std::fs::create_dir(&runtime).expect("failed to create runtime directory");
+    let unavailable = Command::new(env!("CARGO_BIN_EXE_sliver"))
+        .arg(&source)
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .output()
+        .expect("failed to run sliver without supervisor");
+    assert_eq!(unavailable.status.code(), Some(1));
+    assert!(unavailable.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&unavailable.stderr).contains("connecting"));
+}
+
+#[test]
+fn supervisor_rejection_is_stderr_only() {
+    let directory = tempfile::tempdir().expect("failed to create temporary directory");
+    let runtime = directory.path().join("runtime");
+    let socket_directory = runtime.join("sliver");
+    std::fs::create_dir_all(&socket_directory).expect("failed to create socket directory");
+    let socket = socket_directory.join("supervisor.sock");
+    let listener = UnixListener::bind(&socket).expect("failed to bind supervisor stub");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("failed to accept apply request");
+        let mut length = [0u8; 4];
+        stream
+            .read_exact(&mut length)
+            .expect("failed to read path length");
+        let mut path = vec![0; u32::from_be_bytes(length) as usize];
+        stream.read_exact(&mut path).expect("failed to read path");
+        let message = b"render failed";
+        stream
+            .write_all(&[1])
+            .expect("failed to write failure status");
+        stream
+            .write_all(&(message.len() as u32).to_be_bytes())
+            .expect("failed to write failure length");
+        stream
+            .write_all(message)
+            .expect("failed to write failure message");
+    });
+    let source = directory.path().join("config.lua");
+    std::fs::write(&source, "return {}").expect("failed to create config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sliver"))
+        .arg(&source)
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .output()
+        .expect("failed to run sliver");
+
+    server.join().expect("supervisor stub panicked");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("render failed"));
+}
+
+#[test]
 fn successful_apply_is_silent_and_sends_absolute_path() {
     let directory = tempfile::tempdir().expect("failed to create temporary directory");
     let runtime = directory.path().join("runtime");
