@@ -762,7 +762,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
         let now = self.now_seconds();
         let mut owner_is_healthy = false;
-        if let Some(active) = self.active.as_mut() {
+        let hidden = self.active.as_mut().map(|active| {
             owner_is_healthy = true;
             let hidden = cancel_contacts(
                 &active.worker,
@@ -772,17 +772,31 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     .with_visibility(false, VisibilityReason::Recovery, false),
             );
             active.contacts.clear();
-            if let Err(error) = hidden {
+            hidden
+        });
+        let next_timer_deadline = match hidden {
+            Some(Ok(effects)) => match self.apply_key_effects(&effects.key_requests) {
+                Ok(()) => effects.next_timer_deadline,
+                Err(error) => {
+                    eprintln!("healthy Lua worker failed while entering recovery: {error:#}");
+                    self.active.take();
+                    owner_is_healthy = false;
+                    None
+                }
+            },
+            Some(Err(error)) => {
                 eprintln!("healthy Lua worker failed while entering recovery: {error:#}");
                 self.active.take();
                 owner_is_healthy = false;
+                None
             }
-        }
+            None => None,
+        };
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         self.touch_queue.drain();
         self.input_transitions.clear();
-        self.next_timer_deadline = None;
+        self.next_timer_deadline = next_timer_deadline;
         self.fn_hold_started = None;
         self.recovery_row.clear();
         self.recovery = Some(RecoveryState::new(owner_is_healthy));
@@ -909,8 +923,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let timer_due = self
             .next_timer_deadline
             .is_some_and(|deadline| deadline <= now);
-        if self.recovery.is_none()
-            && self.active.is_some()
+        if self.recovery.is_some() {
+            if self.active.is_some()
+                && self
+                    .recovery
+                    .as_ref()
+                    .is_some_and(|recovery| recovery.owner_is_healthy())
+                && timer_due
+            {
+                self.drive_hidden(now)?;
+            }
+        } else if self.active.is_some()
             && (!self.input_transitions.is_empty()
                 || !self.touch_queue.events.is_empty()
                 || timer_due)
@@ -920,6 +943,34 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             self.drive_active(now, transitions, touches)?;
         }
         Ok(())
+    }
+
+    fn drive_hidden(&mut self, now: f64) -> Result<()> {
+        if !self
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.owner_is_healthy())
+        {
+            return Ok(());
+        }
+        let effects = {
+            let Some(active) = self.active.as_ref() else {
+                return Ok(());
+            };
+            active.worker.drive(DriveRequest::new(
+                now,
+                self.input_state,
+                Vec::new(),
+                0.0,
+                Vec::new(),
+            ))
+        };
+        let effects = match effects {
+            Ok(effects) => effects,
+            Err(error) => return self.fail_active_worker(error),
+        };
+        self.next_timer_deadline = effects.next_timer_deadline;
+        self.apply_key_effects(&effects.key_requests)
     }
 
     fn drive_active(
@@ -992,17 +1043,21 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
-    fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
-        let Some(active) = self.active.as_ref() else {
-            return Ok(());
-        };
-        let (next_synthetic, key_events) = self
-            .synthetic
-            .plan(&effects.key_requests, self.input_state)?;
+    fn apply_key_effects(&mut self, requests: &[KeyRequest]) -> Result<()> {
+        let (next_synthetic, key_events) = self.synthetic.plan(requests, self.input_state)?;
         if !key_events.is_empty() {
             self.hardware.emit_key_events(&key_events)?;
         }
         self.synthetic = next_synthetic;
+        Ok(())
+    }
+
+    fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
+        if self.active.is_none() {
+            return Ok(());
+        }
+        self.apply_key_effects(&effects.key_requests)?;
+        let active = self.active.as_ref().expect("active worker disappeared");
         let old_frame = active.frame.clone();
         let old_backlight = active.backlight;
         let frame = effects.frame;
@@ -1967,6 +2022,77 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(&log)?, "render\nvisibility:false\n");
         assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_runs_timers_without_presenting_hidden_lua_frames() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timed.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                sliver.timer.every(1.0, function()
+                    record("timer")
+                    sliver.redraw()
+                    sliver.redraw()
+                end)
+                return {{
+                    api_version = 1,
+                    render = function() record("render") end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+        assert!(supervisor.recovery.is_some());
+        let frames_after_entry = supervisor.hardware().presented_frames().len();
+        let count = |name: &str| -> Result<usize> {
+            Ok(std::fs::read_to_string(&log)?
+                .lines()
+                .filter(|line| *line == name)
+                .count())
+        };
+        let renders_before_hidden = count("render")?;
+        let timers_before_hidden = count("timer")?;
+
+        supervisor.step_at(6.0)?;
+
+        assert!(count("timer")? > timers_before_hidden);
+        assert_eq!(count("render")?, renders_before_hidden);
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frames_after_entry
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(7.0)?;
+        assert!(supervisor.recovery.is_none());
+        assert_eq!(count("render")?, renders_before_hidden + 1);
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frames_after_entry + 1
+        );
         supervisor.shutdown()?;
         Ok(())
     }

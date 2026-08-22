@@ -210,6 +210,7 @@ struct Runtime {
     key: Option<Function>,
     source: PathBuf,
     controls: RuntimeControls,
+    visible: bool,
     producer: FrameProducer,
     pending_frame: Option<PendingFrame>,
     pending_retry_deadline: Option<f64>,
@@ -712,18 +713,26 @@ impl Runtime {
             self.dispatch_keys(now_seconds, started, transitions)?;
             self.dispatch_touch(now_seconds, started, events)?;
             if let Some((visible, reason)) = options.visibility {
+                self.visible = visible;
                 self.dispatch_visibility(visible, reason, now_seconds, started)?;
             }
             self.run_due_timers(now_seconds, started)?;
             self.controls
                 .now_seconds
                 .set(Some(sample_now(now_seconds, started)));
-            let redraw_requested = self.controls.redraw_pending.replace(false);
-            if options.force_render || redraw_requested {
-                let frame = self.render_frame(now_seconds, delta)?;
-                self.pending_frame = Some(PendingFrame { frame, timing });
+            let redraw_requested = self.controls.redraw_pending.get();
+            if self.visible {
+                self.controls.redraw_pending.set(false);
+                if options.force_render || redraw_requested {
+                    let frame = self.render_frame(now_seconds, delta)?;
+                    self.pending_frame = Some(PendingFrame { frame, timing });
+                }
             }
-            let frame = self.try_publish_pending(now_seconds)?;
+            let frame = if self.visible {
+                self.try_publish_pending(now_seconds)?
+            } else {
+                None
+            };
             self.controls
                 .now_seconds
                 .set(Some(sample_now(now_seconds, started)));
@@ -949,6 +958,7 @@ impl Runtime {
             key,
             source: source.to_path_buf(),
             controls,
+            visible: true,
             producer,
             pending_frame: None,
             pending_retry_deadline: None,
