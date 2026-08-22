@@ -808,6 +808,10 @@ mod tests {
         let (presented, last) = consumer.join().expect("broker thread panicked")?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
 
+        let fps = 60.0 / elapsed.as_secs_f64();
+        eprintln!(
+            "Lua raw decoded 2008x60 producer: {fps:.1} FPS, presented {presented}/60 frames"
+        );
         assert!(
             elapsed <= Duration::from_secs(1),
             "Lua raw-pixel producer missed the 60 FPS deadline: {elapsed:?}"
