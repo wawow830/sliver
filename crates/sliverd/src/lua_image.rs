@@ -1,5 +1,7 @@
 use cairo::{Context, Filter, Format, ImageSurface, SurfacePattern};
-use mlua::{AnyUserData, Lua, MultiValue, Table, UserData, Value};
+use mlua::{AnyUserData, Lua, LuaString, MultiValue, Table, UserData, Value};
+
+const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) struct Image {
     surface: ImageSurface,
@@ -22,7 +24,7 @@ pub(crate) enum ImageFilter {
 }
 
 struct ImageSpec {
-    bytes: Vec<u8>,
+    data: LuaString,
     format: ImageFormat,
     width: usize,
     height: usize,
@@ -84,8 +86,8 @@ impl ImageSpec {
         height: &Value,
         stride: &Value,
     ) -> mlua::Result<Self> {
-        let bytes = match data {
-            Value::String(data) => data.as_bytes().to_vec(),
+        let data = match data {
+            Value::String(data) => data.clone(),
             value => {
                 return Err(error(format!(
                     "sliver.image.new data must be a binary string, got {}",
@@ -109,23 +111,9 @@ impl ImageSpec {
         let width = positive_integer(width, "width")?;
         let height = positive_integer(height, "height")?;
         let stride = positive_integer(stride, "stride")?;
-        let row_bytes = width
-            .checked_mul(4)
-            .ok_or_else(|| error("sliver.image.new width overflows"))?;
-        if stride < row_bytes {
-            return Err(error("sliver.image.new stride is smaller than one row"));
-        }
-        let byte_count = stride
-            .checked_mul(height)
-            .ok_or_else(|| error("sliver.image.new stride and height overflow"))?;
-        if bytes.len() < byte_count {
-            return Err(error(format!(
-                "sliver.image.new data has {} bytes but needs at least {byte_count}",
-                bytes.len()
-            )));
-        }
+        validate_layout(data.as_bytes().len(), width, height, stride)?;
         Ok(Self {
-            bytes,
+            data,
             format,
             width,
             height,
@@ -136,14 +124,23 @@ impl ImageSpec {
 
 impl Image {
     fn from_spec(spec: ImageSpec) -> mlua::Result<Self> {
-        let output_stride = spec
-            .width
-            .checked_mul(4)
-            .ok_or_else(|| error("sliver.image.new width overflows"))?;
-        let output_bytes = output_stride
-            .checked_mul(spec.height)
-            .ok_or_else(|| error("sliver.image.new image size overflows"))?;
-        let mut pixels = vec![0; output_bytes];
+        let (output_stride, output_bytes, cairo_width, cairo_height, cairo_stride) =
+            validate_layout(
+                spec.data.as_bytes().len(),
+                spec.width,
+                spec.height,
+                spec.stride,
+            )?;
+        let bytes = spec.data.as_bytes();
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(output_bytes)
+            .map_err(|allocation| {
+                error(format!(
+                    "sliver.image.new image storage allocation failed: {allocation}"
+                ))
+            })?;
+        pixels.resize(output_bytes, 0);
         for y in 0..spec.height {
             let input_row = y * spec.stride;
             let output_row = y * output_stride;
@@ -151,16 +148,16 @@ impl Image {
                 let input = input_row + x * 4;
                 let (red, green, blue, alpha) = match spec.format {
                     ImageFormat::Rgba8 => (
-                        spec.bytes[input],
-                        spec.bytes[input + 1],
-                        spec.bytes[input + 2],
-                        spec.bytes[input + 3],
+                        bytes[input],
+                        bytes[input + 1],
+                        bytes[input + 2],
+                        bytes[input + 3],
                     ),
                     ImageFormat::Bgra8 => (
-                        spec.bytes[input + 2],
-                        spec.bytes[input + 1],
-                        spec.bytes[input],
-                        spec.bytes[input + 3],
+                        bytes[input + 2],
+                        bytes[input + 1],
+                        bytes[input],
+                        bytes[input + 3],
                     ),
                 };
                 let red = premultiply(red, alpha);
@@ -174,12 +171,6 @@ impl Image {
                 pixels[output..output + 4].copy_from_slice(&pixel.to_ne_bytes());
             }
         }
-        let cairo_width =
-            i32::try_from(spec.width).map_err(|_| error("sliver.image.new width is too large"))?;
-        let cairo_height = i32::try_from(spec.height)
-            .map_err(|_| error("sliver.image.new height is too large"))?;
-        let cairo_stride = i32::try_from(output_stride)
-            .map_err(|_| error("sliver.image.new stride is too large"))?;
         let surface = ImageSurface::create_for_data(
             pixels,
             Format::ARgb32,
@@ -335,6 +326,52 @@ fn validate_positive_rect(rect: Rect, name: &str) -> mlua::Result<()> {
         )));
     }
     Ok(())
+}
+
+fn validate_layout(
+    data_len: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+) -> mlua::Result<(usize, usize, i32, i32, i32)> {
+    let cairo_width = i32::try_from(width)
+        .map_err(|_| error("sliver.image.new Cairo dimension width is too large"))?;
+    let cairo_height = i32::try_from(height)
+        .map_err(|_| error("sliver.image.new Cairo dimension height is too large"))?;
+    let output_stride = width
+        .checked_mul(4)
+        .ok_or_else(|| error("sliver.image.new width overflows"))?;
+    let cairo_stride = i32::try_from(output_stride)
+        .map_err(|_| error("sliver.image.new Cairo stride is too large"))?;
+    if stride < output_stride {
+        return Err(error("sliver.image.new stride is smaller than one row"));
+    }
+    if stride > i32::MAX as usize {
+        return Err(error("sliver.image.new stride exceeds the Cairo limit"));
+    }
+    let input_bytes = stride
+        .checked_mul(height)
+        .ok_or_else(|| error("sliver.image.new stride and height overflow"))?;
+    let output_bytes = output_stride
+        .checked_mul(height)
+        .ok_or_else(|| error("sliver.image.new image size overflows"))?;
+    if input_bytes > MAX_IMAGE_BYTES || output_bytes > MAX_IMAGE_BYTES {
+        return Err(error(format!(
+            "sliver.image.new image storage is limited to {MAX_IMAGE_BYTES} bytes"
+        )));
+    }
+    if data_len < input_bytes {
+        return Err(error(format!(
+            "sliver.image.new data has {data_len} bytes but needs at least {input_bytes}"
+        )));
+    }
+    Ok((
+        output_stride,
+        output_bytes,
+        cairo_width,
+        cairo_height,
+        cairo_stride,
+    ))
 }
 
 fn positive_integer(value: &Value, name: &str) -> mlua::Result<usize> {

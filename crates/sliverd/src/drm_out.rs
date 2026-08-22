@@ -284,10 +284,13 @@ pub fn probe() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+    use std::time::{Duration, Instant};
+
     use super::*;
     use crate::hardware::{
-        FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, Modifier, TouchEvent,
-        TouchPhase,
+        FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, LogicalFrame, Modifier,
+        TouchBarHardware, TouchEvent, TouchPhase,
     };
     use crate::supervisor::Supervisor;
 
@@ -735,6 +738,148 @@ mod tests {
         assert_eq!(frame.rgba_at(20, 20), [255, 0, 0, 255]);
         assert_eq!(frame.rgba_at(5, 20), [0, 0, 0, 255]);
         assert_eq!(frame.rgba_at(35, 20), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_raw_decoded_frames_hold_native_rate_under_broker_contention() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("raw-video.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local frame = -1
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    frame = frame + 1
+                    local pixels = string.rep(string.char(frame, 0, 0, 255), 2008 * 60)
+                    canvas:raw_pixels(
+                        pixels,
+                        "rgba8",
+                        2008,
+                        60,
+                        2008 * 4,
+                        { x = 0, y = 0, width = 2008, height = 60 },
+                        { x = 0, y = 0, width = 2008, height = 60 },
+                        "nearest"
+                    )
+                end,
+            }
+            "#,
+        )?;
+        let crate::lua_worker::StagedLuaWorker { worker, .. } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        let broker = worker.broker_for_test();
+        let done = Arc::new(AtomicBool::new(false));
+        let consumer_done = done.clone();
+        let consumer = thread::spawn(move || -> Result<(usize, u8)> {
+            let mut hardware = FakeTouchBar::new();
+            hardware.claim()?;
+            loop {
+                if let Some(completed) = broker.take_newest()? {
+                    let (frame, _) = LogicalFrame::from_completed(completed);
+                    hardware.present(&frame)?;
+                } else if consumer_done.load(Ordering::Acquire) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let count = hardware.presented_frames().len();
+            let last = hardware
+                .presented_frames()
+                .last()
+                .map(|frame| frame.rgba_at(0, 0)[0])
+                .unwrap_or_default();
+            hardware.release()?;
+            Ok((count, last))
+        });
+
+        let started = Instant::now();
+        for frame in 0..60 {
+            worker.render_to_slots_at(
+                frame as f64 / 60.0,
+                if frame == 0 { 0.0 } else { 1.0 / 60.0 },
+            )?;
+        }
+        let elapsed = started.elapsed();
+        done.store(true, Ordering::Release);
+        let (presented, last) = consumer.join().expect("broker thread panicked")?;
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+
+        assert!(
+            elapsed <= Duration::from_secs(1),
+            "Lua raw-pixel producer missed the 60 FPS deadline: {elapsed:?}"
+        );
+        assert!(presented < 60, "broker did not drop any stale frames");
+        assert_eq!(last, 60, "broker did not present the newest complete frame");
+        Ok(())
+    }
+
+    #[test]
+    fn lua_rejects_oversized_decoded_image_storage_before_conversion() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("oversized-image.lua");
+        let too_large = 16 * 1024 * 1024 + 1;
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local image = sliver.image.new(
+                    string.rep("\0", {too_large}),
+                    "rgba8",
+                    1,
+                    1,
+                    {too_large}
+                )
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                too_large = too_large
+            ),
+        )?;
+
+        let error = match crate::lua_worker::LuaWorker::stage(&source) {
+            Ok(staged) => {
+                staged
+                    .worker
+                    .shutdown(crate::lua_worker::StopReason::Shutdown)?;
+                panic!("oversized decoded image was accepted")
+            }
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("image storage is limited"));
+        Ok(())
+    }
+
+    #[test]
+    fn lua_rejects_decoded_images_beyond_cairo_dimensions() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("wide-image.lua");
+        let too_wide = i64::from(i32::MAX) + 1;
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local image = sliver.image.new(string.char(0, 0, 0, 0), "rgba8", {too_wide}, 1, {too_wide} * 4)
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                too_wide = too_wide
+            ),
+        )?;
+
+        let error = match crate::lua_worker::LuaWorker::stage(&source) {
+            Ok(staged) => {
+                staged
+                    .worker
+                    .shutdown(crate::lua_worker::StopReason::Shutdown)?;
+                panic!("decoded image beyond Cairo dimensions was accepted")
+            }
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("Cairo dimension"));
         Ok(())
     }
 

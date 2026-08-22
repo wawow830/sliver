@@ -114,16 +114,12 @@ impl<H: TouchBarHardware> Supervisor<H> {
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
-        let stage_time = self.now_seconds();
         let StagedLuaWorker {
             worker,
             frame: staged_frame,
             pending_backlight,
-        } = LuaWorker::stage_with_backlight_at(&selected_path, current_backlight, stage_time)?;
-        let crate::lua_worker::TimedFrame {
-            frame,
-            timing: frame_timing,
-        } = staged_frame;
+        } = LuaWorker::stage_with_backlight_at(&selected_path, current_backlight, 0.0)?;
+        let frame = staged_frame.frame;
         self.poll_hardware(Duration::ZERO)?;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
@@ -174,7 +170,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
         }
 
         self.backlight = candidate_backlight;
-        self.last_presented_time = Some(frame_timing.presentation_time);
+        self.last_presented_time = Some(now);
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         self.next_timer_deadline = Some(now);
@@ -1128,6 +1124,7 @@ mod tests {
         let state_file = directory.path().join("state/sliver/config-path");
         let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
         supervisor.apply(&source)?;
+        let committed_at = supervisor.now_seconds();
         supervisor.step_at(1.0)?;
 
         let lines: Vec<_> = std::fs::read_to_string(log)?
@@ -1141,7 +1138,57 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0][1], 0.0);
         assert!(lines[1][0] > lines[0][0]);
-        assert!((lines[1][1] - (lines[1][0] - lines[0][0])).abs() < 0.001);
+        assert!((lines[1][1] - (1.0 - committed_at)).abs() < 0.002);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn slow_staging_does_not_charge_staging_time_to_the_next_frame_delta() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("slow-stage.lua");
+        let log = directory.path().join("slow-stage-times");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                sliver.timer.after(0.01, function() sliver.redraw() end)
+                return {{
+                    api_version = 1,
+                    start = function()
+                        local deadline = os.clock() + 0.08
+                        while os.clock() < deadline do end
+                    end,
+                    render = function(_, time, delta)
+                        local file = assert(io.open(log, "a"))
+                        file:write(time, " ", delta, "\n")
+                        file:close()
+                    end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let committed_at = supervisor.now_seconds();
+        let next_frame_at = committed_at + 0.05;
+        supervisor.step_at(next_frame_at)?;
+
+        let lines: Vec<_> = std::fs::read_to_string(log)?
+            .lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .map(|value| value.parse::<f64>().expect("frame timing was numeric"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0][1], 0.0);
+        assert!((lines[1][1] - 0.05).abs() < 0.02);
         supervisor.shutdown()?;
         Ok(())
     }

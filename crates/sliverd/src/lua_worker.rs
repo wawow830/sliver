@@ -60,7 +60,7 @@ pub(crate) struct LuaWorker {
 
 enum WorkerCommand {
     #[allow(dead_code)]
-    Render(mpsc::SyncSender<std::result::Result<(), String>>),
+    Render(f64, f64, mpsc::SyncSender<std::result::Result<(), String>>),
     Commit(f64, mpsc::SyncSender<std::result::Result<(), String>>),
     Drive(
         f64,
@@ -143,7 +143,7 @@ impl LuaWorker {
         initial_time: f64,
     ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
-        validate_frame_timing(initial_time, 0.0).map_err(|error| anyhow!(error))?;
+        FrameTiming::new(initial_time, 0.0)?;
         let source = source.to_path_buf();
         let slots = FrameSlots::new(
             sliver_core::STRIP_W as usize,
@@ -203,7 +203,7 @@ impl LuaWorker {
             .context("Lua worker command channel is closed")?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
-            .send(WorkerCommand::Render(reply_tx))
+            .send(WorkerCommand::Render(0.0, 0.0, reply_tx))
             .context("requesting the next Lua frame")?;
         reply_rx
             .recv()
@@ -212,6 +212,28 @@ impl LuaWorker {
         self.take_frame()?
             .map(|frame| frame.frame)
             .context("Lua worker published no frame")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn render_to_slots_at(&self, presentation_time: f64, delta: f64) -> Result<()> {
+        let commands = self
+            .commands
+            .as_ref()
+            .context("Lua worker command channel is closed")?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(WorkerCommand::Render(presentation_time, delta, reply_tx))
+            .context("requesting a Lua frame for the shared slots")?;
+        reply_rx
+            .recv()
+            .context("Lua owner thread exited while rendering")?
+            .map_err(|error| anyhow!(error))?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn broker_for_test(&self) -> FrameBroker {
+        self.broker.clone()
     }
 
     pub(crate) fn commit(&self, now_seconds: f64) -> Result<()> {
@@ -368,11 +390,14 @@ fn owner_main(
 fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
     loop {
         match commands.recv() {
-            Ok(WorkerCommand::Render(reply)) => {
-                let result = runtime.render_frame(0.0, 0.0).and_then(|frame| {
-                    let timing = FrameTiming::new(0.0, 0.0).map_err(|error| error.to_string())?;
-                    runtime.publish_frame(&frame, timing).map(|_| ())
-                });
+            Ok(WorkerCommand::Render(presentation_time, delta, reply)) => {
+                let result = FrameTiming::new(presentation_time, delta)
+                    .map_err(|error| error.to_string())
+                    .and_then(|timing| {
+                        runtime
+                            .render_frame(presentation_time, delta)
+                            .and_then(|frame| runtime.publish_frame(&frame, timing).map(|_| ()))
+                    });
                 let _ = reply.send(result);
             }
             Ok(WorkerCommand::Commit(now_seconds, reply)) => {
@@ -406,7 +431,7 @@ impl Runtime {
     }
 
     fn commit(&mut self, now_seconds: f64) -> std::result::Result<(), String> {
-        validate_now(now_seconds)?;
+        FrameTiming::new(now_seconds, 0.0).map_err(|error| error.to_string())?;
         if self.controls.committed.replace(true) {
             return Err("Lua worker was already committed".into());
         }
@@ -421,7 +446,7 @@ impl Runtime {
         delta: f64,
         events: Vec<TouchEvent>,
     ) -> std::result::Result<RuntimeEffects, String> {
-        validate_frame_timing(now_seconds, delta)?;
+        let timing = FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
         if !self.controls.committed.get() {
             return Err("Lua worker has not been committed".into());
         }
@@ -432,8 +457,6 @@ impl Runtime {
             self.run_due_timers(now_seconds)?;
             let frame = if self.controls.redraw_pending.replace(false) {
                 let frame = self.render_frame(now_seconds, delta)?;
-                let timing =
-                    FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
                 self.publish_frame(&frame, timing)?;
                 Some(timing)
             } else {
@@ -798,23 +821,6 @@ fn validate_backlight_level(level: f64) -> Result<()> {
         "backlight level must be finite and between 0.0 and 1.0"
     );
     Ok(())
-}
-
-fn validate_now(now_seconds: f64) -> std::result::Result<(), String> {
-    if now_seconds.is_finite() && now_seconds >= 0.0 {
-        Ok(())
-    } else {
-        Err("worker time must be finite and non-negative".into())
-    }
-}
-
-fn validate_frame_timing(presentation_time: f64, delta: f64) -> std::result::Result<(), String> {
-    validate_now(presentation_time)?;
-    if delta.is_finite() && delta >= 0.0 {
-        Ok(())
-    } else {
-        Err("frame delta must be finite and non-negative".into())
-    }
 }
 
 fn validate_after_delay(delay: f64) -> mlua::Result<()> {
