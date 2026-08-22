@@ -54,6 +54,42 @@ impl ModifierState {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct InputState {
+    pub(crate) fn_active: bool,
+    pub(crate) modifiers: ModifierState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservedKey {
+    Fn,
+    Modifier(Modifier),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InputTransition {
+    pub(crate) key: ObservedKey,
+    pub(crate) active: bool,
+    pub(crate) state: InputState,
+}
+
+impl InputState {
+    pub(crate) fn apply(&mut self, key: ObservedKey, active: bool) -> bool {
+        let old = match key {
+            ObservedKey::Fn => self.fn_active,
+            ObservedKey::Modifier(modifier) => self.modifiers.is_active(modifier),
+        };
+        if old == active {
+            return false;
+        }
+        match key {
+            ObservedKey::Fn => self.fn_active = active,
+            ObservedKey::Modifier(modifier) => self.modifiers.set(modifier, active),
+        }
+        true
+    }
+}
+
 pub(crate) type ContactId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
