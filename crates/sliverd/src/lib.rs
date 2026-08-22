@@ -1,5 +1,6 @@
 mod apply_ipc;
 mod drm_out;
+mod frame_slots;
 mod hardware;
 mod lua_canvas;
 mod lua_worker;
