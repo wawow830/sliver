@@ -255,9 +255,10 @@ fn run_with_hardware<H: TouchBarHardware>(cfg: sliver_core::Config, mut hardware
 fn present_lua_once<H: TouchBarHardware>(source: &std::path::Path, hardware: &mut H) -> Result<()> {
     hardware.claim()?;
     let run_result = (|| -> Result<()> {
-        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
+        let crate::lua_worker::StagedLuaWorker { worker } =
             crate::lua_worker::LuaWorker::stage(source)?;
-        hardware.present(&frame)?;
+        let frame = worker.render_at(0.0, 0.0)?;
+        hardware.present(&frame.frame)?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)
     })();
     let release_result = hardware.release();
@@ -284,11 +285,15 @@ pub fn probe() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+    use std::time::{Duration, Instant};
+
     use super::*;
     use crate::hardware::{
-        FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, Modifier, TouchEvent,
-        TouchPhase,
+        FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, InputState, LogicalFrame,
+        Modifier, TouchBarHardware, TouchEvent, TouchPhase,
     };
+    use crate::supervisor::Supervisor;
 
     fn legacy_touch_up(x: f64) -> HardwareEvent {
         HardwareEvent::Touch(TouchEvent {
@@ -738,6 +743,488 @@ mod tests {
     }
 
     #[test]
+    fn candidate_render_rejects_permanently_held_slots_with_bounded_error() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("candidate-pressure.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, "#0000ff")
+                end,
+            }
+            "##,
+        )?;
+        let crate::lua_worker::StagedLuaWorker { worker } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        let _held = worker.hold_slots_for_test();
+        let started = Instant::now();
+        let error = match worker.render_at(1.0, 0.0) {
+            Ok(_) => panic!("candidate render succeeded with permanently held slots"),
+            Err(error) => error,
+        };
+        assert!(started.elapsed() < Duration::from_millis(75));
+        assert!(format!("{error:#}").contains("candidate frame could not be publish"));
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        Ok(())
+    }
+
+    #[test]
+    fn dropped_lua_frame_does_not_poison_later_render_commands() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("dropped-frame.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            local renders = 0
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    renders = renders + 1
+                    if renders == 1 then
+                        canvas:rectangle(0, 0, 20, 20, "#ff0000")
+                    else
+                        canvas:rectangle(0, 0, 20, 20, "#0000ff")
+                    end
+                end,
+            }
+            "##,
+        )?;
+        let crate::lua_worker::StagedLuaWorker { worker } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        let mut held = worker.hold_slots_for_test();
+        assert_eq!(held.len(), 3);
+        worker.render_to_slots_at(1.0, 0.0)?;
+        drop(held.pop());
+        worker.render_to_slots_at(2.0, 0.0)?;
+
+        let completed = worker
+            .broker_for_test()
+            .take_newest()?
+            .context("later complete frame was dropped")?;
+        let (frame, _) = LogicalFrame::from_completed(completed);
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&frame)?;
+        assert_eq!(
+            hardware
+                .presented_frames()
+                .last()
+                .context("later frame was not presented")?
+                .rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        hardware.release()?;
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pending_lua_frame_retries_without_rerender_after_slots_free() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("pending-frame.lua");
+        let log = directory.path().join("pending-renders");
+        std::fs::write(
+            &source,
+            format!(
+                r##"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(name)
+                    local file = assert(io.open(log, "a"))
+                    file:write(name, "\n")
+                    file:close()
+                end
+                sliver.timer.after(0.001, function() record("timer") end)
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        if event.phase == "down" then
+                            record("touch")
+                            sliver.redraw()
+                        end
+                    end,
+                    render = function(canvas)
+                        record("render")
+                        canvas:rectangle(0, 0, 20, 20, "#0000ff")
+                    end,
+                }}
+                "##,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let crate::lua_worker::StagedLuaWorker { worker } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        worker.commit(0.0, InputState::default())?;
+        let mut held = worker.hold_slots_for_test();
+        let started = Instant::now();
+        let effects = worker.drive(
+            1.0,
+            InputState::default(),
+            Vec::new(),
+            0.0,
+            vec![TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 1.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }],
+        )?;
+        assert!(started.elapsed() < Duration::from_millis(20));
+        assert_eq!(std::fs::read_to_string(&log)?, "touch\ntimer\nrender\n");
+        assert!(effects.frame.is_none());
+        drop(held.pop());
+        let effects = worker.drive(2.0, InputState::default(), Vec::new(), 0.0, Vec::new())?;
+        let frame = effects.frame.expect("pending frame was not retried");
+        assert_eq!(std::fs::read_to_string(log)?, "touch\ntimer\nrender\n");
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&frame.frame)?;
+        assert_eq!(
+            hardware
+                .presented_frames()
+                .last()
+                .context("pending frame was not presented")?
+                .rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        hardware.release()?;
+        drop(held);
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        Ok(())
+    }
+
+    #[test]
+    fn lua_raw_decoded_frames_hold_native_rate_under_broker_contention() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("raw-video.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local frame = 0
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    frame = frame + 1
+                    local pixels = string.rep(string.char(frame, 0, 0, 255), 2008 * 60)
+                    canvas:raw_pixels(
+                        pixels,
+                        "rgba8",
+                        2008,
+                        60,
+                        2008 * 4,
+                        { x = 0, y = 0, width = 2008, height = 60 },
+                        { x = 0, y = 0, width = 2008, height = 60 },
+                        "nearest"
+                    )
+                end,
+            }
+            "#,
+        )?;
+        let crate::lua_worker::StagedLuaWorker { worker, .. } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        let broker = worker.broker_for_test();
+        let done = Arc::new(AtomicBool::new(false));
+        let consumer_done = done.clone();
+        let consumer = thread::spawn(move || -> Result<(usize, u8)> {
+            let mut hardware = FakeTouchBar::new();
+            hardware.claim()?;
+            loop {
+                if let Some(completed) = broker.take_newest()? {
+                    let (frame, _) = LogicalFrame::from_completed(completed);
+                    hardware.present(&frame)?;
+                } else if consumer_done.load(Ordering::Acquire) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let count = hardware.presented_frames().len();
+            let last = hardware
+                .presented_frames()
+                .last()
+                .map(|frame| frame.rgba_at(0, 0)[0])
+                .unwrap_or_default();
+            hardware.release()?;
+            Ok((count, last))
+        });
+
+        let started = Instant::now();
+        for frame in 0..60 {
+            worker.render_to_slots_at(
+                frame as f64 / 60.0,
+                if frame == 0 { 0.0 } else { 1.0 / 60.0 },
+            )?;
+        }
+        let elapsed = started.elapsed();
+        done.store(true, Ordering::Release);
+        let (presented, last) = consumer.join().expect("broker thread panicked")?;
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+
+        let fps = 60.0 / elapsed.as_secs_f64();
+        eprintln!(
+            "Lua raw decoded 2008x60 producer: {fps:.1} FPS, presented {presented}/60 frames"
+        );
+        assert!(
+            elapsed <= Duration::from_secs(1),
+            "Lua raw-pixel producer missed the 60 FPS deadline: {elapsed:?}"
+        );
+        assert!(presented < 60, "broker did not drop any stale frames");
+        assert_eq!(last, 60, "broker did not present the newest complete frame");
+        Ok(())
+    }
+
+    #[test]
+    fn lua_rejects_oversized_decoded_image_storage_before_conversion() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("oversized-image.lua");
+        let too_large = 16 * 1024 * 1024 + 1;
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local image = sliver.image.new(
+                    string.rep("\0", {too_large}),
+                    "rgba8",
+                    1,
+                    1,
+                    {too_large}
+                )
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                too_large = too_large
+            ),
+        )?;
+
+        let error = match crate::lua_worker::LuaWorker::stage(&source) {
+            Ok(staged) => {
+                staged
+                    .worker
+                    .shutdown(crate::lua_worker::StopReason::Shutdown)?;
+                panic!("oversized decoded image was accepted")
+            }
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("image storage is limited"));
+        Ok(())
+    }
+
+    #[test]
+    fn lua_rejects_oversized_decoded_output_before_conversion() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("oversized-output.lua");
+        let too_large = 16 * 1024 * 1024 + 4;
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local image = sliver.image.new(
+                    string.rep("\0", {too_large}),
+                    "rgba8",
+                    1,
+                    {too_large} // 4,
+                    4
+                )
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                too_large = too_large
+            ),
+        )?;
+
+        let error = match crate::lua_worker::LuaWorker::stage(&source) {
+            Ok(staged) => {
+                staged
+                    .worker
+                    .shutdown(crate::lua_worker::StopReason::Shutdown)?;
+                panic!("oversized decoded output was accepted")
+            }
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("image storage is limited"));
+        Ok(())
+    }
+
+    #[test]
+    fn lua_rejects_decoded_images_beyond_cairo_dimensions() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("wide-image.lua");
+        let too_wide = i64::from(i32::MAX) + 1;
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local image = sliver.image.new(string.char(0, 0, 0, 0), "rgba8", {too_wide}, 1, {too_wide} * 4)
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                too_wide = too_wide
+            ),
+        )?;
+
+        let error = match crate::lua_worker::LuaWorker::stage(&source) {
+            Ok(staged) => {
+                staged
+                    .worker
+                    .shutdown(crate::lua_worker::StopReason::Shutdown)?;
+                panic!("decoded image beyond Cairo dimensions was accepted")
+            }
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("Cairo dimension"));
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_draws_reusable_decoded_images_and_borrowed_raw_pixels() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("images.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local image = sliver.image.new {
+                data = string.char(255, 0, 0, 255, 0, 0, 255, 255),
+                format = "rgba8",
+                width = 2,
+                height = 1,
+                stride = 8,
+            }
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:image(
+                        image,
+                        { x = 0, y = 0, width = 2, height = 1 },
+                        { x = 0, y = 0, width = 2, height = 1 },
+                        "nearest"
+                    )
+                    canvas:image(
+                        image,
+                        { x = 0, y = 0, width = 2, height = 1 },
+                        { x = 5, y = 0, width = 2, height = 1 },
+                        "nearest"
+                    )
+                    local pixels = string.char(0, 255, 0, 255, 99, 99, 99, 99)
+                    canvas:raw_pixels(
+                        pixels,
+                        "bgra8",
+                        1,
+                        1,
+                        8,
+                        { x = 0, y = 0, width = 1, height = 1 },
+                        { x = 3, y = 0, width = 1, height = 1 },
+                        "nearest"
+                    )
+                    pixels = nil
+                    collectgarbage("collect")
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        let frame = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .context("decoded image frame was not presented")?;
+        assert_eq!(frame.rgba_at(0, 0), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(1, 0), [0, 0, 255, 255]);
+        assert_eq!(frame.rgba_at(3, 0), [0, 255, 0, 255]);
+        assert_eq!(frame.rgba_at(5, 0), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(6, 0), [0, 0, 255, 255]);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_keeps_image_premultiplication_private() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("alpha-image.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local image = sliver.image.new(string.char(255, 0, 0, 128), "rgba8", 1, 1, 4)
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:image(
+                        image,
+                        { x = 0, y = 0, width = 1, height = 1 },
+                        { x = 10, y = 10, width = 1, height = 1 },
+                        "nearest"
+                    )
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let frame = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .context("alpha image frame was not presented")?;
+        assert_eq!(frame.rgba_at(10, 10), [128, 0, 0, 255]);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_defaults_decoded_image_scaling_to_linear_filtering() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("linear-image.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local image = sliver.image.new(string.char(255, 0, 0, 255, 0, 0, 255, 255), "rgba8", 2, 1, 8)
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:image(
+                        image,
+                        { x = 0, y = 0, width = 2, height = 1 },
+                        { x = 0, y = 0, width = 4, height = 2 }
+                    )
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        let pixel = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .context("linear image frame was not presented")?
+            .rgba_at(2, 1);
+        assert!(
+            pixel[0] > 0 && pixel[2] > 0,
+            "default filter was not linear: {pixel:?}"
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn lua_canvas_clears_complete_frame_before_reusing_immutable_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("frames.lua");
@@ -771,9 +1258,10 @@ mod tests {
         )?;
         let mut hardware = FakeTouchBar::new();
         hardware.claim()?;
-        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
+        let crate::lua_worker::StagedLuaWorker { worker } =
             crate::lua_worker::LuaWorker::stage(&source)?;
-        hardware.present(&frame)?;
+        let frame = worker.render_at(0.0, 0.0)?;
+        hardware.present(&frame.frame)?;
         let frame = worker.render_next()?;
         hardware.present(&frame)?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
@@ -826,9 +1314,10 @@ mod tests {
         )?;
         let mut hardware = FakeTouchBar::new();
         hardware.claim()?;
-        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
+        let crate::lua_worker::StagedLuaWorker { worker } =
             crate::lua_worker::LuaWorker::stage(&source)?;
-        hardware.present(&frame)?;
+        let frame = worker.render_at(0.0, 0.0)?;
+        hardware.present(&frame.frame)?;
         let frame = worker.render_next()?;
         hardware.present(&frame)?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;

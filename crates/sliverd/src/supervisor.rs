@@ -258,9 +258,11 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     down_contacts: BTreeMap<ContactId, TouchEvent>,
     ignored_contacts: BTreeSet<ContactId>,
     touch_queue: TouchQueue,
+    input_transitions: Vec<InputTransition>,
     next_timer_deadline: Option<f64>,
     synthetic: SyntheticState,
     authorizer: SessionAuthorizer<L>,
+    last_presented_time: Option<f64>,
 }
 
 impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
@@ -290,9 +292,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             down_contacts: BTreeMap::new(),
             ignored_contacts: BTreeSet::new(),
             touch_queue: TouchQueue::new(),
+            input_transitions: Vec::new(),
             next_timer_deadline: None,
             synthetic: SyntheticState::default(),
             authorizer: SessionAuthorizer::new(logind),
+            last_presented_time: None,
         })
     }
 
@@ -327,16 +331,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
-        let StagedLuaWorker {
-            worker,
-            frame,
-            pending_backlight,
-        } = LuaWorker::stage_with_backlight_and_input(
+        let StagedLuaWorker { worker } = LuaWorker::stage_with_backlight_and_input(
             &selected_path,
             current_backlight,
             self.input_state,
         )?;
-        self.poll_hardware(Duration::ZERO)?;
+        self.poll_hardware_deferred(Duration::ZERO)?;
+        let render_now = self.now_seconds();
+        let render_time = self
+            .last_presented_time
+            .map_or(render_now, |last| render_now.max(last));
+        let staged_frame = worker.render_at_with_input(render_time, 0.0, self.input_state)?;
+        let pending_backlight = worker.pending_backlight()?;
+        let frame = staged_frame.frame;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
         let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
@@ -400,8 +407,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         self.backlight = candidate_backlight;
+        self.last_presented_time = Some(now);
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
+        let deferred_touches = self.touch_queue.drain();
+        let deferred_transitions = std::mem::take(&mut self.input_transitions);
         self.next_timer_deadline = Some(now);
         let replaced = self.active.replace(ActiveConfig {
             worker,
@@ -411,6 +421,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             contacts: BTreeMap::new(),
         });
         if let Some(replaced) = replaced {
+            if !deferred_transitions.is_empty() || !deferred_touches.is_empty() {
+                if let Err(error) = replaced.worker.drive(
+                    now,
+                    self.input_state,
+                    deferred_transitions,
+                    0.0,
+                    deferred_touches,
+                ) {
+                    eprintln!("replaced Lua worker did not receive deferred input: {error:#}");
+                }
+            }
             let cancels: Vec<_> = replaced
                 .contacts
                 .values()
@@ -424,7 +445,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 if let Err(error) =
                     replaced
                         .worker
-                        .drive(now, self.input_state, Vec::new(), cancels)
+                        .drive(now, self.input_state, Vec::new(), 0.0, cancels)
                 {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
@@ -481,6 +502,16 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Err(error)
     }
 
+    fn route_input(&mut self, key: ObservedKey, active: bool) {
+        if self.input_state.apply(key, active) && self.active.is_some() {
+            self.input_transitions.push(InputTransition {
+                key,
+                active,
+                state: self.input_state,
+            });
+        }
+    }
+
     fn route_touch(&mut self, event: TouchEvent) {
         match event.phase {
             TouchPhase::Down => {
@@ -532,40 +563,41 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.process_events_at(now, events)
     }
 
-    fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
-        let mut transitions = Vec::new();
-        for event in events {
+    fn poll_hardware_deferred(&mut self, timeout: Duration) -> Result<()> {
+        for event in self.hardware.poll(timeout)? {
             match event {
                 HardwareEvent::Touch(touch) => self.route_touch(touch),
-                HardwareEvent::Fn { active } => {
-                    if self.input_state.apply(ObservedKey::Fn, active) {
-                        transitions.push(InputTransition {
-                            key: ObservedKey::Fn,
-                            active,
-                            state: self.input_state,
-                        });
-                    }
-                }
+                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active),
                 HardwareEvent::Modifier { modifier, active } => {
-                    if self
-                        .input_state
-                        .apply(ObservedKey::Modifier(modifier), active)
-                    {
-                        transitions.push(InputTransition {
-                            key: ObservedKey::Modifier(modifier),
-                            active,
-                            state: self.input_state,
-                        });
-                    }
+                    self.route_input(ObservedKey::Modifier(modifier), active)
                 }
                 HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
             }
         }
-        let touches = self.touch_queue.drain();
+        Ok(())
+    }
+
+    fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
+        for event in events {
+            match event {
+                HardwareEvent::Touch(touch) => self.route_touch(touch),
+                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active),
+                HardwareEvent::Modifier { modifier, active } => {
+                    self.route_input(ObservedKey::Modifier(modifier), active)
+                }
+                HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
+            }
+        }
         let timer_due = self
             .next_timer_deadline
             .is_some_and(|deadline| deadline <= now);
-        if !transitions.is_empty() || !touches.is_empty() || timer_due {
+        if self.active.is_some()
+            && (!self.input_transitions.is_empty()
+                || !self.touch_queue.events.is_empty()
+                || timer_due)
+        {
+            let transitions = std::mem::take(&mut self.input_transitions);
+            let touches = self.touch_queue.drain();
             self.drive_active(now, transitions, touches)?;
         }
         Ok(())
@@ -580,9 +612,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
+        let delta = self
+            .last_presented_time
+            .map(|previous| (now - previous).max(0.0))
+            .unwrap_or(0.0);
         let effects = match active
             .worker
-            .drive(now, self.input_state, transitions, touches)
+            .drive(now, self.input_state, transitions, delta, touches)
         {
             Ok(effects) => effects,
             Err(error) => return self.fail_active_worker(error),
@@ -624,6 +660,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let old_backlight = active.backlight;
         let frame = effects.frame;
         let backlight = effects.backlight;
+        let frame_time = frame.as_ref().map(|frame| frame.timing.presentation_time);
         let mut brightness_changed = false;
 
         if let Some(level) = backlight {
@@ -644,7 +681,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             brightness_changed = true;
         }
         if let Some(frame) = frame.as_ref() {
-            if let Err(error) = self.hardware.present(frame) {
+            if let Err(error) = self.hardware.present(&frame.frame) {
                 let mut error = error.context("presenting Lua frame");
                 if let Err(restore_error) = self.hardware.present(&old_frame) {
                     error = error.context(format!(
@@ -669,7 +706,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         let active = self.active.as_mut().expect("active worker disappeared");
         if let Some(frame) = frame {
-            active.frame = frame;
+            active.frame = frame.frame;
+            self.last_presented_time = frame_time;
         }
         if let Some(level) = backlight {
             active.backlight = level;
@@ -690,6 +728,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn stop_active_worker(&mut self, reason: StopReason) -> Result<()> {
         let now = self.now_seconds();
+        self.input_transitions.clear();
         let Some(active) = self.active.take() else {
             return Ok(());
         };
@@ -705,7 +744,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if !cancels.is_empty() {
             if let Err(error) = active
                 .worker
-                .drive(now, self.input_state, Vec::new(), cancels)
+                .drive(now, self.input_state, Vec::new(), 0.0, cancels)
             {
                 eprintln!("active Lua worker did not receive contact cancellation: {error:#}");
             }
@@ -718,6 +757,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.down_contacts.clear();
         self.ignored_contacts.clear();
         self.touch_queue.drain();
+        self.input_transitions.clear();
         self.next_timer_deadline = None;
         self.input_state = input_state;
     }
@@ -2554,6 +2594,158 @@ mod tests {
     }
 
     #[test]
+    fn deferred_input_updates_candidate_render_and_survives_replacement() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-input.lua");
+        let candidate_source = directory.path().join("candidate-input.lua");
+        let old_log = directory.path().join("old-input-events");
+        let candidate_log = directory.path().join("candidate-input-events");
+        let render_log = directory.path().join("candidate-render-state");
+        let old_config = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            local log = {log:?}
+            local function record(event)
+                local file = assert(io.open(log, "a"))
+                file:write(event.key, ":", event.phase, "\n")
+                file:close()
+            end
+            return {{
+                api_version = 1,
+                key = record,
+                render = function() end,
+            }}
+            "#,
+            log = old_log.to_string_lossy(),
+        );
+        let candidate_config = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            local event_log = {event_log:?}
+            local render_log = {render_log:?}
+            local function record(event)
+                local file = assert(io.open(event_log, "a"))
+                file:write(event.key, ":", event.phase, "\n")
+                file:close()
+            end
+            return {{
+                api_version = 1,
+                key = record,
+                render = function()
+                    local state = sliver.input.state()
+                    assert(state.fn)
+                    assert(state.modifiers.left_ctrl)
+                    local file = assert(io.open(render_log, "w"))
+                    file:write("fresh")
+                    file:close()
+                end,
+            }}
+            "#,
+            event_log = candidate_log.to_string_lossy(),
+            render_log = render_log.to_string_lossy(),
+        );
+        std::fs::write(&old_source, old_config)?;
+        std::fs::write(&candidate_source, candidate_config)?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&old_source)?;
+
+        // The next apply polls once before staging and once after staging. The
+        // changes arrive on that deferred poll, after the candidate's snapshot.
+        supervisor
+            .hardware_mut()
+            .inject_on_poll(4, HardwareEvent::Fn { active: true });
+        supervisor.hardware_mut().inject_on_poll(
+            4,
+            HardwareEvent::Modifier {
+                modifier: Modifier::LeftCtrl,
+                active: true,
+            },
+        );
+        supervisor.apply(&candidate_source)?;
+
+        assert_eq!(std::fs::read_to_string(render_log)?, "fresh");
+        assert_eq!(
+            std::fs::read_to_string(old_log)?,
+            "fn:down\nleft_ctrl:down\n"
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.hardware_mut().inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: false,
+        });
+        supervisor.step_at(1.0)?;
+        assert_eq!(
+            std::fs::read_to_string(candidate_log)?,
+            "fn:up\nleft_ctrl:up\n"
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn deferred_input_survives_a_failed_candidate_until_the_old_worker_drives() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-input.lua");
+        let bad_source = directory.path().join("bad-input.lua");
+        let log = directory.path().join("old-input-events");
+        std::fs::write(
+            &old_source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                return {{
+                    api_version = 1,
+                    key = function(event)
+                        local file = assert(io.open(log, "a"))
+                        file:write(event.key, ":", event.phase, "\n")
+                        file:close()
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        std::fs::write(
+            &bad_source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function()
+                    assert(sliver.input.state().fn)
+                    error("candidate failed")
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inject_on_poll(4, HardwareEvent::Fn { active: true });
+
+        let error = supervisor
+            .apply(&bad_source)
+            .expect_err("failed candidate unexpectedly committed");
+        assert!(format!("{error:#}").contains("candidate failed"));
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(1.0)?;
+        assert_eq!(std::fs::read_to_string(log)?, "fn:down\nfn:up\n");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn lua_receives_fn_and_modifier_transitions_and_snapshots() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("input.lua");
@@ -2949,6 +3141,285 @@ mod tests {
     }
 
     #[test]
+    fn rendered_frames_receive_intended_time_and_previous_presented_delta() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("frame-time.lua");
+        let log = directory.path().join("frame-times");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                sliver.timer.after(0.5, function() sliver.redraw() end)
+                return {{
+                    api_version = 1,
+                    render = function(_, time, delta)
+                        assert(type(time) == "number")
+                        assert(type(delta) == "number")
+                        local file = assert(io.open(log, "a"))
+                        file:write(time, " ", delta, "\n")
+                        file:close()
+                    end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let committed_at = supervisor.now_seconds();
+        supervisor.step_at(1.0)?;
+
+        let lines: Vec<_> = std::fs::read_to_string(log)?
+            .lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .map(|value| value.parse::<f64>().expect("frame timing was numeric"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0][1], 0.0);
+        assert!(lines[1][0] > lines[0][0]);
+        assert!((lines[1][1] - (1.0 - committed_at)).abs() < 0.002);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn slow_replacement_retimes_candidate_after_old_frame_presentation() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-present.lua");
+        let candidate_source = directory.path().join("candidate-present.lua");
+        let old_log = directory.path().join("old-present-times");
+        let candidate_log = directory.path().join("candidate-present-times");
+        let candidate_counts = directory.path().join("candidate-counts");
+        let old_config = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            local log = {log:?}
+            return {{
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then sliver.redraw() end
+                end,
+                render = function(_, time, delta)
+                    local file = assert(io.open(log, "a"))
+                    file:write(time, " ", delta, "\n")
+                    file:close()
+                end,
+            }}
+            "#,
+            log = old_log.to_string_lossy(),
+        );
+        let candidate_config = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            local log = {log:?}
+            local counts = {counts:?}
+            local renders = 0
+            local registrations = 0
+            local function register_timer()
+                registrations = registrations + 1
+                sliver.timer.after(100, function() end)
+            end
+            return {{
+                api_version = 1,
+                start = function()
+                    register_timer()
+                    local deadline = os.clock() + 0.08
+                    while os.clock() < deadline do end
+                end,
+                render = function(_, time, delta)
+                    renders = renders + 1
+                    register_timer()
+                    sliver.backlight.set(0.75)
+                    local file = assert(io.open(log, "a"))
+                    file:write(time, " ", delta, "\n")
+                    file:close()
+                    local count_file = assert(io.open(counts, "a"))
+                    count_file:write(renders, " ", registrations, "\n")
+                    count_file:close()
+                end,
+            }}
+            "#,
+            log = candidate_log.to_string_lossy(),
+            counts = candidate_counts.to_string_lossy(),
+        );
+        std::fs::write(&old_source, old_config)?;
+        std::fs::write(&candidate_source, candidate_config)?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor.hardware_mut().inject_on_poll(
+            4,
+            HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }),
+        );
+        supervisor.apply(&candidate_source)?;
+
+        let parse = |path: &std::path::Path| -> Result<Vec<[f64; 2]>> {
+            std::fs::read_to_string(path)?
+                .lines()
+                .map(|line| {
+                    let values: Vec<_> = line
+                        .split_whitespace()
+                        .map(|value| value.parse::<f64>())
+                        .collect::<std::result::Result<_, _>>()?;
+                    anyhow::ensure!(values.len() == 2, "frame timing line had the wrong shape");
+                    Ok([values[0], values[1]])
+                })
+                .collect()
+        };
+        let old_frames = parse(&old_log)?;
+        let candidate_frames = parse(&candidate_log)?;
+        let counts = std::fs::read_to_string(candidate_counts)?;
+        assert_eq!(old_frames.len(), 2);
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            2,
+            "old worker presented during candidate staging"
+        );
+        assert_eq!(
+            candidate_frames.len(),
+            1,
+            "candidate rendered more than once"
+        );
+        assert_eq!(candidate_frames[0][1], 0.0);
+        assert!(candidate_frames[0][0] >= old_frames[0][0]);
+        assert_eq!(counts, "1 2\n");
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn reapplying_after_a_later_frame_keeps_timestamps_monotonic() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-timing.lua");
+        let new_source = directory.path().join("new-timing.lua");
+        let old_log = directory.path().join("old-timing");
+        let new_log = directory.path().join("new-timing");
+        let config = |log: &std::path::Path, timer: bool| {
+            let timer = if timer {
+                "sliver.timer.after(0.01, function() sliver.redraw() end)"
+            } else {
+                ""
+            };
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local file_name = {log:?}
+                {timer}
+                return {{
+                    api_version = 1,
+                    render = function(_, time, delta)
+                        local file = assert(io.open(file_name, "a"))
+                        file:write(time, " ", delta, "\n")
+                        file:close()
+                    end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+                timer = timer,
+            )
+        };
+        std::fs::write(&old_source, config(&old_log, true))?;
+        std::fs::write(&new_source, config(&new_log, false))?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&old_source)?;
+        std::thread::sleep(Duration::from_millis(40));
+        let now = supervisor.now_seconds();
+        supervisor.step_at(now)?;
+        supervisor.apply(&new_source)?;
+
+        let parse = |path: &std::path::Path| -> Result<Vec<[f64; 2]>> {
+            std::fs::read_to_string(path)?
+                .lines()
+                .map(|line| {
+                    let values: Vec<_> = line
+                        .split_whitespace()
+                        .map(|value| value.parse::<f64>())
+                        .collect::<std::result::Result<_, _>>()?;
+                    anyhow::ensure!(values.len() == 2, "frame timing line had the wrong shape");
+                    Ok([values[0], values[1]])
+                })
+                .collect()
+        };
+        let old_frames = parse(&old_log)?;
+        let new_frames = parse(&new_log)?;
+        assert_eq!(old_frames.len(), 2);
+        assert_eq!(new_frames.len(), 1);
+        assert!(old_frames[1][0] >= old_frames[0][0]);
+        assert!(new_frames[0][0] >= old_frames[1][0]);
+        assert_eq!(new_frames[0][1], 0.0);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn slow_staging_does_not_charge_staging_time_to_the_next_frame_delta() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("slow-stage.lua");
+        let log = directory.path().join("slow-stage-times");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                sliver.timer.after(0.01, function() sliver.redraw() end)
+                return {{
+                    api_version = 1,
+                    start = function()
+                        local deadline = os.clock() + 0.08
+                        while os.clock() < deadline do end
+                    end,
+                    render = function(_, time, delta)
+                        local file = assert(io.open(log, "a"))
+                        file:write(time, " ", delta, "\n")
+                        file:close()
+                    end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let committed_at = supervisor.now_seconds();
+        let next_frame_at = committed_at + 0.05;
+        supervisor.step_at(next_frame_at)?;
+
+        let lines: Vec<_> = std::fs::read_to_string(log)?
+            .lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .map(|value| value.parse::<f64>().expect("frame timing was numeric"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0][1], 0.0);
+        assert!((lines[1][1] - 0.05).abs() < 0.02);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn static_worker_does_not_render_without_a_request() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("static.lua");
@@ -2958,7 +3429,6 @@ mod tests {
             format!(
                 r#"
                 require("sliver.v1")
-                local sliver = require("sliver.v1")
                 local log = {log:?}
                 return {{
                     api_version = 1,

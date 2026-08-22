@@ -13,6 +13,7 @@ ctrlc = "3"
 evdev = "0.12"
 chrono = "0.4"
 libc = "0.2"
+memmap2 = "0.9"
 mlua = { version = "0.12", default-features = false, features = ["lua54", "vendored"] }
 pango = "0.20"
 pangocairo = "0.20"
