@@ -528,6 +528,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         self.backlight = candidate_backlight;
         self.last_presented_time = Some(now);
+        self.fn_hold_started = self.input_state.fn_active.then_some(now);
         self.selected_path = Some(selected_path.clone());
         self.recovery = None;
         self.recovery_row.clear();
@@ -1895,6 +1896,29 @@ mod tests {
             .expect("failing logout aborted owner handoff");
         assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
         supervisor.apply(&new_source)?;
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn held_fn_at_worker_commit_starts_recovery_clock() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut input_state = InputState::default();
+        input_state.fn_active = true;
+        let mut supervisor =
+            Supervisor::new(FakeTouchBar::with_input_state(input_state), state_file)?;
+        supervisor.apply(&source)?;
+
+        supervisor.step_at(2.9)?;
+        assert!(supervisor.recovery.is_none());
+        supervisor.step_at(3.1)?;
+        assert!(supervisor.recovery.is_some());
         supervisor.shutdown()?;
         Ok(())
     }
