@@ -136,7 +136,7 @@ pub(crate) trait TouchBarHardware {
 }
 
 #[cfg(test)]
-pub(crate) use fake::{FakeAction, FakeTouchBar};
+pub(crate) use fake::{FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar};
 
 #[cfg(test)]
 mod fake {
@@ -144,16 +144,25 @@ mod fake {
 
     use anyhow::{ensure, Result};
 
-    use super::{HardwareEvent, LogicalFrame, ModifierState, TouchBarHardware};
+    use super::{HardwareEvent, LogicalFrame, Modifier, ModifierState, TouchBarHardware};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum FakeKey {
+        Function(usize),
+        Modifier(Modifier),
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct FakeKeyEvent {
+        pub(crate) key: FakeKey,
+        pub(crate) active: bool,
+    }
 
     #[derive(Debug, Clone, PartialEq)]
     pub(crate) enum FakeAction {
         Grab,
         Present,
-        FunctionKeyTap {
-            index: usize,
-            modifiers: ModifierState,
-        },
+        SyntheticKey(FakeKeyEvent),
         Backlight(f64),
         Release,
     }
@@ -245,8 +254,31 @@ mod fake {
 
         fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
             ensure!(self.claimed, "fake Touch Bar is not claimed");
-            self.actions
-                .push(FakeAction::FunctionKeyTap { index, modifiers });
+            ensure!(index < 12, "function-key index is out of range");
+            for modifier in Modifier::ALL {
+                if modifiers.is_active(modifier) {
+                    self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
+                        key: FakeKey::Modifier(modifier),
+                        active: true,
+                    }));
+                }
+            }
+            self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
+                key: FakeKey::Function(index),
+                active: true,
+            }));
+            self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
+                key: FakeKey::Function(index),
+                active: false,
+            }));
+            for modifier in Modifier::ALL.into_iter().rev() {
+                if modifiers.is_active(modifier) {
+                    self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
+                        key: FakeKey::Modifier(modifier),
+                        active: false,
+                    }));
+                }
+            }
             Ok(())
         }
 

@@ -258,7 +258,9 @@ pub fn probe() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hardware::{FakeAction, FakeTouchBar, HardwareEvent, Modifier};
+    use crate::hardware::{
+        FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, Modifier,
+    };
 
     #[test]
     fn live_toml_apply_and_widget_press_cross_the_hardware_seam() -> Result<()> {
@@ -355,15 +357,35 @@ mod tests {
             .last()
             .context("daemon did not present F2 press feedback")?;
         assert_ne!(&function_row, pressed_function_row);
-        assert!(hardware.actions().iter().any(|action| {
-            matches!(
-                action,
-                FakeAction::FunctionKeyTap {
-                    index: 1,
-                    modifiers,
-                } if modifiers.is_active(Modifier::LeftCtrl)
-            )
-        }));
+        let key_events: Vec<_> = hardware
+            .actions()
+            .iter()
+            .filter_map(|action| match action {
+                FakeAction::SyntheticKey(event) => Some(*event),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            key_events,
+            vec![
+                FakeKeyEvent {
+                    key: FakeKey::Modifier(Modifier::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Function(1),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Function(1),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Modifier(Modifier::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
 
         hardware.inject(HardwareEvent::Fn { active: false });
         daemon.step(&mut hardware, Duration::ZERO)?;

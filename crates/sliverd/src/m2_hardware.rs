@@ -595,34 +595,36 @@ impl M2TouchBar {
         ensure!(!self.is_claimed(), "Touch Bar is already claimed");
 
         let mut claim = claim_card()?;
-        let (pw, ph) = claim.mode.size();
-        let (pw, ph) = (u32::from(pw), u32::from(ph));
-        debug_assert_eq!(pw, PANEL_W);
+        let (panel_width, panel_height) = claim.mode.size();
+        let (panel_width, panel_height) = (u32::from(panel_width), u32::from(panel_height));
+        debug_assert_eq!(panel_width, PANEL_W);
 
         let mut dumb_buffer = None;
         let mut framebuffer = None;
         let physical_surface = (|| -> Result<ImageSurface> {
-            let db = claim
-                .card
-                .create_dumb_buffer((pw + FB_PAD, ph), DrmFourcc::Xrgb8888, 32)?;
-            dumb_buffer = Some(db);
+            let created_dumb_buffer = claim.card.create_dumb_buffer(
+                (panel_width + FB_PAD, panel_height),
+                DrmFourcc::Xrgb8888,
+                32,
+            )?;
+            dumb_buffer = Some(created_dumb_buffer);
 
-            let fb = claim.card.add_framebuffer(
+            let created_framebuffer = claim.card.add_framebuffer(
                 dumb_buffer.as_ref().expect("dumb buffer was set"),
                 24,
                 32,
             )?;
-            framebuffer = Some(fb);
+            framebuffer = Some(created_framebuffer);
 
             // Canvas spans only the visible panel width; the 4px pad is padding.
-            let px_stride = pw * 4;
-            let pixels = vec![0u8; (px_stride * ph) as usize];
+            let pixel_stride = panel_width * 4;
+            let pixels = vec![0u8; (pixel_stride * panel_height) as usize];
             Ok(cairo::ImageSurface::create_for_data(
                 pixels,
                 cairo::Format::ARgb32,
-                pw as i32,
-                ph as i32,
-                px_stride as i32,
+                panel_width as i32,
+                panel_height as i32,
+                pixel_stride as i32,
             )?)
         })();
 
