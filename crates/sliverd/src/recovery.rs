@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use cairo::{FontSlant, FontWeight};
 
 use crate::frame_canvas::FrameCanvas;
-use crate::hardware::{function_key_output, ContactId, LogicalFrame, TouchEvent, TouchPhase};
+use crate::hardware::{ContactId, LogicalFrame, TouchEvent, TouchPhase};
 
 const KEY_COUNT: usize = 12;
 const PRESSED_RGB: (f64, f64, f64) = (0.22, 0.22, 0.22);
@@ -173,10 +173,6 @@ impl RecoveryRow {
                 .context("drawing recovery label")?;
         }
         frame.finish()
-    }
-
-    pub(crate) fn output_key(index: usize) -> Option<crate::hardware::OutputKey> {
-        function_key_output(index)
     }
 }
 
