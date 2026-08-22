@@ -675,6 +675,177 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn route_recovery_touch(&mut self, event: TouchEvent) -> Result<()> {
+        let changed = match event.phase {
+            TouchPhase::Down => {
+                let Some(index) = RecoveryRow::hit_test(event.x, event.y) else {
+                    return Ok(());
+                };
+                let recovery = self.recovery.as_mut().expect("recovery state disappeared");
+                recovery.contacts.insert(event.id, index);
+                if self.recovery_row.is_pressed(index) {
+                    false
+                } else {
+                    self.recovery_row.press(index);
+                    true
+                }
+            }
+            TouchPhase::Move => {
+                let Some(index) = self
+                    .recovery
+                    .as_ref()
+                    .and_then(|recovery| recovery.contacts.get(&event.id).copied())
+                else {
+                    return Ok(());
+                };
+                let inside = RecoveryRow::hit_test(event.x, event.y) == Some(index);
+                let was_pressed = self.recovery_row.is_pressed(index);
+                if inside != was_pressed {
+                    if inside {
+                        self.recovery_row.press(index);
+                    } else {
+                        self.recovery_row.release(index);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            TouchPhase::Up | TouchPhase::Cancel => {
+                let Some(index) = self
+                    .recovery
+                    .as_mut()
+                    .and_then(|recovery| recovery.contacts.remove(&event.id))
+                else {
+                    return Ok(());
+                };
+                let activate = event.phase == TouchPhase::Up
+                    && RecoveryRow::hit_test(event.x, event.y) == Some(index);
+                let still_pressed = self.recovery.as_ref().is_some_and(|recovery| {
+                    recovery.contacts.values().any(|value| *value == index)
+                });
+                self.recovery_row.release(index);
+                if still_pressed {
+                    self.recovery_row.press(index);
+                }
+                if activate {
+                    self.activate_recovery_key(index)?;
+                }
+                true
+            }
+        };
+        if changed {
+            self.present_recovery()
+        } else {
+            Ok(())
+        }
+    }
+
+    fn activate_recovery_key(&mut self, index: usize) -> Result<()> {
+        let Some(key) = RecoveryRow::output_key(index) else {
+            return Ok(());
+        };
+        let events = tap_key_events(key, &modifier_output_keys(self.input_state.modifiers));
+        self.hardware
+            .emit_key_events(&events)
+            .context("emitting recovery function key")
+    }
+
+    fn present_recovery(&mut self) -> Result<()> {
+        let frame = self.recovery_row.render()?;
+        self.hardware.present(&frame)
+    }
+
+    fn enter_recovery(&mut self) -> Result<()> {
+        if self.recovery.is_some() {
+            return Ok(());
+        }
+        let now = self.now_seconds();
+        let mut owner_is_healthy = false;
+        if let Some(active) = self.active.as_mut() {
+            owner_is_healthy = true;
+            let cancels: Vec<_> = active
+                .contacts
+                .values()
+                .map(|event| TouchEvent {
+                    phase: TouchPhase::Cancel,
+                    time: now,
+                    ..*event
+                })
+                .collect();
+            active.contacts.clear();
+            let hidden = active.worker.drive_with_visibility(
+                now,
+                self.input_state,
+                Vec::new(),
+                0.0,
+                cancels,
+                Some((false, "recovery")),
+                false,
+            );
+            if let Err(error) = hidden {
+                eprintln!("healthy Lua worker failed while entering recovery: {error:#}");
+                self.active.take();
+                owner_is_healthy = false;
+            }
+        }
+        self.ignored_contacts
+            .extend(self.down_contacts.keys().copied());
+        self.touch_queue.drain();
+        self.input_transitions.clear();
+        self.next_timer_deadline = None;
+        self.fn_hold_started = None;
+        self.recovery_row.clear();
+        self.recovery = Some(RecoveryState {
+            contacts: BTreeMap::new(),
+            owner_is_healthy,
+        });
+        self.hardware
+            .set_backlight(0.75)
+            .context("setting recovery backlight")?;
+        self.backlight = 0.75;
+        self.present_recovery()
+    }
+
+    fn exit_recovery(&mut self, now: f64) -> Result<()> {
+        let Some(recovery) = self.recovery.take() else {
+            return Ok(());
+        };
+        if !recovery.owner_is_healthy || self.active.is_none() {
+            self.recovery = Some(recovery);
+            return Ok(());
+        }
+        self.recovery_row.clear();
+        self.ignored_contacts
+            .extend(self.down_contacts.keys().copied());
+        let transitions = std::mem::take(&mut self.input_transitions);
+        let Some(active) = self.active.as_ref() else {
+            return Ok(());
+        };
+        self.hardware
+            .set_backlight(active.backlight)
+            .context("restoring worker backlight after recovery")?;
+        self.backlight = active.backlight;
+        let delta = self
+            .last_presented_time
+            .map(|previous| (now - previous).max(0.0))
+            .unwrap_or(0.0);
+        let effects = match active.worker.drive_with_visibility(
+            now,
+            self.input_state,
+            transitions,
+            delta,
+            Vec::new(),
+            Some((true, "recovery")),
+            true,
+        ) {
+            Ok(effects) => effects,
+            Err(error) => return self.fail_active_worker(error),
+        };
+        self.apply_effects(effects)
     }
 
     fn poll_hardware(&mut self, timeout: Duration) -> Result<()> {
