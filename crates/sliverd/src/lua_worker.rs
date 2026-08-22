@@ -702,7 +702,8 @@ impl Runtime {
             self.controls
                 .now_seconds
                 .set(Some(sample_now(now_seconds, started)));
-            if options.force_render || self.controls.redraw_pending.replace(false) {
+            let redraw_requested = self.controls.redraw_pending.replace(false);
+            if options.force_render || redraw_requested {
                 let frame = self.render_frame(now_seconds, delta)?;
                 self.pending_frame = Some(PendingFrame { frame, timing });
             }

@@ -4636,7 +4636,10 @@ mod tests {
                 local sliver = require("sliver.v1")
                 return {{
                     api_version = 1,
-                    visibility = function(event) record("visibility:" .. tostring(event.visible)) end,
+                    visibility = function(event)
+                        record("visibility:" .. tostring(event.visible))
+                        if event.visible then sliver.redraw() end
+                    end,
                     touch = function(event) record("touch:" .. event.phase) end,
                     key = function(event) record("key:" .. event.key .. ":" .. event.phase) end,
                     render = function() record("render") end,
@@ -4690,6 +4693,14 @@ mod tests {
             .rposition(|line| *line == "render")
             .expect("return render was not requested");
         assert!(fn_up < visible && visible < render);
+        supervisor.step_at(6.0)?;
+        assert_eq!(
+            std::fs::read_to_string(&log)?
+                .lines()
+                .filter(|line| *line == "render")
+                .count(),
+            2
+        );
         supervisor.shutdown()?;
         Ok(())
     }
