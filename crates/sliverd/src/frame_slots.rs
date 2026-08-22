@@ -42,20 +42,6 @@ pub(crate) struct CompletedFrame {
     pub(crate) timing: FrameTiming,
 }
 
-impl CompletedFrame {
-    pub(crate) fn dimensions(&self) -> (usize, usize, usize) {
-        (self.width, self.height, self.stride)
-    }
-
-    pub(crate) fn pixels(&self) -> &[u8] {
-        &self.pixels
-    }
-
-    pub(crate) fn timing(&self) -> FrameTiming {
-        self.timing
-    }
-}
-
 struct Slot {
     state: AtomicU8,
     sequence: AtomicU64,
@@ -345,8 +331,8 @@ mod tests {
         }
 
         let presented = broker.take_newest()?.expect("complete frame was lost");
-        assert_eq!(presented.pixels(), frame(4).as_slice());
-        assert_eq!(presented.timing().presentation_time, 4.0);
+        assert_eq!(presented.pixels, frame(4));
+        assert_eq!(presented.timing.presentation_time, 4.0);
         assert!(broker.take_newest()?.is_none());
         Ok(())
     }
@@ -362,10 +348,7 @@ mod tests {
         assert!(broker.take_newest()?.is_none());
         assert!(producer.publish(2, 1, 8, &frame(9), FrameTiming::new(2.0, 0.0)?,)?);
         assert_eq!(
-            broker
-                .take_newest()?
-                .expect("complete slot stalled")
-                .pixels(),
+            broker.take_newest()?.expect("complete slot stalled").pixels,
             frame(9)
         );
         drop(partial);
@@ -449,7 +432,7 @@ mod tests {
         let producer = slots.producer();
         assert!(producer.publish(2, 1, 8, &frame(5), FrameTiming::new(5.0, 0.0)?,)?);
         assert_eq!(
-            broker.take_newest()?.expect("broker stalled").pixels(),
+            broker.take_newest()?.expect("broker stalled").pixels,
             frame(5)
         );
         Ok(())

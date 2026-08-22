@@ -59,6 +59,7 @@ pub(crate) struct LuaWorker {
 }
 
 enum WorkerCommand {
+    #[allow(dead_code)]
     Render(mpsc::SyncSender<std::result::Result<(), String>>),
     Commit(f64, mpsc::SyncSender<std::result::Result<(), String>>),
     Drive(
@@ -136,13 +137,6 @@ impl LuaWorker {
         Self::stage_with_backlight_at(source, 0.0, 0.0)
     }
 
-    pub(crate) fn stage_with_backlight(
-        source: &Path,
-        initial_backlight: f64,
-    ) -> Result<StagedLuaWorker> {
-        Self::stage_with_backlight_at(source, initial_backlight, 0.0)
-    }
-
     pub(crate) fn stage_with_backlight_at(
         source: &Path,
         initial_backlight: f64,
@@ -204,6 +198,7 @@ impl LuaWorker {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn render_next(&self) -> Result<LogicalFrame> {
         let commands = self
             .commands
