@@ -999,7 +999,7 @@ impl Runtime {
         let context = frame.context();
         let canvas = self
             ._lua
-            .create_userdata(Canvas::new(&context))
+            .create_userdata(Canvas::new(context))
             .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
         let render_result = self
             .render
