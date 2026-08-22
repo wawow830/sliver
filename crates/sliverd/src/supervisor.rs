@@ -348,6 +348,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if let Some((peer, grant)) = authorization {
             self.authorizer.recheck(peer, &grant)?;
         }
+        self.release_synthetic_keys()?;
         path_state.commit()?;
 
         let old_frame = self.active.as_ref().map(|active| active.frame.clone());
@@ -393,7 +394,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         self.backlight = candidate_backlight;
-        self.release_synthetic_keys()?;
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         self.next_timer_deadline = Some(now);
@@ -941,7 +941,9 @@ mod tests {
         state_file: std::path::PathBuf,
         fail_next_present: bool,
         fail_next_backlight: bool,
+        fail_next_key: bool,
         state_seen_at_failure: Vec<u8>,
+        state_seen_at_key_failure: Vec<u8>,
     }
 
     impl FailingPresentHardware {
@@ -951,7 +953,9 @@ mod tests {
                 state_file,
                 fail_next_present: false,
                 fail_next_backlight: false,
+                fail_next_key: false,
                 state_seen_at_failure: Vec::new(),
+                state_seen_at_key_failure: Vec::new(),
             }
         }
     }
@@ -975,6 +979,11 @@ mod tests {
         }
 
         fn emit_key_events(&mut self, events: &[crate::hardware::SyntheticKeyEvent]) -> Result<()> {
+            if self.fail_next_key {
+                self.fail_next_key = false;
+                self.state_seen_at_key_failure = std::fs::read(&self.state_file)?;
+                bail!("injected synthetic key failure");
+            }
             self.inner.emit_key_events(events)
         }
 
@@ -997,6 +1006,89 @@ mod tests {
         fn release(&mut self) -> Result<()> {
             self.inner.release()
         }
+    }
+
+    #[test]
+    fn key_cleanup_failure_rejects_candidate_before_commit() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let old_source = directory.path().join("old.lua");
+        let new_source = directory.path().join("new.lua");
+        std::fs::write(
+            &old_source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                    end
+                end,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                end,
+            }
+            "#,
+        )?;
+        std::fs::write(
+            &new_source,
+            r#"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let mut supervisor = Supervisor::new(
+            FailingPresentHardware::new(state_file.clone()),
+            state_file.clone(),
+        )?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+        supervisor.hardware_mut().fail_next_key = true;
+
+        let error = supervisor
+            .apply(&new_source)
+            .expect_err("key cleanup failure committed a candidate");
+        assert!(format!("{error:#}").contains("injected synthetic key failure"));
+        assert_eq!(
+            supervisor.hardware().state_seen_at_key_failure,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .expect("old frame disappeared")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
     }
 
     #[test]
