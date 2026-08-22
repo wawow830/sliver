@@ -930,10 +930,32 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         {
             self.worker_failure = Some(format!("{error:#}"));
         }
+        let now = self.now_seconds();
+        if let Some(active) = self.active.take() {
+            let cancels: Vec<_> = active
+                .contacts
+                .values()
+                .map(|event| TouchEvent {
+                    phase: TouchPhase::Cancel,
+                    time: now,
+                    ..*event
+                })
+                .collect();
+            if !cancels.is_empty() {
+                if let Err(cancel_error) =
+                    active
+                        .worker
+                        .drive(now, self.input_state, Vec::new(), 0.0, cancels)
+                {
+                    eprintln!(
+                        "failed Lua worker did not receive contact cancellation: {cancel_error:#}"
+                    );
+                }
+            }
+        }
         if let Err(cleanup_error) = self.release_synthetic_keys() {
             eprintln!("releasing synthetic keys after worker failure failed: {cleanup_error:#}");
         }
-        self.active.take();
         self.next_timer_deadline = None;
         if let Some(recovery) = self.recovery.as_mut() {
             recovery.mark_unhealthy();
@@ -1861,6 +1883,57 @@ mod tests {
             .expect("failing logout aborted owner handoff");
         assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
         supervisor.apply(&new_source)?;
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn later_render_failure_cancels_contacts_before_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("failing-render.lua");
+        let events = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {events:?}
+                local renders = 0
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        record(event.phase)
+                        if event.phase == "down" then sliver.redraw() end
+                    end,
+                    render = function()
+                        renders = renders + 1
+                        if renders > 1 then error("later render failed") end
+                    end,
+                }}
+                "#,
+                events = events.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("later render failure was not reported");
+        assert!(format!("{error:#}").contains("later render failed"));
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        assert!(supervisor.hardware().presented_frames().len() >= 2);
+        assert_eq!(std::fs::read_to_string(&events)?, "down\ncancel\n");
         supervisor.shutdown()?;
         Ok(())
     }
