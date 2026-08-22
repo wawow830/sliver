@@ -2020,7 +2020,10 @@ mod tests {
         supervisor.step_at(1.0)?;
         supervisor.step_at(4.0)?;
 
-        assert_eq!(std::fs::read_to_string(&log)?, "render\nvisibility:false\n");
+        assert_eq!(
+            std::fs::read_to_string(&log)?,
+            "render\nvisibility:false\ntimer\n"
+        );
         assert!(supervisor.recovery.is_some());
         supervisor.shutdown()?;
         Ok(())
