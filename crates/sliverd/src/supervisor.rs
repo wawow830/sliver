@@ -50,7 +50,13 @@ struct TouchQueue {
 
 #[derive(Clone, Default)]
 struct SyntheticState {
-    held: Vec<(crate::hardware::OutputKey, Vec<crate::hardware::OutputKey>)>,
+    held: Vec<HeldSyntheticKey>,
+}
+
+#[derive(Clone)]
+struct HeldSyntheticKey {
+    key: OutputKey,
+    modifiers: Vec<OutputKey>,
 }
 
 impl TouchQueue {
@@ -115,15 +121,18 @@ impl SyntheticState {
                             active: true,
                         });
                     }
-                    next.held.push((request.key, modifiers));
+                    next.held.push(HeldSyntheticKey {
+                        key: request.key,
+                        modifiers,
+                    });
                 }
                 KeyOperation::Up => {
                     let index = next
                         .held
                         .iter()
-                        .position(|(key, _)| *key == request.key)
+                        .position(|held| held.key == request.key)
                         .context("synthetic key is not held")?;
-                    let (_, modifiers) = next.held.remove(index);
+                    let HeldSyntheticKey { modifiers, .. } = next.held.remove(index);
                     if !is_modifier_key(request.key) || next.modifier_count(request.key) == 0 {
                         events.push(SyntheticKeyEvent {
                             key: request.key,
@@ -189,15 +198,15 @@ impl SyntheticState {
     }
 
     fn is_key_held(&self, key: OutputKey) -> bool {
-        self.held.iter().any(|(held, _)| *held == key)
+        self.held.iter().any(|held| held.key == key)
     }
 
     fn modifier_count(&self, modifier: OutputKey) -> usize {
-        self.held.iter().filter(|(key, _)| *key == modifier).count()
+        self.held.iter().filter(|held| held.key == modifier).count()
             + self
                 .held
                 .iter()
-                .flat_map(|(_, modifiers)| modifiers)
+                .flat_map(|held| &held.modifiers)
                 .filter(|held| **held == modifier)
                 .count()
     }
@@ -205,7 +214,7 @@ impl SyntheticState {
     fn release(&self) -> (Self, Vec<SyntheticKeyEvent>) {
         let mut remaining = self.clone();
         let mut events = Vec::new();
-        while let Some((key, modifiers)) = remaining.held.pop() {
+        while let Some(HeldSyntheticKey { key, modifiers }) = remaining.held.pop() {
             if !is_modifier_key(key) || remaining.modifier_count(key) == 0 {
                 events.push(SyntheticKeyEvent { key, active: false });
             }
