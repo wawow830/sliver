@@ -494,6 +494,68 @@ mod tests {
     }
 
     #[test]
+    fn lua_diagnostics_name_source_line_traceback_and_stage() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("diagnostic.lua");
+        let cases = [
+            (
+                "load",
+                "require('sliver.v1')\nlocal broken =",
+                "syntax error",
+            ),
+            (
+                "validation",
+                "require('sliver.v1'); return { api_version = 1, render = function() end, extra = true }",
+                "extra",
+            ),
+            (
+                "start",
+                r#"
+                require("sliver.v1")
+                local function fail() error("start boom") end
+                return { api_version = 1, start = fail, render = function() end }
+                "#,
+                "start boom",
+            ),
+            (
+                "render",
+                r#"
+                require("sliver.v1")
+                local function fail() error("render boom") end
+                return {
+                    api_version = 1,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 2008, 60, 1, 0, 0, 1)
+                        fail()
+                    end,
+                }
+                "#,
+                "render boom",
+            ),
+        ];
+
+        for (stage, config, expected) in cases {
+            std::fs::write(&source, config)?;
+            let mut hardware = FakeTouchBar::new();
+
+            let error = present_lua_once(&source, &mut hardware)
+                .expect_err("failing Lua stage was accepted");
+
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains(&format!("[{stage}]")), "{diagnostic}");
+            assert!(diagnostic.contains(expected), "{diagnostic}");
+            assert!(
+                diagnostic.contains(&format!("{}:", source.display())),
+                "diagnostic omitted the source line: {diagnostic}"
+            );
+            assert!(diagnostic.contains("stack traceback:"), "{diagnostic}");
+            assert!(hardware.presented_frames().is_empty());
+            assert_eq!(hardware.actions(), &[FakeAction::Grab, FakeAction::Release]);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn lua_callbacks_are_fixed_serial_and_ignore_returns() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("lifecycle.lua");
