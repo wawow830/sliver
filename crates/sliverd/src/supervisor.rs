@@ -11,8 +11,9 @@ use anyhow::{ensure, Context, Result};
 use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::hardware::{
-    ContactId, HardwareEvent, InputState, InputTransition, KeyboardKey, LogicalFrame, Modifier,
-    ObservedKey, OutputKey, SyntheticKeyEvent, TouchBarHardware, TouchEvent, TouchPhase,
+    modifier_output_keys, tap_key_events, ContactId, HardwareEvent, InputState, InputTransition,
+    KeyboardKey, LogicalFrame, ObservedKey, OutputKey, SyntheticKeyEvent, TouchBarHardware,
+    TouchEvent, TouchPhase,
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
@@ -139,26 +140,7 @@ impl SyntheticState {
                         .into_iter()
                         .filter(|modifier| next.modifier_count(*modifier) == 0)
                         .collect();
-                    events.extend(
-                        mirrored
-                            .iter()
-                            .copied()
-                            .map(|key| SyntheticKeyEvent { key, active: true }),
-                    );
-                    events.push(SyntheticKeyEvent {
-                        key: request.key,
-                        active: true,
-                    });
-                    events.push(SyntheticKeyEvent {
-                        key: request.key,
-                        active: false,
-                    });
-                    events.extend(
-                        mirrored
-                            .into_iter()
-                            .rev()
-                            .map(|key| SyntheticKeyEvent { key, active: false }),
-                    );
+                    events.extend(tap_key_events(request.key, &mirrored));
                 }
             }
         }
@@ -171,11 +153,7 @@ impl SyntheticState {
         input_state: InputState,
     ) -> Result<Vec<OutputKey>> {
         let modifiers = match mode {
-            ModifierMode::Inherit => Modifier::ALL
-                .into_iter()
-                .filter(|modifier| input_state.modifiers.is_active(*modifier))
-                .map(modifier_key)
-                .collect(),
+            ModifierMode::Inherit => modifier_output_keys(input_state.modifiers),
             ModifierMode::None => Vec::new(),
             ModifierMode::Explicit(keys) => keys.clone(),
         };
@@ -236,19 +214,6 @@ fn is_modifier_key(key: OutputKey) -> bool {
                 | KeyboardKey::RightSuper
         )
     )
-}
-
-fn modifier_key(modifier: Modifier) -> OutputKey {
-    OutputKey::Keyboard(match modifier {
-        Modifier::LeftCtrl => KeyboardKey::LeftCtrl,
-        Modifier::RightCtrl => KeyboardKey::RightCtrl,
-        Modifier::LeftAlt => KeyboardKey::LeftAlt,
-        Modifier::RightAlt => KeyboardKey::RightAlt,
-        Modifier::LeftShift => KeyboardKey::LeftShift,
-        Modifier::RightShift => KeyboardKey::RightShift,
-        Modifier::LeftSuper => KeyboardKey::LeftSuper,
-        Modifier::RightSuper => KeyboardKey::RightSuper,
-    })
 }
 
 pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {

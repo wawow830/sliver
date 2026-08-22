@@ -139,6 +139,61 @@ pub(crate) struct SyntheticKeyEvent {
     pub(crate) active: bool,
 }
 
+pub(crate) fn tap_key_events(key: OutputKey, modifiers: &[OutputKey]) -> Vec<SyntheticKeyEvent> {
+    let mut events = modifiers
+        .iter()
+        .copied()
+        .map(|key| SyntheticKeyEvent { key, active: true })
+        .collect::<Vec<_>>();
+    events.push(SyntheticKeyEvent { key, active: true });
+    events.push(SyntheticKeyEvent { key, active: false });
+    events.extend(
+        modifiers
+            .iter()
+            .rev()
+            .copied()
+            .map(|key| SyntheticKeyEvent { key, active: false }),
+    );
+    events
+}
+
+pub(crate) fn modifier_output_keys(state: ModifierState) -> Vec<OutputKey> {
+    Modifier::ALL
+        .into_iter()
+        .filter(|modifier| state.is_active(*modifier))
+        .map(|modifier| {
+            OutputKey::Keyboard(match modifier {
+                Modifier::LeftCtrl => KeyboardKey::LeftCtrl,
+                Modifier::RightCtrl => KeyboardKey::RightCtrl,
+                Modifier::LeftAlt => KeyboardKey::LeftAlt,
+                Modifier::RightAlt => KeyboardKey::RightAlt,
+                Modifier::LeftShift => KeyboardKey::LeftShift,
+                Modifier::RightShift => KeyboardKey::RightShift,
+                Modifier::LeftSuper => KeyboardKey::LeftSuper,
+                Modifier::RightSuper => KeyboardKey::RightSuper,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn function_key_output(index: usize) -> Option<OutputKey> {
+    Some(OutputKey::Keyboard(match index {
+        0 => KeyboardKey::F1,
+        1 => KeyboardKey::F2,
+        2 => KeyboardKey::F3,
+        3 => KeyboardKey::F4,
+        4 => KeyboardKey::F5,
+        5 => KeyboardKey::F6,
+        6 => KeyboardKey::F7,
+        7 => KeyboardKey::F8,
+        8 => KeyboardKey::F9,
+        9 => KeyboardKey::F10,
+        10 => KeyboardKey::F11,
+        11 => KeyboardKey::F12,
+        _ => return None,
+    }))
+}
+
 pub(crate) type ContactId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -20,8 +20,9 @@ use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, EventType, InputEvent, Key};
 
 use crate::hardware::{
-    validate_backlight, ConsumerKey, HardwareEvent, KeyboardKey, LogicalFrame, Modifier,
-    ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
+    function_key_output, modifier_output_keys, tap_key_events, validate_backlight, ConsumerKey,
+    HardwareEvent, KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey,
+    SyntheticKeyEvent, TouchBarHardware,
 };
 
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
@@ -740,41 +741,23 @@ fn initial_keyboard_events(key_state: &AttributeSet<Key>) -> Vec<HardwareEvent> 
     events
 }
 
-fn function_key_batches(
-    index: usize,
-    modifiers: ModifierState,
-) -> io::Result<Vec<Vec<InputEvent>>> {
-    let key = *F_KEYS.get(index).ok_or_else(|| {
+fn function_key_events(index: usize, modifiers: ModifierState) -> io::Result<Vec<InputEvent>> {
+    let key = function_key_output(index).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "function-key index out of range",
         )
     })?;
-
-    let modifier_down: Vec<_> = Modifier::ALL
+    Ok(tap_key_events(key, &modifier_output_keys(modifiers))
         .into_iter()
-        .zip(MOD_KEYS)
-        .filter(|(modifier, _)| modifiers.is_active(*modifier))
-        .map(|(_, key)| InputEvent::new(EventType::KEY, key.code(), 1))
-        .collect();
-    let modifier_up: Vec<_> = Modifier::ALL
-        .into_iter()
-        .zip(MOD_KEYS)
-        .rev()
-        .filter(|(modifier, _)| modifiers.is_active(*modifier))
-        .map(|(_, key)| InputEvent::new(EventType::KEY, key.code(), 0))
-        .collect();
-
-    let mut batches = Vec::with_capacity(4);
-    if !modifier_down.is_empty() {
-        batches.push(modifier_down);
-    }
-    batches.push(vec![InputEvent::new(EventType::KEY, key.code(), 1)]);
-    batches.push(vec![InputEvent::new(EventType::KEY, key.code(), 0)]);
-    if !modifier_up.is_empty() {
-        batches.push(modifier_up);
-    }
-    Ok(batches)
+        .map(|event| {
+            InputEvent::new(
+                EventType::KEY,
+                output_key_code(event.key).code(),
+                i32::from(event.active),
+            )
+        })
+        .collect())
 }
 
 /// One virtual keyboard shared by the Lua worker and the fixed Fn row.
@@ -808,10 +791,7 @@ impl KeyboardEmitter {
     }
 
     fn tap(&mut self, index: usize, modifiers: ModifierState) -> io::Result<()> {
-        for batch in function_key_batches(index, modifiers)? {
-            self.device.emit(&batch)?;
-        }
-        Ok(())
+        self.device.emit(&function_key_events(index, modifiers)?)
     }
 
     fn emit(&mut self, events: &[SyntheticKeyEvent]) -> io::Result<()> {
@@ -1534,23 +1514,20 @@ mod tests {
             ]
         );
 
-        let batches = function_key_batches(1, modifiers)?;
-        let observed: Vec<Vec<(u16, i32)>> = batches
+        let events = function_key_events(1, modifiers)?;
+        let observed: Vec<_> = events
             .iter()
-            .map(|batch| {
-                batch
-                    .iter()
-                    .map(|event| (event.code(), event.value()))
-                    .collect()
-            })
+            .map(|event| (event.code(), event.value()))
             .collect();
         assert_eq!(
             observed,
             vec![
-                vec![(Key::KEY_LEFTCTRL.code(), 1), (Key::KEY_RIGHTALT.code(), 1),],
-                vec![(Key::KEY_F2.code(), 1)],
-                vec![(Key::KEY_F2.code(), 0)],
-                vec![(Key::KEY_RIGHTALT.code(), 0), (Key::KEY_LEFTCTRL.code(), 0),],
+                (Key::KEY_LEFTCTRL.code(), 1),
+                (Key::KEY_RIGHTALT.code(), 1),
+                (Key::KEY_F2.code(), 1),
+                (Key::KEY_F2.code(), 0),
+                (Key::KEY_RIGHTALT.code(), 0),
+                (Key::KEY_LEFTCTRL.code(), 0),
             ]
         );
         Ok(())
