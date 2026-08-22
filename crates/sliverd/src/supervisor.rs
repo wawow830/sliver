@@ -1575,6 +1575,68 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_held_keys_cleanup_releases_each_modifier_once() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("held-old.lua");
+        let new_source = directory.path().join("held-new.lua");
+        std::fs::write(
+            &old_source,
+            r#"
+            local sliver = require("sliver.v1")
+            local keys = sliver.input.keys.keyboard
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(event.id == 1 and keys.f2 or keys.f3)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        std::fs::write(
+            &new_source,
+            "require(\"sliver.v1\"); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&old_source)?;
+        for id in 1..=2 {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Down)));
+        }
+        supervisor.step_at(1.0)?;
+        supervisor.apply(&new_source)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions()[1],
+            vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn key_taps_bridge_inherited_suppressed_and_explicit_modifiers_in_one_transaction() -> Result<()>
     {
         let directory = tempfile::tempdir()?;
