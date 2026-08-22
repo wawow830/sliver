@@ -385,6 +385,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         self.backlight = candidate_backlight;
+        self.release_synthetic_keys()?;
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         self.next_timer_deadline = Some(now);
@@ -420,6 +421,15 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 eprintln!("replaced Lua worker did not stop cleanly: {error:#}");
             }
         }
+        Ok(())
+    }
+
+    fn release_synthetic_keys(&mut self) -> Result<()> {
+        let (empty, events) = self.synthetic.release();
+        if !events.is_empty() {
+            self.hardware.emit_key_events(&events)?;
+        }
+        self.synthetic = empty;
         Ok(())
     }
 
@@ -573,6 +583,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
+        let (next_synthetic, key_events) = self
+            .synthetic
+            .plan(&effects.key_requests, self.input_state)?;
+        if !key_events.is_empty() {
+            self.hardware.emit_key_events(&key_events)?;
+        }
+        self.synthetic = next_synthetic;
         let old_frame = active.frame.clone();
         let old_backlight = active.backlight;
         let frame = effects.frame;
@@ -649,6 +666,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     pub(crate) fn shutdown(mut self) -> Result<()> {
         let now = self.now_seconds();
+        let synthetic_result = self.release_synthetic_keys();
         let stop_result = match self.active.take() {
             Some(active) => {
                 let cancels: Vec<_> = active
@@ -671,7 +689,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         };
         let release_result = self.hardware.release();
         self.claimed = false;
-        match (stop_result, release_result) {
+        match (stop_result.and(synthetic_result), release_result) {
             (Err(error), Err(release_error)) => {
                 eprintln!("hardware release failed after Lua stop error: {release_error:#}");
                 Err(error)
@@ -863,8 +881,8 @@ mod tests {
     use anyhow::{bail, Context, Result};
 
     use crate::hardware::{
-        FakeAction, FakeTouchBar, HardwareEvent, LogicalFrame, Modifier, ModifierState,
-        TouchBarHardware, TouchEvent, TouchPhase,
+        ConsumerKey, FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, KeyboardKey,
+        LogicalFrame, Modifier, ModifierState, TouchBarHardware, TouchEvent, TouchPhase,
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
@@ -1121,6 +1139,69 @@ mod tests {
                 .context("new frame was not committed")?
                 .rgba_at(10, 10),
             [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn touch_can_emit_keyboard_and_consumer_taps() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("keys.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.tap(sliver.input.keys.keyboard.escape)
+                        sliver.input.key.tap(sliver.input.keys.consumer.play_pause)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::PlayPause),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::PlayPause),
+                    active: false,
+                },
+            ]
         );
         supervisor.shutdown()?;
         Ok(())
