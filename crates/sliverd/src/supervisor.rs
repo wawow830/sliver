@@ -4490,6 +4490,189 @@ mod tests {
     }
 
     #[test]
+    fn saved_startup_failure_keeps_path_and_enters_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let missing = directory.path().join("missing.lua");
+        PreparedPathState::prepare(&state_file, &missing)?.commit()?;
+        let (logind, _) = active_local_logind("startup-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            None,
+        )?;
+
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            missing.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        assert!(!supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn absent_path_uses_one_injected_default_without_persisting_it() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let default = directory.path().join("default.lua");
+        std::fs::write(
+            &default,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }",
+        )?;
+        let (logind, _) = active_local_logind("default-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(default),
+        )?;
+
+        assert!(!state_file.exists());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("default was not presented")
+                .rgba_at(10, 10),
+            [0, 255, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn healthy_worker_enters_recovery_at_three_seconds_and_returns_after_fn_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                local sliver = require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    visibility = function(event) record("visibility:" .. tostring(event.visible)) end,
+                    touch = function(event) record("touch:" .. event.phase) end,
+                    key = function(event) record("key:" .. event.key .. ":" .. event.phase) end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(2.0)?;
+        supervisor.step_at(4.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(4.1)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(5.0)?;
+
+        let events = std::fs::read_to_string(&log)?;
+        assert!(events.contains("touch:down"));
+        assert!(events.contains("touch:cancel"));
+        assert!(events.contains("visibility:false"));
+        assert!(events.contains("key:fn:up"));
+        assert!(events.contains("visibility:true"));
+        assert_eq!(
+            events.lines().filter(|line| *line == "touch:down").count(),
+            1
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_key_waits_for_finger_up_and_bridges_physical_modifiers() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("recovery-session");
+        let mut supervisor =
+            Supervisor::new_with_startup_candidate(FakeTouchBar::new(), state_file, logind, None)?;
+        supervisor.hardware_mut().inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 1.0,
+                x: 10.0,
+                y: 30.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(2.0)?;
+        assert!(supervisor.hardware().synthetic_keys().is_empty());
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Up,
+                id: 1,
+                time: 2.0,
+                x: 10.0,
+                y: 30.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(3.0)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn successful_candidate_commits_frame_and_selected_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("config.lua");
