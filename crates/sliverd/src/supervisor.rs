@@ -118,7 +118,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
         let StagedLuaWorker {
             worker,
             frame: staged_frame,
-            pending_backlight,
+            pending_backlight: _staged_backlight,
         } = LuaWorker::stage_with_backlight_at(&selected_path, current_backlight, stage_time)?;
         self.poll_hardware(Duration::ZERO)?;
         let staged_frame = if self
@@ -131,6 +131,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
         } else {
             staged_frame
         };
+        let pending_backlight = worker.pending_backlight()?;
         let frame = staged_frame.frame;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
@@ -1181,8 +1182,9 @@ mod tests {
         );
         let candidate_config = format!(
             r#"
-            require("sliver.v1")
+            local sliver = require("sliver.v1")
             local log = {log:?}
+            local renders = 0
             return {{
                 api_version = 1,
                 start = function()
@@ -1190,6 +1192,8 @@ mod tests {
                     while os.clock() < deadline do end
                 end,
                 render = function(_, time, delta)
+                    renders = renders + 1
+                    sliver.backlight.set(renders == 1 and 0.25 or 0.75)
                     local file = assert(io.open(log, "a"))
                     file:write(time, " ", delta, "\n")
                     file:close()
@@ -1247,6 +1251,7 @@ mod tests {
         assert_eq!(candidate_frames[0][1], 0.0);
         assert_eq!(candidate_frames[1][1], 0.0);
         assert!(candidate_frames[1][0] >= old_frames[1][0]);
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         supervisor.shutdown()?;
         Ok(())
     }

@@ -62,6 +62,7 @@ enum WorkerCommand {
     #[allow(dead_code)]
     Render(f64, f64, mpsc::SyncSender<std::result::Result<(), String>>),
     Commit(f64, mpsc::SyncSender<std::result::Result<(), String>>),
+    PendingBacklight(mpsc::SyncSender<std::result::Result<Option<f64>, String>>),
     Drive(
         f64,
         f64,
@@ -238,6 +239,21 @@ impl LuaWorker {
         self.broker.clone()
     }
 
+    pub(crate) fn pending_backlight(&self) -> Result<Option<f64>> {
+        let commands = self
+            .commands
+            .as_ref()
+            .context("Lua worker command channel is closed")?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(WorkerCommand::PendingBacklight(reply_tx))
+            .context("reading staged Lua backlight")?;
+        reply_rx
+            .recv()
+            .context("Lua owner thread exited while reading backlight")?
+            .map_err(|error| anyhow!(error))
+    }
+
     pub(crate) fn commit(&self, now_seconds: f64) -> Result<()> {
         let commands = self
             .commands
@@ -404,6 +420,9 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
             }
             Ok(WorkerCommand::Commit(now_seconds, reply)) => {
                 let _ = reply.send(runtime.commit(now_seconds));
+            }
+            Ok(WorkerCommand::PendingBacklight(reply)) => {
+                let _ = reply.send(Ok(runtime.pending_backlight()));
             }
             Ok(WorkerCommand::Drive(now_seconds, delta, events, reply)) => {
                 let _ = reply.send(runtime.drive(now_seconds, delta, events));
