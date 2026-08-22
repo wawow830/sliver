@@ -41,6 +41,7 @@ struct ActiveConfig {
 
 struct RecoveryState {
     contacts: BTreeMap<ContactId, usize>,
+    pressed_contacts: BTreeSet<ContactId>,
     owner_is_healthy: bool,
 }
 
@@ -676,6 +677,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn route_recovery_touch(&mut self, event: TouchEvent) -> Result<()> {
+        let mut activation = None;
         let changed = match event.phase {
             TouchPhase::Down => {
                 let Some(index) = RecoveryRow::hit_test(event.x, event.y) else {
@@ -683,6 +685,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 };
                 let recovery = self.recovery.as_mut().expect("recovery state disappeared");
                 recovery.contacts.insert(event.id, index);
+                recovery.pressed_contacts.insert(event.id);
                 if self.recovery_row.is_pressed(index) {
                     false
                 } else {
@@ -699,16 +702,26 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     return Ok(());
                 };
                 let inside = RecoveryRow::hit_test(event.x, event.y) == Some(index);
-                let was_pressed = self.recovery_row.is_pressed(index);
-                if inside != was_pressed {
+                let recovery = self.recovery.as_mut().expect("recovery state disappeared");
+                let was_inside = recovery.pressed_contacts.contains(&event.id);
+                if inside == was_inside {
+                    false
+                } else {
                     if inside {
+                        recovery.pressed_contacts.insert(event.id);
+                    } else {
+                        recovery.pressed_contacts.remove(&event.id);
+                    }
+                    let any_pressed = recovery
+                        .pressed_contacts
+                        .iter()
+                        .any(|id| recovery.contacts.get(id) == Some(&index));
+                    if any_pressed {
                         self.recovery_row.press(index);
                     } else {
                         self.recovery_row.release(index);
                     }
                     true
-                } else {
-                    false
                 }
             }
             TouchPhase::Up | TouchPhase::Cancel => {
@@ -721,24 +734,30 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 };
                 let activate = event.phase == TouchPhase::Up
                     && RecoveryRow::hit_test(event.x, event.y) == Some(index);
-                let still_pressed = self.recovery.as_ref().is_some_and(|recovery| {
-                    recovery.contacts.values().any(|value| *value == index)
-                });
-                self.recovery_row.release(index);
+                let recovery = self.recovery.as_mut().expect("recovery state disappeared");
+                recovery.pressed_contacts.remove(&event.id);
+                let still_pressed = recovery
+                    .pressed_contacts
+                    .iter()
+                    .any(|id| recovery.contacts.get(id) == Some(&index));
                 if still_pressed {
                     self.recovery_row.press(index);
+                } else {
+                    self.recovery_row.release(index);
                 }
                 if activate {
-                    self.activate_recovery_key(index)?;
+                    activation = Some(index);
                 }
                 true
             }
         };
         if changed {
-            self.present_recovery()
-        } else {
-            Ok(())
+            self.present_recovery()?;
         }
+        if let Some(index) = activation {
+            self.activate_recovery_key(index)?;
+        }
+        Ok(())
     }
 
     fn activate_recovery_key(&mut self, index: usize) -> Result<()> {
@@ -797,6 +816,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.recovery_row.clear();
         self.recovery = Some(RecoveryState {
             contacts: BTreeMap::new(),
+            pressed_contacts: BTreeSet::new(),
             owner_is_healthy,
         });
         self.hardware
