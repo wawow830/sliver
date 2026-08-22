@@ -394,7 +394,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn startup_candidate(&mut self, path: &Path, persist_path: bool) -> Result<()> {
-        self.apply_candidate(path, None, persist_path)
+        let result = self.apply_candidate(path, None, persist_path);
+        if result.is_ok() && !persist_path {
+            self.selected_path = None;
+        }
+        result
     }
 
     fn apply_candidate(
