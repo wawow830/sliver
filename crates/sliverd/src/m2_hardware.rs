@@ -778,11 +778,11 @@ fn function_key_batches(
 }
 
 /// One virtual keyboard shared by the Lua worker and the fixed Fn row.
-struct FnEmitter {
+struct KeyboardEmitter {
     device: VirtualDevice,
 }
 
-impl FnEmitter {
+impl KeyboardEmitter {
     fn new() -> Result<Self> {
         let keys: AttributeSet<Key> = F_KEYS
             .into_iter()
@@ -940,7 +940,7 @@ pub(crate) struct M2TouchBar {
     touch: Option<TouchInput>,
     keyboard: Option<KeyboardInput>,
     modifiers: ModifierState,
-    fn_emitter: Option<FnEmitter>,
+    keyboard_emitter: Option<KeyboardEmitter>,
 }
 
 impl M2TouchBar {
@@ -954,7 +954,7 @@ impl M2TouchBar {
             touch: None,
             keyboard: None,
             modifiers: ModifierState::default(),
-            fn_emitter: None,
+            keyboard_emitter: None,
         }
     }
 
@@ -1025,7 +1025,7 @@ impl M2TouchBar {
         let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
         self.modifiers = keyboard.initial_modifiers();
         self.keyboard = Some(keyboard);
-        self.fn_emitter = Some(FnEmitter::new().context("creating Sliver Keyboard")?);
+        self.keyboard_emitter = Some(KeyboardEmitter::new().context("creating Sliver Keyboard")?);
         Ok(())
     }
 
@@ -1145,7 +1145,7 @@ impl M2TouchBar {
         self.touch = None;
         self.keyboard = None;
         self.modifiers = ModifierState::default();
-        self.fn_emitter = None;
+        self.keyboard_emitter = None;
 
         let framebuffer = self.framebuffer.take();
         let dumb_buffer = self.dumb_buffer.take();
@@ -1187,7 +1187,7 @@ impl TouchBarHardware for M2TouchBar {
 
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        if let Some(emitter) = self.fn_emitter.as_mut() {
+        if let Some(emitter) = self.keyboard_emitter.as_mut() {
             emitter
                 .emit(events)
                 .context("emitting synthetic keyboard events")?;
@@ -1197,7 +1197,7 @@ impl TouchBarHardware for M2TouchBar {
 
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        if let Some(emitter) = self.fn_emitter.as_mut() {
+        if let Some(emitter) = self.keyboard_emitter.as_mut() {
             if let Err(error) = emitter.tap(index, modifiers) {
                 eprintln!("fn: failed to emit F{}: {error}", index + 1);
             }
