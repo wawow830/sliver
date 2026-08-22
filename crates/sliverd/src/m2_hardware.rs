@@ -760,33 +760,14 @@ fn function_key_events(index: usize, modifiers: ModifierState) -> io::Result<Vec
         .collect())
 }
 
-struct PersistentEmitter<T> {
-    value: Option<T>,
-}
-
-impl<T> Default for PersistentEmitter<T> {
-    fn default() -> Self {
-        Self { value: None }
+fn ensure_optional_emitter<T>(
+    emitter: &mut Option<T>,
+    create: impl FnOnce() -> Result<T>,
+) -> Result<()> {
+    if emitter.is_none() {
+        *emitter = Some(create()?);
     }
-}
-
-impl<T> PersistentEmitter<T> {
-    fn ensure(&mut self, create: impl FnOnce() -> Result<T>) -> Result<()> {
-        if self.as_ref().is_none() {
-            self.value = Some(create()?);
-        }
-        Ok(())
-    }
-
-    fn as_ref(&self) -> Option<&T> {
-        self.value.as_ref()
-    }
-
-    fn as_mut(&mut self) -> Option<&mut T> {
-        self.value.as_mut()
-    }
-
-    fn release(&mut self) {}
+    Ok(())
 }
 
 /// One virtual keyboard shared by the Lua worker and the fixed Fn row.
@@ -950,7 +931,7 @@ pub(crate) struct M2TouchBar {
     keyboard: Option<KeyboardInput>,
     fn_active: bool,
     modifiers: ModifierState,
-    keyboard_emitter: PersistentEmitter<KeyboardEmitter>,
+    keyboard_emitter: Option<KeyboardEmitter>,
 }
 
 impl M2TouchBar {
@@ -965,7 +946,7 @@ impl M2TouchBar {
             keyboard: None,
             fn_active: false,
             modifiers: ModifierState::default(),
-            keyboard_emitter: PersistentEmitter::default(),
+            keyboard_emitter: None,
         }
     }
 
@@ -1050,8 +1031,9 @@ impl M2TouchBar {
             let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);
-            self.keyboard_emitter
-                .ensure(|| KeyboardEmitter::new().context("creating Sliver Keyboard"))?;
+            ensure_optional_emitter(&mut self.keyboard_emitter, || {
+                KeyboardEmitter::new().context("creating Sliver Keyboard")
+            })?;
             Ok(())
         })();
         self.finish_claim_setup(setup_result)
@@ -1207,7 +1189,6 @@ impl M2TouchBar {
         self.keyboard = None;
         self.fn_active = false;
         self.modifiers = ModifierState::default();
-        self.keyboard_emitter.release();
 
         let framebuffer = self.framebuffer.take();
         let dumb_buffer = self.dumb_buffer.take();
@@ -1428,13 +1409,12 @@ mod tests {
 
     #[test]
     fn release_keeps_keyboard_emitter_for_reclaim() -> Result<()> {
-        let mut emitter = PersistentEmitter::default();
-        emitter.ensure(|| Ok(7_u8))?;
+        let mut emitter = None;
+        ensure_optional_emitter(&mut emitter, || Ok(7_u8))?;
         let first = emitter.as_ref().expect("keyboard emitter was not created") as *const u8;
 
-        emitter.release();
-        emitter.ensure(|| Ok(8_u8))?;
-
+        let second_claim = ensure_optional_emitter(&mut emitter, || Ok(8_u8));
+        assert!(second_claim.is_ok());
         let second = emitter
             .as_ref()
             .expect("release discarded the keyboard emitter") as *const u8;
