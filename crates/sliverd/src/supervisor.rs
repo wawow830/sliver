@@ -20,8 +20,8 @@ use crate::hardware::{
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
-    DriveRequest, KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason,
-    VisibilityReason, WorkerEffects,
+    earliest_deadline, DriveRequest, KeyOperation, KeyRequest, LuaWorker, ModifierMode,
+    StagedLuaWorker, StopReason, VisibilityReason, WorkerEffects,
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
@@ -1064,14 +1064,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn poll_wait(&self, now: f64) -> Duration {
-        let worker_deadline = self.next_timer_deadline;
-        let recovery_deadline = self.recovery_deadline();
-        let deadline = match (worker_deadline, recovery_deadline) {
-            (Some(worker), Some(recovery)) => Some(worker.min(recovery)),
-            (Some(worker), None) => Some(worker),
-            (None, Some(recovery)) => Some(recovery),
-            (None, None) => None,
-        };
+        let deadline = earliest_deadline(self.next_timer_deadline, self.recovery_deadline());
         let Some(deadline) = deadline else {
             return MAX_POLL_WAIT;
         };

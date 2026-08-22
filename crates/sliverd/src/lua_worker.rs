@@ -73,6 +73,14 @@ impl VisibilityReason {
     }
 }
 
+pub(crate) fn earliest_deadline(first: Option<f64>, second: Option<f64>) -> Option<f64> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
+}
+
 #[derive(Default)]
 struct DriveOptions {
     visibility: Option<(bool, VisibilityReason)>,
@@ -654,15 +662,10 @@ impl Runtime {
     }
 
     fn next_deadline(&self) -> Option<f64> {
-        match (
+        earliest_deadline(
             self.controls.timers.borrow().next_deadline(),
             self.pending_retry_deadline,
-        ) {
-            (Some(timer), Some(retry)) => Some(timer.min(retry)),
-            (Some(timer), None) => Some(timer),
-            (None, Some(retry)) => Some(retry),
-            (None, None) => None,
-        }
+        )
     }
 
     fn restore_backlight(&mut self, level: f64) -> std::result::Result<(), String> {
