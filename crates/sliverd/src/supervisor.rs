@@ -135,6 +135,14 @@ impl SyntheticState {
                     }
                 }
                 KeyOperation::Tap => {
+                    ensure!(
+                        !is_modifier_key(request.key) || next.modifier_count(request.key) == 0,
+                        "synthetic modifier is already held"
+                    );
+                    ensure!(
+                        !next.is_key_held(request.key),
+                        "synthetic key is already held"
+                    );
                     let modifiers = next.resolve_modifiers(&request.modifiers, input_state)?;
                     ensure!(
                         !modifiers.contains(&request.key),
@@ -1722,6 +1730,115 @@ mod tests {
             width: None,
             height: None,
         }
+    }
+
+    #[test]
+    fn tap_rejects_a_primary_key_held_by_down_before_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("held-primary.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f2
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.id == 1 and event.phase == "down" then
+                        sliver.input.key.down(key, { modifiers = false })
+                    elseif event.id == 2 and event.phase == "down" then
+                        sliver.input.key.tap(key, { modifiers = false })
+                    elseif event.id == 1 and event.phase == "up" then
+                        sliver.input.key.up(key)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        for (id, phase) in [
+            (1, TouchPhase::Down),
+            (2, TouchPhase::Down),
+            (1, TouchPhase::Up),
+        ] {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, phase)));
+        }
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("tap of an already-held key was accepted");
+        assert!(format!("{error:#}").contains("synthetic key is already held"));
+        assert!(supervisor.hardware().synthetic_transactions().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn tap_rejects_a_modifier_owned_standalone_or_by_a_chord() -> Result<()> {
+        let run = |chord: bool| -> Result<()> {
+            let directory = tempfile::tempdir()?;
+            let source = directory.path().join("held-modifier.lua");
+            std::fs::write(
+                &source,
+                if chord {
+                    r#"
+                    local sliver = require("sliver.v1")
+                    local keys = sliver.input.keys.keyboard
+                    return {
+                        api_version = 1,
+                        touch = function(event)
+                            if event.id == 1 and event.phase == "down" then
+                                sliver.input.key.down(keys.f2, {
+                                    modifiers = { keys.left_ctrl },
+                                })
+                            elseif event.id == 2 and event.phase == "down" then
+                                sliver.input.key.tap(keys.left_ctrl, { modifiers = false })
+                            end
+                        end,
+                        render = function() end,
+                    }
+                    "#
+                } else {
+                    r#"
+                    local sliver = require("sliver.v1")
+                    local key = sliver.input.keys.keyboard.left_ctrl
+                    return {
+                        api_version = 1,
+                        touch = function(event)
+                            if event.id == 1 and event.phase == "down" then
+                                sliver.input.key.down(key, { modifiers = false })
+                            elseif event.id == 2 and event.phase == "down" then
+                                sliver.input.key.tap(key, { modifiers = false })
+                            end
+                        end,
+                        render = function() end,
+                    }
+                    "#
+                },
+            )?;
+            let state_file = directory.path().join("state/sliver/config-path");
+            let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+            supervisor.apply(&source)?;
+            for id in 1..=2 {
+                supervisor
+                    .hardware_mut()
+                    .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Down)));
+            }
+            let error = supervisor
+                .step_at(1.0)
+                .expect_err("tap of an owned modifier was accepted");
+            assert!(format!("{error:#}").contains("synthetic modifier is already held"));
+            assert!(supervisor.hardware().synthetic_transactions().is_empty());
+            supervisor.shutdown()?;
+            Ok(())
+        };
+
+        run(false)?;
+        run(true)
     }
 
     #[test]
