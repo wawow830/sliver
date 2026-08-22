@@ -9,6 +9,7 @@ const FREE: u8 = 0;
 const WRITING: u8 = 1;
 const READY: u8 = 2;
 const READING: u8 = 3;
+const RECLAIMING: u8 = 4;
 
 #[cfg(test)]
 struct DropGate {
@@ -344,19 +345,32 @@ impl FrameBroker {
             return Ok(None);
         }
         let selected_sequence = newest_slot.sequence.load(Ordering::Acquire);
-        #[cfg(test)]
-        if let Some(selection_gate) = &self.inner.selection_gate {
-            if selection_gate.active.swap(0, Ordering::AcqRel) != 0 {
-                selection_gate.selected.wait();
-                selection_gate.resume.wait();
-            }
-        }
 
         for (older_index, slot) in self.inner.slots.iter().enumerate() {
-            if older_index != index && slot.sequence.load(Ordering::Acquire) < selected_sequence {
-                let _ =
-                    slot.state
-                        .compare_exchange(READY, FREE, Ordering::AcqRel, Ordering::Relaxed);
+            if older_index == index {
+                continue;
+            }
+            if slot
+                .state
+                .compare_exchange(READY, RECLAIMING, Ordering::AcqRel, Ordering::Relaxed)
+                .is_err()
+            {
+                continue;
+            }
+            let observed_sequence = slot.sequence.load(Ordering::Acquire);
+            #[cfg(test)]
+            if let Some(selection_gate) = &self.inner.selection_gate {
+                if observed_sequence < selected_sequence
+                    && selection_gate.active.swap(0, Ordering::AcqRel) != 0
+                {
+                    selection_gate.selected.wait();
+                    selection_gate.resume.wait();
+                }
+            }
+            if observed_sequence < selected_sequence {
+                slot.state.store(FREE, Ordering::Release);
+            } else {
+                slot.state.store(READY, Ordering::Release);
             }
         }
 
@@ -406,25 +420,32 @@ mod tests {
         let gate = SelectionGate::new();
         let slots = FrameSlots::new_with_selection_gate(2, 1, 8, gate.clone())?;
         let producer = slots.producer();
-        assert!(producer.publish(2, 1, 8, &frame(1), FrameTiming::new(1.0, 0.0)?,)?);
-        assert!(producer.publish(2, 1, 8, &frame(2), FrameTiming::new(2.0, 1.0)?,)?);
+        for value in 1..=3 {
+            assert!(producer.publish(
+                2,
+                1,
+                8,
+                &frame(value),
+                FrameTiming::new(f64::from(value), if value == 1 { 0.0 } else { 1.0 })?,
+            )?);
+        }
         let broker = slots.broker();
         let broker_thread = std::thread::spawn(move || broker.take_newest());
 
         gate.selected.wait();
-        assert!(producer.publish(2, 1, 8, &frame(3), FrameTiming::new(3.0, 1.0)?,)?);
+        assert!(producer.publish(2, 1, 8, &frame(4), FrameTiming::new(4.0, 1.0)?,)?);
         gate.resume.wait();
 
         let first = broker_thread
             .join()
             .expect("broker thread panicked")?
             .expect("selected frame was lost");
-        assert_eq!(first.pixels, frame(2));
+        assert_eq!(first.pixels, frame(3));
         let second = slots
             .broker()
             .take_newest()?
             .expect("newer frame was dropped");
-        assert_eq!(second.pixels, frame(3));
+        assert_eq!(second.pixels, frame(4));
         Ok(())
     }
 
