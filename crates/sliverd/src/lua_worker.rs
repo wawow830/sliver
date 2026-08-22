@@ -197,21 +197,23 @@ impl LuaWorker {
 
     #[allow(dead_code)]
     pub(crate) fn render_next(&self) -> Result<LogicalFrame> {
+        self.render_at(0.0, 0.0).map(|frame| frame.frame)
+    }
+
+    pub(crate) fn render_at(&self, presentation_time: f64, delta: f64) -> Result<TimedFrame> {
         let commands = self
             .commands
             .as_ref()
             .context("Lua worker command channel is closed")?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
-            .send(WorkerCommand::Render(0.0, 0.0, reply_tx))
-            .context("requesting the next Lua frame")?;
+            .send(WorkerCommand::Render(presentation_time, delta, reply_tx))
+            .context("requesting a Lua frame")?;
         reply_rx
             .recv()
             .context("Lua owner thread exited while rendering")?
             .map_err(|error| anyhow!(error))?;
-        self.take_frame()?
-            .map(|frame| frame.frame)
-            .context("Lua worker published no frame")
+        self.take_frame()?.context("Lua worker published no frame")
     }
 
     #[cfg(test)]

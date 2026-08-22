@@ -120,8 +120,18 @@ impl<H: TouchBarHardware> Supervisor<H> {
             frame: staged_frame,
             pending_backlight,
         } = LuaWorker::stage_with_backlight_at(&selected_path, current_backlight, stage_time)?;
-        let frame = staged_frame.frame;
         self.poll_hardware(Duration::ZERO)?;
+        let staged_frame = if self
+            .last_presented_time
+            .is_some_and(|last| staged_frame.timing.presentation_time < last)
+        {
+            let now = self.now_seconds();
+            let time = self.last_presented_time.map_or(now, |last| now.max(last));
+            worker.render_at(time, 0.0)?
+        } else {
+            staged_frame
+        };
+        let frame = staged_frame.frame;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
         let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
@@ -1140,6 +1150,103 @@ mod tests {
         assert_eq!(lines[0][1], 0.0);
         assert!(lines[1][0] > lines[0][0]);
         assert!((lines[1][1] - (1.0 - committed_at)).abs() < 0.002);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn slow_replacement_retimes_candidate_after_old_frame_presentation() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-present.lua");
+        let candidate_source = directory.path().join("candidate-present.lua");
+        let old_log = directory.path().join("old-present-times");
+        let candidate_log = directory.path().join("candidate-present-times");
+        let old_config = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            local log = {log:?}
+            return {{
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then sliver.redraw() end
+                end,
+                render = function(_, time, delta)
+                    local file = assert(io.open(log, "a"))
+                    file:write(time, " ", delta, "\n")
+                    file:close()
+                end,
+            }}
+            "#,
+            log = old_log.to_string_lossy(),
+        );
+        let candidate_config = format!(
+            r#"
+            require("sliver.v1")
+            local log = {log:?}
+            return {{
+                api_version = 1,
+                start = function()
+                    local deadline = os.clock() + 0.08
+                    while os.clock() < deadline do end
+                end,
+                render = function(_, time, delta)
+                    local file = assert(io.open(log, "a"))
+                    file:write(time, " ", delta, "\n")
+                    file:close()
+                end,
+            }}
+            "#,
+            log = candidate_log.to_string_lossy(),
+        );
+        std::fs::write(&old_source, old_config)?;
+        std::fs::write(&candidate_source, candidate_config)?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor.hardware_mut().inject_on_poll(
+            4,
+            HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }),
+        );
+        supervisor.apply(&candidate_source)?;
+
+        let parse = |path: &std::path::Path| -> Result<Vec<[f64; 2]>> {
+            std::fs::read_to_string(path)?
+                .lines()
+                .map(|line| {
+                    let values: Vec<_> = line
+                        .split_whitespace()
+                        .map(|value| value.parse::<f64>())
+                        .collect::<std::result::Result<_, _>>()?;
+                    anyhow::ensure!(values.len() == 2, "frame timing line had the wrong shape");
+                    Ok([values[0], values[1]])
+                })
+                .collect()
+        };
+        let old_frames = parse(&old_log)?;
+        let candidate_frames = parse(&candidate_log)?;
+        assert_eq!(
+            old_frames.len(),
+            2,
+            "old worker did not present during staging"
+        );
+        assert_eq!(
+            candidate_frames.len(),
+            2,
+            "candidate was not retimed at commit"
+        );
+        assert_eq!(candidate_frames[0][1], 0.0);
+        assert_eq!(candidate_frames[1][1], 0.0);
+        assert!(candidate_frames[1][0] >= old_frames[1][0]);
         supervisor.shutdown()?;
         Ok(())
     }
