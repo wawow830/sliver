@@ -674,6 +674,48 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Duration::from_secs_f64((deadline - now).min(MAX_POLL_WAIT.as_secs_f64()))
     }
 
+    fn stop_active_worker(&mut self, reason: StopReason) -> Result<()> {
+        let now = self.now_seconds();
+        let Some(active) = self.active.take() else {
+            return Ok(());
+        };
+        let cancels: Vec<_> = active
+            .contacts
+            .values()
+            .map(|event| TouchEvent {
+                phase: TouchPhase::Cancel,
+                time: now,
+                ..*event
+            })
+            .collect();
+        if !cancels.is_empty() {
+            if let Err(error) = active
+                .worker
+                .drive(now, self.input_state, Vec::new(), cancels)
+            {
+                eprintln!("active Lua worker did not receive contact cancellation: {error:#}");
+            }
+        }
+        active.worker.shutdown(reason)
+    }
+
+    #[allow(dead_code)]
+    fn reset_owner_state(&mut self) {
+        self.down_contacts.clear();
+        self.ignored_contacts.clear();
+        self.touch_queue.drain();
+        self.next_timer_deadline = None;
+        self.input_state = InputState::default();
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn handoff_owner(&mut self) -> Result<()> {
+        self.release_synthetic_keys()?;
+        let stop_result = self.stop_active_worker(StopReason::Logout);
+        self.reset_owner_state();
+        stop_result
+    }
+
     #[cfg(test)]
     fn step_at(&mut self, now: f64) -> Result<()> {
         let events = self.hardware.poll(Duration::ZERO)?;
@@ -681,28 +723,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     pub(crate) fn shutdown(mut self) -> Result<()> {
-        let now = self.now_seconds();
         let synthetic_result = self.release_synthetic_keys();
-        let stop_result = match self.active.take() {
-            Some(active) => {
-                let cancels: Vec<_> = active
-                    .contacts
-                    .values()
-                    .map(|event| TouchEvent {
-                        phase: TouchPhase::Cancel,
-                        time: now,
-                        ..*event
-                    })
-                    .collect();
-                if !cancels.is_empty() {
-                    let _ = active
-                        .worker
-                        .drive(now, self.input_state, Vec::new(), cancels);
-                }
-                active.worker.shutdown(StopReason::Shutdown)
-            }
-            None => Ok(()),
-        };
+        let stop_result = self.stop_active_worker(StopReason::Shutdown);
         let release_result = self.hardware.release();
         self.claimed = false;
         match (stop_result.and(synthetic_result), release_result) {
@@ -879,13 +901,15 @@ fn serve_connection<H: TouchBarHardware, L: Logind>(
 
 impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
     fn drop(&mut self) {
-        self.active.take();
         if self.claimed {
             if let Err(error) = self.release_synthetic_keys() {
                 eprintln!("synthetic key cleanup failed during supervisor drop: {error:#}");
             }
+            self.active.take();
             let _ = self.hardware.release();
             self.claimed = false;
+        } else {
+            self.active.take();
         }
     }
 }
@@ -893,6 +917,7 @@ impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
     use std::rc::Rc;
@@ -1009,15 +1034,23 @@ mod tests {
     struct SharedFakeHardware {
         inner: FakeTouchBar,
         synthetic: Rc<RefCell<Vec<FakeKeyEvent>>>,
+        order_file: Option<std::path::PathBuf>,
     }
 
     impl SharedFakeHardware {
         fn new() -> (Self, Rc<RefCell<Vec<FakeKeyEvent>>>) {
+            Self::with_order(None)
+        }
+
+        fn with_order(
+            order_file: Option<std::path::PathBuf>,
+        ) -> (Self, Rc<RefCell<Vec<FakeKeyEvent>>>) {
             let synthetic = Rc::new(RefCell::new(Vec::new()));
             (
                 Self {
                     inner: FakeTouchBar::new(),
                     synthetic: synthetic.clone(),
+                    order_file,
                 },
                 synthetic,
             )
@@ -1047,6 +1080,15 @@ mod tests {
                     key,
                     active: event.active,
                 });
+                if !event.active {
+                    if let Some(path) = &self.order_file {
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)?;
+                        writeln!(file, "key-up")?;
+                    }
+                }
             }
             self.inner.emit_key_events(events)
         }
@@ -1066,6 +1108,102 @@ mod tests {
         fn release(&mut self) -> Result<()> {
             self.inner.release()
         }
+    }
+
+    #[test]
+    fn owner_handoff_cleans_before_logout_and_refreshes_input_state() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let order_file = directory.path().join("handoff-order");
+        let state_log = directory.path().join("handoff-state");
+        let old_source = directory.path().join("old-owner.lua");
+        let new_source = directory.path().join("new-owner.lua");
+        std::fs::write(
+            &old_source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local order = {order:?}
+                return {{
+                    api_version = 1,
+                    stop = function(reason)
+                        local file = assert(io.open(order, "a"))
+                        file:write(reason, "\n")
+                        file:close()
+                    end,
+                    touch = function(event)
+                        if event.phase == "down" then
+                            sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                        end
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                order = order_file.to_string_lossy(),
+            ),
+        )?;
+        std::fs::write(
+            &new_source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local state_log = {state_log:?}
+                return {{
+                    api_version = 1,
+                    start = function()
+                        local state = sliver.input.state()
+                        local file = assert(io.open(state_log, "w"))
+                        file:write(tostring(state.fn), ":", tostring(state.modifiers.left_ctrl))
+                        file:close()
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                state_log = state_log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (hardware, _) = SharedFakeHardware::with_order(Some(order_file.clone()));
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+
+        supervisor.handoff_owner()?;
+        assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
+        assert_eq!(supervisor.hardware().inner.virtual_keyboard_creations(), 1);
+        assert_eq!(
+            supervisor.hardware().inner.virtual_keyboard_name(),
+            Some("Sliver Keyboard")
+        );
+
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Modifier {
+                modifier: Modifier::LeftCtrl,
+                active: true,
+            });
+        supervisor.apply(&new_source)?;
+        assert_eq!(std::fs::read_to_string(&state_log)?, "true:true");
+        supervisor.shutdown()?;
+        Ok(())
     }
 
     #[test]

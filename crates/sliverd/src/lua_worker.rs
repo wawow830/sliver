@@ -55,6 +55,8 @@ pub(crate) struct KeyRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StopReason {
     Replaced,
+    #[allow(dead_code)]
+    Logout,
     Shutdown,
 }
 
@@ -62,6 +64,7 @@ impl StopReason {
     fn as_str(self) -> &'static str {
         match self {
             Self::Replaced => "replaced",
+            Self::Logout => "logout",
             Self::Shutdown => "shutdown",
         }
     }
