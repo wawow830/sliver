@@ -59,16 +59,29 @@ pub(crate) struct KeyRequest {
     pub(crate) modifiers: ModifierMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VisibilityReason {
+    Recovery,
+}
+
+impl VisibilityReason {
+    fn as_lua_str(self) -> &'static str {
+        match self {
+            Self::Recovery => "recovery",
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct DriveOptions {
-    visibility: Option<(bool, String)>,
+    visibility: Option<(bool, VisibilityReason)>,
     force_render: bool,
 }
 
 impl DriveOptions {
-    pub(crate) fn visibility(visible: bool, reason: &str, force_render: bool) -> Self {
+    pub(crate) fn visibility(visible: bool, reason: VisibilityReason, force_render: bool) -> Self {
         Self {
-            visibility: Some((visible, reason.to_owned())),
+            visibility: Some((visible, reason)),
             force_render,
         }
     }
@@ -712,7 +725,7 @@ impl Runtime {
             self.dispatch_keys(now_seconds, started, transitions)?;
             self.dispatch_touch(now_seconds, started, events)?;
             if let Some((visible, reason)) = options.visibility {
-                self.dispatch_visibility(visible, &reason, now_seconds, started)?;
+                self.dispatch_visibility(visible, reason, now_seconds, started)?;
             }
             self.run_due_timers(now_seconds, started)?;
             self.controls
@@ -771,7 +784,7 @@ impl Runtime {
     fn dispatch_visibility(
         &self,
         visible: bool,
-        reason: &str,
+        reason: VisibilityReason,
         now_seconds: f64,
         started: Instant,
     ) -> std::result::Result<(), String> {
@@ -789,7 +802,7 @@ impl Runtime {
             .set("visible", visible)
             .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
         table
-            .set("reason", reason)
+            .set("reason", reason.as_lua_str())
             .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
         visibility
             .call::<()>(table)

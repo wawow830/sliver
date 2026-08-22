@@ -21,7 +21,7 @@ use crate::hardware::{
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
     DriveOptions, KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason,
-    WorkerEffects,
+    VisibilityReason, WorkerEffects,
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
@@ -749,7 +749,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 Vec::new(),
                 0.0,
                 cancels,
-                DriveOptions::visibility(false, "recovery", false),
+                DriveOptions::visibility(false, VisibilityReason::Recovery, false),
             );
             if let Err(error) = hidden {
                 eprintln!("healthy Lua worker failed while entering recovery: {error:#}");
@@ -801,7 +801,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             transitions,
             delta,
             Vec::new(),
-            DriveOptions::visibility(true, "recovery", true),
+            DriveOptions::visibility(true, VisibilityReason::Recovery, true),
         ) {
             Ok(effects) => effects,
             Err(error) => return self.fail_active_worker(error),
