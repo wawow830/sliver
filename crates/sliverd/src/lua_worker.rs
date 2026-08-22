@@ -74,18 +74,9 @@ impl VisibilityReason {
 }
 
 #[derive(Default)]
-pub(crate) struct DriveOptions {
+struct DriveOptions {
     visibility: Option<(bool, VisibilityReason)>,
     force_render: bool,
-}
-
-impl DriveOptions {
-    pub(crate) fn visibility(visible: bool, reason: VisibilityReason, force_render: bool) -> Self {
-        Self {
-            visibility: Some((visible, reason)),
-            force_render,
-        }
-    }
 }
 
 pub(crate) struct DriveRequest {
@@ -97,7 +88,6 @@ pub(crate) struct DriveRequest {
     options: DriveOptions,
 }
 
-#[allow(dead_code)]
 impl DriveRequest {
     pub(crate) fn new(
         now_seconds: f64,
@@ -461,44 +451,7 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))
     }
 
-    pub(crate) fn drive(
-        &self,
-        now_seconds: f64,
-        input_state: InputState,
-        transitions: Vec<InputTransition>,
-        delta: f64,
-        events: Vec<TouchEvent>,
-    ) -> Result<WorkerEffects> {
-        self.drive_with_visibility(
-            now_seconds,
-            input_state,
-            transitions,
-            delta,
-            events,
-            DriveOptions::default(),
-        )
-    }
-
-    pub(crate) fn drive_with_visibility(
-        &self,
-        now_seconds: f64,
-        input_state: InputState,
-        transitions: Vec<InputTransition>,
-        delta: f64,
-        events: Vec<TouchEvent>,
-        options: DriveOptions,
-    ) -> Result<WorkerEffects> {
-        self.drive_request(DriveRequest {
-            now_seconds,
-            input_state,
-            transitions,
-            delta,
-            events,
-            options,
-        })
-    }
-
-    pub(crate) fn drive_request(&self, request: DriveRequest) -> Result<WorkerEffects> {
+    pub(crate) fn drive(&self, request: DriveRequest) -> Result<WorkerEffects> {
         let commands = self
             .commands
             .as_ref()

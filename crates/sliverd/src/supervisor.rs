@@ -20,7 +20,7 @@ use crate::hardware::{
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
-    DriveOptions, KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason,
+    DriveRequest, KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason,
     VisibilityReason, WorkerEffects,
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
@@ -77,8 +77,7 @@ fn cancel_contacts(
     worker: &LuaWorker,
     contacts: &BTreeMap<ContactId, TouchEvent>,
     now: f64,
-    input_state: InputState,
-    options: DriveOptions,
+    request: DriveRequest,
 ) -> Result<WorkerEffects> {
     let events = contacts
         .values()
@@ -88,7 +87,7 @@ fn cancel_contacts(
             ..*event
         })
         .collect();
-    worker.drive_with_visibility(now, input_state, Vec::new(), 0.0, events, options)
+    worker.drive(request.with_events(events))
 }
 
 impl TouchQueue {
@@ -565,13 +564,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         });
         if let Some(replaced) = replaced {
             if !deferred_transitions.is_empty() || !deferred_touches.is_empty() {
-                if let Err(error) = replaced.worker.drive(
+                if let Err(error) = replaced.worker.drive(DriveRequest::new(
                     now,
                     self.input_state,
                     deferred_transitions,
                     0.0,
                     deferred_touches,
-                ) {
+                )) {
                     eprintln!("replaced Lua worker did not receive deferred input: {error:#}");
                 }
             }
@@ -580,8 +579,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     &replaced.worker,
                     &replaced.contacts,
                     now,
-                    self.input_state,
-                    DriveOptions::default(),
+                    DriveRequest::new(now, self.input_state, Vec::new(), 0.0, Vec::new()),
                 ) {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
@@ -762,8 +760,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 &active.worker,
                 &active.contacts,
                 now,
-                self.input_state,
-                DriveOptions::visibility(false, VisibilityReason::Recovery, false),
+                DriveRequest::new(now, self.input_state, Vec::new(), 0.0, Vec::new())
+                    .with_visibility(false, VisibilityReason::Recovery, false),
             );
             active.contacts.clear();
             if let Err(error) = hidden {
@@ -810,13 +808,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .last_presented_time
             .map(|previous| (now - previous).max(0.0))
             .unwrap_or(0.0);
-        let effects = match active.worker.drive_with_visibility(
-            now,
-            self.input_state,
-            transitions,
-            delta,
-            Vec::new(),
-            DriveOptions::visibility(true, VisibilityReason::Recovery, true),
+        let effects = match active.worker.drive(
+            DriveRequest::new(now, self.input_state, transitions, delta, Vec::new())
+                .with_visibility(true, VisibilityReason::Recovery, true),
         ) {
             Ok(effects) => effects,
             Err(error) => return self.fail_active_worker(error),
@@ -925,10 +919,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .last_presented_time
             .map(|previous| (now - previous).max(0.0))
             .unwrap_or(0.0);
-        let effects = match active
-            .worker
-            .drive(now, self.input_state, transitions, delta, touches)
-        {
+        let effects = match active.worker.drive(DriveRequest::new(
+            now,
+            self.input_state,
+            transitions,
+            delta,
+            touches,
+        )) {
             Ok(effects) => effects,
             Err(error) => return self.fail_active_worker(error),
         };
@@ -959,8 +956,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     &active.worker,
                     &active.contacts,
                     now,
-                    self.input_state,
-                    DriveOptions::default(),
+                    DriveRequest::new(now, self.input_state, Vec::new(), 0.0, Vec::new()),
                 ) {
                     eprintln!(
                         "failed Lua worker did not receive contact cancellation: {cancel_error:#}"
@@ -1080,8 +1076,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 &active.worker,
                 &active.contacts,
                 now,
-                self.input_state,
-                DriveOptions::default(),
+                DriveRequest::new(now, self.input_state, Vec::new(), 0.0, Vec::new()),
             ) {
                 eprintln!("active Lua worker did not receive contact cancellation: {error:#}");
             }
