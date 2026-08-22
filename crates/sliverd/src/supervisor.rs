@@ -24,6 +24,7 @@ use crate::lua_worker::{
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
+use crate::recovery::RecoveryRow;
 
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
 const REQUEST_QUEUE_CAPACITY: usize = 16;
@@ -35,6 +36,11 @@ struct ActiveConfig {
     frame: LogicalFrame,
     backlight: f64,
     contacts: BTreeMap<ContactId, TouchEvent>,
+}
+
+struct RecoveryState {
+    contacts: BTreeMap<ContactId, usize>,
+    owner_is_healthy: bool,
 }
 
 struct AuthorizedRequest {
@@ -250,7 +256,10 @@ fn is_modifier_key(key: OutputKey) -> bool {
 pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
+    selected_path: Option<PathBuf>,
     active: Option<ActiveConfig>,
+    recovery: Option<RecoveryState>,
+    recovery_row: RecoveryRow,
     claimed: bool,
     origin: Instant,
     backlight: f64,
@@ -260,12 +269,16 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     touch_queue: TouchQueue,
     input_transitions: Vec<InputTransition>,
     next_timer_deadline: Option<f64>,
+    fn_hold_started: Option<f64>,
+    #[cfg(test)]
+    worker_failure: Option<String>,
     synthetic: SyntheticState,
     authorizer: SessionAuthorizer<L>,
     last_presented_time: Option<f64>,
 }
 
 impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
+    #[cfg(test)]
     pub(crate) fn new(hardware: H, state_file: PathBuf) -> Result<Self> {
         Self::new_with_logind(hardware, state_file, RealLogind::default())
     }
@@ -284,7 +297,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(Self {
             hardware,
             state_file,
+            selected_path: None,
             active: None,
+            recovery: None,
+            recovery_row: RecoveryRow::new(),
             claimed: true,
             origin: Instant::now(),
             backlight,
@@ -294,10 +310,40 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             touch_queue: TouchQueue::new(),
             input_transitions: Vec::new(),
             next_timer_deadline: None,
+            fn_hold_started: None,
+            #[cfg(test)]
+            worker_failure: None,
             synthetic: SyntheticState::default(),
             authorizer: SessionAuthorizer::new(logind),
             last_presented_time: None,
         })
+    }
+
+    /// Build the running supervisor and make one startup attempt. A saved path
+    /// is tried once. `default_path` is supplied by the embedded-default owner
+    /// when no path is saved; it is never persisted by this module.
+    pub(crate) fn new_with_startup_candidate(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+        default_path: Option<PathBuf>,
+    ) -> Result<Self> {
+        let mut supervisor = Self::new_with_logind(hardware, state_file.clone(), logind)?;
+        let saved = read_selected_path(&state_file)?;
+        let candidate = saved.clone().or(default_path);
+        supervisor.selected_path = saved;
+        match candidate {
+            Some(path) => {
+                if let Err(error) =
+                    supervisor.startup_candidate(&path, supervisor.selected_path.is_some())
+                {
+                    eprintln!("selected Lua worker entered recovery: {error:#}");
+                    supervisor.enter_recovery()?;
+                }
+            }
+            None => supervisor.enter_recovery()?,
+        }
+        Ok(supervisor)
     }
 
     fn now_seconds(&self) -> f64 {
@@ -306,12 +352,60 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     #[cfg(test)]
     pub(crate) fn apply(&mut self, requested_path: &Path) -> Result<()> {
-        self.apply_candidate(requested_path, None)
+        self.apply_request(requested_path, None)
     }
 
     fn apply_authorized(&mut self, request: AuthorizedRequest) -> Result<()> {
         self.authorizer.recheck(request.peer, &request.grant)?;
-        self.apply_candidate(&request.path, Some((request.peer, request.grant)))
+        self.apply_request(&request.path, Some((request.peer, request.grant)))
+    }
+
+    fn apply_request(
+        &mut self,
+        requested_path: &Path,
+        authorization: Option<(PeerCredentials, AuthorizationGrant)>,
+    ) -> Result<()> {
+        let result = self.apply_candidate(requested_path, authorization);
+        if result.is_err()
+            && self.active.is_none()
+            && !result
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("active session")
+            && !result.as_ref().unwrap_err().to_string().contains("changed")
+        {
+            if let Ok(path) = absolute_lexical(requested_path) {
+                self.selected_path = Some(path.clone());
+                let state_result = PreparedPathState::prepare(&self.state_file, &path)
+                    .and_then(PreparedPathState::commit);
+                if let Err(state_error) = state_result {
+                    return Err(result.err().expect("candidate failed").context(format!(
+                        "preserving failed selected path also failed: {state_error:#}"
+                    )));
+                }
+                if let Err(recovery_error) = self.enter_recovery() {
+                    return Err(result
+                        .err()
+                        .expect("candidate failed")
+                        .context(format!("entering recovery also failed: {recovery_error:#}")));
+                }
+            }
+        }
+        result
+    }
+
+    fn startup_candidate(&mut self, path: &Path, persist_path: bool) -> Result<()> {
+        let result = self.apply_candidate(path, None);
+        if result.is_ok() && !persist_path {
+            match std::fs::remove_file(&self.state_file) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("clearing default selected-path state"),
+            }
+            self.selected_path = None;
+        }
+        result
     }
 
     fn apply_candidate(
@@ -408,6 +502,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         self.backlight = candidate_backlight;
         self.last_presented_time = Some(now);
+        self.selected_path = Some(selected_path.clone());
+        self.recovery = None;
+        self.recovery_row.clear();
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         let deferred_touches = self.touch_queue.drain();
@@ -502,8 +599,22 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Err(error)
     }
 
-    fn route_input(&mut self, key: ObservedKey, active: bool) {
-        if self.input_state.apply(key, active) && self.active.is_some() {
+    fn route_input(&mut self, key: ObservedKey, active: bool, now: f64) {
+        if !self.input_state.apply(key, active) {
+            return;
+        }
+        if key == ObservedKey::Fn {
+            self.fn_hold_started = active.then_some(now);
+        }
+        if self.recovery.is_some() {
+            if key == ObservedKey::Fn && !active && self.active.is_some() {
+                self.input_transitions.push(InputTransition {
+                    key,
+                    active,
+                    state: self.input_state,
+                });
+            }
+        } else if self.active.is_some() {
             self.input_transitions.push(InputTransition {
                 key,
                 active,
@@ -512,14 +623,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
-    fn route_touch(&mut self, event: TouchEvent) {
+    fn route_touch(&mut self, event: TouchEvent) -> Result<()> {
         match event.phase {
             TouchPhase::Down => {
                 if self.down_contacts.insert(event.id, event).is_some() {
-                    return;
+                    return Ok(());
                 }
                 if self.ignored_contacts.contains(&event.id) {
-                    return;
+                    return Ok(());
+                }
+                if self.recovery.is_some() {
+                    return self.route_recovery_touch(event);
                 }
                 if let Some(active) = self.active.as_mut() {
                     active.contacts.insert(event.id, event);
@@ -528,11 +642,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
             TouchPhase::Move => {
                 let Some(contact) = self.down_contacts.get_mut(&event.id) else {
-                    return;
+                    return Ok(());
                 };
                 *contact = event;
                 if self.ignored_contacts.contains(&event.id) {
-                    return;
+                    return Ok(());
+                }
+                if self.recovery.is_some() {
+                    return self.route_recovery_touch(event);
                 }
                 if let Some(active) = self.active.as_mut() {
                     if let std::collections::btree_map::Entry::Occupied(mut contact) =
@@ -546,7 +663,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             TouchPhase::Up | TouchPhase::Cancel => {
                 self.down_contacts.remove(&event.id);
                 if self.ignored_contacts.remove(&event.id) {
-                    return;
+                    return Ok(());
+                }
+                if self.recovery.is_some() {
+                    return self.route_recovery_touch(event);
                 }
                 if let Some(active) = self.active.as_mut() {
                     if active.contacts.remove(&event.id).is_some() {
