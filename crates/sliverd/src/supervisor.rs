@@ -909,6 +909,15 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
         for event in events {
+            if matches!(event, HardwareEvent::Touch(_))
+                && self.recovery.is_none()
+                && self.active.is_some()
+                && self
+                    .fn_hold_started
+                    .is_some_and(|started| now - started >= 3.0)
+            {
+                self.enter_recovery()?;
+            }
             match event {
                 HardwareEvent::Touch(touch) => self.route_touch(touch)?,
                 HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active, now),
@@ -4791,6 +4800,48 @@ mod tests {
                 .count(),
             2
         );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn deadline_poll_takes_recovery_ownership_before_routing_touch() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local log = {log:?}
+                local sliver = require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        local file = assert(io.open(log, "a"))
+                        file:write(event.phase, "\n")
+                        file:close()
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(4.0)?;
+
+        assert!(!log.exists() || !std::fs::read_to_string(&log)?.contains("down"));
+        assert_eq!(supervisor.recovery.as_ref().map(|_| true), Some(true));
         supervisor.shutdown()?;
         Ok(())
     }
