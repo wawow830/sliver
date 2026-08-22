@@ -69,6 +69,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware> {
     ignored_contacts: BTreeSet<ContactId>,
     touch_queue: TouchQueue,
     next_timer_deadline: Option<f64>,
+    last_presented_time: Option<f64>,
 }
 
 impl<H: TouchBarHardware> Supervisor<H> {
@@ -92,6 +93,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
             ignored_contacts: BTreeSet::new(),
             touch_queue: TouchQueue::new(),
             next_timer_deadline: None,
+            last_presented_time: None,
         })
     }
 
@@ -112,11 +114,20 @@ impl<H: TouchBarHardware> Supervisor<H> {
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
+        let stage_time = self.now_seconds();
         let StagedLuaWorker {
             worker,
-            frame,
+            frame: staged_frame,
             pending_backlight,
-        } = LuaWorker::stage_with_backlight(&selected_path, current_backlight)?;
+        } = LuaWorker::stage_with_backlight_at(
+            &selected_path,
+            current_backlight,
+            stage_time,
+        )?;
+        let crate::lua_worker::TimedFrame {
+            frame,
+            timing: frame_timing,
+        } = staged_frame;
         self.poll_hardware(Duration::ZERO)?;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
@@ -167,6 +178,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
         }
 
         self.backlight = candidate_backlight;
+        self.last_presented_time = Some(frame_timing.presentation_time);
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         self.next_timer_deadline = Some(now);
@@ -188,7 +200,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
                 })
                 .collect();
             if !cancels.is_empty() {
-                if let Err(error) = replaced.worker.drive(now, cancels) {
+                if let Err(error) = replaced.worker.drive(now, 0.0, cancels) {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
                     );
@@ -306,7 +318,11 @@ impl<H: TouchBarHardware> Supervisor<H> {
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
-        let effects = active.worker.drive(now, touches)?;
+        let delta = self
+            .last_presented_time
+            .map(|previous| (now - previous).max(0.0))
+            .unwrap_or(0.0);
+        let effects = active.worker.drive(now, delta, touches)?;
         self.next_timer_deadline = effects
             .next_timer_deadline
             .or_else(|| effects.frame.as_ref().map(|_| now));
@@ -321,6 +337,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
         let old_backlight = active.backlight;
         let frame = effects.frame;
         let backlight = effects.backlight;
+        let frame_time = frame.as_ref().map(|frame| frame.timing.presentation_time);
         let mut brightness_changed = false;
 
         if let Some(level) = backlight {
@@ -341,7 +358,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
             brightness_changed = true;
         }
         if let Some(frame) = frame.as_ref() {
-            if let Err(error) = self.hardware.present(frame) {
+            if let Err(error) = self.hardware.present(&frame.frame) {
                 let mut error = error.context("presenting Lua frame");
                 if let Err(restore_error) = self.hardware.present(&old_frame) {
                     error = error.context(format!(
@@ -366,7 +383,8 @@ impl<H: TouchBarHardware> Supervisor<H> {
 
         let active = self.active.as_mut().expect("active worker disappeared");
         if let Some(frame) = frame {
-            active.frame = frame;
+            active.frame = frame.frame;
+            self.last_presented_time = frame_time;
         }
         if let Some(level) = backlight {
             active.backlight = level;
@@ -405,7 +423,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
                     })
                     .collect();
                 if !cancels.is_empty() {
-                    let _ = active.worker.drive(now, cancels);
+                    let _ = active.worker.drive(now, 0.0, cancels);
                 }
                 active.worker.shutdown(StopReason::Shutdown)
             }
@@ -1081,6 +1099,53 @@ mod tests {
 
         supervisor.step_at(2.0)?;
         assert_eq!(std::fs::read_to_string(&log)?, "1\n2\n3\n");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn rendered_frames_receive_intended_time_and_previous_presented_delta() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("frame-time.lua");
+        let log = directory.path().join("frame-times");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                sliver.timer.after(0.5, function() sliver.redraw() end)
+                return {{
+                    api_version = 1,
+                    render = function(_, time, delta)
+                        assert(type(time) == "number")
+                        assert(type(delta) == "number")
+                        local file = assert(io.open(log, "a"))
+                        file:write(time, " ", delta, "\n")
+                        file:close()
+                    end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor.step_at(1.0)?;
+
+        let lines: Vec<_> = std::fs::read_to_string(log)?
+            .lines()
+            .map(|line| {
+                line.split_whitespace()
+                    .map(|value| value.parse::<f64>().expect("frame timing was numeric"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0][1], 0.0);
+        assert!(lines[1][0] > lines[0][0]);
+        assert!((lines[1][1] - (lines[1][0] - lines[0][0])).abs() < 0.001);
         supervisor.shutdown()?;
         Ok(())
     }

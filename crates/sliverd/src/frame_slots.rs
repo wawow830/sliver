@@ -32,11 +32,11 @@ impl FrameTiming {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CompletedFrame {
-    width: usize,
-    height: usize,
-    stride: usize,
-    pixels: Vec<u8>,
-    timing: FrameTiming,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) stride: usize,
+    pub(crate) pixels: Vec<u8>,
+    pub(crate) timing: FrameTiming,
 }
 
 impl CompletedFrame {
@@ -80,10 +80,12 @@ pub(crate) struct FrameSlots {
     inner: Arc<SharedSlots>,
 }
 
+#[derive(Clone)]
 pub(crate) struct FrameProducer {
     inner: Arc<SharedSlots>,
 }
 
+#[derive(Clone)]
 pub(crate) struct FrameBroker {
     inner: Arc<SharedSlots>,
 }

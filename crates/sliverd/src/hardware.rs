@@ -3,6 +3,8 @@ use std::time::Duration;
 use anyhow::{ensure, Result};
 use cairo::ImageSurface;
 
+use crate::frame_slots::{CompletedFrame, FrameTiming};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modifier {
     LeftCtrl,
@@ -132,6 +134,18 @@ impl LogicalFrame {
 
     pub(crate) fn pixels(&self) -> &[u8] {
         &self.pixels
+    }
+
+    pub(crate) fn from_completed(completed: CompletedFrame) -> (Self, FrameTiming) {
+        (
+            Self {
+                width: completed.width,
+                height: completed.height,
+                stride: completed.stride,
+                pixels: completed.pixels,
+            },
+            completed.timing,
+        )
     }
 }
 

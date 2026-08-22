@@ -9,19 +9,31 @@ use mlua::{
     Function, HookTriggers, Lua, MultiValue, Table, UserData, UserDataMethods, Value, VmState,
 };
 
+use crate::frame_slots::{FrameBroker, FrameSlots, FrameTiming, FrameProducer};
 use crate::hardware::{LogicalFrame, Modifier, TouchEvent, TouchPhase};
 use crate::lua_canvas::{create_path, Canvas};
 
+pub(crate) struct TimedFrame {
+    pub(crate) frame: LogicalFrame,
+    pub(crate) timing: FrameTiming,
+}
+
 pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
-    pub(crate) frame: LogicalFrame,
+    pub(crate) frame: TimedFrame,
     pub(crate) pending_backlight: Option<f64>,
 }
 
 pub(crate) struct WorkerEffects {
-    pub(crate) frame: Option<LogicalFrame>,
+    pub(crate) frame: Option<TimedFrame>,
     pub(crate) backlight: Option<f64>,
     pub(crate) next_timer_deadline: Option<f64>,
+}
+
+struct RuntimeEffects {
+    frame: Option<FrameTiming>,
+    backlight: Option<f64>,
+    next_timer_deadline: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,16 +54,17 @@ impl StopReason {
 pub(crate) struct LuaWorker {
     commands: Option<mpsc::Sender<WorkerCommand>>,
     owner: Option<thread::JoinHandle<()>>,
+    broker: FrameBroker,
 }
 
 enum WorkerCommand {
-    #[allow(dead_code)]
-    Render(mpsc::SyncSender<std::result::Result<LogicalFrame, String>>),
+    Render(mpsc::SyncSender<std::result::Result<(), String>>),
     Commit(f64, mpsc::SyncSender<std::result::Result<(), String>>),
     Drive(
         f64,
+        f64,
         Vec<TouchEvent>,
-        mpsc::SyncSender<std::result::Result<WorkerEffects, String>>,
+        mpsc::SyncSender<std::result::Result<RuntimeEffects, String>>,
     ),
     RestoreBacklight(f64, mpsc::SyncSender<std::result::Result<(), String>>),
     Shutdown(
@@ -70,6 +83,7 @@ struct Runtime {
     _key: Option<Function>,
     source: PathBuf,
     controls: RuntimeControls,
+    producer: FrameProducer,
 }
 
 struct CallbackRefs {
@@ -118,32 +132,64 @@ struct DueTimer {
 
 impl LuaWorker {
     pub(crate) fn stage(source: &Path) -> Result<StagedLuaWorker> {
-        Self::stage_with_backlight(source, 0.0)
+        Self::stage_with_backlight_at(source, 0.0, 0.0)
     }
 
     pub(crate) fn stage_with_backlight(
         source: &Path,
         initial_backlight: f64,
     ) -> Result<StagedLuaWorker> {
+        Self::stage_with_backlight_at(source, initial_backlight, 0.0)
+    }
+
+    pub(crate) fn stage_with_backlight_at(
+        source: &Path,
+        initial_backlight: f64,
+        initial_time: f64,
+    ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
+        validate_frame_timing(initial_time, 0.0).map_err(|error| anyhow!(error))?;
         let source = source.to_path_buf();
+        let slots = FrameSlots::new(
+            sliver_core::STRIP_W as usize,
+            sliver_core::STRIP_H as usize,
+            sliver_core::STRIP_W as usize * 4,
+        )?;
+        let producer = slots.producer();
+        let broker = slots.broker();
         let (command_tx, command_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let owner = thread::Builder::new()
             .name("sliver-lua".into())
-            .spawn(move || owner_main(source, initial_backlight, command_rx, ready_tx))
+            .spawn(move || {
+                owner_main(
+                    source,
+                    initial_backlight,
+                    initial_time,
+                    producer,
+                    command_rx,
+                    ready_tx,
+                )
+            })
             .context("starting Lua owner thread")?;
 
         let mut worker = Self {
             commands: Some(command_tx),
             owner: Some(owner),
+            broker,
         };
         match ready_rx.recv() {
-            Ok(Ok(staged)) => Ok(StagedLuaWorker {
-                worker,
-                frame: staged.frame,
-                pending_backlight: staged.pending_backlight,
-            }),
+            Ok(Ok(staged)) => {
+                let frame = worker.take_frame()?.context("Lua worker published no initial frame")?;
+                Ok(StagedLuaWorker {
+                    worker,
+                    frame: TimedFrame {
+                        frame,
+                        timing: staged.timing,
+                    },
+                    pending_backlight: staged.pending_backlight,
+                })
+            }
             Ok(Err(error)) => {
                 worker.abandon();
                 Err(anyhow!(error))
@@ -155,7 +201,6 @@ impl LuaWorker {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn render_next(&self) -> Result<LogicalFrame> {
         let commands = self
             .commands
@@ -168,7 +213,8 @@ impl LuaWorker {
         reply_rx
             .recv()
             .context("Lua owner thread exited while rendering")?
-            .map_err(|error| anyhow!(error))
+            .map_err(|error| anyhow!(error))?;
+        self.take_frame()?.context("Lua worker published no frame")
     }
 
     pub(crate) fn commit(&self, now_seconds: f64) -> Result<()> {
@@ -186,19 +232,44 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))
     }
 
-    pub(crate) fn drive(&self, now_seconds: f64, events: Vec<TouchEvent>) -> Result<WorkerEffects> {
+    pub(crate) fn drive(
+        &self,
+        now_seconds: f64,
+        delta: f64,
+        events: Vec<TouchEvent>,
+    ) -> Result<WorkerEffects> {
         let commands = self
             .commands
             .as_ref()
             .context("Lua worker command channel is closed")?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
-            .send(WorkerCommand::Drive(now_seconds, events, reply_tx))
+            .send(WorkerCommand::Drive(now_seconds, delta, events, reply_tx))
             .context("driving Lua worker")?;
-        reply_rx
+        let effects = reply_rx
             .recv()
             .context("Lua owner thread exited while driving")?
-            .map_err(|error| anyhow!(error))
+            .map_err(|error| anyhow!(error))?;
+        let frame = match effects.frame {
+            Some(timing) => Some(TimedFrame {
+                frame: self.take_frame()?.context("Lua worker published no frame")?,
+                timing,
+            }),
+            None => None,
+        };
+        Ok(WorkerEffects {
+            frame,
+            backlight: effects.backlight,
+            next_timer_deadline: effects.next_timer_deadline,
+        })
+    }
+
+    fn take_frame(&self) -> Result<Option<LogicalFrame>> {
+        let Some(completed) = self.broker.take_newest()? else {
+            return Ok(None);
+        };
+        let (frame, _) = LogicalFrame::from_completed(completed);
+        Ok(Some(frame))
     }
 
     pub(crate) fn restore_backlight(&self, level: f64) -> Result<()> {
@@ -257,25 +328,43 @@ impl Drop for LuaWorker {
 }
 
 struct StagedRuntime {
-    frame: LogicalFrame,
+    timing: FrameTiming,
     pending_backlight: Option<f64>,
 }
 
 fn owner_main(
     source: PathBuf,
     initial_backlight: f64,
+    initial_time: f64,
+    producer: FrameProducer,
     commands: mpsc::Receiver<WorkerCommand>,
     ready: mpsc::SyncSender<std::result::Result<StagedRuntime, String>>,
 ) {
-    let (runtime, frame) = match Runtime::load_and_render(&source, initial_backlight) {
+    let (runtime, frame) = match Runtime::load_and_render(
+        &source,
+        initial_backlight,
+        initial_time,
+        producer,
+    ) {
         Ok(staged) => staged,
         Err(error) => {
             let _ = ready.send(Err(error));
             return;
         }
     };
+    let timing = match FrameTiming::new(initial_time, 0.0) {
+        Ok(timing) => timing,
+        Err(error) => {
+            let _ = ready.send(Err(error.to_string()));
+            return;
+        }
+    };
+    if let Err(error) = runtime.publish_frame(&frame, timing) {
+        let _ = ready.send(Err(error));
+        return;
+    }
     let staged = StagedRuntime {
-        frame,
+        timing,
         pending_backlight: runtime.pending_backlight(),
     };
     if ready.send(Ok(staged)).is_err() {
@@ -289,13 +378,19 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
     loop {
         match commands.recv() {
             Ok(WorkerCommand::Render(reply)) => {
-                let _ = reply.send(runtime.render_frame());
+                let result = runtime
+                    .render_frame(0.0, 0.0)
+                    .and_then(|frame| {
+                        let timing = FrameTiming::new(0.0, 0.0).map_err(|error| error.to_string())?;
+                        runtime.publish_frame(&frame, timing).map(|_| ())
+                    });
+                let _ = reply.send(result);
             }
             Ok(WorkerCommand::Commit(now_seconds, reply)) => {
                 let _ = reply.send(runtime.commit(now_seconds));
             }
-            Ok(WorkerCommand::Drive(now_seconds, events, reply)) => {
-                let _ = reply.send(runtime.drive(now_seconds, events));
+            Ok(WorkerCommand::Drive(now_seconds, delta, events, reply)) => {
+                let _ = reply.send(runtime.drive(now_seconds, delta, events));
             }
             Ok(WorkerCommand::RestoreBacklight(level, reply)) => {
                 let _ = reply.send(runtime.restore_backlight(level));
@@ -334,9 +429,10 @@ impl Runtime {
     fn drive(
         &mut self,
         now_seconds: f64,
+        delta: f64,
         events: Vec<TouchEvent>,
-    ) -> std::result::Result<WorkerEffects, String> {
-        validate_now(now_seconds)?;
+    ) -> std::result::Result<RuntimeEffects, String> {
+        validate_frame_timing(now_seconds, delta)?;
         if !self.controls.committed.get() {
             return Err("Lua worker has not been committed".into());
         }
@@ -346,13 +442,16 @@ impl Runtime {
             self.dispatch_touch(events)?;
             self.run_due_timers(now_seconds)?;
             let frame = if self.controls.redraw_pending.replace(false) {
-                Some(self.render_frame()?)
+                let frame = self.render_frame(now_seconds, delta)?;
+                let timing = FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
+                self.publish_frame(&frame, timing)?;
+                Some(timing)
             } else {
                 None
             };
             let backlight = self.controls.pending_backlight.take();
             let next_timer_deadline = self.controls.timers.borrow().next_deadline();
-            Ok(WorkerEffects {
+            Ok(RuntimeEffects {
                 frame,
                 backlight,
                 next_timer_deadline,
@@ -398,6 +497,8 @@ impl Runtime {
     fn load_and_render(
         source: &Path,
         initial_backlight: f64,
+        initial_time: f64,
+        producer: FrameProducer,
     ) -> std::result::Result<(Self, LogicalFrame), String> {
         let bytes =
             std::fs::read(source).map_err(|error| diagnostic("load", source, error.to_string()))?;
@@ -493,12 +594,39 @@ impl Runtime {
             _key: key,
             source: source.to_path_buf(),
             controls,
+            producer,
         };
-        let frame = runtime.render_frame()?;
+        let frame = runtime.render_frame(initial_time, 0.0)?;
         Ok((runtime, frame))
     }
 
-    fn render_frame(&self) -> std::result::Result<LogicalFrame, String> {
+    fn publish_frame(
+        &self,
+        frame: &LogicalFrame,
+        timing: FrameTiming,
+    ) -> std::result::Result<(), String> {
+        let published = self
+            .producer
+            .publish(
+                frame.width(),
+                frame.height(),
+                frame.stride(),
+                frame.pixels(),
+                timing,
+            )
+            .map_err(|error| error.to_string())?;
+        if published {
+            Ok(())
+        } else {
+            Err("no shared frame slot was available".into())
+        }
+    }
+
+    fn render_frame(
+        &self,
+        presentation_time: f64,
+        delta: f64,
+    ) -> std::result::Result<LogicalFrame, String> {
         self.controls.redraw_pending.set(false);
         let surface = cairo::ImageSurface::create(
             cairo::Format::ARgb32,
@@ -518,7 +646,9 @@ impl Runtime {
             ._lua
             .create_userdata(Canvas::new(&context))
             .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        let render_result = self.render.call::<()>(canvas.clone());
+        let render_result = self
+            .render
+            .call::<()>((canvas.clone(), presentation_time, delta));
         canvas
             .borrow::<Canvas>()
             .map_err(|error| diagnostic("render", &self.source, error.to_string()))?
@@ -685,6 +815,18 @@ fn validate_now(now_seconds: f64) -> std::result::Result<(), String> {
         Ok(())
     } else {
         Err("worker time must be finite".into())
+    }
+}
+
+fn validate_frame_timing(
+    presentation_time: f64,
+    delta: f64,
+) -> std::result::Result<(), String> {
+    validate_now(presentation_time)?;
+    if delta.is_finite() && delta >= 0.0 {
+        Ok(())
+    } else {
+        Err("frame delta must be finite and non-negative".into())
     }
 }
 

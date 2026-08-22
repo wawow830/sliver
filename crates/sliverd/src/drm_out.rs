@@ -257,7 +257,7 @@ fn present_lua_once<H: TouchBarHardware>(source: &std::path::Path, hardware: &mu
     let run_result = (|| -> Result<()> {
         let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
             crate::lua_worker::LuaWorker::stage(source)?;
-        hardware.present(&frame)?;
+        hardware.present(&frame.frame)?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)
     })();
     let release_result = hardware.release();
@@ -773,7 +773,7 @@ mod tests {
         hardware.claim()?;
         let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
             crate::lua_worker::LuaWorker::stage(&source)?;
-        hardware.present(&frame)?;
+        hardware.present(&frame.frame)?;
         let frame = worker.render_next()?;
         hardware.present(&frame)?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
@@ -828,7 +828,7 @@ mod tests {
         hardware.claim()?;
         let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
             crate::lua_worker::LuaWorker::stage(&source)?;
-        hardware.present(&frame)?;
+        hardware.present(&frame.frame)?;
         let frame = worker.render_next()?;
         hardware.present(&frame)?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
