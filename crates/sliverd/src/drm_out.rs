@@ -663,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn lua_canvas_reuses_paths_across_fresh_frames() -> Result<()> {
+    fn lua_canvas_clears_complete_frame_before_reusing_immutable_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("frames.lua");
         std::fs::write(
@@ -706,9 +706,21 @@ mod tests {
 
         let frames = hardware.presented_frames();
         assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0].rgba_at(15, 15), [255, 0, 0, 255]);
-        assert_eq!(frames[1].rgba_at(5, 5), [0, 255, 0, 255]);
-        assert_eq!(frames[1].rgba_at(15, 15), [0, 0, 0, 255]);
+        assert_eq!(
+            frames[0].rgba_at(15, 15),
+            [255, 0, 0, 255],
+            "immutable path did not render the first frame"
+        );
+        assert_eq!(
+            frames[1].rgba_at(5, 5),
+            [0, 255, 0, 255],
+            "the same immutable path was not reusable in the next frame"
+        );
+        assert_eq!(
+            frames[1].rgba_at(15, 15),
+            [0, 0, 0, 255],
+            "complete-frame clearing retained pixels from the previous frame"
+        );
         Ok(())
     }
 
@@ -750,7 +762,11 @@ mod tests {
         let frames = hardware.presented_frames();
         assert!(frames[0].rgba_at(105, 5)[0] > 0);
         assert_eq!(frames[1].rgba_at(5, 5), [0, 255, 0, 255]);
-        assert_eq!(frames[1].rgba_at(105, 5), [0, 0, 0, 255]);
+        assert_eq!(
+            frames[1].rgba_at(105, 5),
+            [0, 0, 0, 255],
+            "a fresh frame retained the previous transform, alpha, or pixels"
+        );
         Ok(())
     }
 
