@@ -3,6 +3,7 @@ mod drm_out;
 mod frame_slots;
 mod hardware;
 mod lua_canvas;
+mod lua_image;
 mod lua_worker;
 mod m2_hardware;
 mod path_state;

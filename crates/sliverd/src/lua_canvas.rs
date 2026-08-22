@@ -3,6 +3,8 @@ use std::cell::{Cell, RefCell};
 use cairo::Context;
 use mlua::{AnyUserData, MultiValue, Table, UserData, UserDataMethods, Value};
 
+use crate::lua_image::{parse_filter, Image, Rect};
+
 #[derive(Clone, Copy)]
 struct Color {
     red: f64,
@@ -298,6 +300,62 @@ impl UserData for Canvas {
             canvas.context.fill().map_err(|error| {
                 mlua::Error::runtime(format!("canvas:rectangle fill failed: {error}"))
             })
+        });
+        methods.add_method("image", |_, canvas, args: MultiValue| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:image cannot be called after canvas invalidation",
+                ));
+            }
+            let values = args.into_vec();
+            if values.len() < 3 || values.len() > 4 {
+                return Err(mlua::Error::runtime(
+                    "canvas:image needs an image, source rectangle, destination rectangle, and an optional filter",
+                ));
+            }
+            let image = match &values[0] {
+                Value::UserData(image) => image.borrow::<Image>()?,
+                value => {
+                    return Err(mlua::Error::runtime(format!(
+                        "canvas:image image must be a sliver image, got {}",
+                        value.type_name()
+                    )))
+                }
+            };
+            let source = Rect::from_value(&values[1], "image source")?;
+            let destination = Rect::from_value(&values[2], "image destination")?;
+            let filter = parse_filter(values.get(3))?;
+            image.draw(
+                &canvas.context,
+                source,
+                destination,
+                filter,
+                canvas.alpha.get(),
+            )
+        });
+        methods.add_method("raw_pixels", |_, canvas, args: MultiValue| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:raw_pixels cannot be called after canvas invalidation",
+                ));
+            }
+            let values = args.into_vec();
+            if values.len() < 7 || values.len() > 8 {
+                return Err(mlua::Error::runtime(
+                    "canvas:raw_pixels needs data, format, width, height, stride, source rectangle, destination rectangle, and an optional filter",
+                ));
+            }
+            let image = Image::from_raw_values(&values[..5])?;
+            let source = Rect::from_value(&values[5], "raw pixels source")?;
+            let destination = Rect::from_value(&values[6], "raw pixels destination")?;
+            let filter = parse_filter(values.get(7))?;
+            image.draw(
+                &canvas.context,
+                source,
+                destination,
+                filter,
+                canvas.alpha.get(),
+            )
         });
         methods.add_method("fill", |_, canvas, args: MultiValue| {
             if canvas.invalidated.get() {

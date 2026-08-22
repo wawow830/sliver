@@ -12,6 +12,7 @@ use mlua::{
 use crate::frame_slots::{FrameBroker, FrameSlots, FrameTiming, FrameProducer};
 use crate::hardware::{LogicalFrame, Modifier, TouchEvent, TouchPhase};
 use crate::lua_canvas::{create_path, Canvas};
+use crate::lua_image::create_image;
 
 pub(crate) struct TimedFrame {
     pub(crate) frame: LogicalFrame,
@@ -860,6 +861,9 @@ fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<C
         module.set("api_version", 1)?;
         let path = lua.create_function(create_path)?;
         module.set("path", path)?;
+        let image = lua.create_table()?;
+        image.set("new", lua.create_function(create_image)?)?;
+        module.set("image", image)?;
 
         let redraw_pending = loader_controls.redraw_pending.clone();
         module.set(

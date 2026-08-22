@@ -289,6 +289,7 @@ mod tests {
         FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, Modifier, TouchEvent,
         TouchPhase,
     };
+    use crate::supervisor::Supervisor;
 
     fn legacy_touch_up(x: f64) -> HardwareEvent {
         HardwareEvent::Touch(TouchEvent {
@@ -734,6 +735,60 @@ mod tests {
         assert_eq!(frame.rgba_at(20, 20), [255, 0, 0, 255]);
         assert_eq!(frame.rgba_at(5, 20), [0, 0, 0, 255]);
         assert_eq!(frame.rgba_at(35, 20), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_draws_reusable_decoded_images_and_borrowed_raw_pixels() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("images.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local image = sliver.image.new(
+                string.char(255, 0, 0, 255, 0, 0, 255, 255),
+                "rgba8",
+                2,
+                1,
+                8
+            )
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:image(
+                        image,
+                        { x = 0, y = 0, width = 2, height = 1 },
+                        { x = 0, y = 0, width = 2, height = 1 },
+                        "nearest"
+                    )
+                    canvas:raw_pixels(
+                        string.char(0, 255, 0, 255),
+                        "bgra8",
+                        1,
+                        1,
+                        4,
+                        { x = 0, y = 0, width = 1, height = 1 },
+                        { x = 3, y = 0, width = 1, height = 1 },
+                        "nearest"
+                    )
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        let frame = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .context("decoded image frame was not presented")?;
+        assert_eq!(frame.rgba_at(0, 0), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(1, 0), [0, 0, 255, 255]);
+        assert_eq!(frame.rgba_at(3, 0), [0, 255, 0, 255]);
+        supervisor.shutdown()?;
         Ok(())
     }
 
