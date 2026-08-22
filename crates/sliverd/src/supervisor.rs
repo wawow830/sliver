@@ -1,16 +1,61 @@
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::io::{ErrorKind, Read};
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 
 use crate::apply_ipc::absolute_lexical;
-use crate::hardware::TouchBarHardware;
-use crate::lua_worker::{LuaWorker, StagedLuaWorker, StopReason};
+use crate::hardware::{
+    ContactId, HardwareEvent, LogicalFrame, TouchBarHardware, TouchEvent, TouchPhase,
+};
+use crate::lua_worker::{LuaWorker, StagedLuaWorker, StopReason, WorkerEffects};
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
+
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
 
 struct ActiveConfig {
     worker: LuaWorker,
     _selected_path: PathBuf,
+    frame: LogicalFrame,
+    backlight: f64,
+    contacts: BTreeMap<ContactId, TouchEvent>,
+}
+
+struct TouchQueue {
+    events: Vec<Option<TouchEvent>>,
+    moves: BTreeMap<ContactId, usize>,
+}
+
+impl TouchQueue {
+    fn new() -> Self {
+        Self {
+            events: Vec::new(),
+            moves: BTreeMap::new(),
+        }
+    }
+
+    fn push(&mut self, event: TouchEvent) {
+        if event.phase == TouchPhase::Move {
+            if let Some(index) = self.moves.insert(event.id, self.events.len()) {
+                self.events[index] = None;
+            }
+        } else {
+            self.moves.remove(&event.id);
+        }
+        self.events.push(Some(event));
+    }
+
+    fn drain(&mut self) -> Vec<TouchEvent> {
+        self.moves.clear();
+        std::mem::take(&mut self.events)
+            .into_iter()
+            .flatten()
+            .collect()
+    }
 }
 
 pub(crate) struct Supervisor<H: TouchBarHardware> {
@@ -18,17 +63,40 @@ pub(crate) struct Supervisor<H: TouchBarHardware> {
     state_file: PathBuf,
     active: Option<ActiveConfig>,
     claimed: bool,
+    origin: Instant,
+    backlight: f64,
+    down_contacts: BTreeMap<ContactId, TouchEvent>,
+    ignored_contacts: BTreeSet<ContactId>,
+    touch_queue: TouchQueue,
+    next_timer_deadline: Option<f64>,
 }
 
 impl<H: TouchBarHardware> Supervisor<H> {
     pub(crate) fn new(mut hardware: H, state_file: PathBuf) -> Result<Self> {
         hardware.claim()?;
+        let backlight = match hardware.get_backlight() {
+            Ok(level) => level,
+            Err(error) => {
+                let _ = hardware.release();
+                return Err(error).context("reading initial Touch Bar backlight");
+            }
+        };
         Ok(Self {
             hardware,
             state_file,
             active: None,
             claimed: true,
+            origin: Instant::now(),
+            backlight,
+            down_contacts: BTreeMap::new(),
+            ignored_contacts: BTreeSet::new(),
+            touch_queue: TouchQueue::new(),
+            next_timer_deadline: None,
         })
+    }
+
+    fn now_seconds(&self) -> f64 {
+        self.origin.elapsed().as_secs_f64()
     }
 
     pub(crate) fn apply(&mut self, requested_path: &Path) -> Result<()> {
@@ -41,24 +109,91 @@ impl<H: TouchBarHardware> Supervisor<H> {
             selected_path.display()
         );
 
-        let StagedLuaWorker { worker, frame, .. } = LuaWorker::stage(&selected_path)?;
+        self.poll_hardware(Duration::ZERO)?;
+        let current_backlight = self.hardware.get_backlight()?;
+        self.backlight = current_backlight;
+        let StagedLuaWorker {
+            worker,
+            frame,
+            pending_backlight,
+        } = LuaWorker::stage_with_backlight(&selected_path, current_backlight)?;
+        self.poll_hardware(Duration::ZERO)?;
+        let latest_backlight = self.hardware.get_backlight()?;
+        self.backlight = latest_backlight;
         let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
         let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
         path_state.commit()?;
-        if let Err(presentation_error) = self.hardware.present(&frame) {
-            if let Err(rollback_error) = previous_path_state.restore(&self.state_file) {
-                return Err(presentation_error).context(format!(
-                    "restoring selected path after presentation failed also failed: {rollback_error:#}"
-                ));
+
+        let old_frame = self.active.as_ref().map(|active| active.frame.clone());
+        let old_backlight = latest_backlight;
+        let candidate_backlight = pending_backlight.unwrap_or(old_backlight);
+        let brightness_attempted = pending_backlight.is_some();
+        let mut brightness_changed = false;
+        if let Some(level) = pending_backlight {
+            if let Err(error) = self.hardware.set_backlight(level) {
+                return self.rollback_candidate(
+                    previous_path_state,
+                    old_frame.as_ref(),
+                    old_backlight,
+                    false,
+                    brightness_attempted,
+                    error,
+                );
             }
-            return Err(presentation_error);
+            brightness_changed = true;
         }
 
+        if let Err(error) = self.hardware.present(&frame) {
+            return self.rollback_candidate(
+                previous_path_state,
+                old_frame.as_ref(),
+                old_backlight,
+                true,
+                brightness_changed,
+                error,
+            );
+        }
+
+        let now = self.now_seconds();
+        if let Err(error) = worker.commit(now) {
+            return self.rollback_candidate(
+                previous_path_state,
+                old_frame.as_ref(),
+                old_backlight,
+                true,
+                brightness_changed,
+                error,
+            );
+        }
+
+        self.backlight = candidate_backlight;
+        self.ignored_contacts
+            .extend(self.down_contacts.keys().copied());
+        self.next_timer_deadline = Some(now);
         let replaced = self.active.replace(ActiveConfig {
             worker,
             _selected_path: selected_path,
+            frame,
+            backlight: candidate_backlight,
+            contacts: BTreeMap::new(),
         });
         if let Some(replaced) = replaced {
+            let cancels: Vec<_> = replaced
+                .contacts
+                .values()
+                .map(|event| TouchEvent {
+                    phase: TouchPhase::Cancel,
+                    time: now,
+                    ..*event
+                })
+                .collect();
+            if !cancels.is_empty() {
+                if let Err(error) = replaced.worker.drive(now, cancels) {
+                    eprintln!(
+                        "replaced Lua worker did not receive contact cancellation: {error:#}"
+                    );
+                }
+            }
             if let Err(error) = replaced.worker.shutdown(StopReason::Replaced) {
                 eprintln!("replaced Lua worker did not stop cleanly: {error:#}");
             }
@@ -66,9 +201,204 @@ impl<H: TouchBarHardware> Supervisor<H> {
         Ok(())
     }
 
+    fn rollback_candidate(
+        &mut self,
+        previous_path_state: PathStateSnapshot,
+        old_frame: Option<&LogicalFrame>,
+        old_backlight: f64,
+        restore_frame: bool,
+        restore_backlight: bool,
+        error: anyhow::Error,
+    ) -> Result<()> {
+        let mut error = error;
+        if restore_frame {
+            if let Some(frame) = old_frame {
+                if let Err(restore_error) = self.hardware.present(frame) {
+                    error = error.context(format!(
+                        "restoring the previous frame after candidate failure also failed: {restore_error:#}"
+                    ));
+                }
+            }
+        }
+        if restore_backlight {
+            if let Err(restore_error) = self.hardware.set_backlight(old_backlight) {
+                error = error.context(format!(
+                    "restoring the previous backlight after candidate failure also failed: {restore_error:#}"
+                ));
+            }
+        }
+        if let Err(restore_error) = previous_path_state.restore(&self.state_file) {
+            error = error.context(format!(
+                "restoring selected path after candidate failure also failed: {restore_error:#}"
+            ));
+        }
+        Err(error)
+    }
+
+    fn route_touch(&mut self, event: TouchEvent) {
+        match event.phase {
+            TouchPhase::Down => {
+                if self.down_contacts.insert(event.id, event).is_some() {
+                    return;
+                }
+                if self.ignored_contacts.contains(&event.id) {
+                    return;
+                }
+                if let Some(active) = self.active.as_mut() {
+                    active.contacts.insert(event.id, event);
+                    self.touch_queue.push(event);
+                }
+            }
+            TouchPhase::Move => {
+                let Some(contact) = self.down_contacts.get_mut(&event.id) else {
+                    return;
+                };
+                *contact = event;
+                if self.ignored_contacts.contains(&event.id) {
+                    return;
+                }
+                if let Some(active) = self.active.as_mut() {
+                    if let std::collections::btree_map::Entry::Occupied(mut contact) =
+                        active.contacts.entry(event.id)
+                    {
+                        contact.insert(event);
+                        self.touch_queue.push(event);
+                    }
+                }
+            }
+            TouchPhase::Up | TouchPhase::Cancel => {
+                self.down_contacts.remove(&event.id);
+                if self.ignored_contacts.remove(&event.id) {
+                    return;
+                }
+                if let Some(active) = self.active.as_mut() {
+                    if active.contacts.remove(&event.id).is_some() {
+                        self.touch_queue.push(event);
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_hardware(&mut self, timeout: Duration) -> Result<()> {
+        let events = self.hardware.poll(timeout)?;
+        let now = self.now_seconds();
+        self.process_events_at(now, events)
+    }
+
+    fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
+        for event in events {
+            if let HardwareEvent::Touch(touch) = event {
+                self.route_touch(touch);
+            }
+        }
+        let touches = self.touch_queue.drain();
+        let timer_due = self
+            .next_timer_deadline
+            .is_some_and(|deadline| deadline <= now);
+        if !touches.is_empty() || timer_due {
+            self.drive_active(now, touches)?;
+        }
+        Ok(())
+    }
+
+    fn drive_active(&mut self, now: f64, touches: Vec<TouchEvent>) -> Result<()> {
+        let Some(active) = self.active.as_ref() else {
+            return Ok(());
+        };
+        let effects = active.worker.drive(now, touches)?;
+        self.next_timer_deadline = effects
+            .next_timer_deadline
+            .or_else(|| effects.frame.as_ref().map(|_| now));
+        self.apply_effects(effects)
+    }
+
+    fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
+        let Some(active) = self.active.as_ref() else {
+            return Ok(());
+        };
+        let old_frame = active.frame.clone();
+        let old_backlight = active.backlight;
+        let frame = effects.frame;
+        let backlight = effects.backlight;
+        let mut brightness_changed = false;
+
+        if let Some(level) = backlight {
+            if let Err(error) = self.hardware.set_backlight(level) {
+                let mut error = error.context("applying Lua backlight request");
+                if let Err(restore_error) = self.hardware.set_backlight(old_backlight) {
+                    error = error.context(format!(
+                        "restoring the previous backlight also failed: {restore_error:#}"
+                    ));
+                }
+                return Err(error);
+            }
+            brightness_changed = true;
+        }
+        if let Some(frame) = frame.as_ref() {
+            if let Err(error) = self.hardware.present(frame) {
+                let mut error = error.context("presenting Lua frame");
+                if let Err(restore_error) = self.hardware.present(&old_frame) {
+                    error = error.context(format!(
+                        "restoring the previous frame also failed: {restore_error:#}"
+                    ));
+                }
+                if brightness_changed {
+                    if let Err(restore_error) = self.hardware.set_backlight(old_backlight) {
+                        error = error.context(format!(
+                            "restoring the previous backlight also failed: {restore_error:#}"
+                        ));
+                    }
+                }
+                return Err(error);
+            }
+        }
+
+        let active = self.active.as_mut().expect("active worker disappeared");
+        if let Some(frame) = frame {
+            active.frame = frame;
+        }
+        if let Some(level) = backlight {
+            active.backlight = level;
+            self.backlight = level;
+        }
+        Ok(())
+    }
+
+    fn poll_wait(&self, now: f64) -> Duration {
+        let Some(deadline) = self.next_timer_deadline else {
+            return MAX_POLL_WAIT;
+        };
+        if deadline <= now {
+            return Duration::ZERO;
+        }
+        Duration::from_secs_f64((deadline - now).min(MAX_POLL_WAIT.as_secs_f64()))
+    }
+
+    #[cfg(test)]
+    fn step_at(&mut self, now: f64) -> Result<()> {
+        let events = self.hardware.poll(Duration::ZERO)?;
+        self.process_events_at(now, events)
+    }
+
     pub(crate) fn shutdown(mut self) -> Result<()> {
+        let now = self.now_seconds();
         let stop_result = match self.active.take() {
-            Some(active) => active.worker.shutdown(StopReason::Shutdown),
+            Some(active) => {
+                let cancels: Vec<_> = active
+                    .contacts
+                    .values()
+                    .map(|event| TouchEvent {
+                        phase: TouchPhase::Cancel,
+                        time: now,
+                        ..*event
+                    })
+                    .collect();
+                if !cancels.is_empty() {
+                    let _ = active.worker.drive(now, cancels);
+                }
+                active.worker.shutdown(StopReason::Shutdown)
+            }
             None => Ok(()),
         };
         let release_result = self.hardware.release();
@@ -95,17 +425,108 @@ impl<H: TouchBarHardware> Supervisor<H> {
     }
 }
 
+struct PendingRequest {
+    stream: UnixStream,
+    header: [u8; 4],
+    header_len: usize,
+    length: Option<usize>,
+    payload: Vec<u8>,
+    payload_len: usize,
+}
+
+impl PendingRequest {
+    fn new(stream: UnixStream) -> Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            stream,
+            header: [0; 4],
+            header_len: 0,
+            length: None,
+            payload: Vec::new(),
+            payload_len: 0,
+        })
+    }
+
+    fn try_path(&mut self) -> Result<Option<PathBuf>> {
+        while self.header_len < self.header.len() {
+            match self.stream.read(&mut self.header[self.header_len..]) {
+                Ok(0) => bail!("apply request ended before its length header"),
+                Ok(read) => self.header_len += read,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(None),
+                Err(error) => return Err(error).context("reading apply request length"),
+            }
+        }
+
+        if self.length.is_none() {
+            let length = u32::from_be_bytes(self.header) as usize;
+            ensure!(length <= MAX_REQUEST_BYTES, "IPC message is too large");
+            ensure!(length > 0, "config path is empty");
+            self.payload.resize(length, 0);
+            self.length = Some(length);
+        }
+
+        let length = self.length.expect("request length was initialized");
+        while self.payload_len < length {
+            match self.stream.read(&mut self.payload[self.payload_len..]) {
+                Ok(0) => bail!("apply request ended before its path payload"),
+                Ok(read) => self.payload_len += read,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(None),
+                Err(error) => return Err(error).context("reading apply request path"),
+            }
+        }
+
+        Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(
+            std::mem::take(&mut self.payload),
+        ))))
+    }
+}
+
 pub(crate) fn serve<H: TouchBarHardware>(
     listener: UnixListener,
     supervisor: &mut Supervisor<H>,
 ) -> Result<()> {
-    for connection in listener.incoming() {
-        let mut stream = connection.context("accepting apply request")?;
-        serve_connection(&mut stream, supervisor)?;
+    listener.set_nonblocking(true)?;
+    let mut requests = VecDeque::new();
+    loop {
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => requests.push_back(PendingRequest::new(stream)?),
+                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error).context("accepting apply request"),
+            }
+        }
+
+        if let Some(request) = requests.front_mut() {
+            match request.try_path() {
+                Ok(Some(path)) => {
+                    let mut request = requests.pop_front().expect("request was present");
+                    let result = supervisor.apply(&path);
+                    request.stream.set_nonblocking(false)?;
+                    crate::apply_ipc::write_reply(&mut request.stream, &result)
+                        .context("sending apply reply")?;
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let mut request = requests.pop_front().expect("request was present");
+                    let result: Result<()> = Err(error);
+                    request.stream.set_nonblocking(false)?;
+                    crate::apply_ipc::write_reply(&mut request.stream, &result)
+                        .context("sending apply error")?;
+                    continue;
+                }
+            }
+        }
+
+        let now = supervisor.now_seconds();
+        let wait = supervisor.poll_wait(now);
+        let events = supervisor.hardware.poll(wait)?;
+        let now = supervisor.now_seconds();
+        supervisor.process_events_at(now, events)?;
     }
-    Ok(())
 }
 
+#[cfg(test)]
 fn serve_connection<H: TouchBarHardware>(
     stream: &mut UnixStream,
     supervisor: &mut Supervisor<H>,
@@ -134,7 +555,8 @@ mod tests {
     use anyhow::{bail, Context, Result};
 
     use crate::hardware::{
-        FakeAction, FakeTouchBar, HardwareEvent, LogicalFrame, ModifierState, TouchBarHardware,
+        FakeAction, FakeTouchBar, HardwareEvent, LogicalFrame, Modifier, ModifierState,
+        TouchBarHardware, TouchEvent, TouchPhase,
     };
 
     use super::{serve_connection, Supervisor};
@@ -143,6 +565,7 @@ mod tests {
         inner: FakeTouchBar,
         state_file: std::path::PathBuf,
         fail_next_present: bool,
+        fail_next_backlight: bool,
         state_seen_at_failure: Vec<u8>,
     }
 
@@ -152,6 +575,7 @@ mod tests {
                 inner: FakeTouchBar::new(),
                 state_file,
                 fail_next_present: false,
+                fail_next_backlight: false,
                 state_seen_at_failure: Vec::new(),
             }
         }
@@ -184,6 +608,10 @@ mod tests {
         }
 
         fn set_backlight(&mut self, level: f64) -> Result<()> {
+            if self.fail_next_backlight {
+                self.fail_next_backlight = false;
+                bail!("injected backlight failure");
+            }
             self.inner.set_backlight(level)
         }
 
@@ -225,9 +653,15 @@ mod tests {
             std::fs::read(&state_file)?,
             old_source.as_os_str().as_encoded_bytes()
         );
-        assert_eq!(supervisor.hardware().inner.presented_frames().len(), 1);
+        assert_eq!(supervisor.hardware().inner.presented_frames().len(), 2);
         assert_eq!(
-            supervisor.hardware().inner.presented_frames()[0].rgba_at(10, 10),
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .expect("previous frame was not restored")
+                .rgba_at(10, 10),
             [255, 0, 0, 255]
         );
         supervisor.shutdown()?;
@@ -350,6 +784,383 @@ mod tests {
                 .context("new frame was not committed")?
                 .rgba_at(10, 10),
             [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn touch_drives_frame_and_backlight_with_normalized_fields() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("touch.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local active = false
+            return {
+                api_version = 1,
+                touch = function(event)
+                    assert(event.phase == "down")
+                    assert(event.id == 7)
+                    assert(event.x == 100)
+                    assert(event.y == 20)
+                    assert(event.time == 0.25)
+                    assert(event.modifiers.left_ctrl)
+                    assert(event.pressure == 0.5)
+                    assert(event.width == 0.25)
+                    assert(event.height == nil)
+                    active = true
+                    sliver.backlight.set(0.75)
+                    sliver.redraw()
+                end,
+                render = function(canvas)
+                    if active then
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        let mut modifiers = ModifierState::default();
+        modifiers.set(Modifier::LeftCtrl, true);
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 7,
+                time: 0.25,
+                x: 100.0,
+                y: 20.0,
+                modifiers,
+                pressure: Some(0.5),
+                width: Some(0.25),
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        assert!(supervisor
+            .hardware()
+            .actions()
+            .contains(&FakeAction::Backlight(0.75)));
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .context("touch did not produce a frame")?
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn coalesces_moves_without_reordering_transitions() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("touch-order.lua");
+        let log = directory.path().join("touch-events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                require("sliver.v1")
+                local log = {log:?}
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        local file = assert(io.open(log, "a"))
+                        file:write(event.phase, ":", event.id, ":", math.floor(event.x), "\n")
+                        file:close()
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        let touch = |phase, id, x| TouchEvent {
+            phase,
+            id,
+            time: 0.0,
+            x,
+            y: 10.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        for event in [
+            touch(TouchPhase::Down, 1, 10.0),
+            touch(TouchPhase::Move, 1, 20.0),
+            touch(TouchPhase::Down, 2, 5.0),
+            touch(TouchPhase::Move, 1, 30.0),
+            touch(TouchPhase::Move, 2, 40.0),
+            touch(TouchPhase::Up, 1, 30.0),
+            touch(TouchPhase::Cancel, 2, 40.0),
+        ] {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(event));
+        }
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            std::fs::read_to_string(log)?,
+            "down:1:10\ndown:2:5\nmove:1:30\nmove:2:40\nup:1:30\ncancel:2:40\n"
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn zero_delay_timer_waits_until_after_worker_commit() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("zero-timer.lua");
+        let log = directory.path().join("timer-events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                sliver.timer.after(0, function()
+                    local file = assert(io.open(log, "w"))
+                    file:write("fired")
+                    file:close()
+                end)
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+
+        supervisor.apply(&source)?;
+
+        assert!(!log.exists(), "staged timer fired before commit");
+        supervisor.step_at(supervisor.now_seconds())?;
+        assert_eq!(std::fs::read_to_string(&log)?, "fired");
+        supervisor.step_at(supervisor.now_seconds() + 1.0)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "fired");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn timers_skip_missed_repeats_and_cancel_idempotently() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timers.lua");
+        let log = directory.path().join("timer-events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(name)
+                    local file = assert(io.open(log, "a"))
+                    file:write(name, "\n")
+                    file:close()
+                end
+                local canceled = sliver.timer.after(9, function() record("canceled") end)
+                canceled:cancel()
+                canceled:cancel()
+                sliver.timer.after(1, function() record("once") end)
+                sliver.timer.every(1, function() record("repeat") end)
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let committed_at = supervisor.now_seconds();
+
+        supervisor.step_at(committed_at + 1.0)?;
+        supervisor.step_at(committed_at + 4.5)?;
+
+        assert_eq!(std::fs::read_to_string(log)?, "once\nrepeat\nrepeat\n");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn redraw_coalesces_and_a_render_request_schedules_one_follow_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("redraw.lua");
+        let log = directory.path().join("renders");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local renders = 0
+                return {{
+                    api_version = 1,
+                    touch = function()
+                        sliver.redraw()
+                        sliver.redraw()
+                    end,
+                    render = function()
+                        renders = renders + 1
+                        local file = assert(io.open(log, "a"))
+                        file:write(renders, "\n")
+                        file:close()
+                        if renders == 2 then sliver.redraw() end
+                    end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "1\n");
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "1\n2\n");
+
+        supervisor.step_at(2.0)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "1\n2\n3\n");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_cancels_old_contacts_and_ignores_until_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-touch.lua");
+        let new_source = directory.path().join("new-touch.lua");
+        let old_log = directory.path().join("old-events");
+        let new_log = directory.path().join("new-events");
+        let config = |log: &std::path::Path| {
+            format!(
+                r#"
+                require("sliver.v1")
+                local log = {log:?}
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        local file = assert(io.open(log, "a"))
+                        file:write(event.phase, "\n")
+                        file:close()
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            )
+        };
+        std::fs::write(&old_source, config(&old_log))?;
+        std::fs::write(&new_source, config(&new_log))?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&old_source)?;
+
+        let event = |phase| TouchEvent {
+            phase,
+            id: 9,
+            time: 0.0,
+            x: 1.0,
+            y: 1.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+        supervisor.apply(&new_source)?;
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(TouchPhase::Move)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(TouchPhase::Up)));
+        supervisor.step_at(2.0)?;
+        assert!(!new_log.exists());
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(TouchPhase::Down)));
+        supervisor.step_at(3.0)?;
+        assert_eq!(std::fs::read_to_string(old_log)?, "down\ncancel\n");
+        assert_eq!(std::fs::read_to_string(new_log)?, "down\n");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn staged_backlight_failure_restores_path_frame_and_level() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old.lua");
+        let new_source = directory.path().join("new.lua");
+        std::fs::write(
+            &old_source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        std::fs::write(
+            &new_source,
+            "require('sliver.v1'); local sliver = require('sliver.v1'); return { api_version = 1, start = function() sliver.backlight.set(0.75) end, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1) end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(
+            FailingPresentHardware::new(state_file.clone()),
+            state_file.clone(),
+        )?;
+        supervisor.apply(&old_source)?;
+        supervisor.hardware_mut().fail_next_backlight = true;
+
+        let error = supervisor
+            .apply(&new_source)
+            .expect_err("staged backlight failure was accepted");
+
+        assert!(format!("{error:#}").contains("injected backlight failure"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(supervisor.hardware().inner.backlight_level(), 0.0);
+        assert_eq!(
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .unwrap()
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
         );
         supervisor.shutdown()?;
         Ok(())
