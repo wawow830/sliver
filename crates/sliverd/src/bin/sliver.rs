@@ -14,10 +14,13 @@ fn main() -> ExitCode {
             println!("sliver {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        [_path] => {
-            eprintln!("sliver supervisor is unavailable");
-            ExitCode::FAILURE
-        }
+        [path] => match sliverd::apply_config(std::path::Path::new(path)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error:#}");
+                ExitCode::FAILURE
+            }
+        },
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)

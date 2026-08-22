@@ -1,3 +1,4 @@
+mod apply_ipc;
 mod drm_out;
 mod hardware;
 mod lua_canvas;
@@ -7,6 +8,12 @@ mod m2_hardware;
 use std::io::{Read, Write};
 
 use anyhow::{bail, Context, Result};
+
+/// Send one explicit Lua config to the running per-user supervisor.
+#[doc(hidden)]
+pub fn apply_config(path: &std::path::Path) -> Result<()> {
+    apply_ipc::request_apply(path)
+}
 
 /// Run the legacy TOML daemon and developer modes until issue #16 removes them.
 pub fn legacy_main() -> Result<()> {
