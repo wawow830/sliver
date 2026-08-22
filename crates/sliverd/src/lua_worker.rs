@@ -15,13 +15,31 @@ pub(crate) struct StagedLuaWorker {
     pub(crate) frame: LogicalFrame,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StopReason {
+    Replaced,
+    Shutdown,
+}
+
+impl StopReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Replaced => "replaced",
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
+
 pub(crate) struct LuaWorker {
     commands: Option<mpsc::Sender<WorkerCommand>>,
     owner: Option<thread::JoinHandle<()>>,
 }
 
 enum WorkerCommand {
-    Shutdown(mpsc::SyncSender<std::result::Result<(), String>>),
+    Shutdown(
+        StopReason,
+        mpsc::SyncSender<std::result::Result<(), String>>,
+    ),
     Abandon,
 }
 
@@ -70,14 +88,14 @@ impl LuaWorker {
         }
     }
 
-    pub(crate) fn shutdown(mut self) -> Result<()> {
+    pub(crate) fn shutdown(mut self, reason: StopReason) -> Result<()> {
         let commands = self
             .commands
             .take()
             .context("Lua worker command channel is closed")?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
-            .send(WorkerCommand::Shutdown(reply_tx))
+            .send(WorkerCommand::Shutdown(reason, reply_tx))
             .context("requesting Lua worker shutdown")?;
         let result = reply_rx
             .recv()
@@ -126,8 +144,8 @@ fn owner_main(
     }
 
     match commands.recv() {
-        Ok(WorkerCommand::Shutdown(reply)) => {
-            let _ = reply.send(runtime.stop());
+        Ok(WorkerCommand::Shutdown(reason, reply)) => {
+            let _ = reply.send(runtime.stop(reason));
         }
         Ok(WorkerCommand::Abandon) | Err(_) => {}
     }
@@ -257,9 +275,9 @@ impl Runtime {
         ))
     }
 
-    fn stop(self) -> std::result::Result<(), String> {
+    fn stop(self, reason: StopReason) -> std::result::Result<(), String> {
         if let Some(stop) = self.stop {
-            stop.call::<()>("shutdown")
+            stop.call::<()>(reason.as_str())
                 .map_err(|error| diagnostic("stop", &self.source, error.to_string()))?;
         }
         Ok(())
