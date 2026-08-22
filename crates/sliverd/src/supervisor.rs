@@ -4,34 +4,59 @@ use std::path::{Path, PathBuf};
 use anyhow::{ensure, Context, Result};
 
 use crate::apply_ipc::absolute_lexical;
+use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::hardware::TouchBarHardware;
+use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{LuaWorker, StagedLuaWorker, StopReason};
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
+use crate::peer_credentials::PeerCredentials;
 
 struct ActiveConfig {
     worker: LuaWorker,
     _selected_path: PathBuf,
 }
 
-pub(crate) struct Supervisor<H: TouchBarHardware> {
+pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
     active: Option<ActiveConfig>,
     claimed: bool,
+    authorizer: SessionAuthorizer<L>,
 }
 
-impl<H: TouchBarHardware> Supervisor<H> {
-    pub(crate) fn new(mut hardware: H, state_file: PathBuf) -> Result<Self> {
+impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
+    pub(crate) fn new(hardware: H, state_file: PathBuf) -> Result<Self> {
+        Self::new_with_logind(hardware, state_file, RealLogind)
+    }
+}
+
+impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
+    pub(crate) fn new_with_logind(mut hardware: H, state_file: PathBuf, logind: L) -> Result<Self> {
         hardware.claim()?;
         Ok(Self {
             hardware,
             state_file,
             active: None,
             claimed: true,
+            authorizer: SessionAuthorizer::new(logind),
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn apply(&mut self, requested_path: &Path) -> Result<()> {
+        self.apply_candidate(requested_path, None)
+    }
+
+    fn apply_authorized(&mut self, requested_path: &Path, peer: PeerCredentials) -> Result<()> {
+        let grant = self.authorizer.authorize(peer)?;
+        self.apply_candidate(requested_path, Some((peer, grant)))
+    }
+
+    fn apply_candidate(
+        &mut self,
+        requested_path: &Path,
+        authorization: Option<(PeerCredentials, AuthorizationGrant)>,
+    ) -> Result<()> {
         let selected_path = absolute_lexical(requested_path)?;
         let metadata = std::fs::metadata(&selected_path)
             .with_context(|| format!("reading config metadata for {}", selected_path.display()))?;
@@ -44,6 +69,9 @@ impl<H: TouchBarHardware> Supervisor<H> {
         let StagedLuaWorker { worker, frame } = LuaWorker::stage(&selected_path)?;
         let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
         let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
+        if let Some((peer, grant)) = authorization {
+            self.authorizer.recheck(peer, &grant)?;
+        }
         path_state.commit()?;
         if let Err(presentation_error) = self.hardware.present(&frame) {
             if let Err(rollback_error) = previous_path_state.restore(&self.state_file) {
@@ -95,9 +123,9 @@ impl<H: TouchBarHardware> Supervisor<H> {
     }
 }
 
-pub(crate) fn serve<H: TouchBarHardware>(
+pub(crate) fn serve<H: TouchBarHardware, L: Logind>(
     listener: UnixListener,
-    supervisor: &mut Supervisor<H>,
+    supervisor: &mut Supervisor<H, L>,
 ) -> Result<()> {
     for connection in listener.incoming() {
         let mut stream = connection.context("accepting apply request")?;
@@ -106,15 +134,17 @@ pub(crate) fn serve<H: TouchBarHardware>(
     Ok(())
 }
 
-fn serve_connection<H: TouchBarHardware>(
+fn serve_connection<H: TouchBarHardware, L: Logind>(
     stream: &mut UnixStream,
-    supervisor: &mut Supervisor<H>,
+    supervisor: &mut Supervisor<H, L>,
 ) -> Result<()> {
-    let result = crate::apply_ipc::read_request(stream).and_then(|path| supervisor.apply(&path));
+    let result = crate::peer_credentials::read(stream)
+        .and_then(|peer| crate::apply_ipc::read_request(stream).map(|path| (path, peer)))
+        .and_then(|(path, peer)| supervisor.apply_authorized(&path, peer));
     crate::apply_ipc::write_reply(stream, &result).context("sending apply reply")
 }
 
-impl<H: TouchBarHardware> Drop for Supervisor<H> {
+impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
     fn drop(&mut self) {
         self.active.take();
         if self.claimed {
@@ -136,6 +166,7 @@ mod tests {
     use crate::hardware::{
         FakeAction, FakeTouchBar, HardwareEvent, LogicalFrame, ModifierState, TouchBarHardware,
     };
+    use crate::logind::{ActiveSession, FakeLogind, Session};
 
     use super::{serve_connection, Supervisor};
 
@@ -456,8 +487,30 @@ mod tests {
             &invalid,
             "require('sliver.v1'); return { api_version = 1, render = function() error('queued failure') end }",
         )?;
-        let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar>> {
-            let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        let pid = std::process::id() as libc::pid_t;
+        logind.set_session(
+            pid,
+            Some(Session {
+                id: "seat-session".into(),
+                uid,
+                seat: Some("seat0".into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "seat-session".into(),
+                uid,
+            }),
+        );
+        let server_logind = logind.clone();
+        let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
+            let mut supervisor =
+                Supervisor::new_with_logind(FakeTouchBar::new(), state_file, server_logind)?;
             for _ in 0..3 {
                 let (mut stream, _) = listener.accept()?;
                 serve_connection(&mut stream, &mut supervisor)?;
@@ -503,6 +556,70 @@ mod tests {
         assert_eq!(
             supervisor.hardware().presented_frames()[1].rgba_at(10, 10),
             [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn active_local_session_can_apply_through_the_unix_request_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let source = directory.path().join("config.lua");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let pid = std::process::id() as libc::pid_t;
+        let uid = unsafe { libc::getuid() };
+        let logind = FakeLogind::new();
+        logind.set_session(
+            pid,
+            Some(Session {
+                id: "seat-session".into(),
+                uid,
+                seat: Some("seat0".into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "seat-session".into(),
+                uid,
+            }),
+        );
+        let mut supervisor =
+            Supervisor::new_with_logind(FakeTouchBar::new(), state_file.clone(), logind)?;
+        let client_socket = socket.clone();
+        let client_source = source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&client_socket, &client_source)
+        });
+
+        let (mut stream, _) = listener.accept()?;
+        serve_connection(&mut stream, &mut supervisor)?;
+        client.join().expect("apply client panicked")?;
+
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(supervisor.hardware().presented_frames().len(), 1);
+        assert_eq!(
+            supervisor.hardware().presented_frames()[0].rgba_at(10, 10),
+            [255, 0, 0, 255]
         );
         supervisor.shutdown()?;
         Ok(())

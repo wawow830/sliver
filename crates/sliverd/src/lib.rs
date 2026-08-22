@@ -1,10 +1,13 @@
 mod apply_ipc;
+mod authorization;
 mod drm_out;
 mod hardware;
+mod logind;
 mod lua_canvas;
 mod lua_worker;
 mod m2_hardware;
 mod path_state;
+mod peer_credentials;
 mod supervisor;
 
 use std::io::{Read, Write};
