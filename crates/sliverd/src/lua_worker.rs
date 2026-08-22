@@ -144,9 +144,13 @@ fn owner_main(
         return;
     }
 
+    run_commands(runtime, commands);
+}
+
+#[cfg(test)]
+fn run_commands(runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
     loop {
         match commands.recv() {
-            #[cfg(test)]
             Ok(WorkerCommand::Render(reply)) => {
                 let _ = reply.send(runtime.render_frame());
             }
@@ -156,6 +160,13 @@ fn owner_main(
             }
             Ok(WorkerCommand::Abandon) | Err(_) => break,
         }
+    }
+}
+
+#[cfg(not(test))]
+fn run_commands(runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
+    if let Ok(WorkerCommand::Shutdown(reply)) = commands.recv() {
+        let _ = reply.send(runtime.stop());
     }
 }
 
