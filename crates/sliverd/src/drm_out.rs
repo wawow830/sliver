@@ -443,6 +443,106 @@ mod tests {
     }
 
     #[test]
+    fn lua_callbacks_are_fixed_serial_and_ignore_returns() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("lifecycle.lua");
+        let events = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                require("sliver.v1")
+                local events = {events:?}
+                local function record(event)
+                    local file = assert(io.open(events, "a"))
+                    file:write(event, "\n")
+                    file:close()
+                end
+                local owner
+                local app
+                app = {{
+                    api_version = 1,
+                    start = function()
+                        owner = coroutine.running()
+                        record("start")
+                        app.render = function() error("replacement render ran") end
+                        app.stop = function() error("replacement stop ran") end
+                        return "ignored"
+                    end,
+                    stop = function(reason)
+                        assert(reason == "shutdown")
+                        assert(coroutine.running() == owner)
+                        record("stop")
+                        return false
+                    end,
+                    visibility = function() end,
+                    touch = function() end,
+                    key = function() end,
+                    render = function(canvas)
+                        assert(coroutine.running() == owner)
+                        record("render")
+                        canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1)
+                        return 42
+                    end,
+                }}
+                return app
+                "#,
+                events = events.to_string_lossy()
+            ),
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        assert_eq!(std::fs::read_to_string(events)?, "start\nrender\nstop\n");
+        assert_eq!(
+            hardware
+                .presented_frames()
+                .first()
+                .context("worker did not present its lifecycle frame")?
+                .rgba_at(10, 10),
+            [0, 255, 0, 255]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lua_callbacks_cannot_yield() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("yield.lua");
+
+        for stage in ["start", "render"] {
+            let callbacks = if stage == "start" {
+                "start = function() coroutine.yield() end, render = function() end"
+            } else {
+                "render = function() coroutine.yield() end"
+            };
+            std::fs::write(
+                &source,
+                format!(
+                    r#"
+                    require("sliver.v1")
+                    return {{
+                        api_version = 1,
+                        {callbacks}
+                    }}
+                    "#
+                ),
+            )?;
+            let mut hardware = FakeTouchBar::new();
+
+            let error = present_lua_once(&source, &mut hardware)
+                .expect_err("yielding callback was accepted");
+
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains(&format!("[{stage}]")), "{diagnostic}");
+            assert!(diagnostic.contains("yield"), "{diagnostic}");
+            assert!(hardware.presented_frames().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn live_toml_apply_and_widget_press_cross_the_hardware_seam() -> Result<()> {
         let initial = sliver_core::parse_config(
             r##"
