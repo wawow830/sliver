@@ -8,6 +8,7 @@ pub(crate) struct AuthorizationGrant {
     session_id: String,
     seat: String,
     uid: libc::uid_t,
+    generation: u64,
 }
 
 pub(crate) struct SessionAuthorizer<L> {
@@ -24,6 +25,10 @@ impl<L: Logind> SessionAuthorizer<L> {
             bail!("root is not authorized to apply Sliver configurations");
         }
 
+        let generation_before = self
+            .logind
+            .generation()
+            .context("reading the logind session generation")?;
         let session = self
             .logind
             .session_for_pid(peer.pid)
@@ -52,11 +57,20 @@ impl<L: Logind> SessionAuthorizer<L> {
             Some(active) if active.id == session.id && active.uid == peer.uid => {}
             _ => bail!("caller session is not the active session on seat {seat}"),
         }
+        let generation_after = self
+            .logind
+            .generation()
+            .context("reading the logind session generation")?;
+        ensure!(
+            generation_before == generation_after,
+            "session changed while checking authorization"
+        );
 
         Ok(AuthorizationGrant {
             session_id: session.id,
             seat: seat.to_owned(),
             uid: peer.uid,
+            generation: generation_after,
         })
     }
 
@@ -113,6 +127,40 @@ mod tests {
             .expect_err("root bypassed session authorization");
 
         assert!(format!("{error:#}").contains("root is not authorized"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_generation_change_invalidates_an_unchanged_session_snapshot() -> Result<()> {
+        let uid = unsafe { libc::getuid() };
+        let pid = std::process::id() as libc::pid_t;
+        let logind = FakeLogind::new();
+        logind.set_session(
+            pid,
+            Some(Session {
+                id: "same-session".into(),
+                uid,
+                seat: Some("seat0".into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "same-session".into(),
+                uid,
+            }),
+        );
+        let authorizer = SessionAuthorizer::new(logind.clone());
+        let grant = authorizer.authorize(peer(uid))?;
+
+        logind.bump_generation();
+
+        let error = authorizer
+            .recheck(peer(uid), &grant)
+            .expect_err("an unchanged session snapshot hid a generation change");
+        assert!(format!("{error:#}").contains("changed during config apply"));
         Ok(())
     }
 

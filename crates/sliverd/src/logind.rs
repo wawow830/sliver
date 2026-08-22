@@ -1,8 +1,9 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
+use std::sync::{Arc, Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Session {
@@ -19,15 +20,119 @@ pub(crate) struct ActiveSession {
     pub(crate) uid: libc::uid_t,
 }
 
-pub(crate) trait Logind {
+pub(crate) trait Logind: Clone + Send + Sync + 'static {
+    fn generation(&self) -> Result<u64>;
     fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>>;
     fn active_session(&self, seat: &str) -> Result<Option<ActiveSession>>;
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct RealLogind;
+#[derive(Clone, Default)]
+pub(crate) struct RealLogind {
+    state: Arc<Mutex<RealState>>,
+}
+
+#[derive(Default)]
+struct RealState {
+    monitor: Option<LoginMonitor>,
+    generation: u64,
+}
+
+impl RealLogind {
+    fn monitor_generation(&self) -> Result<u64> {
+        let mut state = self.state.lock().expect("real logind mutex poisoned");
+        if state.monitor.is_none() {
+            state.monitor = Some(LoginMonitor::new()?);
+        }
+        if state
+            .monitor
+            .as_mut()
+            .expect("logind monitor was just initialized")
+            .changed()?
+        {
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .context("logind generation overflow")?;
+        }
+        Ok(state.generation)
+    }
+}
+
+struct LoginMonitor {
+    raw: std::ptr::NonNull<ffi::SdLoginMonitor>,
+}
+
+// LoginMonitor is accessed only while RealState's mutex is held.
+unsafe impl Send for LoginMonitor {}
+
+impl LoginMonitor {
+    fn new() -> Result<Self> {
+        let mut raw = ptr::null_mut();
+        let code = unsafe { ffi::sd_login_monitor_new(ptr::null(), &mut raw) };
+        ensure!(
+            code >= 0,
+            "sd_login_monitor_new failed: {}",
+            std::io::Error::from_raw_os_error(-code)
+        );
+        let raw = std::ptr::NonNull::new(raw).context("systemd returned a null login monitor")?;
+        let monitor = Self { raw };
+        monitor.flush()?;
+        Ok(monitor)
+    }
+
+    fn changed(&mut self) -> Result<bool> {
+        let fd = unsafe { ffi::sd_login_monitor_get_fd(self.raw.as_ptr()) };
+        ensure!(fd >= 0, "sd_login_monitor_get_fd failed: {fd}");
+        let events = unsafe { ffi::sd_login_monitor_get_events(self.raw.as_ptr()) };
+        ensure!(events >= 0, "sd_login_monitor_get_events failed: {events}");
+        let mut descriptor = libc::pollfd {
+            fd,
+            events: events as libc::c_short,
+            revents: 0,
+        };
+        let result = loop {
+            let result = unsafe { libc::poll(&mut descriptor, 1, 0) };
+            if result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            break result;
+        };
+        ensure!(
+            result >= 0,
+            "polling the logind monitor: {}",
+            std::io::Error::last_os_error()
+        );
+        if result == 0 {
+            return Ok(false);
+        }
+        self.flush()?;
+        Ok(true)
+    }
+
+    fn flush(&self) -> Result<()> {
+        let code = unsafe { ffi::sd_login_monitor_flush(self.raw.as_ptr()) };
+        ensure!(
+            code >= 0,
+            "sd_login_monitor_flush failed: {}",
+            std::io::Error::from_raw_os_error(-code)
+        );
+        Ok(())
+    }
+}
+
+impl Drop for LoginMonitor {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ffi::sd_login_monitor_unref(self.raw.as_ptr());
+        }
+    }
+}
 
 impl Logind for RealLogind {
+    fn generation(&self) -> Result<u64> {
+        self.monitor_generation()
+    }
+
     fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>> {
         let id = match systemd_string("sd_pid_get_session", |output| unsafe {
             ffi::sd_pid_get_session(pid, output)
@@ -42,10 +147,9 @@ impl Logind for RealLogind {
             Some(uid) => uid,
             None => return Ok(None),
         };
-        let seat =
-            systemd_string_for_session(&c_id, "sd_session_get_seat", |session, output| unsafe {
-                ffi::sd_session_get_seat(session, output)
-            })?;
+        let seat = systemd_string("sd_session_get_seat", |output| unsafe {
+            ffi::sd_session_get_seat(c_id.as_ptr(), output)
+        })?;
         let remote = match systemd_bool(&c_id, "sd_session_is_remote", |session| unsafe {
             ffi::sd_session_is_remote(session)
         })? {
@@ -94,22 +198,6 @@ where
 {
     let mut output = ptr::null_mut();
     let code = call(&mut output);
-    if code < 0 {
-        free_string(output);
-        return missing_or_error(name, code);
-    }
-    if output.is_null() {
-        return Ok(None);
-    }
-    Ok(Some(unsafe { take_string(output) }?))
-}
-
-fn systemd_string_for_session<F>(session: &CString, name: &str, call: F) -> Result<Option<String>>
-where
-    F: FnOnce(*const c_char, *mut *mut c_char) -> libc::c_int,
-{
-    let mut output = ptr::null_mut();
-    let code = call(session.as_ptr(), &mut output);
     if code < 0 {
         free_string(output);
         return missing_or_error(name, code);
@@ -176,6 +264,11 @@ fn free_string(output: *mut c_char) {
 mod ffi {
     use std::os::raw::c_char;
 
+    #[repr(C)]
+    pub(super) struct SdLoginMonitor {
+        _private: [u8; 0],
+    }
+
     extern "C" {
         pub(super) fn sd_pid_get_session(
             pid: libc::pid_t,
@@ -196,6 +289,14 @@ mod ffi {
             ret_session: *mut *mut c_char,
             ret_uid: *mut libc::uid_t,
         ) -> libc::c_int;
+        pub(super) fn sd_login_monitor_new(
+            category: *const c_char,
+            ret: *mut *mut SdLoginMonitor,
+        ) -> libc::c_int;
+        pub(super) fn sd_login_monitor_unref(monitor: *mut SdLoginMonitor) -> *mut SdLoginMonitor;
+        pub(super) fn sd_login_monitor_flush(monitor: *mut SdLoginMonitor) -> libc::c_int;
+        pub(super) fn sd_login_monitor_get_fd(monitor: *mut SdLoginMonitor) -> libc::c_int;
+        pub(super) fn sd_login_monitor_get_events(monitor: *mut SdLoginMonitor) -> libc::c_int;
     }
 }
 
@@ -218,6 +319,7 @@ mod fake {
     struct State {
         sessions: std::collections::HashMap<libc::pid_t, Session>,
         active: std::collections::HashMap<String, ActiveSession>,
+        generation: u64,
     }
 
     impl FakeLogind {
@@ -232,6 +334,10 @@ mod fake {
             } else {
                 state.sessions.remove(&pid);
             }
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .expect("fake logind generation overflow");
         }
 
         pub(crate) fn set_active(&self, seat: &str, session: Option<ActiveSession>) {
@@ -241,10 +347,30 @@ mod fake {
             } else {
                 state.active.remove(seat);
             }
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .expect("fake logind generation overflow");
+        }
+
+        pub(crate) fn bump_generation(&self) {
+            let mut state = self.state.lock().expect("fake logind mutex poisoned");
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .expect("fake logind generation overflow");
         }
     }
 
     impl Logind for FakeLogind {
+        fn generation(&self) -> Result<u64> {
+            Ok(self
+                .state
+                .lock()
+                .expect("fake logind mutex poisoned")
+                .generation)
+        }
+
         fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>> {
             Ok(self
                 .state

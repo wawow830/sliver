@@ -26,7 +26,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
 
 impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
     pub(crate) fn new(hardware: H, state_file: PathBuf) -> Result<Self> {
-        Self::new_with_logind(hardware, state_file, RealLogind)
+        Self::new_with_logind(hardware, state_file, RealLogind::default())
     }
 }
 
@@ -186,6 +186,30 @@ mod tests {
                 state_seen_at_failure: Vec::new(),
             }
         }
+    }
+
+    fn active_local_logind(session_id: &str) -> (FakeLogind, libc::uid_t) {
+        let uid = unsafe { libc::getuid() };
+        let pid = std::process::id() as libc::pid_t;
+        let logind = FakeLogind::new();
+        logind.set_session(
+            pid,
+            Some(Session {
+                id: session_id.into(),
+                uid,
+                seat: Some("seat0".into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: session_id.into(),
+                uid,
+            }),
+        );
+        (logind, uid)
     }
 
     impl TouchBarHardware for FailingPresentHardware {
@@ -487,26 +511,7 @@ mod tests {
             &invalid,
             "require('sliver.v1'); return { api_version = 1, render = function() error('queued failure') end }",
         )?;
-        let logind = FakeLogind::new();
-        let uid = unsafe { libc::getuid() };
-        let pid = std::process::id() as libc::pid_t;
-        logind.set_session(
-            pid,
-            Some(Session {
-                id: "seat-session".into(),
-                uid,
-                seat: Some("seat0".into()),
-                remote: false,
-                active: true,
-            }),
-        );
-        logind.set_active(
-            "seat0",
-            Some(ActiveSession {
-                id: "seat-session".into(),
-                uid,
-            }),
-        );
+        let (logind, _uid) = active_local_logind("seat-session");
         let server_logind = logind.clone();
         let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
             let mut supervisor =
@@ -580,26 +585,7 @@ mod tests {
             "#,
         )?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let pid = std::process::id() as libc::pid_t;
-        let uid = unsafe { libc::getuid() };
-        let logind = FakeLogind::new();
-        logind.set_session(
-            pid,
-            Some(Session {
-                id: "seat-session".into(),
-                uid,
-                seat: Some("seat0".into()),
-                remote: false,
-                active: true,
-            }),
-        );
-        logind.set_active(
-            "seat0",
-            Some(ActiveSession {
-                id: "seat-session".into(),
-                uid,
-            }),
-        );
+        let (logind, _uid) = active_local_logind("seat-session");
         let mut supervisor =
             Supervisor::new_with_logind(FakeTouchBar::new(), state_file.clone(), logind)?;
         let client_socket = socket.clone();
@@ -656,26 +642,7 @@ mod tests {
             ),
         )?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let uid = unsafe { libc::getuid() };
-        let pid = std::process::id() as libc::pid_t;
-        let logind = FakeLogind::new();
-        logind.set_session(
-            pid,
-            Some(Session {
-                id: "old-session".into(),
-                uid,
-                seat: Some("seat0".into()),
-                remote: false,
-                active: true,
-            }),
-        );
-        logind.set_active(
-            "seat0",
-            Some(ActiveSession {
-                id: "old-session".into(),
-                uid,
-            }),
-        );
+        let (logind, uid) = active_local_logind("old-session");
         let server_logind = logind.clone();
         let server_socket = socket.clone();
         let server_state = state_file.clone();
@@ -762,26 +729,7 @@ mod tests {
             "#,
         )?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let uid = unsafe { libc::getuid() };
-        let pid = std::process::id() as libc::pid_t;
-        let logind = FakeLogind::new();
-        logind.set_session(
-            pid,
-            Some(Session {
-                id: "old-session".into(),
-                uid,
-                seat: Some("seat0".into()),
-                remote: false,
-                active: true,
-            }),
-        );
-        logind.set_active(
-            "seat0",
-            Some(ActiveSession {
-                id: "old-session".into(),
-                uid,
-            }),
-        );
+        let (logind, uid) = active_local_logind("old-session");
         let server_logind = logind.clone();
         let server_state = state_file.clone();
         let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
@@ -852,26 +800,7 @@ mod tests {
         std::fs::write(&old_source, config(1.0, 0.0))?;
         std::fs::write(&new_source, config(0.0, 1.0))?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let uid = unsafe { libc::getuid() };
-        let pid = std::process::id() as libc::pid_t;
-        let logind = FakeLogind::new();
-        logind.set_session(
-            pid,
-            Some(Session {
-                id: "old-session".into(),
-                uid,
-                seat: Some("seat0".into()),
-                remote: false,
-                active: true,
-            }),
-        );
-        logind.set_active(
-            "seat0",
-            Some(ActiveSession {
-                id: "old-session".into(),
-                uid,
-            }),
-        );
+        let (logind, uid) = active_local_logind("old-session");
         let server_logind = logind.clone();
         let server_state = state_file.clone();
         let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
