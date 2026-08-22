@@ -663,10 +663,11 @@ impl Runtime {
     }
 
     fn next_deadline(&self) -> Option<f64> {
-        earliest_deadline(
-            self.controls.timers.borrow().next_deadline(),
-            self.pending_retry_deadline,
-        )
+        let pending_retry = self
+            .visible
+            .then_some(self.pending_retry_deadline)
+            .flatten();
+        earliest_deadline(self.controls.timers.borrow().next_deadline(), pending_retry)
     }
 
     fn restore_backlight(&mut self, level: f64) -> std::result::Result<(), String> {
