@@ -2266,6 +2266,16 @@ mod tests {
                 active: false,
             }]
         );
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        let frames_after_failure = supervisor.hardware().presented_frames().len();
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(touch(3, 1.0)));
+        supervisor.step_at(3.0)?;
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frames_after_failure + 1
+        );
         supervisor.shutdown()?;
         Ok(())
     }
@@ -4530,6 +4540,46 @@ mod tests {
         assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         assert!(!supervisor.hardware().presented_frames().is_empty());
         supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn all_startup_worker_failures_use_the_same_recovery_row() -> Result<()> {
+        let cases = [
+            ("missing", None),
+            ("invalid", Some("return {}")),
+            (
+                "start",
+                Some("require('sliver.v1'); return { api_version = 1, start = function() error('start failed') end, render = function() end }"),
+            ),
+            (
+                "render",
+                Some("require('sliver.v1'); return { api_version = 1, render = function() error('render failed') end }"),
+            ),
+        ];
+        for (name, contents) in cases {
+            let directory = tempfile::tempdir()?;
+            let state_file = directory.path().join("state/sliver/config-path");
+            let source = directory.path().join(format!("{name}.lua"));
+            if let Some(contents) = contents {
+                std::fs::write(&source, contents)?;
+            }
+            PreparedPathState::prepare(&state_file, &source)?.commit()?;
+            let (logind, _) = active_local_logind(name);
+            let supervisor = Supervisor::new_with_startup_candidate(
+                FakeTouchBar::new(),
+                state_file.clone(),
+                logind,
+                None,
+            )?;
+            assert_eq!(
+                std::fs::read(&state_file)?,
+                source.as_os_str().as_encoded_bytes()
+            );
+            assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+            assert!(!supervisor.hardware().presented_frames().is_empty());
+            supervisor.shutdown()?;
+        }
         Ok(())
     }
 
