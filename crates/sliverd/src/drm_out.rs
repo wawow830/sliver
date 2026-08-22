@@ -443,6 +443,57 @@ mod tests {
     }
 
     #[test]
+    fn lua_application_requires_v1_and_render() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalid-contract.lua");
+        let cases = [
+            (
+                "module was not loaded",
+                "return { api_version = 1, render = function() end }",
+                "load sliver.v1",
+            ),
+            (
+                "application version was missing",
+                "require('sliver.v1'); return { render = function() end }",
+                "api_version",
+            ),
+            (
+                "module and application versions differed",
+                "local v1 = require('sliver.v1'); return { api_version = v1.api_version + 1, render = function() end }",
+                "api_version",
+            ),
+            (
+                "application version was not an integer",
+                "require('sliver.v1'); return { api_version = 1.0, render = function() end }",
+                "api_version",
+            ),
+            (
+                "render callback was missing",
+                "require('sliver.v1'); return { api_version = 1 }",
+                "render",
+            ),
+            (
+                "application was not a table",
+                "require('sliver.v1'); return 1",
+                "application table",
+            ),
+        ];
+
+        for (failure, config, expected) in cases {
+            std::fs::write(&source, config)?;
+            let mut hardware = FakeTouchBar::new();
+
+            let error = present_lua_once(&source, &mut hardware).expect_err(failure);
+
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains("[validation]"), "{diagnostic}");
+            assert!(diagnostic.contains(expected), "{diagnostic}");
+            assert!(hardware.presented_frames().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn lua_callbacks_are_fixed_serial_and_ignore_returns() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("lifecycle.lua");
