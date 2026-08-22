@@ -14,10 +14,14 @@ use anyhow::{bail, ensure, Context, Result};
 use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::hardware::{
-    ContactId, HardwareEvent, LogicalFrame, TouchBarHardware, TouchEvent, TouchPhase,
+    modifier_output_keys, tap_key_events, ContactId, HardwareEvent, InputState, InputTransition,
+    KeyboardKey, LogicalFrame, ObservedKey, OutputKey, SyntheticKeyEvent, TouchBarHardware,
+    TouchEvent, TouchPhase,
 };
 use crate::logind::{Logind, RealLogind};
-use crate::lua_worker::{LuaWorker, StagedLuaWorker, StopReason, WorkerEffects};
+use crate::lua_worker::{
+    KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason, WorkerEffects,
+};
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
 
@@ -42,6 +46,11 @@ struct AuthorizedRequest {
 struct TouchQueue {
     events: Vec<Option<TouchEvent>>,
     moves: BTreeMap<ContactId, usize>,
+}
+
+#[derive(Clone, Default)]
+struct SyntheticState {
+    held: Vec<(crate::hardware::OutputKey, Vec<crate::hardware::OutputKey>)>,
 }
 
 impl TouchQueue {
@@ -72,6 +81,163 @@ impl TouchQueue {
     }
 }
 
+impl SyntheticState {
+    fn plan(
+        &self,
+        requests: &[KeyRequest],
+        input_state: InputState,
+    ) -> Result<(Self, Vec<SyntheticKeyEvent>)> {
+        let mut next = self.clone();
+        let mut events = Vec::new();
+        for request in requests {
+            match request.operation {
+                KeyOperation::Down => {
+                    ensure!(
+                        !next.is_key_held(request.key),
+                        "synthetic key is already held"
+                    );
+                    let modifiers = next.resolve_modifiers(&request.modifiers, input_state)?;
+                    ensure!(
+                        !modifiers.contains(&request.key),
+                        "a synthetic key cannot mirror itself"
+                    );
+                    for modifier in &modifiers {
+                        if next.modifier_count(*modifier) == 0 {
+                            events.push(SyntheticKeyEvent {
+                                key: *modifier,
+                                active: true,
+                            });
+                        }
+                    }
+                    if !is_modifier_key(request.key) || next.modifier_count(request.key) == 0 {
+                        events.push(SyntheticKeyEvent {
+                            key: request.key,
+                            active: true,
+                        });
+                    }
+                    next.held.push((request.key, modifiers));
+                }
+                KeyOperation::Up => {
+                    let index = next
+                        .held
+                        .iter()
+                        .position(|(key, _)| *key == request.key)
+                        .context("synthetic key is not held")?;
+                    let (_, modifiers) = next.held.remove(index);
+                    if !is_modifier_key(request.key) || next.modifier_count(request.key) == 0 {
+                        events.push(SyntheticKeyEvent {
+                            key: request.key,
+                            active: false,
+                        });
+                    }
+                    for modifier in modifiers.into_iter().rev() {
+                        if next.modifier_count(modifier) == 0 {
+                            events.push(SyntheticKeyEvent {
+                                key: modifier,
+                                active: false,
+                            });
+                        }
+                    }
+                }
+                KeyOperation::Tap => {
+                    ensure!(
+                        !is_modifier_key(request.key) || next.modifier_count(request.key) == 0,
+                        "synthetic modifier is already held"
+                    );
+                    ensure!(
+                        !next.is_key_held(request.key),
+                        "synthetic key is already held"
+                    );
+                    let modifiers = next.resolve_modifiers(&request.modifiers, input_state)?;
+                    ensure!(
+                        !modifiers.contains(&request.key),
+                        "a synthetic key cannot mirror itself"
+                    );
+                    let mirrored: Vec<_> = modifiers
+                        .into_iter()
+                        .filter(|modifier| next.modifier_count(*modifier) == 0)
+                        .collect();
+                    events.extend(tap_key_events(request.key, &mirrored));
+                }
+            }
+        }
+        Ok((next, events))
+    }
+
+    fn resolve_modifiers(
+        &self,
+        mode: &ModifierMode,
+        input_state: InputState,
+    ) -> Result<Vec<OutputKey>> {
+        let modifiers = match mode {
+            ModifierMode::Inherit => modifier_output_keys(input_state.modifiers),
+            ModifierMode::None => Vec::new(),
+            ModifierMode::Explicit(keys) => keys.clone(),
+        };
+        let mut seen = BTreeSet::new();
+        for key in &modifiers {
+            ensure!(
+                is_modifier_key(*key),
+                "explicit modifiers must be modifier keys"
+            );
+            ensure!(
+                seen.insert(*key),
+                "explicit modifiers must not contain duplicates"
+            );
+        }
+        Ok(modifiers)
+    }
+
+    fn is_key_held(&self, key: OutputKey) -> bool {
+        self.held.iter().any(|(held, _)| *held == key)
+    }
+
+    fn modifier_count(&self, modifier: OutputKey) -> usize {
+        self.held.iter().filter(|(key, _)| *key == modifier).count()
+            + self
+                .held
+                .iter()
+                .flat_map(|(_, modifiers)| modifiers)
+                .filter(|held| **held == modifier)
+                .count()
+    }
+
+    fn release(&self) -> (Self, Vec<SyntheticKeyEvent>) {
+        let mut remaining = self.clone();
+        let mut events = Vec::new();
+        while let Some((key, modifiers)) = remaining.held.pop() {
+            if !is_modifier_key(key) || remaining.modifier_count(key) == 0 {
+                events.push(SyntheticKeyEvent { key, active: false });
+            }
+            for modifier in modifiers.into_iter().rev() {
+                if remaining.modifier_count(modifier) == 0 {
+                    events.push(SyntheticKeyEvent {
+                        key: modifier,
+                        active: false,
+                    });
+                }
+            }
+        }
+        (Self::default(), events)
+    }
+}
+
+fn is_modifier_key(key: OutputKey) -> bool {
+    matches!(
+        key,
+        OutputKey::Keyboard(
+            KeyboardKey::LeftCtrl
+                | KeyboardKey::RightCtrl
+                | KeyboardKey::LeftAlt
+                | KeyboardKey::RightAlt
+                | KeyboardKey::LeftShift
+                | KeyboardKey::RightShift
+                | KeyboardKey::LeftSuper
+                | KeyboardKey::RightSuper
+        )
+    )
+}
+
 pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
@@ -79,10 +245,12 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     claimed: bool,
     origin: Instant,
     backlight: f64,
+    input_state: InputState,
     down_contacts: BTreeMap<ContactId, TouchEvent>,
     ignored_contacts: BTreeSet<ContactId>,
     touch_queue: TouchQueue,
     next_timer_deadline: Option<f64>,
+    synthetic: SyntheticState,
     authorizer: SessionAuthorizer<L>,
 }
 
@@ -109,10 +277,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             claimed: true,
             origin: Instant::now(),
             backlight,
+            input_state: InputState::default(),
             down_contacts: BTreeMap::new(),
             ignored_contacts: BTreeSet::new(),
             touch_queue: TouchQueue::new(),
             next_timer_deadline: None,
+            synthetic: SyntheticState::default(),
             authorizer: SessionAuthorizer::new(logind),
         })
     }
@@ -152,7 +322,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             worker,
             frame,
             pending_backlight,
-        } = LuaWorker::stage_with_backlight(&selected_path, current_backlight)?;
+        } = LuaWorker::stage_with_backlight_and_input(
+            &selected_path,
+            current_backlight,
+            self.input_state,
+        )?;
         self.poll_hardware(Duration::ZERO)?;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
@@ -194,7 +368,18 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         let now = self.now_seconds();
-        if let Err(error) = worker.commit(now) {
+        if let Err(error) = worker.commit(now, self.input_state) {
+            return self.rollback_candidate(
+                previous_path_state,
+                old_frame.as_ref(),
+                old_backlight,
+                true,
+                brightness_changed,
+                error,
+            );
+        }
+
+        if let Err(error) = self.release_synthetic_keys() {
             return self.rollback_candidate(
                 previous_path_state,
                 old_frame.as_ref(),
@@ -227,7 +412,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 })
                 .collect();
             if !cancels.is_empty() {
-                if let Err(error) = replaced.worker.drive(now, cancels) {
+                if let Err(error) =
+                    replaced
+                        .worker
+                        .drive(now, self.input_state, Vec::new(), cancels)
+                {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
                     );
@@ -237,6 +426,15 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 eprintln!("replaced Lua worker did not stop cleanly: {error:#}");
             }
         }
+        Ok(())
+    }
+
+    fn release_synthetic_keys(&mut self) -> Result<()> {
+        let (empty, events) = self.synthetic.release();
+        if !events.is_empty() {
+            self.hardware.emit_key_events(&events)?;
+        }
+        self.synthetic = empty;
         Ok(())
     }
 
@@ -326,26 +524,60 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
+        let mut transitions = Vec::new();
         for event in events {
-            if let HardwareEvent::Touch(touch) = event {
-                self.route_touch(touch);
+            match event {
+                HardwareEvent::Touch(touch) => self.route_touch(touch),
+                HardwareEvent::Fn { active } => {
+                    if self.input_state.apply(ObservedKey::Fn, active) {
+                        transitions.push(InputTransition {
+                            key: ObservedKey::Fn,
+                            active,
+                            state: self.input_state,
+                        });
+                    }
+                }
+                HardwareEvent::Modifier { modifier, active } => {
+                    if self
+                        .input_state
+                        .apply(ObservedKey::Modifier(modifier), active)
+                    {
+                        transitions.push(InputTransition {
+                            key: ObservedKey::Modifier(modifier),
+                            active,
+                            state: self.input_state,
+                        });
+                    }
+                }
+                HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
             }
         }
         let touches = self.touch_queue.drain();
         let timer_due = self
             .next_timer_deadline
             .is_some_and(|deadline| deadline <= now);
-        if !touches.is_empty() || timer_due {
-            self.drive_active(now, touches)?;
+        if !transitions.is_empty() || !touches.is_empty() || timer_due {
+            self.drive_active(now, transitions, touches)?;
         }
         Ok(())
     }
 
-    fn drive_active(&mut self, now: f64, touches: Vec<TouchEvent>) -> Result<()> {
+    fn drive_active(
+        &mut self,
+        now: f64,
+        transitions: Vec<InputTransition>,
+        touches: Vec<TouchEvent>,
+    ) -> Result<()> {
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
-        let effects = active.worker.drive(now, touches)?;
+        let effects = match active
+            .worker
+            .drive(now, self.input_state, transitions, touches)
+        {
+            Ok(effects) => effects,
+            Err(error) => return self.fail_active_worker(error),
+        };
         self.next_timer_deadline = if effects.redraw_pending {
             Some(now)
         } else {
@@ -353,13 +585,32 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .next_timer_deadline
                 .or_else(|| effects.frame.as_ref().map(|_| now))
         };
-        self.apply_effects(effects)
+        if let Err(error) = self.apply_effects(effects) {
+            return self.fail_active_worker(error);
+        }
+        Ok(())
+    }
+
+    fn fail_active_worker(&mut self, error: anyhow::Error) -> Result<()> {
+        if let Err(cleanup_error) = self.release_synthetic_keys() {
+            return Err(error.context(format!(
+                "releasing synthetic keys after worker failure also failed: {cleanup_error:#}"
+            )));
+        }
+        Err(error)
     }
 
     fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
+        let (next_synthetic, key_events) = self
+            .synthetic
+            .plan(&effects.key_requests, self.input_state)?;
+        if !key_events.is_empty() {
+            self.hardware.emit_key_events(&key_events)?;
+        }
+        self.synthetic = next_synthetic;
         let old_frame = active.frame.clone();
         let old_backlight = active.backlight;
         let frame = effects.frame;
@@ -428,6 +679,53 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Duration::from_secs_f64((deadline - now).min(MAX_POLL_WAIT.as_secs_f64()))
     }
 
+    fn stop_active_worker(&mut self, reason: StopReason) -> Result<()> {
+        let now = self.now_seconds();
+        let Some(active) = self.active.take() else {
+            return Ok(());
+        };
+        let cancels: Vec<_> = active
+            .contacts
+            .values()
+            .map(|event| TouchEvent {
+                phase: TouchPhase::Cancel,
+                time: now,
+                ..*event
+            })
+            .collect();
+        if !cancels.is_empty() {
+            if let Err(error) = active
+                .worker
+                .drive(now, self.input_state, Vec::new(), cancels)
+            {
+                eprintln!("active Lua worker did not receive contact cancellation: {error:#}");
+            }
+        }
+        active.worker.shutdown(reason)
+    }
+
+    #[allow(dead_code)]
+    fn reset_owner_state(&mut self, input_state: InputState) {
+        self.down_contacts.clear();
+        self.ignored_contacts.clear();
+        self.touch_queue.drain();
+        self.next_timer_deadline = None;
+        self.input_state = input_state;
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn handoff_owner(&mut self) -> Result<()> {
+        self.poll_hardware(Duration::ZERO)?;
+        self.release_synthetic_keys()?;
+        let stop_result = self.stop_active_worker(StopReason::Logout);
+        let input_state = self.hardware.input_state();
+        self.reset_owner_state(input_state);
+        if let Err(error) = stop_result {
+            eprintln!("Lua worker logout cleanup failed during owner handoff: {error:#}");
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     fn step_at(&mut self, now: f64) -> Result<()> {
         let events = self.hardware.poll(Duration::ZERO)?;
@@ -435,28 +733,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     pub(crate) fn shutdown(mut self) -> Result<()> {
-        let now = self.now_seconds();
-        let stop_result = match self.active.take() {
-            Some(active) => {
-                let cancels: Vec<_> = active
-                    .contacts
-                    .values()
-                    .map(|event| TouchEvent {
-                        phase: TouchPhase::Cancel,
-                        time: now,
-                        ..*event
-                    })
-                    .collect();
-                if !cancels.is_empty() {
-                    let _ = active.worker.drive(now, cancels);
-                }
-                active.worker.shutdown(StopReason::Shutdown)
-            }
-            None => Ok(()),
-        };
+        let synthetic_result = self.release_synthetic_keys();
+        let stop_result = self.stop_active_worker(StopReason::Shutdown);
         let release_result = self.hardware.release();
         self.claimed = false;
-        match (stop_result, release_result) {
+        match (stop_result.and(synthetic_result), release_result) {
             (Err(error), Err(release_error)) => {
                 eprintln!("hardware release failed after Lua stop error: {release_error:#}");
                 Err(error)
@@ -714,26 +995,34 @@ fn serve_connection<H: TouchBarHardware, L: Logind>(
 
 impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
     fn drop(&mut self) {
-        self.active.take();
         if self.claimed {
+            if let Err(error) = self.release_synthetic_keys() {
+                eprintln!("synthetic key cleanup failed during supervisor drop: {error:#}");
+            }
+            self.active.take();
             let _ = self.hardware.release();
             self.claimed = false;
+        } else {
+            self.active.take();
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::io::{Read, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
+    use std::rc::Rc;
     use std::thread;
     use std::time::{Duration, Instant};
 
     use anyhow::{bail, Context, Result};
 
     use crate::hardware::{
-        FakeAction, FakeTouchBar, HardwareEvent, LogicalFrame, Modifier, ModifierState,
+        ConsumerKey, FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, InputState,
+        KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent,
         TouchBarHardware, TouchEvent, TouchPhase,
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
@@ -769,7 +1058,9 @@ mod tests {
         state_file: std::path::PathBuf,
         fail_next_present: bool,
         fail_next_backlight: bool,
+        fail_next_key: bool,
         state_seen_at_failure: Vec<u8>,
+        state_seen_at_key_failure: Vec<u8>,
     }
 
     impl FailingPresentHardware {
@@ -779,7 +1070,9 @@ mod tests {
                 state_file,
                 fail_next_present: false,
                 fail_next_backlight: false,
+                fail_next_key: false,
                 state_seen_at_failure: Vec::new(),
+                state_seen_at_key_failure: Vec::new(),
             }
         }
     }
@@ -793,6 +1086,10 @@ mod tests {
             self.inner.poll(timeout)
         }
 
+        fn input_state(&self) -> InputState {
+            self.inner.input_state()
+        }
+
         fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
             if self.fail_next_present {
                 self.fail_next_present = false;
@@ -800,6 +1097,15 @@ mod tests {
                 bail!("injected presentation failure");
             }
             self.inner.present(frame)
+        }
+
+        fn emit_key_events(&mut self, events: &[crate::hardware::SyntheticKeyEvent]) -> Result<()> {
+            if self.fail_next_key {
+                self.fail_next_key = false;
+                self.state_seen_at_key_failure = std::fs::read(&self.state_file)?;
+                bail!("injected synthetic key failure");
+            }
+            self.inner.emit_key_events(events)
         }
 
         fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
@@ -941,6 +1247,393 @@ mod tests {
         first_client.join().expect("first client panicked")?;
         second_client.join().expect("second client panicked")?;
         let supervisor = server.join().expect("supervisor thread panicked")?;
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    struct SharedFakeHardware {
+        inner: FakeTouchBar,
+        synthetic: Rc<RefCell<Vec<FakeKeyEvent>>>,
+        order_file: Option<std::path::PathBuf>,
+    }
+
+    impl SharedFakeHardware {
+        fn with_order(
+            order_file: Option<std::path::PathBuf>,
+        ) -> (Self, Rc<RefCell<Vec<FakeKeyEvent>>>) {
+            let synthetic = Rc::new(RefCell::new(Vec::new()));
+            (
+                Self {
+                    inner: FakeTouchBar::new(),
+                    synthetic: synthetic.clone(),
+                    order_file,
+                },
+                synthetic,
+            )
+        }
+    }
+
+    impl TouchBarHardware for SharedFakeHardware {
+        fn claim(&mut self) -> Result<()> {
+            self.inner.claim()
+        }
+
+        fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+            self.inner.poll(timeout)
+        }
+
+        fn input_state(&self) -> InputState {
+            self.inner.input_state()
+        }
+
+        fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
+            self.inner.present(frame)
+        }
+
+        fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
+            for event in events {
+                let key = match event.key {
+                    OutputKey::Keyboard(key) => FakeKey::Keyboard(key),
+                    OutputKey::Consumer(key) => FakeKey::Consumer(key),
+                };
+                self.synthetic.borrow_mut().push(FakeKeyEvent {
+                    key,
+                    active: event.active,
+                });
+                if !event.active {
+                    if let Some(path) = &self.order_file {
+                        let mut file = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)?;
+                        writeln!(file, "key-up")?;
+                    }
+                }
+            }
+            self.inner.emit_key_events(events)
+        }
+
+        fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
+            self.inner.tap_function_key(index, modifiers)
+        }
+
+        fn get_backlight(&mut self) -> Result<f64> {
+            self.inner.get_backlight()
+        }
+
+        fn set_backlight(&mut self, level: f64) -> Result<()> {
+            self.inner.set_backlight(level)
+        }
+
+        fn release(&mut self) -> Result<()> {
+            if let Some(path) = &self.order_file {
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?;
+                writeln!(file, "hardware-release")?;
+            }
+            self.inner.release()
+        }
+    }
+
+    #[test]
+    fn owner_handoff_cleans_before_logout_and_refreshes_input_state() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let order_file = directory.path().join("handoff-order");
+        let state_log = directory.path().join("handoff-state");
+        let old_source = directory.path().join("old-owner.lua");
+        let new_source = directory.path().join("new-owner.lua");
+        std::fs::write(
+            &old_source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local order = {order:?}
+                return {{
+                    api_version = 1,
+                    stop = function(reason)
+                        local file = assert(io.open(order, "a"))
+                        file:write(reason, "\n")
+                        file:close()
+                    end,
+                    touch = function(event)
+                        if event.phase == "down" then
+                            sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                        end
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                order = order_file.to_string_lossy(),
+            ),
+        )?;
+        std::fs::write(
+            &new_source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local state_log = {state_log:?}
+                return {{
+                    api_version = 1,
+                    start = function()
+                        local state = sliver.input.state()
+                        local file = assert(io.open(state_log, "w"))
+                        file:write(tostring(state.fn), ":", tostring(state.modifiers.left_ctrl))
+                        file:close()
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                state_log = state_log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (hardware, _) = SharedFakeHardware::with_order(Some(order_file.clone()));
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Modifier {
+                modifier: Modifier::LeftCtrl,
+                active: true,
+            });
+
+        supervisor.handoff_owner()?;
+        assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
+        assert_eq!(supervisor.hardware().inner.virtual_keyboard_creations(), 1);
+        assert_eq!(
+            supervisor.hardware().inner.virtual_keyboard_name(),
+            Some("Sliver Keyboard")
+        );
+
+        supervisor.apply(&new_source)?;
+        assert_eq!(std::fs::read_to_string(&state_log)?, "true:true");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn failing_logout_still_completes_owner_handoff() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let order_file = directory.path().join("failing-handoff-order");
+        let old_source = directory.path().join("failing-old.lua");
+        let new_source = directory.path().join("after-logout.lua");
+        std::fs::write(
+            &old_source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local order = {order:?}
+                return {{
+                    api_version = 1,
+                    stop = function(reason)
+                        local file = assert(io.open(order, "a"))
+                        file:write(reason, "\n")
+                        file:close()
+                        error("logout cleanup failed")
+                    end,
+                    touch = function(event)
+                        if event.phase == "down" then
+                            sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                        end
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                order = order_file.to_string_lossy(),
+            ),
+        )?;
+        std::fs::write(
+            &new_source,
+            "require(\"sliver.v1\"); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (hardware, _) = SharedFakeHardware::with_order(Some(order_file.clone()));
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+
+        supervisor
+            .handoff_owner()
+            .expect("failing logout aborted owner handoff");
+        assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
+        supervisor.apply(&new_source)?;
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn shutdown_and_drop_release_tracked_synthetic_keys() -> Result<()> {
+        let exercise = |shutdown: bool| -> Result<Vec<FakeKeyEvent>> {
+            let directory = tempfile::tempdir()?;
+            let source = directory.path().join("held.lua");
+            std::fs::write(
+                &source,
+                r#"
+                local sliver = require("sliver.v1")
+                return {
+                    api_version = 1,
+                    touch = function(event)
+                        if event.phase == "down" then
+                            sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                        end
+                    end,
+                    render = function() end,
+                }
+                "#,
+            )?;
+            let state_file = directory.path().join("state/sliver/config-path");
+            let order_file = directory.path().join("shutdown-order");
+            let (hardware, synthetic) = SharedFakeHardware::with_order(Some(order_file.clone()));
+            let mut supervisor = Supervisor::new(hardware, state_file)?;
+            supervisor.apply(&source)?;
+            supervisor
+                .hardware_mut()
+                .inner
+                .inject(HardwareEvent::Touch(TouchEvent {
+                    phase: TouchPhase::Down,
+                    id: 1,
+                    time: 0.0,
+                    x: 1.0,
+                    y: 1.0,
+                    modifiers: ModifierState::default(),
+                    pressure: None,
+                    width: None,
+                    height: None,
+                }));
+            supervisor.step_at(1.0)?;
+            if shutdown {
+                supervisor.shutdown()?;
+            } else {
+                drop(supervisor);
+            }
+            let events = synthetic.borrow().clone();
+            assert_eq!(
+                std::fs::read_to_string(order_file)?,
+                "key-up\nhardware-release\n"
+            );
+            Ok(events)
+        };
+
+        let expected = vec![
+            FakeKeyEvent {
+                key: FakeKey::Keyboard(KeyboardKey::F2),
+                active: true,
+            },
+            FakeKeyEvent {
+                key: FakeKey::Keyboard(KeyboardKey::F2),
+                active: false,
+            },
+        ];
+        assert_eq!(exercise(true)?, expected);
+        assert_eq!(exercise(false)?, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn key_cleanup_failure_rolls_back_candidate_after_commit_steps() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let old_source = directory.path().join("old.lua");
+        let new_source = directory.path().join("new.lua");
+        std::fs::write(
+            &old_source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                    end
+                end,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                end,
+            }
+            "#,
+        )?;
+        std::fs::write(
+            &new_source,
+            r#"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let mut supervisor = Supervisor::new(
+            FailingPresentHardware::new(state_file.clone()),
+            state_file.clone(),
+        )?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+        supervisor.hardware_mut().fail_next_key = true;
+
+        let error = supervisor
+            .apply(&new_source)
+            .expect_err("key cleanup failure committed a candidate");
+        assert!(format!("{error:#}").contains("injected synthetic key failure"));
+        assert_eq!(
+            supervisor.hardware().state_seen_at_key_failure,
+            new_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .expect("old frame disappeared")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
         supervisor.shutdown()?;
         Ok(())
     }
@@ -1109,6 +1802,814 @@ mod tests {
                 .context("new frame was not committed")?
                 .rgba_at(10, 10),
             [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn held_synthetic_keys_are_released_when_a_worker_fails() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("failing-key.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.x == 1 then
+                        sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                    else
+                        error("worker failed after holding a key")
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let touch = |id, x| TouchEvent {
+            phase: TouchPhase::Down,
+            id,
+            time: 0.0,
+            x,
+            y: 1.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(touch(1, 1.0)));
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(touch(2, 2.0)));
+        let error = supervisor
+            .step_at(2.0)
+            .expect_err("worker failure was swallowed");
+        assert!(format!("{error:#}").contains("worker failed after holding a key"));
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions()[1],
+            vec![FakeKeyEvent {
+                key: FakeKey::Keyboard(KeyboardKey::F2),
+                active: false,
+            }]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic_key_requests_are_rejected_during_staging() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("staged-key.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            sliver.input.key.tap(sliver.input.keys.keyboard.escape)
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        let error = supervisor
+            .apply(&source)
+            .expect_err("staged synthetic key output was accepted");
+        assert!(format!("{error:#}").contains("unavailable while staging"));
+        assert!(supervisor.hardware().synthetic_keys().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic_key_holds_are_released_before_worker_replacement() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-key.lua");
+        let new_source = directory.path().join("new-key.lua");
+        std::fs::write(
+            &old_source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                    elseif event.phase == "up" then
+                        sliver.input.key.up(sliver.input.keys.keyboard.f2)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        std::fs::write(
+            &new_source,
+            r#"
+            require("sliver.v1")
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftAlt,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        assert_eq!(
+            supervisor.hardware().virtual_keyboard_name(),
+            Some("Sliver Keyboard")
+        );
+        assert_eq!(supervisor.hardware().virtual_keyboard_creations(), 1);
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+        assert_eq!(supervisor.hardware().synthetic_transactions().len(), 1);
+
+        supervisor.apply(&new_source)?;
+        assert_eq!(supervisor.hardware().virtual_keyboard_creations(), 1);
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions()[1],
+            vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftAlt),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn touch_can_emit_keyboard_and_consumer_taps() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("keys.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.tap(sliver.input.keys.keyboard.escape)
+                        sliver.input.key.tap(sliver.input.keys.consumer.play_pause)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::PlayPause),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::PlayPause),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn overlapping_held_keys_reference_count_inherited_and_explicit_modifiers() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("overlapping-keys.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local keys = sliver.input.keys
+            local explicit = { modifiers = { keys.keyboard.right_ctrl } }
+            return {
+                api_version = 1,
+                touch = function(event)
+                    local key = ({
+                        [1] = keys.keyboard.f2,
+                        [2] = keys.keyboard.f3,
+                        [3] = keys.keyboard.f4,
+                        [4] = keys.keyboard.f5,
+                    })[event.id]
+                    local options = event.id >= 3 and explicit or nil
+                    if event.phase == "down" then
+                        sliver.input.key.down(key, options)
+                    elseif event.phase == "up" then
+                        sliver.input.key.up(key)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&source)?;
+        for id in 1..=4 {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Down)));
+        }
+        for id in 1..=4 {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Up)));
+        }
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions(),
+            &[vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::RightCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F4),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F5),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F4),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F5),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::RightCtrl),
+                    active: false,
+                },
+            ]]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    fn overlap_touch(id: u32, phase: TouchPhase) -> TouchEvent {
+        TouchEvent {
+            phase,
+            id,
+            time: 0.0,
+            x: f64::from(id),
+            y: 1.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        }
+    }
+
+    #[test]
+    fn tap_rejects_a_primary_key_held_by_down_before_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("held-primary.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f2
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.id == 1 and event.phase == "down" then
+                        sliver.input.key.down(key, { modifiers = false })
+                    elseif event.id == 2 and event.phase == "down" then
+                        sliver.input.key.tap(key, { modifiers = false })
+                    elseif event.id == 1 and event.phase == "up" then
+                        sliver.input.key.up(key)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        for (id, phase) in [
+            (1, TouchPhase::Down),
+            (2, TouchPhase::Down),
+            (1, TouchPhase::Up),
+        ] {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, phase)));
+        }
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("tap of an already-held key was accepted");
+        assert!(format!("{error:#}").contains("synthetic key is already held"));
+        assert!(supervisor.hardware().synthetic_transactions().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn tap_rejects_a_modifier_owned_standalone_or_by_a_chord() -> Result<()> {
+        let run = |chord: bool| -> Result<()> {
+            let directory = tempfile::tempdir()?;
+            let source = directory.path().join("held-modifier.lua");
+            std::fs::write(
+                &source,
+                if chord {
+                    r#"
+                    local sliver = require("sliver.v1")
+                    local keys = sliver.input.keys.keyboard
+                    return {
+                        api_version = 1,
+                        touch = function(event)
+                            if event.id == 1 and event.phase == "down" then
+                                sliver.input.key.down(keys.f2, {
+                                    modifiers = { keys.left_ctrl },
+                                })
+                            elseif event.id == 2 and event.phase == "down" then
+                                sliver.input.key.tap(keys.left_ctrl, { modifiers = false })
+                            end
+                        end,
+                        render = function() end,
+                    }
+                    "#
+                } else {
+                    r#"
+                    local sliver = require("sliver.v1")
+                    local key = sliver.input.keys.keyboard.left_ctrl
+                    return {
+                        api_version = 1,
+                        touch = function(event)
+                            if event.id == 1 and event.phase == "down" then
+                                sliver.input.key.down(key, { modifiers = false })
+                            elseif event.id == 2 and event.phase == "down" then
+                                sliver.input.key.tap(key, { modifiers = false })
+                            end
+                        end,
+                        render = function() end,
+                    }
+                    "#
+                },
+            )?;
+            let state_file = directory.path().join("state/sliver/config-path");
+            let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+            supervisor.apply(&source)?;
+            for id in 1..=2 {
+                supervisor
+                    .hardware_mut()
+                    .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Down)));
+            }
+            let error = supervisor
+                .step_at(1.0)
+                .expect_err("tap of an owned modifier was accepted");
+            assert!(format!("{error:#}").contains("synthetic modifier is already held"));
+            assert!(supervisor.hardware().synthetic_transactions().is_empty());
+            supervisor.shutdown()?;
+            Ok(())
+        };
+
+        run(false)?;
+        run(true)
+    }
+
+    #[test]
+    fn explicit_modifier_lists_reject_nonadjacent_duplicates() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("duplicate-modifiers.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local keys = sliver.input.keys
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.tap(keys.keyboard.f2, {
+                            modifiers = {
+                                keys.keyboard.left_ctrl,
+                                keys.keyboard.left_alt,
+                                keys.keyboard.left_ctrl,
+                            },
+                        })
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("nonadjacent duplicate modifier was accepted");
+        assert!(format!("{error:#}").contains("must not contain duplicates"));
+        assert!(supervisor.hardware().synthetic_transactions().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_modifier_shares_ownership_with_mirrored_modifier() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("modifier-owner.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local keys = sliver.input.keys.keyboard
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.id == 1 and event.phase == "down" then
+                        sliver.input.key.down(keys.left_ctrl, { modifiers = false })
+                    elseif event.id == 2 and event.phase == "down" then
+                        sliver.input.key.down(keys.f2, {
+                            modifiers = { keys.left_ctrl },
+                        })
+                    elseif event.id == 1 and event.phase == "up" then
+                        sliver.input.key.up(keys.left_ctrl)
+                    elseif event.id == 2 and event.phase == "up" then
+                        sliver.input.key.up(keys.f2)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        for (id, phase) in [
+            (1, TouchPhase::Down),
+            (2, TouchPhase::Down),
+            (1, TouchPhase::Up),
+            (2, TouchPhase::Up),
+        ] {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, phase)));
+        }
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions()[0],
+            vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn overlapping_held_keys_cleanup_releases_each_modifier_once() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("held-old.lua");
+        let new_source = directory.path().join("held-new.lua");
+        std::fs::write(
+            &old_source,
+            r#"
+            local sliver = require("sliver.v1")
+            local keys = sliver.input.keys.keyboard
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(event.id == 1 and keys.f2 or keys.f3)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        std::fs::write(
+            &new_source,
+            "require(\"sliver.v1\"); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&old_source)?;
+        for id in 1..=2 {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Down)));
+        }
+        supervisor.step_at(1.0)?;
+        supervisor.apply(&new_source)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions()[1],
+            vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn key_taps_bridge_inherited_suppressed_and_explicit_modifiers_in_one_transaction() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("modifier-keys.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.tap(sliver.input.keys.keyboard.f2)
+                        sliver.input.key.tap(sliver.input.keys.keyboard.escape, { modifiers = false })
+                        sliver.input.key.tap(sliver.input.keys.keyboard.f3, {
+                            modifiers = { sliver.input.keys.keyboard.right_shift },
+                        })
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftAlt,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions(),
+            &[vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftAlt),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftAlt),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::RightShift),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::RightShift),
+                    active: false,
+                },
+            ]]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn lua_receives_fn_and_modifier_transitions_and_snapshots() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("input.lua");
+        let log = directory.path().join("input-events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(line)
+                    local file = assert(io.open(log, "a"))
+                    file:write(line, "\n")
+                    file:close()
+                end
+                return {{
+                    api_version = 1,
+                    start = function()
+                        local state = sliver.input.state()
+                        assert(state.fn)
+                        assert(state.modifiers.left_ctrl)
+                        record("start:" .. tostring(state.fn) .. ":" .. tostring(state.modifiers.left_ctrl))
+                    end,
+                    key = function(event)
+                        local state = sliver.input.state()
+                        assert(event.state.fn == state.fn)
+                        assert(event.state.modifiers.right_alt == state.modifiers.right_alt)
+                        record(event.key .. ":" .. event.phase .. ":" .. tostring(state.fn) .. ":" .. tostring(state.modifiers.left_ctrl) .. ":" .. tostring(state.modifiers.right_alt))
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Fn { active: true });
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&source)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "start:true:true\n");
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.hardware_mut().inject(HardwareEvent::Modifier {
+            modifier: Modifier::RightAlt,
+            active: true,
+        });
+        supervisor.hardware_mut().inject(HardwareEvent::Modifier {
+            modifier: Modifier::RightAlt,
+            active: true,
+        });
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            std::fs::read_to_string(&log)?,
+            "start:true:true\nfn:up:false:true:false\nright_alt:down:false:true:true\n"
         );
         supervisor.shutdown()?;
         Ok(())

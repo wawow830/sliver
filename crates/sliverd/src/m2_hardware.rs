@@ -20,7 +20,9 @@ use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, EventType, InputEvent, Key};
 
 use crate::hardware::{
-    validate_backlight, HardwareEvent, LogicalFrame, Modifier, ModifierState, TouchBarHardware,
+    function_key_output, modifier_output_keys, tap_key_events, validate_backlight, ConsumerKey,
+    HardwareEvent, InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey,
+    SyntheticKeyEvent, TouchBarHardware,
 };
 
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
@@ -638,14 +640,28 @@ fn open_main_keyboard() -> io::Result<(PathBuf, evdev::Device)> {
 struct KeyboardInput {
     path: PathBuf,
     device: evdev::Device,
+    initial_modifiers: ModifierState,
+    pending: Vec<HardwareEvent>,
 }
 
 impl KeyboardInput {
     fn open() -> io::Result<Self> {
         let (path, device) = open_main_keyboard()?;
         set_nonblocking(device.as_raw_fd())?;
+        let key_state = device.get_key_state()?;
+        let initial_modifiers = modifier_state_from_key_state(&key_state);
+        let pending = initial_keyboard_events(&key_state);
         eprintln!("fn: watching {} ({KEYBOARD_NAME})", path.display());
-        Ok(Self { path, device })
+        Ok(Self {
+            path,
+            device,
+            initial_modifiers,
+            pending,
+        })
+    }
+
+    fn initial_modifiers(&self) -> ModifierState {
+        self.initial_modifiers
     }
 
     fn drain(
@@ -653,14 +669,19 @@ impl KeyboardInput {
         output: &mut Vec<HardwareEvent>,
         modifiers: &mut ModifierState,
     ) -> io::Result<bool> {
+        let mut progress = false;
+        if !self.pending.is_empty() {
+            output.append(&mut self.pending);
+            progress = true;
+        }
         let events: Vec<InputEvent> = match self.device.fetch_events() {
             Ok(events) => events.collect(),
-            Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(false),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(progress),
             Err(e) => return Err(e),
         };
 
         if events.is_empty() {
-            return Ok(false);
+            return Ok(progress);
         }
 
         for event in events {
@@ -694,64 +715,136 @@ fn modifier_for(code: u16) -> Option<Modifier> {
         .find_map(|(key, modifier)| (key.code() == code).then_some(modifier))
 }
 
-fn function_key_batches(
-    index: usize,
-    modifiers: ModifierState,
-) -> io::Result<Vec<Vec<InputEvent>>> {
-    let key = *F_KEYS.get(index).ok_or_else(|| {
+fn modifier_state_from_key_state(key_state: &AttributeSet<Key>) -> ModifierState {
+    let mut modifiers = ModifierState::default();
+    for (key, modifier) in MOD_KEYS.into_iter().zip(Modifier::ALL) {
+        if key_state.contains(key) {
+            modifiers.set(modifier, true);
+        }
+    }
+    modifiers
+}
+
+fn initial_keyboard_events(key_state: &AttributeSet<Key>) -> Vec<HardwareEvent> {
+    let mut events = Vec::new();
+    if key_state.contains(Key::KEY_FN) {
+        events.push(HardwareEvent::Fn { active: true });
+    }
+    for (key, modifier) in MOD_KEYS.into_iter().zip(Modifier::ALL) {
+        if key_state.contains(key) {
+            events.push(HardwareEvent::Modifier {
+                modifier,
+                active: true,
+            });
+        }
+    }
+    events
+}
+
+fn function_key_events(index: usize, modifiers: ModifierState) -> io::Result<Vec<InputEvent>> {
+    let key = function_key_output(index).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "function-key index out of range",
         )
     })?;
-
-    let modifier_down: Vec<_> = Modifier::ALL
-        .into_iter()
-        .zip(MOD_KEYS)
-        .filter(|(modifier, _)| modifiers.is_active(*modifier))
-        .map(|(_, key)| InputEvent::new(EventType::KEY, key.code(), 1))
-        .collect();
-    let modifier_up: Vec<_> = Modifier::ALL
-        .into_iter()
-        .zip(MOD_KEYS)
-        .rev()
-        .filter(|(modifier, _)| modifiers.is_active(*modifier))
-        .map(|(_, key)| InputEvent::new(EventType::KEY, key.code(), 0))
-        .collect();
-
-    let mut batches = Vec::with_capacity(4);
-    if !modifier_down.is_empty() {
-        batches.push(modifier_down);
-    }
-    batches.push(vec![InputEvent::new(EventType::KEY, key.code(), 1)]);
-    batches.push(vec![InputEvent::new(EventType::KEY, key.code(), 0)]);
-    if !modifier_up.is_empty() {
-        batches.push(modifier_up);
-    }
-    Ok(batches)
+    Ok(encode_synthetic_key_events(&tap_key_events(
+        key,
+        &modifier_output_keys(modifiers),
+    )))
 }
 
-/// Virtual keyboard used solely to emit real F1-F12 key events.
-struct FnEmitter {
+/// One virtual keyboard shared by the Lua worker and the fixed Fn row.
+struct KeyboardEmitter {
     device: VirtualDevice,
 }
 
-impl FnEmitter {
+impl KeyboardEmitter {
     fn new() -> Result<Self> {
-        let keys: AttributeSet<Key> = F_KEYS.into_iter().chain(MOD_KEYS).collect();
+        let keys: AttributeSet<Key> = F_KEYS
+            .into_iter()
+            .chain(MOD_KEYS)
+            .chain([
+                Key::KEY_ESC,
+                Key::KEY_BRIGHTNESSDOWN,
+                Key::KEY_BRIGHTNESSUP,
+                Key::KEY_PREVIOUSSONG,
+                Key::KEY_PLAYPAUSE,
+                Key::KEY_NEXTSONG,
+                Key::KEY_MUTE,
+                Key::KEY_VOLUMEDOWN,
+                Key::KEY_VOLUMEUP,
+            ])
+            .collect();
         let device = VirtualDeviceBuilder::new()?
-            .name("Sliver Function Row")
+            .name("Sliver Keyboard")
             .with_keys(&keys)?
             .build()?;
-        eprintln!("fn: virtual F-key keyboard ready");
+        eprintln!("keyboard: virtual Sliver Keyboard ready");
         Ok(Self { device })
     }
 
     fn tap(&mut self, index: usize, modifiers: ModifierState) -> io::Result<()> {
-        for batch in function_key_batches(index, modifiers)? {
-            self.device.emit(&batch)?;
+        self.device.emit(&function_key_events(index, modifiers)?)
+    }
+
+    fn emit(&mut self, events: &[SyntheticKeyEvent]) -> io::Result<()> {
+        let events = encode_synthetic_key_events(events);
+        if !events.is_empty() {
+            self.device.emit(&events)?;
         }
         Ok(())
+    }
+}
+
+fn encode_synthetic_key_events(events: &[SyntheticKeyEvent]) -> Vec<InputEvent> {
+    events
+        .iter()
+        .map(|event| {
+            InputEvent::new(
+                EventType::KEY,
+                output_key_code(event.key).code(),
+                i32::from(event.active),
+            )
+        })
+        .collect()
+}
+
+fn output_key_code(key: OutputKey) -> Key {
+    match key {
+        OutputKey::Keyboard(key) => match key {
+            KeyboardKey::Escape => Key::KEY_ESC,
+            KeyboardKey::F1 => Key::KEY_F1,
+            KeyboardKey::F2 => Key::KEY_F2,
+            KeyboardKey::F3 => Key::KEY_F3,
+            KeyboardKey::F4 => Key::KEY_F4,
+            KeyboardKey::F5 => Key::KEY_F5,
+            KeyboardKey::F6 => Key::KEY_F6,
+            KeyboardKey::F7 => Key::KEY_F7,
+            KeyboardKey::F8 => Key::KEY_F8,
+            KeyboardKey::F9 => Key::KEY_F9,
+            KeyboardKey::F10 => Key::KEY_F10,
+            KeyboardKey::F11 => Key::KEY_F11,
+            KeyboardKey::F12 => Key::KEY_F12,
+            KeyboardKey::LeftCtrl => Key::KEY_LEFTCTRL,
+            KeyboardKey::RightCtrl => Key::KEY_RIGHTCTRL,
+            KeyboardKey::LeftAlt => Key::KEY_LEFTALT,
+            KeyboardKey::RightAlt => Key::KEY_RIGHTALT,
+            KeyboardKey::LeftShift => Key::KEY_LEFTSHIFT,
+            KeyboardKey::RightShift => Key::KEY_RIGHTSHIFT,
+            KeyboardKey::LeftSuper => Key::KEY_LEFTMETA,
+            KeyboardKey::RightSuper => Key::KEY_RIGHTMETA,
+        },
+        OutputKey::Consumer(key) => match key {
+            ConsumerKey::BrightnessDown => Key::KEY_BRIGHTNESSDOWN,
+            ConsumerKey::BrightnessUp => Key::KEY_BRIGHTNESSUP,
+            ConsumerKey::Previous => Key::KEY_PREVIOUSSONG,
+            ConsumerKey::PlayPause => Key::KEY_PLAYPAUSE,
+            ConsumerKey::Next => Key::KEY_NEXTSONG,
+            ConsumerKey::Mute => Key::KEY_MUTE,
+            ConsumerKey::VolumeDown => Key::KEY_VOLUMEDOWN,
+            ConsumerKey::VolumeUp => Key::KEY_VOLUMEUP,
+        },
     }
 }
 
@@ -824,8 +917,9 @@ pub(crate) struct M2TouchBar {
     shown: bool,
     touch: Option<TouchInput>,
     keyboard: Option<KeyboardInput>,
+    fn_active: bool,
     modifiers: ModifierState,
-    fn_emitter: Option<FnEmitter>,
+    keyboard_emitter: Option<KeyboardEmitter>,
 }
 
 impl M2TouchBar {
@@ -838,8 +932,9 @@ impl M2TouchBar {
             shown: false,
             touch: None,
             keyboard: None,
+            fn_active: false,
             modifiers: ModifierState::default(),
-            fn_emitter: None,
+            keyboard_emitter: None,
         }
     }
 
@@ -847,8 +942,21 @@ impl M2TouchBar {
         self.claim.is_some()
     }
 
+    fn finish_claim_setup(&mut self, setup_result: Result<()>) -> Result<()> {
+        if let Err(error) = setup_result {
+            if let Err(cleanup_error) = self.release_inner() {
+                return Err(error.context(format!(
+                    "rolling back Touch Bar claim after setup failure also failed: {cleanup_error:#}"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn claim_inner(&mut self) -> Result<()> {
         ensure!(!self.is_claimed(), "Touch Bar is already claimed");
+        self.fn_active = false;
         self.modifiers = ModifierState::default();
 
         let mut claim = claim_card()?;
@@ -900,28 +1008,54 @@ impl M2TouchBar {
         self.dumb_buffer = dumb_buffer;
         self.physical_surface = Some(physical_surface);
 
-        self.touch = match TouchInput::open() {
-            Ok(touch) => Some(touch),
-            Err(e) => {
-                eprintln!("touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)");
-                None
+        let setup_result = (|| -> Result<()> {
+            self.touch = match TouchInput::open() {
+                Ok(touch) => Some(touch),
+                Err(e) => {
+                    eprintln!("touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)");
+                    None
+                }
+            };
+            let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
+            self.modifiers = keyboard.initial_modifiers();
+            self.keyboard = Some(keyboard);
+            if self.keyboard_emitter.is_none() {
+                self.keyboard_emitter =
+                    Some(KeyboardEmitter::new().context("creating Sliver Keyboard")?);
             }
-        };
-        self.keyboard = match KeyboardInput::open() {
-            Ok(keyboard) => Some(keyboard),
-            Err(e) => {
-                eprintln!("fn: can't find keyboard: {e}");
-                None
+            Ok(())
+        })();
+        self.finish_claim_setup(setup_result)
+    }
+
+    fn remember_keyboard_events(&mut self, events: &[HardwareEvent]) {
+        for event in events {
+            match *event {
+                HardwareEvent::Fn { active } => self.fn_active = active,
+                HardwareEvent::Modifier { modifier, active } => {
+                    self.modifiers.set(modifier, active)
+                }
+                HardwareEvent::Touch(_)
+                | HardwareEvent::Device { .. }
+                | HardwareEvent::Visibility { .. } => {}
             }
-        };
-        self.fn_emitter = match FnEmitter::new() {
-            Ok(emitter) => Some(emitter),
-            Err(e) => {
-                eprintln!("fn: can't create virtual keyboard: {e:#}");
-                None
+        }
+    }
+
+    fn reset_keyboard_state(&mut self, output: &mut Vec<HardwareEvent>) {
+        if self.fn_active {
+            output.push(HardwareEvent::Fn { active: false });
+        }
+        for modifier in Modifier::ALL {
+            if self.modifiers.is_active(modifier) {
+                output.push(HardwareEvent::Modifier {
+                    modifier,
+                    active: false,
+                });
             }
-        };
-        Ok(())
+        }
+        self.fn_active = false;
+        self.modifiers = ModifierState::default();
     }
 
     fn poll_inner(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
@@ -935,6 +1069,7 @@ impl M2TouchBar {
 
             // Preserve the old daemon's cross-device ordering: update Fn and
             // modifiers before interpreting a touch from the same poll.
+            let keyboard_start = output.len();
             let keyboard_error = match self.keyboard.as_mut() {
                 Some(keyboard) => match keyboard.drain(&mut output, &mut self.modifiers) {
                     Ok(progress) => {
@@ -945,6 +1080,7 @@ impl M2TouchBar {
                 },
                 None => None,
             };
+            self.remember_keyboard_events(&output[keyboard_start..]);
             if let Some(error) = keyboard_error {
                 if let Some(keyboard) = self.keyboard.as_ref() {
                     eprintln!(
@@ -954,6 +1090,7 @@ impl M2TouchBar {
                 } else {
                     eprintln!("fn: keyboard reader stopped: {error}");
                 }
+                self.reset_keyboard_state(&mut output);
                 self.keyboard = None;
             }
 
@@ -1039,8 +1176,8 @@ impl M2TouchBar {
         }
         self.touch = None;
         self.keyboard = None;
+        self.fn_active = false;
         self.modifiers = ModifierState::default();
-        self.fn_emitter = None;
 
         let framebuffer = self.framebuffer.take();
         let dumb_buffer = self.dumb_buffer.take();
@@ -1076,13 +1213,30 @@ impl TouchBarHardware for M2TouchBar {
         self.poll_inner(timeout)
     }
 
+    fn input_state(&self) -> InputState {
+        InputState {
+            fn_active: self.fn_active,
+            modifiers: self.modifiers,
+        }
+    }
+
     fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
         self.present_inner(frame)
     }
 
+    fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
+        ensure!(self.is_claimed(), "Touch Bar is not claimed");
+        if let Some(emitter) = self.keyboard_emitter.as_mut() {
+            emitter
+                .emit(events)
+                .context("emitting synthetic keyboard events")?;
+        }
+        Ok(())
+    }
+
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        if let Some(emitter) = self.fn_emitter.as_mut() {
+        if let Some(emitter) = self.keyboard_emitter.as_mut() {
             if let Err(error) = emitter.tap(index, modifiers) {
                 eprintln!("fn: failed to emit F{}: {error}", index + 1);
             }
@@ -1234,6 +1388,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn failed_claim_setup_rolls_back_before_retry() {
+        let mut hardware = M2TouchBar::new();
+        let first = hardware
+            .finish_claim_setup(Err(anyhow::anyhow!("injected setup failure")))
+            .expect_err("injected setup failure was swallowed");
+        assert!(format!("{first:#}").contains("injected setup failure"));
+        assert!(!hardware.is_claimed());
+
+        let second = hardware
+            .finish_claim_setup(Err(anyhow::anyhow!("retry setup failure")))
+            .expect_err("retry setup failure was swallowed");
+        assert!(format!("{second:#}").contains("retry setup failure"));
+        assert!(!format!("{second:#}").contains("already claimed"));
+    }
+
+    #[test]
+    fn release_keeps_keyboard_emitter_for_reclaim() -> Result<()> {
+        let mut hardware = M2TouchBar::new();
+        hardware.keyboard_emitter = Some(KeyboardEmitter::new()?);
+        let first = hardware
+            .keyboard_emitter
+            .as_ref()
+            .expect("keyboard emitter was not created")
+            as *const KeyboardEmitter;
+
+        hardware.release_inner()?;
+
+        let second = hardware
+            .keyboard_emitter
+            .as_ref()
+            .expect("release discarded the keyboard emitter")
+            as *const KeyboardEmitter;
+        assert_eq!(first, second);
+        Ok(())
+    }
+
+    #[test]
     fn framebuffer_copy_uses_visible_width_and_mode_height() -> Result<()> {
         let source = vec![
             1, 1, 1, 1, 1, 1, 1, 1, // visible row 0
@@ -1373,28 +1564,71 @@ mod tests {
     }
 
     #[test]
-    fn function_key_batches_bridge_modifiers_in_one_device() -> Result<()> {
-        let mut modifiers = ModifierState::default();
-        modifiers.set(Modifier::LeftCtrl, true);
-        modifiers.set(Modifier::RightAlt, true);
+    fn keyboard_failure_releases_fn_and_modifier_snapshots() {
+        let mut hardware = M2TouchBar::new();
+        hardware.fn_active = true;
+        hardware.modifiers.set(Modifier::LeftCtrl, true);
+        hardware.modifiers.set(Modifier::RightAlt, true);
+        let mut output = Vec::new();
 
-        let batches = function_key_batches(1, modifiers)?;
-        let observed: Vec<Vec<(u16, i32)>> = batches
+        hardware.reset_keyboard_state(&mut output);
+
+        assert_eq!(
+            output,
+            vec![
+                HardwareEvent::Fn { active: false },
+                HardwareEvent::Modifier {
+                    modifier: Modifier::LeftCtrl,
+                    active: false,
+                },
+                HardwareEvent::Modifier {
+                    modifier: Modifier::RightAlt,
+                    active: false,
+                },
+            ]
+        );
+        assert!(!hardware.fn_active);
+        assert_eq!(hardware.modifiers, ModifierState::default());
+    }
+
+    #[test]
+    fn evdev_key_state_seeds_modifier_snapshots_before_initial_events() -> Result<()> {
+        let key_state: AttributeSet<Key> = [Key::KEY_LEFTCTRL, Key::KEY_RIGHTALT, Key::KEY_FN]
+            .into_iter()
+            .collect();
+        let modifiers = modifier_state_from_key_state(&key_state);
+        assert!(modifiers.is_active(Modifier::LeftCtrl));
+        assert!(modifiers.is_active(Modifier::RightAlt));
+        assert!(!modifiers.is_active(Modifier::LeftAlt));
+        assert_eq!(
+            initial_keyboard_events(&key_state),
+            vec![
+                HardwareEvent::Fn { active: true },
+                HardwareEvent::Modifier {
+                    modifier: Modifier::LeftCtrl,
+                    active: true,
+                },
+                HardwareEvent::Modifier {
+                    modifier: Modifier::RightAlt,
+                    active: true,
+                },
+            ]
+        );
+
+        let events = function_key_events(1, modifiers)?;
+        let observed: Vec<_> = events
             .iter()
-            .map(|batch| {
-                batch
-                    .iter()
-                    .map(|event| (event.code(), event.value()))
-                    .collect()
-            })
+            .map(|event| (event.code(), event.value()))
             .collect();
         assert_eq!(
             observed,
             vec![
-                vec![(Key::KEY_LEFTCTRL.code(), 1), (Key::KEY_RIGHTALT.code(), 1),],
-                vec![(Key::KEY_F2.code(), 1)],
-                vec![(Key::KEY_F2.code(), 0)],
-                vec![(Key::KEY_RIGHTALT.code(), 0), (Key::KEY_LEFTCTRL.code(), 0),],
+                (Key::KEY_LEFTCTRL.code(), 1),
+                (Key::KEY_RIGHTALT.code(), 1),
+                (Key::KEY_F2.code(), 1),
+                (Key::KEY_F2.code(), 0),
+                (Key::KEY_RIGHTALT.code(), 0),
+                (Key::KEY_LEFTCTRL.code(), 0),
             ]
         );
         Ok(())

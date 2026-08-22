@@ -11,7 +11,10 @@ use mlua::{
     Function, HookTriggers, Lua, MultiValue, Table, UserData, UserDataMethods, Value, VmState,
 };
 
-use crate::hardware::{LogicalFrame, Modifier, TouchEvent, TouchPhase};
+use crate::hardware::{
+    ConsumerKey, InputState, InputTransition, KeyboardKey, LogicalFrame, Modifier, ObservedKey,
+    OutputKey, TouchEvent, TouchPhase,
+};
 use crate::lua_canvas::{create_path, Canvas};
 
 pub(crate) struct StagedLuaWorker {
@@ -23,13 +26,37 @@ pub(crate) struct StagedLuaWorker {
 pub(crate) struct WorkerEffects {
     pub(crate) frame: Option<LogicalFrame>,
     pub(crate) backlight: Option<f64>,
+    pub(crate) key_requests: Vec<KeyRequest>,
     pub(crate) next_timer_deadline: Option<f64>,
     pub(crate) redraw_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyOperation {
+    Down,
+    Up,
+    Tap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModifierMode {
+    Inherit,
+    None,
+    Explicit(Vec<OutputKey>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyRequest {
+    pub(crate) operation: KeyOperation,
+    pub(crate) key: OutputKey,
+    pub(crate) modifiers: ModifierMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StopReason {
     Replaced,
+    #[allow(dead_code)]
+    Logout,
     Shutdown,
 }
 
@@ -37,6 +64,7 @@ impl StopReason {
     fn as_str(self) -> &'static str {
         match self {
             Self::Replaced => "replaced",
+            Self::Logout => "logout",
             Self::Shutdown => "shutdown",
         }
     }
@@ -50,9 +78,15 @@ pub(crate) struct LuaWorker {
 enum WorkerCommand {
     #[allow(dead_code)]
     Render(mpsc::SyncSender<std::result::Result<LogicalFrame, String>>),
-    Commit(f64, mpsc::SyncSender<std::result::Result<(), String>>),
+    Commit(
+        f64,
+        InputState,
+        mpsc::SyncSender<std::result::Result<(), String>>,
+    ),
     Drive(
         f64,
+        InputState,
+        Vec<InputTransition>,
         Vec<TouchEvent>,
         mpsc::SyncSender<std::result::Result<WorkerEffects, String>>,
     ),
@@ -70,7 +104,7 @@ struct Runtime {
     stop: Option<Function>,
     _visibility: Option<Function>,
     touch: Option<Function>,
-    _key: Option<Function>,
+    key: Option<Function>,
     source: PathBuf,
     controls: RuntimeControls,
 }
@@ -92,6 +126,8 @@ struct RuntimeControls {
     now_seconds: Rc<Cell<Option<f64>>>,
     backlight_level: Rc<Cell<f64>>,
     pending_backlight: Rc<Cell<Option<f64>>>,
+    input_state: Rc<Cell<InputState>>,
+    key_requests: Rc<RefCell<Vec<KeyRequest>>>,
 }
 
 struct TimerRegistry {
@@ -112,6 +148,9 @@ struct TimerHandle {
     timers: Rc<RefCell<TimerRegistry>>,
 }
 
+#[derive(Clone, Copy)]
+struct LuaKey(OutputKey);
+
 struct DueTimer {
     id: u64,
     scheduled_deadline: f64,
@@ -128,13 +167,29 @@ impl LuaWorker {
         source: &Path,
         initial_backlight: f64,
     ) -> Result<StagedLuaWorker> {
+        Self::stage_with_backlight_and_input(source, initial_backlight, InputState::default())
+    }
+
+    pub(crate) fn stage_with_backlight_and_input(
+        source: &Path,
+        initial_backlight: f64,
+        initial_input: InputState,
+    ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
         let source = source.to_path_buf();
         let (command_tx, command_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let owner = thread::Builder::new()
             .name("sliver-lua".into())
-            .spawn(move || owner_main(source, initial_backlight, command_rx, ready_tx))
+            .spawn(move || {
+                owner_main(
+                    source,
+                    initial_backlight,
+                    initial_input,
+                    command_rx,
+                    ready_tx,
+                )
+            })
             .context("starting Lua owner thread")?;
 
         let mut worker = Self {
@@ -174,14 +229,14 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))
     }
 
-    pub(crate) fn commit(&self, now_seconds: f64) -> Result<()> {
+    pub(crate) fn commit(&self, now_seconds: f64, input_state: InputState) -> Result<()> {
         let commands = self
             .commands
             .as_ref()
             .context("Lua worker command channel is closed")?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
-            .send(WorkerCommand::Commit(now_seconds, reply_tx))
+            .send(WorkerCommand::Commit(now_seconds, input_state, reply_tx))
             .context("committing Lua worker timers")?;
         reply_rx
             .recv()
@@ -189,14 +244,26 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))
     }
 
-    pub(crate) fn drive(&self, now_seconds: f64, events: Vec<TouchEvent>) -> Result<WorkerEffects> {
+    pub(crate) fn drive(
+        &self,
+        now_seconds: f64,
+        input_state: InputState,
+        transitions: Vec<InputTransition>,
+        events: Vec<TouchEvent>,
+    ) -> Result<WorkerEffects> {
         let commands = self
             .commands
             .as_ref()
             .context("Lua worker command channel is closed")?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
-            .send(WorkerCommand::Drive(now_seconds, events, reply_tx))
+            .send(WorkerCommand::Drive(
+                now_seconds,
+                input_state,
+                transitions,
+                events,
+                reply_tx,
+            ))
             .context("driving Lua worker")?;
         reply_rx
             .recv()
@@ -267,10 +334,12 @@ struct StagedRuntime {
 fn owner_main(
     source: PathBuf,
     initial_backlight: f64,
+    initial_input: InputState,
     commands: mpsc::Receiver<WorkerCommand>,
     ready: mpsc::SyncSender<std::result::Result<StagedRuntime, String>>,
 ) {
-    let (runtime, frame) = match Runtime::load_and_render(&source, initial_backlight) {
+    let (runtime, frame) = match Runtime::load_and_render(&source, initial_backlight, initial_input)
+    {
         Ok(staged) => staged,
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -294,11 +363,11 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
             Ok(WorkerCommand::Render(reply)) => {
                 let _ = reply.send(runtime.render_frame());
             }
-            Ok(WorkerCommand::Commit(now_seconds, reply)) => {
-                let _ = reply.send(runtime.commit(now_seconds));
+            Ok(WorkerCommand::Commit(now_seconds, input_state, reply)) => {
+                let _ = reply.send(runtime.commit(now_seconds, input_state));
             }
-            Ok(WorkerCommand::Drive(now_seconds, events, reply)) => {
-                let _ = reply.send(runtime.drive(now_seconds, events));
+            Ok(WorkerCommand::Drive(now_seconds, input_state, transitions, events, reply)) => {
+                let _ = reply.send(runtime.drive(now_seconds, input_state, transitions, events));
             }
             Ok(WorkerCommand::RestoreBacklight(level, reply)) => {
                 let _ = reply.send(runtime.restore_backlight(level));
@@ -324,8 +393,13 @@ impl Runtime {
         Ok(())
     }
 
-    fn commit(&mut self, now_seconds: f64) -> std::result::Result<(), String> {
+    fn commit(
+        &mut self,
+        now_seconds: f64,
+        input_state: InputState,
+    ) -> std::result::Result<(), String> {
         validate_now(now_seconds)?;
+        self.controls.input_state.set(input_state);
         if self.controls.committed.replace(true) {
             return Err("Lua worker was already committed".into());
         }
@@ -337,6 +411,8 @@ impl Runtime {
     fn drive(
         &mut self,
         now_seconds: f64,
+        input_state: InputState,
+        transitions: Vec<InputTransition>,
         events: Vec<TouchEvent>,
     ) -> std::result::Result<WorkerEffects, String> {
         validate_now(now_seconds)?;
@@ -346,7 +422,9 @@ impl Runtime {
 
         let started = Instant::now();
         self.controls.now_seconds.set(Some(now_seconds));
+        self.controls.input_state.set(input_state);
         let result = (|| {
+            self.dispatch_keys(now_seconds, started, transitions)?;
             self.dispatch_touch(now_seconds, started, events)?;
             self.run_due_timers(now_seconds, started)?;
             self.controls
@@ -362,16 +440,43 @@ impl Runtime {
                 .set(Some(sample_now(now_seconds, started)));
             let redraw_pending = self.controls.redraw_pending.get();
             let backlight = self.controls.pending_backlight.take();
+            let key_requests = self.controls.key_requests.borrow_mut().drain(..).collect();
             let next_timer_deadline = self.controls.timers.borrow().next_deadline();
             Ok(WorkerEffects {
                 frame,
                 backlight,
+                key_requests,
                 next_timer_deadline,
                 redraw_pending,
             })
         })();
+        if result.is_err() {
+            self.controls.key_requests.borrow_mut().clear();
+        }
         self.controls.now_seconds.set(None);
         result
+    }
+
+    fn dispatch_keys(
+        &self,
+        now_seconds: f64,
+        started: Instant,
+        transitions: Vec<InputTransition>,
+    ) -> std::result::Result<(), String> {
+        let Some(key) = &self.key else {
+            return Ok(());
+        };
+        for transition in transitions {
+            self.controls.input_state.set(transition.state);
+            self.controls
+                .now_seconds
+                .set(Some(sample_now(now_seconds, started)));
+            let table = key_event_table(&self._lua, &transition)
+                .map_err(|error| diagnostic("key", &self.source, error.to_string()))?;
+            key.call::<()>(table)
+                .map_err(|error| diagnostic("key", &self.source, error.to_string()))?;
+        }
+        Ok(())
     }
 
     fn dispatch_touch(
@@ -430,13 +535,14 @@ impl Runtime {
     fn load_and_render(
         source: &Path,
         initial_backlight: f64,
+        initial_input: InputState,
     ) -> std::result::Result<(Self, LogicalFrame), String> {
         let bytes =
             std::fs::read(source).map_err(|error| diagnostic("load", source, error.to_string()))?;
         let lua = unsafe { Lua::unsafe_new() };
         configure_lua_path(&lua, source)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
-        let controls = RuntimeControls::new(initial_backlight);
+        let controls = RuntimeControls::new(initial_backlight, initial_input);
         let loaded_v1 = install_v1_module(&lua, &controls)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let source_name = format!("@{}", source.display());
@@ -522,7 +628,7 @@ impl Runtime {
             stop,
             _visibility: visibility,
             touch,
-            _key: key,
+            key,
             source: source.to_path_buf(),
             controls,
         };
@@ -600,7 +706,7 @@ fn configure_lua_path(lua: &Lua, source: &Path) -> mlua::Result<()> {
 }
 
 impl RuntimeControls {
-    fn new(initial_backlight: f64) -> Self {
+    fn new(initial_backlight: f64, initial_input: InputState) -> Self {
         Self {
             redraw_pending: Rc::new(Cell::new(false)),
             timers: Rc::new(RefCell::new(TimerRegistry::new())),
@@ -608,6 +714,8 @@ impl RuntimeControls {
             now_seconds: Rc::new(Cell::new(None)),
             backlight_level: Rc::new(Cell::new(initial_backlight)),
             pending_backlight: Rc::new(Cell::new(None)),
+            input_state: Rc::new(Cell::new(initial_input)),
+            key_requests: Rc::new(RefCell::new(Vec::new())),
         }
     }
 }
@@ -747,6 +855,115 @@ fn validate_every_interval(interval: f64) -> mlua::Result<()> {
     }
 }
 
+impl UserData for LuaKey {}
+
+fn create_key_constants(lua: &Lua) -> mlua::Result<Table> {
+    let keys = lua.create_table()?;
+    let keyboard = lua.create_table()?;
+    for (name, key) in [
+        ("escape", KeyboardKey::Escape),
+        ("f1", KeyboardKey::F1),
+        ("f2", KeyboardKey::F2),
+        ("f3", KeyboardKey::F3),
+        ("f4", KeyboardKey::F4),
+        ("f5", KeyboardKey::F5),
+        ("f6", KeyboardKey::F6),
+        ("f7", KeyboardKey::F7),
+        ("f8", KeyboardKey::F8),
+        ("f9", KeyboardKey::F9),
+        ("f10", KeyboardKey::F10),
+        ("f11", KeyboardKey::F11),
+        ("f12", KeyboardKey::F12),
+        ("left_ctrl", KeyboardKey::LeftCtrl),
+        ("right_ctrl", KeyboardKey::RightCtrl),
+        ("left_alt", KeyboardKey::LeftAlt),
+        ("right_alt", KeyboardKey::RightAlt),
+        ("left_shift", KeyboardKey::LeftShift),
+        ("right_shift", KeyboardKey::RightShift),
+        ("left_super", KeyboardKey::LeftSuper),
+        ("right_super", KeyboardKey::RightSuper),
+    ] {
+        keyboard.set(name, lua.create_userdata(LuaKey(OutputKey::Keyboard(key)))?)?;
+    }
+    let consumer = lua.create_table()?;
+    for (name, key) in [
+        ("brightness_down", ConsumerKey::BrightnessDown),
+        ("brightness_up", ConsumerKey::BrightnessUp),
+        ("previous", ConsumerKey::Previous),
+        ("play_pause", ConsumerKey::PlayPause),
+        ("next", ConsumerKey::Next),
+        ("mute", ConsumerKey::Mute),
+        ("volume_down", ConsumerKey::VolumeDown),
+        ("volume_up", ConsumerKey::VolumeUp),
+    ] {
+        consumer.set(name, lua.create_userdata(LuaKey(OutputKey::Consumer(key)))?)?;
+    }
+    keys.set("keyboard", keyboard)?;
+    keys.set("consumer", consumer)?;
+    Ok(keys)
+}
+
+fn create_key_operation(
+    lua: &Lua,
+    controls: &RuntimeControls,
+    operation: KeyOperation,
+) -> mlua::Result<Function> {
+    let committed = controls.committed.clone();
+    let requests = controls.key_requests.clone();
+    lua.create_function(move |_, (value, options): (Value, Option<Table>)| {
+        if !committed.get() {
+            return Err(mlua::Error::runtime(
+                "synthetic key output is unavailable while staging",
+            ));
+        }
+        let key = parse_lua_key(value)?;
+        let modifiers = parse_modifier_mode(options)?;
+        requests.borrow_mut().push(KeyRequest {
+            operation,
+            key,
+            modifiers,
+        });
+        Ok(())
+    })
+}
+
+fn parse_lua_key(value: Value) -> mlua::Result<OutputKey> {
+    match value {
+        Value::UserData(value) => Ok(value.borrow::<LuaKey>()?.0),
+        value => Err(mlua::Error::runtime(format!(
+            "key constant must be a Sliver key, got {}",
+            value.type_name()
+        ))),
+    }
+}
+
+fn parse_modifier_mode(options: Option<Table>) -> mlua::Result<ModifierMode> {
+    let Some(options) = options else {
+        return Ok(ModifierMode::Inherit);
+    };
+    let value: Value = options.raw_get("modifiers")?;
+    match value {
+        Value::Nil => Ok(ModifierMode::Inherit),
+        Value::Boolean(false) => Ok(ModifierMode::None),
+        Value::String(value) => match value.to_str()?.as_ref() {
+            "inherit" | "default" => Ok(ModifierMode::Inherit),
+            "none" | "suppress" => Ok(ModifierMode::None),
+            value => Err(mlua::Error::runtime(format!(
+                "unknown modifier mode {value:?}"
+            ))),
+        },
+        Value::Table(values) => values
+            .sequence_values::<Value>()
+            .map(|value| value.and_then(parse_lua_key))
+            .collect::<mlua::Result<Vec<_>>>()
+            .map(ModifierMode::Explicit),
+        value => Err(mlua::Error::runtime(format!(
+            "key modifiers must be omitted, false, a mode, or a key list, got {}",
+            value.type_name()
+        ))),
+    }
+}
+
 fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<Cell<bool>>> {
     let loaded = Rc::new(Cell::new(false));
     let loaded_by_require = loaded.clone();
@@ -766,6 +983,33 @@ fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<C
                 Ok(())
             })?,
         )?;
+
+        let input = lua.create_table()?;
+        let input_state = loader_controls.input_state.clone();
+        input.set(
+            "state",
+            lua.create_function(move |lua, ()| input_state_table(lua, input_state.get()))?,
+        )?;
+        module.set("input", input)?;
+
+        let keys = create_key_constants(lua)?;
+        let key_api = lua.create_table()?;
+        for operation in [KeyOperation::Down, KeyOperation::Up, KeyOperation::Tap] {
+            let name = match operation {
+                KeyOperation::Down => "down",
+                KeyOperation::Up => "up",
+                KeyOperation::Tap => "tap",
+            };
+            key_api.set(
+                name,
+                create_key_operation(lua, &loader_controls, operation)?,
+            )?;
+        }
+        key_api.set("keyboard", keys.get::<Table>("keyboard")?)?;
+        key_api.set("consumer", keys.get::<Table>("consumer")?)?;
+        let input: Table = module.get("input")?;
+        input.set("keys", keys)?;
+        input.set("key", key_api)?;
 
         let timer = lua.create_table()?;
         let after_controls = loader_controls.clone();
@@ -838,6 +1082,44 @@ fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<C
     let preload: Table = package.get("preload")?;
     preload.set("sliver.v1", loader)?;
     Ok(loaded)
+}
+
+fn key_event_table(lua: &Lua, transition: &InputTransition) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    let name = match transition.key {
+        ObservedKey::Fn => "fn",
+        ObservedKey::Modifier(modifier) => modifier_name(modifier),
+    };
+    table.set("key", name)?;
+    table.set("name", name)?;
+    table.set("phase", if transition.active { "down" } else { "up" })?;
+    table.set("active", transition.active)?;
+    table.set("state", input_state_table(lua, transition.state)?)?;
+    Ok(table)
+}
+
+fn modifier_name(modifier: Modifier) -> &'static str {
+    match modifier {
+        Modifier::LeftCtrl => "left_ctrl",
+        Modifier::RightCtrl => "right_ctrl",
+        Modifier::LeftAlt => "left_alt",
+        Modifier::RightAlt => "right_alt",
+        Modifier::LeftShift => "left_shift",
+        Modifier::RightShift => "right_shift",
+        Modifier::LeftSuper => "left_super",
+        Modifier::RightSuper => "right_super",
+    }
+}
+
+fn input_state_table(lua: &Lua, state: InputState) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    table.set("fn", state.fn_active)?;
+    let modifiers = lua.create_table()?;
+    for modifier in Modifier::ALL {
+        modifiers.set(modifier_name(modifier), state.modifiers.is_active(modifier))?;
+    }
+    table.set("modifiers", modifiers)?;
+    Ok(table)
 }
 
 fn touch_event_table(lua: &Lua, event: &TouchEvent) -> mlua::Result<Table> {

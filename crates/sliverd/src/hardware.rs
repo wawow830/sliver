@@ -54,6 +54,146 @@ impl ModifierState {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct InputState {
+    pub(crate) fn_active: bool,
+    pub(crate) modifiers: ModifierState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObservedKey {
+    Fn,
+    Modifier(Modifier),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InputTransition {
+    pub(crate) key: ObservedKey,
+    pub(crate) active: bool,
+    pub(crate) state: InputState,
+}
+
+impl InputState {
+    pub(crate) fn apply(&mut self, key: ObservedKey, active: bool) -> bool {
+        let old = match key {
+            ObservedKey::Fn => self.fn_active,
+            ObservedKey::Modifier(modifier) => self.modifiers.is_active(modifier),
+        };
+        if old == active {
+            return false;
+        }
+        match key {
+            ObservedKey::Fn => self.fn_active = active,
+            ObservedKey::Modifier(modifier) => self.modifiers.set(modifier, active),
+        }
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum KeyboardKey {
+    Escape,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+    LeftCtrl,
+    RightCtrl,
+    LeftAlt,
+    RightAlt,
+    LeftShift,
+    RightShift,
+    LeftSuper,
+    RightSuper,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ConsumerKey {
+    BrightnessDown,
+    BrightnessUp,
+    Previous,
+    PlayPause,
+    Next,
+    Mute,
+    VolumeDown,
+    VolumeUp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum OutputKey {
+    Keyboard(KeyboardKey),
+    Consumer(ConsumerKey),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SyntheticKeyEvent {
+    pub(crate) key: OutputKey,
+    pub(crate) active: bool,
+}
+
+pub(crate) fn tap_key_events(key: OutputKey, modifiers: &[OutputKey]) -> Vec<SyntheticKeyEvent> {
+    let mut events = modifiers
+        .iter()
+        .copied()
+        .map(|key| SyntheticKeyEvent { key, active: true })
+        .collect::<Vec<_>>();
+    events.push(SyntheticKeyEvent { key, active: true });
+    events.push(SyntheticKeyEvent { key, active: false });
+    events.extend(
+        modifiers
+            .iter()
+            .rev()
+            .copied()
+            .map(|key| SyntheticKeyEvent { key, active: false }),
+    );
+    events
+}
+
+pub(crate) fn modifier_output_keys(state: ModifierState) -> Vec<OutputKey> {
+    Modifier::ALL
+        .into_iter()
+        .filter(|modifier| state.is_active(*modifier))
+        .map(|modifier| {
+            OutputKey::Keyboard(match modifier {
+                Modifier::LeftCtrl => KeyboardKey::LeftCtrl,
+                Modifier::RightCtrl => KeyboardKey::RightCtrl,
+                Modifier::LeftAlt => KeyboardKey::LeftAlt,
+                Modifier::RightAlt => KeyboardKey::RightAlt,
+                Modifier::LeftShift => KeyboardKey::LeftShift,
+                Modifier::RightShift => KeyboardKey::RightShift,
+                Modifier::LeftSuper => KeyboardKey::LeftSuper,
+                Modifier::RightSuper => KeyboardKey::RightSuper,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn function_key_output(index: usize) -> Option<OutputKey> {
+    Some(OutputKey::Keyboard(match index {
+        0 => KeyboardKey::F1,
+        1 => KeyboardKey::F2,
+        2 => KeyboardKey::F3,
+        3 => KeyboardKey::F4,
+        4 => KeyboardKey::F5,
+        5 => KeyboardKey::F6,
+        6 => KeyboardKey::F7,
+        7 => KeyboardKey::F8,
+        8 => KeyboardKey::F9,
+        9 => KeyboardKey::F10,
+        10 => KeyboardKey::F11,
+        11 => KeyboardKey::F12,
+        _ => return None,
+    }))
+}
+
 pub(crate) type ContactId = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +286,11 @@ pub(crate) fn validate_backlight(level: f64) -> Result<()> {
 pub(crate) trait TouchBarHardware {
     fn claim(&mut self) -> Result<()>;
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>>;
+    fn input_state(&self) -> InputState;
     fn present(&mut self, frame: &LogicalFrame) -> Result<()>;
+    /// Sends the complete ordered sequence as one virtual-device batch.
+    /// Implementations must preserve slice order and must not split or delay it.
+    fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()>;
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()>;
     fn get_backlight(&mut self) -> Result<f64>;
     fn set_backlight(&mut self, level: f64) -> Result<()>;
@@ -162,12 +306,18 @@ mod fake {
 
     use anyhow::{ensure, Result};
 
-    use super::{HardwareEvent, LogicalFrame, Modifier, ModifierState, TouchBarHardware};
+    use super::{
+        function_key_output, modifier_output_keys, tap_key_events, ConsumerKey, HardwareEvent,
+        InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, ObservedKey, OutputKey,
+        SyntheticKeyEvent, TouchBarHardware,
+    };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum FakeKey {
         Function(usize),
         Modifier(Modifier),
+        Keyboard(KeyboardKey),
+        Consumer(ConsumerKey),
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,6 +383,11 @@ mod fake {
         actions: Vec<FakeAction>,
         frames: Vec<FrameSnapshot>,
         backlight: f64,
+        input_state: InputState,
+        virtual_keyboard_name: Option<String>,
+        virtual_keyboard_creations: usize,
+        synthetic_keys: Vec<FakeKeyEvent>,
+        synthetic_transactions: Vec<Vec<FakeKeyEvent>>,
     }
 
     impl FakeTouchBar {
@@ -259,12 +414,32 @@ mod fake {
         pub(crate) fn backlight_level(&self) -> f64 {
             self.backlight
         }
+
+        pub(crate) fn virtual_keyboard_name(&self) -> Option<&str> {
+            self.virtual_keyboard_name.as_deref()
+        }
+
+        pub(crate) fn virtual_keyboard_creations(&self) -> usize {
+            self.virtual_keyboard_creations
+        }
+
+        pub(crate) fn synthetic_keys(&self) -> &[FakeKeyEvent] {
+            &self.synthetic_keys
+        }
+
+        pub(crate) fn synthetic_transactions(&self) -> &[Vec<FakeKeyEvent>] {
+            &self.synthetic_transactions
+        }
     }
 
     impl TouchBarHardware for FakeTouchBar {
         fn claim(&mut self) -> Result<()> {
             ensure!(!self.claimed, "fake Touch Bar is already claimed");
             self.claimed = true;
+            if self.virtual_keyboard_name.is_none() {
+                self.virtual_keyboard_name = Some("Sliver Keyboard".into());
+                self.virtual_keyboard_creations += 1;
+            }
             self.actions.push(FakeAction::Grab);
             Ok(())
         }
@@ -278,7 +453,26 @@ mod fake {
                     .extract_if(.., |(scheduled, _)| *scheduled == poll)
                     .map(|(_, event)| event),
             );
-            Ok(mem::take(&mut self.events))
+            let events = mem::take(&mut self.events);
+            for event in &events {
+                match *event {
+                    HardwareEvent::Fn { active } => {
+                        self.input_state.apply(ObservedKey::Fn, active);
+                    }
+                    HardwareEvent::Modifier { modifier, active } => {
+                        self.input_state
+                            .apply(ObservedKey::Modifier(modifier), active);
+                    }
+                    HardwareEvent::Touch(_)
+                    | HardwareEvent::Device { .. }
+                    | HardwareEvent::Visibility { .. } => {}
+                }
+            }
+            Ok(events)
+        }
+
+        fn input_state(&self) -> InputState {
+            self.input_state
         }
 
         fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
@@ -288,32 +482,63 @@ mod fake {
             Ok(())
         }
 
+        fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
+            ensure!(self.claimed, "fake Touch Bar is not claimed");
+            let mut transaction = Vec::with_capacity(events.len());
+            for event in events {
+                let key = match event.key {
+                    OutputKey::Keyboard(key) => FakeKey::Keyboard(key),
+                    OutputKey::Consumer(key) => FakeKey::Consumer(key),
+                };
+                let event = FakeKeyEvent {
+                    key,
+                    active: event.active,
+                };
+                self.synthetic_keys.push(event);
+                transaction.push(event);
+                self.actions.push(FakeAction::SyntheticKey(event));
+            }
+            self.synthetic_transactions.push(transaction);
+            Ok(())
+        }
+
         fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
             ensure!(self.claimed, "fake Touch Bar is not claimed");
-            ensure!(index < 12, "function-key index is out of range");
-            for modifier in Modifier::ALL {
-                if modifiers.is_active(modifier) {
-                    self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                        key: FakeKey::Modifier(modifier),
-                        active: true,
-                    }));
-                }
-            }
-            self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                key: FakeKey::Function(index),
-                active: true,
-            }));
-            self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                key: FakeKey::Function(index),
-                active: false,
-            }));
-            for modifier in Modifier::ALL.into_iter().rev() {
-                if modifiers.is_active(modifier) {
-                    self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                        key: FakeKey::Modifier(modifier),
-                        active: false,
-                    }));
-                }
+            let function_key = function_key_output(index)
+                .ok_or_else(|| anyhow::anyhow!("function-key index is out of range"))?;
+            for event in tap_key_events(function_key, &modifier_output_keys(modifiers)) {
+                let key = match event.key {
+                    key if key == function_key => FakeKey::Function(index),
+                    OutputKey::Keyboard(KeyboardKey::LeftCtrl) => {
+                        FakeKey::Modifier(Modifier::LeftCtrl)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::RightCtrl) => {
+                        FakeKey::Modifier(Modifier::RightCtrl)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::LeftAlt) => {
+                        FakeKey::Modifier(Modifier::LeftAlt)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::RightAlt) => {
+                        FakeKey::Modifier(Modifier::RightAlt)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::LeftShift) => {
+                        FakeKey::Modifier(Modifier::LeftShift)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::RightShift) => {
+                        FakeKey::Modifier(Modifier::RightShift)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::LeftSuper) => {
+                        FakeKey::Modifier(Modifier::LeftSuper)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::RightSuper) => {
+                        FakeKey::Modifier(Modifier::RightSuper)
+                    }
+                    _ => unreachable!("function-key planner emitted an unsupported key"),
+                };
+                self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
+                    key,
+                    active: event.active,
+                }));
             }
             Ok(())
         }
@@ -368,6 +593,54 @@ mod tests {
         assert_eq!(
             hardware.poll(Duration::ZERO)?,
             vec![HardwareEvent::Touch(touch)]
+        );
+        hardware.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn fake_key_batch_preserves_one_ordered_transaction() -> Result<()> {
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.emit_key_events(&[
+            SyntheticKeyEvent {
+                key: OutputKey::Keyboard(KeyboardKey::LeftCtrl),
+                active: true,
+            },
+            SyntheticKeyEvent {
+                key: OutputKey::Keyboard(KeyboardKey::F2),
+                active: true,
+            },
+            SyntheticKeyEvent {
+                key: OutputKey::Keyboard(KeyboardKey::F2),
+                active: false,
+            },
+            SyntheticKeyEvent {
+                key: OutputKey::Keyboard(KeyboardKey::LeftCtrl),
+                active: false,
+            },
+        ])?;
+
+        assert_eq!(
+            hardware.synthetic_transactions(),
+            &[vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]]
         );
         hardware.release()?;
         Ok(())
