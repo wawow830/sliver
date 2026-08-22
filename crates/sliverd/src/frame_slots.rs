@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_crash_mid_write_leaves_the_broker_on_new_complete_frames() -> Result<()> {
+    fn abandoned_producer_mid_write_leaves_incomplete_slot_ignored() -> Result<()> {
         let slots = FrameSlots::new(2, 1, 8)?;
         let producer = slots.producer();
         let broker = slots.broker();
@@ -497,6 +497,7 @@ mod tests {
             partial
                 .write_bytes(&[3, 3, 3, 3])
                 .expect("partial write failed");
+            // Abandonment models a producer disappearing, not process detection.
             std::mem::forget(partial);
         })
         .join()
