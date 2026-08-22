@@ -534,6 +534,62 @@ mod tests {
     }
 
     #[test]
+    fn lua_worker_loads_c_module_against_vendored_lua() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let c_source = directory.path().join("native_probe.c");
+        let module = directory.path().join("native_probe.so");
+        std::fs::write(
+            &c_source,
+            r#"
+            typedef struct lua_State lua_State;
+            typedef long long lua_Integer;
+            extern void lua_pushinteger(lua_State *, lua_Integer);
+
+            int luaopen_native_probe(lua_State *state) {
+                lua_pushinteger(state, 54);
+                return 1;
+            }
+            "#,
+        )?;
+        let compile = std::process::Command::new("cc")
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&module)
+            .arg(&c_source)
+            .status()
+            .context("compiling Lua C-module probe")?;
+        anyhow::ensure!(compile.success(), "C-module probe did not compile");
+
+        let source = directory.path().join("native.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local probe = require("native_probe")
+            require("sliver.v1")
+            assert(probe == 54)
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        assert_eq!(
+            hardware
+                .presented_frames()
+                .first()
+                .context("worker did not present the native-module config")?
+                .rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn lua_diagnostics_name_source_line_traceback_and_stage() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("diagnostic.lua");

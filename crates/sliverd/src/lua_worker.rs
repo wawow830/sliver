@@ -233,15 +233,28 @@ impl Runtime {
 fn configure_lua_path(lua: &Lua, source: &Path) -> mlua::Result<()> {
     let directory = source.parent().unwrap_or_else(|| Path::new("."));
     let package: Table = lua.globals().get("package")?;
-    let existing: String = package.get("path")?;
-    let direct = directory.join("?.lua");
-    let nested = directory.join("?/init.lua");
+
+    let existing_lua: String = package.get("path")?;
+    let lua_direct = directory.join("?.lua");
+    let lua_nested = directory.join("?/init.lua");
     package.set(
         "path",
         format!(
-            "{};{};{existing}",
-            direct.to_string_lossy(),
-            nested.to_string_lossy()
+            "{};{};{existing_lua}",
+            lua_direct.to_string_lossy(),
+            lua_nested.to_string_lossy()
+        ),
+    )?;
+
+    let existing_c: String = package.get("cpath")?;
+    let c_direct = directory.join("?.so");
+    let c_nested = directory.join("?/init.so");
+    package.set(
+        "cpath",
+        format!(
+            "{};{};{existing_c}",
+            c_direct.to_string_lossy(),
+            c_nested.to_string_lossy()
         ),
     )
 }
