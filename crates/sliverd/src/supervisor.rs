@@ -1145,6 +1145,108 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_key_requests_are_rejected_during_staging() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("staged-key.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            sliver.input.key.tap(sliver.input.keys.keyboard.escape)
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        let error = supervisor
+            .apply(&source)
+            .expect_err("staged synthetic key output was accepted");
+        assert!(format!("{error:#}").contains("unavailable while staging"));
+        assert!(supervisor.hardware().synthetic_keys().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic_key_holds_are_released_before_worker_replacement() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-key.lua");
+        let new_source = directory.path().join("new-key.lua");
+        std::fs::write(
+            &old_source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                    elseif event.phase == "up" then
+                        sliver.input.key.up(sliver.input.keys.keyboard.f2)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        std::fs::write(
+            &new_source,
+            r#"
+            require("sliver.v1")
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftAlt,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+        assert_eq!(supervisor.hardware().synthetic_transactions().len(), 1);
+
+        supervisor.apply(&new_source)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions()[1],
+            vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftAlt),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn touch_can_emit_keyboard_and_consumer_taps() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("keys.lua");
