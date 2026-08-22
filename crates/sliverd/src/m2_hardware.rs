@@ -865,24 +865,25 @@ pub(crate) fn probe() -> Result<()> {
     let mut claim = claim_card()?;
     let (pw, ph) = claim.mode.size();
     let (pw, ph) = (u32::from(pw), u32::from(ph));
-    let fb_w = pw + FB_PAD;
+    let framebuffer_width = pw + FB_PAD;
 
-    let mut db = match claim
-        .card
-        .create_dumb_buffer((fb_w, ph), DrmFourcc::Xrgb8888, 32)
-    {
-        Ok(db) => db,
-        Err(error) => {
-            if let Err(release_error) = claim.release(None, None) {
-                eprintln!("DRM release failed after probe error: {release_error:#}");
+    let mut dumb_buffer =
+        match claim
+            .card
+            .create_dumb_buffer((framebuffer_width, ph), DrmFourcc::Xrgb8888, 32)
+        {
+            Ok(dumb_buffer) => dumb_buffer,
+            Err(error) => {
+                if let Err(release_error) = claim.release(None, None) {
+                    eprintln!("DRM release failed after probe error: {release_error:#}");
+                }
+                return Err(error.into());
             }
-            return Err(error.into());
-        }
-    };
-    let fb = match claim.card.add_framebuffer(&db, 24, 32) {
-        Ok(fb) => fb,
+        };
+    let framebuffer = match claim.card.add_framebuffer(&dumb_buffer, 24, 32) {
+        Ok(framebuffer) => framebuffer,
         Err(error) => {
-            if let Err(release_error) = claim.release(None, Some(db)) {
+            if let Err(release_error) = claim.release(None, Some(dumb_buffer)) {
                 eprintln!("DRM release failed after probe error: {release_error:#}");
             }
             return Err(error.into());
@@ -897,12 +898,12 @@ pub(crate) fn probe() -> Result<()> {
     const BASE: u32 = 0xff20_2020;
 
     let result = (|| -> Result<()> {
-        let pitch = db.pitch() as usize;
+        let pitch = dumb_buffer.pitch() as usize;
         {
-            let mut map = claim.card.map_dumb_buffer(&mut db)?;
+            let mut map = claim.card.map_dumb_buffer(&mut dumb_buffer)?;
             let data: &mut [u8] = map.as_mut();
             for row in 0..ph as usize {
-                for col in 0..fb_w as usize {
+                for col in 0..framebuffer_width as usize {
                     let px = if col >= pw as usize {
                         MAGENTA
                     } else if row < 200 {
@@ -922,12 +923,12 @@ pub(crate) fn probe() -> Result<()> {
             }
         }
 
-        claim.show(fb)?;
+        claim.show(framebuffer)?;
         eprintln!("probe on glass: red/blue ends, green/white flanks, magenta pad");
         hold()
     })();
 
-    let release_result = claim.release(Some(fb), Some(db));
+    let release_result = claim.release(Some(framebuffer), Some(dumb_buffer));
     match (result, release_result) {
         (Err(error), Err(release_error)) => {
             eprintln!("DRM release failed after probe error: {release_error:#}");

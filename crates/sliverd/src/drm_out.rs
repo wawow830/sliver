@@ -210,14 +210,9 @@ impl Daemon {
         self.dirty = false;
         Ok(())
     }
-
-    fn shutdown<H: TouchBarHardware>(&mut self, hardware: &mut H) -> Result<()> {
-        hardware.release()
-    }
 }
 
 fn run_with_hardware<H: TouchBarHardware>(cfg: sliver_core::Config, mut hardware: H) -> Result<()> {
-    let socket = spawn_socket();
     let running = Arc::new(AtomicBool::new(true));
     let signal_running = running.clone();
     ctrlc::set_handler(move || signal_running.store(false, Ordering::SeqCst))?;
@@ -225,6 +220,7 @@ fn run_with_hardware<H: TouchBarHardware>(cfg: sliver_core::Config, mut hardware
     let mut daemon = Daemon::new(cfg);
     let run_result = (|| -> Result<()> {
         daemon.start(&mut hardware)?;
+        let socket = spawn_socket();
         eprintln!("the strip is ours — Ctrl-C to let go");
         while running.load(Ordering::SeqCst) {
             // Preserve the existing event order: physical keys, touch,
@@ -237,7 +233,7 @@ fn run_with_hardware<H: TouchBarHardware>(cfg: sliver_core::Config, mut hardware
     })();
 
     eprintln!("releasing the strip");
-    let release_result = daemon.shutdown(&mut hardware);
+    let release_result = hardware.release();
     match (run_result, release_result) {
         (Err(error), Err(release_error)) => {
             eprintln!("hardware release failed after daemon error: {release_error:#}");
@@ -263,6 +259,62 @@ pub fn probe() -> Result<()> {
 mod tests {
     use super::*;
     use crate::hardware::{FakeAction, FakeTouchBar, HardwareEvent, Modifier};
+
+    #[test]
+    fn live_toml_apply_and_widget_press_cross_the_hardware_seam() -> Result<()> {
+        let initial = sliver_core::parse_config(
+            r##"
+            background = "#ff0000"
+            [[widgets]]
+            type = "button"
+            text = "first"
+            width = 300
+            "##,
+        )?;
+        let mut daemon = Daemon::new(initial);
+        let mut hardware = FakeTouchBar::new();
+        daemon.start(&mut hardware)?;
+
+        let (socket_tx, socket_rx) = mpsc::channel();
+        let (reply_tx, reply_rx) = mpsc::channel();
+        socket_tx.send((
+            r##"
+            background = "#0000ff"
+            [[widgets]]
+            type = "button"
+            text = "updated"
+            width = 300
+            "##
+            .to_string(),
+            reply_tx,
+        ))?;
+        daemon.apply_pending(&socket_rx);
+        daemon.finish_step(&mut hardware)?;
+        assert_eq!(
+            reply_rx.recv().context("daemon did not reply to apply")?,
+            Ok(())
+        );
+
+        let applied = hardware
+            .presented_frames()
+            .last()
+            .context("daemon did not present the live config")?
+            .clone();
+        assert_eq!(applied.rgba_at(0, 0), [0, 0, 255, 255]);
+
+        hardware.inject(HardwareEvent::TouchTap { x: 100.0 });
+        daemon.step(&mut hardware, Duration::ZERO)?;
+        assert_ne!(
+            &applied,
+            hardware
+                .presented_frames()
+                .last()
+                .context("daemon did not present widget press feedback")?
+        );
+
+        hardware.release()?;
+        Ok(())
+    }
 
     #[test]
     fn current_function_row_crosses_the_hardware_seam() -> Result<()> {
@@ -330,7 +382,7 @@ mod tests {
         hardware.set_backlight(0.5)?;
         assert!(hardware.actions().contains(&FakeAction::Backlight(0.5)));
 
-        daemon.shutdown(&mut hardware)?;
+        hardware.release()?;
         assert_eq!(hardware.actions().first(), Some(&FakeAction::Grab));
         assert_eq!(
             hardware
