@@ -1,5 +1,6 @@
+use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
 
@@ -31,6 +32,25 @@ pub(crate) fn request_apply(path: &Path) -> Result<()> {
         0 => bail!("supervisor returned an invalid success reply"),
         1 => bail!("{}", String::from_utf8_lossy(&message)),
         other => bail!("supervisor returned unknown status {other}"),
+    }
+}
+
+pub(crate) fn read_request(stream: &mut UnixStream) -> Result<PathBuf> {
+    let bytes = read_bytes(stream).context("reading apply request")?;
+    ensure!(!bytes.is_empty(), "config path is empty");
+    Ok(PathBuf::from(OsString::from_vec(bytes)))
+}
+
+pub(crate) fn write_reply(stream: &mut UnixStream, result: &Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => {
+            stream.write_all(&[0])?;
+            write_bytes(stream, &[])
+        }
+        Err(error) => {
+            stream.write_all(&[1])?;
+            write_bytes(stream, format!("{error:#}").as_bytes())
+        }
     }
 }
 

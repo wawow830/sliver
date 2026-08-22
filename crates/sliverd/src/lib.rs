@@ -4,6 +4,8 @@ mod hardware;
 mod lua_canvas;
 mod lua_worker;
 mod m2_hardware;
+mod path_state;
+mod supervisor;
 
 use std::io::{Read, Write};
 
@@ -13,6 +15,68 @@ use anyhow::{bail, Context, Result};
 #[doc(hidden)]
 pub fn apply_config(path: &std::path::Path) -> Result<()> {
     apply_ipc::request_apply(path)
+}
+
+/// Run the per-user supervisor process.
+#[doc(hidden)]
+pub fn supervisor_main() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    let socket = apply_ipc::supervisor_socket_path()?;
+    let socket_directory = socket
+        .parent()
+        .context("supervisor socket path has no parent directory")?;
+    std::fs::create_dir_all(socket_directory).with_context(|| {
+        format!(
+            "creating supervisor socket directory {}",
+            socket_directory.display()
+        )
+    })?;
+    std::fs::set_permissions(socket_directory, std::fs::Permissions::from_mode(0o700))?;
+    if socket.exists() {
+        match UnixStream::connect(&socket) {
+            Ok(_) => bail!(
+                "a Sliver supervisor is already listening at {}",
+                socket.display()
+            ),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                ) =>
+            {
+                std::fs::remove_file(&socket)?;
+            }
+            Err(error) => return Err(error).context("checking existing supervisor socket"),
+        }
+    }
+    let listener = UnixListener::bind(&socket)
+        .with_context(|| format!("binding supervisor socket {}", socket.display()))?;
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
+
+    let state_file = selected_path_state_file()?;
+    let mut supervisor = supervisor::Supervisor::new(m2_hardware::M2TouchBar::new(), state_file)?;
+    let serve_result = supervisor::serve(listener, &mut supervisor);
+    let shutdown_result = supervisor.shutdown();
+    let _ = std::fs::remove_file(&socket);
+    match (serve_result, shutdown_result) {
+        (Err(error), Err(shutdown_error)) => {
+            eprintln!("supervisor shutdown failed after service error: {shutdown_error:#}");
+            Err(error)
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn selected_path_state_file() -> Result<std::path::PathBuf> {
+    if let Some(state_home) = std::env::var_os("XDG_STATE_HOME") {
+        return Ok(std::path::PathBuf::from(state_home).join("sliver/config-path"));
+    }
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    Ok(std::path::PathBuf::from(home).join(".local/state/sliver/config-path"))
 }
 
 /// Run the legacy TOML daemon and developer modes until issue #16 removes them.
