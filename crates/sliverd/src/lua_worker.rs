@@ -515,6 +515,22 @@ impl LuaWorker {
         let _ = self.join_owner();
     }
 
+    pub(crate) fn is_alive(&self) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| !owner.is_finished())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exit_owner_for_test(&mut self) -> Result<()> {
+        if let Some(commands) = self.commands.take() {
+            commands
+                .send(WorkerCommand::Abandon)
+                .context("stopping Lua owner for test")?;
+        }
+        self.join_owner()
+    }
+
     fn join_owner(&mut self) -> Result<()> {
         if let Some(owner) = self.owner.take() {
             owner

@@ -907,7 +907,23 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
+    fn check_worker_liveness(&mut self) -> Result<()> {
+        let exited = self
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.worker.is_alive());
+        if exited {
+            self.fail_active_worker(anyhow::anyhow!("Lua owner thread exited"))?;
+            #[cfg(test)]
+            {
+                self.worker_failure = None;
+            }
+        }
+        Ok(())
+    }
+
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
+        self.check_worker_liveness()?;
         for event in events {
             if matches!(event, HardwareEvent::Touch(_))
                 && self.recovery.is_none()
@@ -4800,6 +4816,34 @@ mod tests {
                 .count(),
             2
         );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn an_idle_worker_exit_enters_recovery_on_the_next_poll() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor.next_timer_deadline = None;
+        supervisor
+            .active
+            .as_mut()
+            .expect("candidate was not made active")
+            .worker
+            .exit_owner_for_test()?;
+
+        supervisor.step_at(1.0)?;
+
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         supervisor.shutdown()?;
         Ok(())
     }
