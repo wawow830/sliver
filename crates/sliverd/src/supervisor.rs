@@ -331,6 +331,11 @@ impl<H: TouchBarHardware> Supervisor<H> {
                         "restoring the previous backlight also failed: {restore_error:#}"
                     ));
                 }
+                if let Err(restore_error) = active.worker.restore_backlight(old_backlight) {
+                    error = error.context(format!(
+                        "restoring Lua backlight state also failed: {restore_error:#}"
+                    ));
+                }
                 return Err(error);
             }
             brightness_changed = true;
@@ -347,6 +352,11 @@ impl<H: TouchBarHardware> Supervisor<H> {
                     if let Err(restore_error) = self.hardware.set_backlight(old_backlight) {
                         error = error.context(format!(
                             "restoring the previous backlight also failed: {restore_error:#}"
+                        ));
+                    }
+                    if let Err(restore_error) = active.worker.restore_backlight(old_backlight) {
+                        error = error.context(format!(
+                            "restoring Lua backlight state also failed: {restore_error:#}"
                         ));
                     }
                 }
@@ -977,9 +987,20 @@ mod tests {
                 local canceled = sliver.timer.after(9, function() record("canceled") end)
                 canceled:cancel()
                 canceled:cancel()
-                sliver.timer.after(1, function() record("once") end)
-                sliver.timer.every(1, function() record("repeat") end)
-                return {{ api_version = 1, render = function() end }}
+                local active = false
+                sliver.timer.after(0.25, function()
+                    record("once")
+                    active = true
+                    sliver.backlight.set(0.5)
+                    sliver.redraw()
+                end)
+                sliver.timer.every(0.5, function() record("repeat") end)
+                return {{
+                    api_version = 1,
+                    render = function(canvas)
+                        if active then canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end
+                    end,
+                }}
                 "#,
                 log = log.to_string_lossy()
             ),
@@ -989,10 +1010,20 @@ mod tests {
         supervisor.apply(&source)?;
         let committed_at = supervisor.now_seconds();
 
-        supervisor.step_at(committed_at + 1.0)?;
-        supervisor.step_at(committed_at + 4.5)?;
+        supervisor.step_at(committed_at + 0.5)?;
+        supervisor.step_at(committed_at + 2.75)?;
 
         assert_eq!(std::fs::read_to_string(log)?, "once\nrepeat\nrepeat\n");
+        assert_eq!(supervisor.hardware().backlight_level(), 0.5);
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .context("timer did not produce a frame")?
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
         supervisor.shutdown()?;
         Ok(())
     }
@@ -1055,6 +1086,42 @@ mod tests {
     }
 
     #[test]
+    fn static_worker_does_not_render_without_a_request() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("static.lua");
+        let log = directory.path().join("renders");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                require("sliver.v1")
+                local log = {log:?}
+                return {{
+                    api_version = 1,
+                    render = function()
+                        local file = assert(io.open(log, "a"))
+                        file:write("render\n")
+                        file:close()
+                    end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "render\n");
+
+        let now = supervisor.now_seconds();
+        supervisor.step_at(now + 1.0)?;
+        supervisor.step_at(now + 2.0)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "render\n");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn replacement_cancels_old_contacts_and_ignores_until_up() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let old_source = directory.path().join("old-touch.lua");
@@ -1098,8 +1165,7 @@ mod tests {
         };
         supervisor
             .hardware_mut()
-            .inject(HardwareEvent::Touch(event(TouchPhase::Down)));
-        supervisor.step_at(1.0)?;
+            .inject_on_poll(4, HardwareEvent::Touch(event(TouchPhase::Down)));
         supervisor.apply(&new_source)?;
 
         supervisor
@@ -1162,6 +1228,79 @@ mod tests {
                 .rgba_at(10, 10),
             [255, 0, 0, 255]
         );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn committed_backlight_failure_rolls_back_worker_and_hardware_state() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("backlight.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.backlight.set(0.75)
+                        sliver.redraw()
+                    end
+                end,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor =
+            Supervisor::new(FailingPresentHardware::new(state_file.clone()), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor.hardware_mut().fail_next_backlight = true;
+        let event = |phase| TouchEvent {
+            phase,
+            id: 1,
+            time: 0.0,
+            x: 1.0,
+            y: 1.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(event(TouchPhase::Down)));
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("committed backlight failure was accepted");
+        assert!(format!("{error:#}").contains("injected backlight failure"));
+        assert_eq!(supervisor.hardware().inner.backlight_level(), 0.0);
+        assert_eq!(
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .expect("previous frame was lost")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(event(TouchPhase::Up)));
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(event(TouchPhase::Down)));
+        supervisor.step_at(2.0)?;
+        assert_eq!(supervisor.hardware().inner.backlight_level(), 0.75);
         supervisor.shutdown()?;
         Ok(())
     }

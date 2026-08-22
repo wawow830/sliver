@@ -228,6 +228,8 @@ mod fake {
     pub(crate) struct FakeTouchBar {
         claimed: bool,
         events: Vec<HardwareEvent>,
+        scheduled_events: Vec<(usize, HardwareEvent)>,
+        poll_count: usize,
         actions: Vec<FakeAction>,
         frames: Vec<FrameSnapshot>,
         backlight: f64,
@@ -240,6 +242,10 @@ mod fake {
 
         pub(crate) fn inject(&mut self, event: HardwareEvent) {
             self.events.push(event);
+        }
+
+        pub(crate) fn inject_on_poll(&mut self, poll: usize, event: HardwareEvent) {
+            self.scheduled_events.push((poll, event));
         }
 
         pub(crate) fn actions(&self) -> &[FakeAction] {
@@ -265,6 +271,13 @@ mod fake {
 
         fn poll(&mut self, _timeout: std::time::Duration) -> Result<Vec<HardwareEvent>> {
             ensure!(self.claimed, "fake Touch Bar is not claimed");
+            self.poll_count += 1;
+            let poll = self.poll_count;
+            self.events.extend(
+                self.scheduled_events
+                    .extract_if(.., |(scheduled, _)| *scheduled == poll)
+                    .map(|(_, event)| event),
+            );
             Ok(mem::take(&mut self.events))
         }
 
