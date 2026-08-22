@@ -11,6 +11,7 @@ use mlua::{
     Function, HookTriggers, Lua, MultiValue, Table, UserData, UserDataMethods, Value, VmState,
 };
 
+use crate::frame_canvas::FrameCanvas;
 #[cfg(test)]
 use crate::frame_slots::FrameWriter;
 use crate::frame_slots::{FrameBroker, FrameProducer, FrameSlots, FrameTiming};
@@ -993,20 +994,9 @@ impl Runtime {
         delta: f64,
     ) -> std::result::Result<LogicalFrame, String> {
         self.controls.redraw_pending.set(false);
-        let surface = cairo::ImageSurface::create(
-            cairo::Format::ARgb32,
-            sliver_core::STRIP_W as i32,
-            sliver_core::STRIP_H as i32,
-        )
-        .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        let context = cairo::Context::new(&surface)
-            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        context.set_operator(cairo::Operator::Source);
-        context.set_source_rgb(0.0, 0.0, 0.0);
-        context
-            .paint()
-            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        context.set_operator(cairo::Operator::Over);
+        let frame = FrameCanvas::new()
+            .map_err(|error| diagnostic("render", &self.source, format!("{error:#}")))?;
+        let context = frame.context();
         let canvas = self
             ._lua
             .create_userdata(Canvas::new(&context))
@@ -1019,8 +1009,8 @@ impl Runtime {
             .map_err(|error| diagnostic("render", &self.source, error.to_string()))?
             .invalidate();
         render_result.map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        surface.flush();
-        LogicalFrame::from_surface(&surface)
+        frame
+            .finish()
             .map_err(|error| diagnostic("render", &self.source, format!("{error:#}")))
     }
 

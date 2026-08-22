@@ -1,6 +1,7 @@
 mod apply_ipc;
 mod authorization;
 mod drm_out;
+mod frame_canvas;
 mod frame_slots;
 mod hardware;
 mod logind;

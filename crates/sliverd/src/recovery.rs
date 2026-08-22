@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use cairo::{FontSlant, FontWeight, Format, ImageSurface};
+use cairo::{FontSlant, FontWeight};
 
+use crate::frame_canvas::FrameCanvas;
 use crate::hardware::{function_key_output, ContactId, LogicalFrame, TouchEvent, TouchPhase};
 
 const KEY_COUNT: usize = 12;
@@ -145,17 +146,8 @@ impl RecoveryRow {
     }
 
     pub(crate) fn render(&self) -> Result<LogicalFrame> {
-        let surface = ImageSurface::create(
-            Format::ARgb32,
-            sliver_core::STRIP_W as i32,
-            sliver_core::STRIP_H as i32,
-        )
-        .context("creating recovery frame")?;
-        let context = cairo::Context::new(&surface).context("creating recovery drawing context")?;
-        context.set_operator(cairo::Operator::Source);
-        context.set_source_rgb(0.0, 0.0, 0.0);
-        context.paint().context("clearing recovery frame")?;
-        context.set_operator(cairo::Operator::Over);
+        let frame = FrameCanvas::new().context("creating recovery frame")?;
+        let context = frame.context();
         context.select_font_face("Sans", FontSlant::Normal, FontWeight::Normal);
         context.set_font_size(24.0);
 
@@ -180,8 +172,7 @@ impl RecoveryRow {
                 .show_text(&label)
                 .context("drawing recovery label")?;
         }
-        surface.flush();
-        LogicalFrame::from_surface(&surface)
+        frame.finish()
     }
 
     pub(crate) fn output_key(index: usize) -> Option<crate::hardware::OutputKey> {
