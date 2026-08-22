@@ -4,13 +4,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{ensure, Context, Result};
 
 use crate::apply_ipc::absolute_lexical;
-use crate::hardware::{LogicalFrame, TouchBarHardware};
+use crate::hardware::TouchBarHardware;
 use crate::lua_worker::{LuaWorker, StagedLuaWorker, StopReason};
-use crate::path_state::PreparedPathState;
+use crate::path_state::{PathStateSnapshot, PreparedPathState};
 
 struct ActiveConfig {
     worker: LuaWorker,
-    frame: LogicalFrame,
     _selected_path: PathBuf,
 }
 
@@ -43,20 +42,20 @@ impl<H: TouchBarHardware> Supervisor<H> {
         );
 
         let StagedLuaWorker { worker, frame } = LuaWorker::stage(&selected_path)?;
+        let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
         let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
-        self.hardware.present(&frame)?;
-        if let Err(error) = path_state.commit() {
-            if let Some(active) = &self.active {
-                self.hardware.present(&active.frame).with_context(|| {
-                    format!("restoring active frame after state commit failed: {error:#}")
-                })?;
+        path_state.commit()?;
+        if let Err(presentation_error) = self.hardware.present(&frame) {
+            if let Err(rollback_error) = previous_path_state.restore(&self.state_file) {
+                return Err(presentation_error).context(format!(
+                    "restoring selected path after presentation failed also failed: {rollback_error:#}"
+                ));
             }
-            return Err(error);
+            return Err(presentation_error);
         }
 
         let replaced = self.active.replace(ActiveConfig {
             worker,
-            frame,
             _selected_path: selected_path,
         });
         if let Some(replaced) = replaced {
@@ -88,6 +87,11 @@ impl<H: TouchBarHardware> Supervisor<H> {
     #[cfg(test)]
     pub(crate) fn hardware(&self) -> &H {
         &self.hardware
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hardware_mut(&mut self) -> &mut H {
+        &mut self.hardware
     }
 }
 
@@ -127,11 +131,104 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use anyhow::{Context, Result};
+    use anyhow::{bail, Context, Result};
 
-    use crate::hardware::{FakeAction, FakeTouchBar};
+    use crate::hardware::{
+        FakeAction, FakeTouchBar, HardwareEvent, LogicalFrame, ModifierState, TouchBarHardware,
+    };
 
     use super::{serve_connection, Supervisor};
+
+    struct FailingPresentHardware {
+        inner: FakeTouchBar,
+        state_file: std::path::PathBuf,
+        fail_next_present: bool,
+        state_seen_at_failure: Vec<u8>,
+    }
+
+    impl FailingPresentHardware {
+        fn new(state_file: std::path::PathBuf) -> Self {
+            Self {
+                inner: FakeTouchBar::new(),
+                state_file,
+                fail_next_present: false,
+                state_seen_at_failure: Vec::new(),
+            }
+        }
+    }
+
+    impl TouchBarHardware for FailingPresentHardware {
+        fn claim(&mut self) -> Result<()> {
+            self.inner.claim()
+        }
+
+        fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+            self.inner.poll(timeout)
+        }
+
+        fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
+            if self.fail_next_present {
+                self.fail_next_present = false;
+                self.state_seen_at_failure = std::fs::read(&self.state_file)?;
+                bail!("injected presentation failure");
+            }
+            self.inner.present(frame)
+        }
+
+        fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
+            self.inner.tap_function_key(index, modifiers)
+        }
+
+        fn set_backlight(&mut self, level: f64) -> Result<()> {
+            self.inner.set_backlight(level)
+        }
+
+        fn release(&mut self) -> Result<()> {
+            self.inner.release()
+        }
+    }
+
+    #[test]
+    fn presentation_failure_restores_previous_selected_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let old_source = directory.path().join("old.lua");
+        let new_source = directory.path().join("new.lua");
+        let config = |red: u8, blue: u8| {
+            format!(
+                "require('sliver.v1'); return {{ api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, {}, 0, {}, 1) end }}",
+                f64::from(red) / 255.0,
+                f64::from(blue) / 255.0,
+            )
+        };
+        std::fs::write(&old_source, config(255, 0))?;
+        std::fs::write(&new_source, config(0, 255))?;
+        let hardware = FailingPresentHardware::new(state_file.clone());
+        let mut supervisor = Supervisor::new(hardware, state_file.clone())?;
+        supervisor.apply(&old_source)?;
+        supervisor.hardware_mut().fail_next_present = true;
+
+        let error = supervisor
+            .apply(&new_source)
+            .expect_err("injected presentation failure was ignored");
+
+        assert!(format!("{error:#}").contains("injected presentation failure"));
+        assert_eq!(
+            supervisor.hardware().state_seen_at_failure,
+            new_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(supervisor.hardware().inner.presented_frames().len(), 1);
+        assert_eq!(
+            supervisor.hardware().inner.presented_frames()[0].rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
 
     #[test]
     fn rejected_candidate_preserves_active_state_and_replacement_stops_after_commit() -> Result<()>

@@ -9,6 +9,50 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+pub(crate) struct PathStateSnapshot {
+    contents: Option<Vec<u8>>,
+}
+
+impl PathStateSnapshot {
+    pub(crate) fn capture(state_file: &Path) -> Result<Self> {
+        match fs::read(state_file) {
+            Ok(contents) => Ok(Self {
+                contents: Some(contents),
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(Self { contents: None })
+            }
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "reading previous selected-path state {}",
+                    state_file.display()
+                )
+            }),
+        }
+    }
+
+    pub(crate) fn restore(self, state_file: &Path) -> Result<()> {
+        match self.contents {
+            Some(contents) => PreparedPathState::prepare_contents(state_file, &contents)?.commit(),
+            None => {
+                match fs::remove_file(state_file) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!(
+                                "removing newly selected path state {}",
+                                state_file.display()
+                            )
+                        });
+                    }
+                }
+                sync_directory(state_directory(state_file))
+            }
+        }
+    }
+}
+
 pub(crate) struct PreparedPathState {
     state_file: PathBuf,
     temp_file: Option<PathBuf>,
@@ -17,16 +61,20 @@ pub(crate) struct PreparedPathState {
 impl PreparedPathState {
     pub(crate) fn prepare(state_file: &Path, selected_path: &Path) -> Result<Self> {
         ensure!(
-            state_file.file_name().is_some(),
-            "selected-path state file must name a file: {}",
-            state_file.display()
-        );
-        ensure!(
             selected_path.is_absolute(),
             "selected path must be absolute: {}",
             selected_path.display()
         );
 
+        Self::prepare_contents(state_file, selected_path.as_os_str().as_bytes())
+    }
+
+    fn prepare_contents(state_file: &Path, contents: &[u8]) -> Result<Self> {
+        ensure!(
+            state_file.file_name().is_some(),
+            "selected-path state file must name a file: {}",
+            state_file.display()
+        );
         let directory = state_directory(state_file);
         fs::create_dir_all(directory).with_context(|| {
             format!(
@@ -35,7 +83,6 @@ impl PreparedPathState {
             )
         })?;
 
-        let contents = selected_path.as_os_str().as_bytes();
         let (mut file, temp_file) = create_temp_file(state_file, directory)?;
         let result = (|| -> Result<()> {
             file.set_permissions(fs::Permissions::from_mode(0o600))
