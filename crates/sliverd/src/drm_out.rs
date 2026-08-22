@@ -407,6 +407,42 @@ mod tests {
     }
 
     #[test]
+    fn lua_application_rejects_non_function_callbacks() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("wrong-callback.lua");
+
+        for callback in ["start", "stop", "visibility", "touch", "key", "render"] {
+            let fields = if callback == "render" {
+                "render = 42".to_string()
+            } else {
+                format!("{callback} = 42, render = function() end")
+            };
+            std::fs::write(
+                &source,
+                format!(
+                    r#"
+                    require("sliver.v1")
+                    return {{
+                        api_version = 1,
+                        {fields}
+                    }}
+                    "#
+                ),
+            )?;
+            let mut hardware = FakeTouchBar::new();
+
+            let error = present_lua_once(&source, &mut hardware)
+                .expect_err("non-function callback was accepted");
+
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains("[validation]"), "{diagnostic}");
+            assert!(diagnostic.contains(callback), "{diagnostic}");
+            assert!(hardware.presented_frames().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn live_toml_apply_and_widget_press_cross_the_hardware_seam() -> Result<()> {
         let initial = sliver_core::parse_config(
             r##"

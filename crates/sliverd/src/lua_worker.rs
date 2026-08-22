@@ -28,6 +28,9 @@ enum WorkerCommand {
 struct Runtime {
     _lua: Lua,
     stop: Option<Function>,
+    _visibility: Option<Function>,
+    _touch: Option<Function>,
+    _key: Option<Function>,
     source: PathBuf,
 }
 
@@ -168,6 +171,9 @@ impl Runtime {
 
         let start = optional_function(&application, "start", source)?;
         let stop = optional_function(&application, "stop", source)?;
+        let visibility = optional_function(&application, "visibility", source)?;
+        let touch = optional_function(&application, "touch", source)?;
+        let key = optional_function(&application, "key", source)?;
         let render = required_function(&application, "render", source)?;
         if let Some(start) = start {
             start
@@ -204,6 +210,9 @@ impl Runtime {
             Self {
                 _lua: lua,
                 stop,
+                _visibility: visibility,
+                _touch: touch,
+                _key: key,
                 source: source.to_path_buf(),
             },
             frame,
