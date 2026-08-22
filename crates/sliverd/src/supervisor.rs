@@ -710,6 +710,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     #[allow(dead_code)]
     pub(crate) fn handoff_owner(&mut self) -> Result<()> {
+        self.poll_hardware(Duration::ZERO)?;
         self.release_synthetic_keys()?;
         let stop_result = self.stop_active_worker(StopReason::Logout);
         let input_state = self.hardware.input_state();
