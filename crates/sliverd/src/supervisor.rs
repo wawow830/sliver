@@ -373,21 +373,33 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         requested_path: &Path,
         authorization: Option<(PeerCredentials, AuthorizationGrant)>,
     ) -> Result<()> {
-        let candidate_error = match self.apply_candidate(requested_path, authorization, true) {
-            Ok(()) => return Ok(()),
-            Err(CandidateFailure::Authorization(error)) => return Err(error),
-            Err(CandidateFailure::Candidate(error)) => error,
-        };
+        let candidate_error =
+            match self.apply_candidate(requested_path, authorization.as_ref(), true) {
+                Ok(()) => return Ok(()),
+                Err(CandidateFailure::Authorization(error)) => return Err(error),
+                Err(CandidateFailure::Candidate(error)) => error,
+            };
         if self.active.is_none() {
             if let Ok(path) = absolute_lexical(requested_path) {
-                self.selected_path = Some(path.clone());
-                let state_result = PreparedPathState::prepare(&self.state_file, &path)
-                    .and_then(PreparedPathState::commit);
-                if let Err(state_error) = state_result {
+                let path_state = match PreparedPathState::prepare(&self.state_file, &path) {
+                    Ok(path_state) => path_state,
+                    Err(state_error) => {
+                        return Err(candidate_error.context(format!(
+                            "preserving failed selected path also failed: {state_error:#}"
+                        )))
+                    }
+                };
+                if let Some((peer, grant)) = authorization {
+                    if let Err(error) = self.authorizer.recheck(peer, &grant) {
+                        return Err(error);
+                    }
+                }
+                if let Err(state_error) = path_state.commit() {
                     return Err(candidate_error.context(format!(
                         "preserving failed selected path also failed: {state_error:#}"
                     )));
                 }
+                self.selected_path = Some(path);
                 if let Err(recovery_error) = self.enter_recovery() {
                     return Err(candidate_error
                         .context(format!("entering recovery also failed: {recovery_error:#}")));
@@ -414,7 +426,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     fn apply_candidate(
         &mut self,
         requested_path: &Path,
-        authorization: Option<(PeerCredentials, AuthorizationGrant)>,
+        authorization: Option<&(PeerCredentials, AuthorizationGrant)>,
         persist_path: bool,
     ) -> std::result::Result<(), CandidateFailure> {
         let selected_path = absolute_lexical(requested_path)?;
@@ -454,7 +466,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .transpose()?;
         if let Some((peer, grant)) = authorization {
             self.authorizer
-                .recheck(peer, &grant)
+                .recheck(*peer, grant)
                 .map_err(CandidateFailure::Authorization)?;
         }
         if let Some(path_state) = path_state {
@@ -4374,6 +4386,75 @@ mod tests {
             .expect("apply client panicked")
             .expect_err("inactive final authorization check was accepted");
         assert!(format!("{error:#}").contains("session is inactive"));
+        assert!(!state_file.exists());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_candidate_rechecks_authorization_before_preserving_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let started = directory.path().join("started");
+        let release = directory.path().join("release");
+        let source = directory.path().join("config.lua");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local started = {started:?}
+                local release = {release:?}
+                return {{
+                    api_version = 1,
+                    render = function()
+                        local marker = assert(io.open(started, "w"))
+                        marker:close()
+                        while true do
+                            local gate = io.open(release)
+                            if gate then gate:close(); break end
+                        end
+                        error("candidate failed during staging")
+                    end,
+                }}
+                "#,
+                started = started.to_string_lossy(),
+                release = release.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("old-session");
+        let mut supervisor =
+            Supervisor::new_with_logind(FakeTouchBar::new(), state_file.clone(), logind.clone())?;
+        let client_socket = socket.clone();
+        let client_source = source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&client_socket, &client_source)
+        });
+
+        let (mut stream, _) = listener.accept()?;
+        let request = super::read_authorized_request(&mut stream, &supervisor.authorizer)?;
+        let flip_logind = logind.clone();
+        let flip_started = started.clone();
+        let flip_release = release.clone();
+        let flip = thread::spawn(move || {
+            while !flip_started.exists() {
+                thread::sleep(Duration::from_millis(1));
+            }
+            flip_logind.bump_generation();
+            std::fs::write(flip_release, "continue").expect("release candidate staging");
+        });
+        let result = supervisor.apply_authorized(request);
+        flip.join().expect("authorization flip panicked");
+        crate::apply_ipc::write_reply(&mut stream, &result)?;
+        let error = client
+            .join()
+            .expect("apply client panicked")
+            .expect_err("failed candidate was accepted after its session changed");
+        assert!(format!("{error:#}").contains("changed during config apply"));
         assert!(!state_file.exists());
         assert!(supervisor.active.is_none());
         assert!(supervisor.recovery.is_none());
