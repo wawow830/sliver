@@ -596,20 +596,24 @@ mod tests {
     }
 
     #[test]
-    fn lua_canvas_shapes_text_with_pango() -> Result<()> {
+    fn lua_canvas_shapes_utf8_text_and_measures_it() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("text.lua");
         std::fs::write(
             &source,
-            r#"
-            require("sliver.v1")
+            r##"
+            local sliver = require("sliver.v1")
             return {
                 api_version = 1,
                 render = function(canvas)
-                    canvas:text(100, 5, "Lua", 28, 1, 1, 1, 1)
+                    local latin_width, latin_height = canvas:measure_text("A", 28)
+                    local mixed_width, mixed_height = canvas:measure_text("A אבג العربية 日本", 28)
+                    assert(latin_width > 0 and latin_height > 0)
+                    assert(mixed_width > latin_width and mixed_height > 0)
+                    canvas:text(100, 5, "A אבג العربية 日本", 28, "#ffffff")
                 end,
             }
-            "#,
+            "##,
         )?;
         let mut hardware = FakeTouchBar::new();
 

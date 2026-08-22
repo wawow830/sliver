@@ -152,17 +152,27 @@ impl Canvas {
         Ok(())
     }
 
-    fn number(value: &Value, name: &str) -> mlua::Result<f64> {
+    fn finite_number(value: &Value, name: &str) -> mlua::Result<f64> {
         let number = match value {
             Value::Integer(value) => *value as f64,
             Value::Number(value) => *value,
             value => {
                 return Err(mlua::Error::runtime(format!(
-                    "canvas:color {name} must be a number, got {}",
+                    "canvas:{name} must be a number, got {}",
                     value.type_name()
                 )));
             }
         };
+        if !number.is_finite() {
+            return Err(mlua::Error::runtime(format!(
+                "canvas:{name} must be finite"
+            )));
+        }
+        Ok(number)
+    }
+
+    fn number(value: &Value, name: &str) -> mlua::Result<f64> {
+        let number = Self::finite_number(value, "color")?;
         Self::validate_channel(name, number)?;
         Ok(number)
     }
@@ -221,6 +231,21 @@ impl Canvas {
         );
     }
 
+    fn text_layout(context: &Context, text: &str, font_size: f64) -> mlua::Result<pango::Layout> {
+        let absolute_size = font_size * f64::from(pango::SCALE);
+        if !absolute_size.is_finite() {
+            return Err(mlua::Error::runtime(
+                "canvas:text font size is too large for Pango",
+            ));
+        }
+        let layout = pangocairo::functions::create_layout(context);
+        layout.set_text(text);
+        let mut font = pango::FontDescription::from_string("Sans");
+        font.set_absolute_size(absolute_size);
+        layout.set_font_description(Some(&font));
+        Ok(layout)
+    }
+
     fn parse_color(values: &[Value]) -> mlua::Result<Color> {
         let Some(first) = values.first() else {
             return Err(mlua::Error::runtime("canvas:color is missing"));
@@ -270,46 +295,10 @@ impl UserData for Canvas {
                     "canvas:rectangle needs x, y, width, height, and a color",
                 ));
             }
-            let x = match &values[0] {
-                Value::Integer(value) => *value as f64,
-                Value::Number(value) => *value,
-                value => {
-                    return Err(mlua::Error::runtime(format!(
-                        "canvas:rectangle x must be a number, got {}",
-                        value.type_name()
-                    )));
-                }
-            };
-            let y = match &values[1] {
-                Value::Integer(value) => *value as f64,
-                Value::Number(value) => *value,
-                value => {
-                    return Err(mlua::Error::runtime(format!(
-                        "canvas:rectangle y must be a number, got {}",
-                        value.type_name()
-                    )));
-                }
-            };
-            let width = match &values[2] {
-                Value::Integer(value) => *value as f64,
-                Value::Number(value) => *value,
-                value => {
-                    return Err(mlua::Error::runtime(format!(
-                        "canvas:rectangle width must be a number, got {}",
-                        value.type_name()
-                    )));
-                }
-            };
-            let height = match &values[3] {
-                Value::Integer(value) => *value as f64,
-                Value::Number(value) => *value,
-                value => {
-                    return Err(mlua::Error::runtime(format!(
-                        "canvas:rectangle height must be a number, got {}",
-                        value.type_name()
-                    )));
-                }
-            };
+            let x = Canvas::finite_number(&values[0], "rectangle x")?;
+            let y = Canvas::finite_number(&values[1], "rectangle y")?;
+            let width = Canvas::finite_number(&values[2], "rectangle width")?;
+            let height = Canvas::finite_number(&values[3], "rectangle height")?;
             Canvas::validate_geometry(x, y, width, height)?;
             let color = Canvas::parse_color(&values[4..])?;
 
@@ -402,16 +391,7 @@ impl UserData for Canvas {
                     )));
                 }
             };
-            let width = match &values[1] {
-                Value::Integer(value) => *value as f64,
-                Value::Number(value) => *value,
-                value => {
-                    return Err(mlua::Error::runtime(format!(
-                        "canvas:stroke line width must be a number, got {}",
-                        value.type_name()
-                    )));
-                }
-            };
+            let width = Canvas::finite_number(&values[1], "stroke line width")?;
             if !width.is_finite() || width <= 0.0 {
                 return Err(mlua::Error::runtime(
                     "canvas:stroke line width must be finite and positive",
@@ -538,45 +518,57 @@ impl UserData for Canvas {
             canvas.context.set_operator(operator);
             Canvas::status(&canvas.context, "operator")
         });
-        methods.add_method(
-            "text",
-            |_, canvas, (x, y, text, font_size, r, g, b, a): (f64, f64, String, f64, f64, f64, f64, f64)| {
-                if canvas.invalidated.get() {
-                    return Err(mlua::Error::runtime(
-                        "canvas:text cannot be called after canvas invalidation",
-                    ));
+        methods.add_method("text", |_, canvas, args: MultiValue| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:text cannot be called after canvas invalidation",
+                ));
+            }
+            let values = args.into_vec();
+            if values.len() < 5 {
+                return Err(mlua::Error::runtime(
+                    "canvas:text needs x, y, text, font size, and a color",
+                ));
+            }
+            let x = Canvas::finite_number(&values[0], "text x")?;
+            let y = Canvas::finite_number(&values[1], "text y")?;
+            let text = match &values[2] {
+                Value::String(text) => text.to_str()?.to_string(),
+                value => {
+                    return Err(mlua::Error::runtime(format!(
+                        "canvas:text text must be a UTF-8 string, got {}",
+                        value.type_name()
+                    )));
                 }
-                if !x.is_finite() || !y.is_finite() {
-                    return Err(mlua::Error::runtime(
-                        "canvas:text coordinates must be finite",
-                    ));
-                }
-                if !font_size.is_finite() || font_size <= 0.0 {
-                    return Err(mlua::Error::runtime(
-                        "canvas:text font size must be finite and positive",
-                    ));
-                }
-                for (name, value) in [("red", r), ("green", g), ("blue", b), ("alpha", a)] {
-                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                        return Err(mlua::Error::runtime(format!(
-                            "canvas:text {name} must be between 0.0 and 1.0"
-                        )));
-                    }
-                }
-
-                let layout = pangocairo::functions::create_layout(&canvas.context);
-                layout.set_text(&text);
-                let mut font = pango::FontDescription::from_string("Sans");
-                font.set_absolute_size(font_size * f64::from(pango::SCALE));
-                layout.set_font_description(Some(&font));
-                canvas.context.set_operator(cairo::Operator::Over);
-                canvas.context.set_source_rgba(r, g, b, a);
-                canvas.context.move_to(x, y);
-                pangocairo::functions::show_layout(&canvas.context, &layout);
-                canvas.context.status().map_err(|error| {
-                    mlua::Error::runtime(format!("canvas:text drawing failed: {error}"))
-                })
-            },
-        );
+            };
+            let font_size = Canvas::finite_number(&values[3], "text font size")?;
+            if font_size <= 0.0 {
+                return Err(mlua::Error::runtime(
+                    "canvas:text font size must be positive",
+                ));
+            }
+            let color = Canvas::parse_color(&values[4..])?;
+            let layout = Canvas::text_layout(&canvas.context, &text, font_size)?;
+            canvas.set_source(color);
+            canvas.context.move_to(x, y);
+            pangocairo::functions::show_layout(&canvas.context, &layout);
+            Canvas::status(&canvas.context, "text")
+        });
+        methods.add_method("measure_text", |_, canvas, (text, font_size): (String, f64)| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:measure_text cannot be called after canvas invalidation",
+                ));
+            }
+            if !font_size.is_finite() || font_size <= 0.0 {
+                return Err(mlua::Error::runtime(
+                    "canvas:measure_text font size must be finite and positive",
+                ));
+            }
+            let layout = Canvas::text_layout(&canvas.context, &text, font_size)?;
+            let (width, height) = layout.size();
+            let scale = f64::from(pango::SCALE);
+            Ok((f64::from(width) / scale, f64::from(height) / scale))
+        });
     }
 }
