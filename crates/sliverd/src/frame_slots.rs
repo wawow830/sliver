@@ -10,6 +10,22 @@ const WRITING: u8 = 1;
 const READY: u8 = 2;
 const READING: u8 = 3;
 
+#[cfg(test)]
+struct DropGate {
+    released: std::sync::Barrier,
+    resume: std::sync::Barrier,
+}
+
+#[cfg(test)]
+impl DropGate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            released: std::sync::Barrier::new(2),
+            resume: std::sync::Barrier::new(2),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FrameTiming {
     pub(crate) presentation_time: f64,
@@ -56,6 +72,8 @@ struct SharedSlots {
     stride: usize,
     next_sequence: AtomicU64,
     slots: [Slot; SLOT_COUNT],
+    #[cfg(test)]
+    drop_gate: Option<Arc<DropGate>>,
 }
 
 /// The fixed-size producer/broker handoff for decoded frames.
@@ -114,8 +132,24 @@ impl FrameSlots {
                 stride,
                 next_sequence: AtomicU64::new(0),
                 slots,
+                #[cfg(test)]
+                drop_gate: None,
             }),
         })
+    }
+
+    #[cfg(test)]
+    fn new_with_drop_gate(
+        width: usize,
+        height: usize,
+        stride: usize,
+        drop_gate: Arc<DropGate>,
+    ) -> Result<Self> {
+        let mut slots = Self::new(width, height, stride)?;
+        Arc::get_mut(&mut slots.inner)
+            .expect("new slots have one owner")
+            .drop_gate = Some(drop_gate);
+        Ok(slots)
     }
 
     pub(crate) fn producer(&self) -> FrameProducer {
@@ -235,11 +269,16 @@ impl Drop for FrameWriter {
     fn drop(&mut self) {
         if !self.published {
             let slot = &self.inner.slots[self.index];
+            if let Ok(mut timing) = slot.timing.lock() {
+                *timing = None;
+            }
             let _ =
                 slot.state
                     .compare_exchange(WRITING, FREE, Ordering::Release, Ordering::Relaxed);
-            if let Ok(mut timing) = slot.timing.lock() {
-                *timing = None;
+            #[cfg(test)]
+            if let Some(drop_gate) = &self.inner.drop_gate {
+                drop_gate.released.wait();
+                drop_gate.resume.wait();
             }
         }
     }
@@ -340,6 +379,25 @@ mod tests {
         assert_eq!(presented.pixels, frame(4));
         assert_eq!(presented.timing.presentation_time, 4.0);
         assert!(broker.take_newest()?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn dropped_writer_cannot_clear_a_successor_metadata() -> Result<()> {
+        let gate = DropGate::new();
+        let slots = FrameSlots::new_with_drop_gate(2, 1, 8, gate.clone())?;
+        let producer = slots.producer();
+        let broker = slots.broker();
+        let writer = producer.begin_write().expect("first slot was unavailable");
+        let dropper = std::thread::spawn(move || drop(writer));
+
+        gate.released.wait();
+        assert!(producer.publish(2, 1, 8, &frame(9), FrameTiming::new(9.0, 0.0)?,)?);
+        gate.resume.wait();
+        dropper.join().expect("writer cleanup thread panicked");
+
+        let completed = broker.take_newest()?.expect("successor frame was lost");
+        assert_eq!(completed.timing.presentation_time, 9.0);
         Ok(())
     }
 
