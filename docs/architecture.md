@@ -19,18 +19,16 @@ cairo surface.
 
 ### sliverd
 
-Long-running hardware owner. Its main loop coordinates:
+Long-running hardware owner. The real adapter polls nonblocking evdev
+descriptors and emits normalized input events through the hardware seam. The
+owner coordinates:
 
 - DRM scanout and dirty-framebuffer updates
-- touch events
-- keyboard Fn and modifier events
+- normalized hardware events from the adapter
 - uinput function-key output
 - once-per-second dynamic redraws
 - live TOML application over a Unix socket
 - shell actions attached to widgets
-
-Blocking input readers run on small threads and communicate with the render
-loop through standard Rust channels.
 
 ### sliver-edit
 
@@ -91,12 +89,11 @@ Mac14,7 Touch Bar
 /dev/input/event2   # on the tested boot
 ```
 
-Sliver grabs this evdev node so touches do not become compositor mouse input.
-Raw X range 0–23044 is normalized into logical strip X 0–2008 and hit-tested
-against widget rectangles.
-
-Current touch handling is single-touch/tap oriented. A future slider widget
-will require down/motion/up messages rather than release-time taps alone.
+The real adapter opens this evdev node in nonblocking mode and polls it
+without handing touches to the compositor. It normalizes raw coordinates and
+lifecycle data into logical 2008x60 `TouchEvent` values, then emits them through
+the hardware seam. The supervisor forwards those normalized events without
+adding layout or gesture policy.
 
 ## Fn and virtual keyboard path
 

@@ -307,9 +307,13 @@ impl<H: TouchBarHardware> Supervisor<H> {
             return Ok(());
         };
         let effects = active.worker.drive(now, touches)?;
-        self.next_timer_deadline = effects
-            .next_timer_deadline
-            .or_else(|| effects.frame.as_ref().map(|_| now));
+        self.next_timer_deadline = if effects.redraw_pending {
+            Some(now)
+        } else {
+            effects
+                .next_timer_deadline
+                .or_else(|| effects.frame.as_ref().map(|_| now))
+        };
         self.apply_effects(effects)
     }
 
@@ -1029,6 +1033,43 @@ mod tests {
     }
 
     #[test]
+    fn slow_repeating_callbacks_schedule_the_next_interval_in_the_future() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("slow-timer.lua");
+        let log = directory.path().join("timer-events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                sliver.timer.every(0.000001, function()
+                    local total = 0
+                    for i = 1, 1000000 do total = total + i end
+                    local file = assert(io.open(log, "a"))
+                    file:write(total, "\n")
+                    file:close()
+                end)
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        let drive_now = supervisor.now_seconds() + 1.0;
+        supervisor.step_at(drive_now)?;
+        supervisor.step_at(drive_now + 0.000002)?;
+
+        let events = std::fs::read_to_string(log)?;
+        assert_eq!(events.lines().count(), 1, "slow timer fired repeatedly");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn redraw_coalesces_and_a_render_request_schedules_one_follow_up() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("redraw.lua");
@@ -1040,6 +1081,7 @@ mod tests {
                 local sliver = require("sliver.v1")
                 local log = {log:?}
                 local renders = 0
+                sliver.timer.after(10, function() end)
                 return {{
                     api_version = 1,
                     touch = function()

@@ -1,8 +1,10 @@
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Instant;
 
 use anyhow::{anyhow, ensure, Context, Result};
 use mlua::{
@@ -22,6 +24,7 @@ pub(crate) struct WorkerEffects {
     pub(crate) frame: Option<LogicalFrame>,
     pub(crate) backlight: Option<f64>,
     pub(crate) next_timer_deadline: Option<f64>,
+    pub(crate) redraw_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -341,32 +344,49 @@ impl Runtime {
             return Err("Lua worker has not been committed".into());
         }
 
+        let started = Instant::now();
         self.controls.now_seconds.set(Some(now_seconds));
         let result = (|| {
-            self.dispatch_touch(events)?;
-            self.run_due_timers(now_seconds)?;
+            self.dispatch_touch(now_seconds, started, events)?;
+            self.run_due_timers(now_seconds, started)?;
+            self.controls
+                .now_seconds
+                .set(Some(sample_now(now_seconds, started)));
             let frame = if self.controls.redraw_pending.replace(false) {
                 Some(self.render_frame()?)
             } else {
                 None
             };
+            self.controls
+                .now_seconds
+                .set(Some(sample_now(now_seconds, started)));
+            let redraw_pending = self.controls.redraw_pending.get();
             let backlight = self.controls.pending_backlight.take();
             let next_timer_deadline = self.controls.timers.borrow().next_deadline();
             Ok(WorkerEffects {
                 frame,
                 backlight,
                 next_timer_deadline,
+                redraw_pending,
             })
         })();
         self.controls.now_seconds.set(None);
         result
     }
 
-    fn dispatch_touch(&self, events: Vec<TouchEvent>) -> std::result::Result<(), String> {
+    fn dispatch_touch(
+        &self,
+        now_seconds: f64,
+        started: Instant,
+        events: Vec<TouchEvent>,
+    ) -> std::result::Result<(), String> {
         let Some(touch) = &self.touch else {
             return Ok(());
         };
         for event in events {
+            self.controls
+                .now_seconds
+                .set(Some(sample_now(now_seconds, started)));
             let table = touch_event_table(&self._lua, &event)
                 .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
             touch
@@ -376,21 +396,33 @@ impl Runtime {
         Ok(())
     }
 
-    fn run_due_timers(&self, now_seconds: f64) -> std::result::Result<(), String> {
+    fn run_due_timers(
+        &self,
+        now_seconds: f64,
+        started: Instant,
+    ) -> std::result::Result<(), String> {
+        let mut fired_repeating = BTreeSet::new();
         loop {
-            let Some(due) = self.controls.timers.borrow().due(now_seconds) else {
+            let current = sample_now(now_seconds, started);
+            self.controls.now_seconds.set(Some(current));
+            let Some(due) = self.controls.timers.borrow().due(current, &fired_repeating) else {
                 return Ok(());
             };
             let result = due
                 .callback
                 .call::<()>(())
                 .map_err(|error| diagnostic("timer", &self.source, error.to_string()));
+            let completed = sample_now(now_seconds, started);
+            self.controls.now_seconds.set(Some(completed));
             self.controls.timers.borrow_mut().finish(
                 due.id,
                 due.scheduled_deadline,
                 due.interval,
-                now_seconds,
+                completed,
             );
+            if due.interval.is_some() {
+                fired_repeating.insert(due.id);
+            }
             result?;
         }
     }
@@ -619,11 +651,14 @@ impl TimerRegistry {
         self.entries.retain(|entry| entry.id != id);
     }
 
-    fn due(&self, now_seconds: f64) -> Option<DueTimer> {
+    fn due(&self, now_seconds: f64, fired_repeating: &BTreeSet<u64>) -> Option<DueTimer> {
         self.entries
             .iter()
             .filter_map(|entry| {
                 let deadline = entry.next_deadline?;
+                if entry.interval.is_some() && fired_repeating.contains(&entry.id) {
+                    return None;
+                }
                 (deadline <= now_seconds).then_some((deadline, entry))
             })
             .min_by(|(left, _), (right, _)| left.total_cmp(right))
@@ -678,6 +713,10 @@ fn validate_backlight_level(level: f64) -> Result<()> {
         "backlight level must be finite and between 0.0 and 1.0"
     );
     Ok(())
+}
+
+fn sample_now(now_seconds: f64, started: Instant) -> f64 {
+    now_seconds + started.elapsed().as_secs_f64()
 }
 
 fn validate_now(now_seconds: f64) -> std::result::Result<(), String> {
