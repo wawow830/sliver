@@ -11,6 +11,7 @@ pub(crate) struct AuthorizationGrant {
     generation: u64,
 }
 
+#[derive(Clone)]
 pub(crate) struct SessionAuthorizer<L> {
     logind: L,
 }
