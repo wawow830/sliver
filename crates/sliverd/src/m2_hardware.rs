@@ -29,6 +29,9 @@ const FB_PAD: u32 = 4;
 
 const TOUCH_DEV: &str = "/dev/input/event2";
 const KEYBOARD_NAME: &str = "Apple MTP keyboard";
+const BACKLIGHT_DIRECTORY: &str = "/sys/class/backlight/228600000.dsi.0";
+const BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0/brightness";
+const MAX_BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0/max_brightness";
 const F_KEYS: [Key; 12] = [
     Key::KEY_F1,
     Key::KEY_F2,
@@ -249,17 +252,250 @@ impl Drop for CardClaim {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AxisRange {
+    min: i32,
+    max: i32,
+}
+
+impl AxisRange {
+    fn new(min: i32, max: i32) -> Option<Self> {
+        (max > min).then_some(Self { min, max })
+    }
+
+    fn normalize(self, raw: i32) -> f64 {
+        let position =
+            (f64::from(raw) - f64::from(self.min)) / (f64::from(self.max) - f64::from(self.min));
+        position.clamp(0.0, 1.0)
+    }
+}
+
+#[cfg(test)]
+fn normalize_axis(raw: i32, range: (i32, i32), extent: f64) -> f64 {
+    AxisRange::new(range.0, range.1).map_or(0.0, |range| range.normalize(raw) * extent)
+}
+
+#[cfg(test)]
 fn normalize_touch_x(raw: i32, range: (i32, i32)) -> f64 {
-    let (min, max) = range;
-    let position = f64::from(raw - min) / f64::from((max - min).max(1));
-    position.clamp(0.0, 1.0) * sliver_core::STRIP_W
+    normalize_axis(raw, range, sliver_core::STRIP_W)
+}
+
+fn normalize_backlight_level(current: u32, maximum: u32) -> Result<f64> {
+    ensure!(maximum > 0, "backlight maximum must be positive");
+    ensure!(
+        current <= maximum,
+        "backlight value {current} exceeds maximum {maximum}"
+    );
+    Ok(f64::from(current) / f64::from(maximum))
+}
+
+fn backlight_value(level: f64, maximum: u32) -> Result<u32> {
+    validate_backlight(level)?;
+    ensure!(maximum > 0, "backlight maximum must be positive");
+    Ok((level * f64::from(maximum)).round() as u32)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TouchSlot {
+    id: Option<crate::hardware::ContactId>,
+    x: i32,
+    y: i32,
+    pressure: Option<i32>,
+    width: Option<i32>,
+    height: Option<i32>,
+    phase: Option<crate::hardware::TouchPhase>,
+    changed: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TouchProfile {
+    slot_min: i32,
+    slot_count: usize,
+    x_range: AxisRange,
+    y_range: AxisRange,
+    pressure_range: Option<AxisRange>,
+    width_range: Option<AxisRange>,
+    height_range: Option<AxisRange>,
+    legacy_single_touch: bool,
+}
+
+struct TouchState {
+    slots: Vec<TouchSlot>,
+    profile: TouchProfile,
+    current_slot: usize,
+    started: std::time::Instant,
+}
+
+impl TouchState {
+    fn new(profile: TouchProfile) -> Self {
+        Self {
+            slots: vec![TouchSlot::default(); profile.slot_count.max(1)],
+            profile,
+            current_slot: 0,
+            started: std::time::Instant::now(),
+        }
+    }
+
+    fn process(
+        &mut self,
+        event: InputEvent,
+        modifiers: ModifierState,
+        output: &mut Vec<crate::hardware::TouchEvent>,
+    ) {
+        use evdev::{AbsoluteAxisType, Synchronization};
+
+        match event.event_type() {
+            EventType::ABSOLUTE => match event.code() {
+                code if code == AbsoluteAxisType::ABS_MT_SLOT.0 => {
+                    self.current_slot =
+                        event.value().saturating_sub(self.profile.slot_min).max(0) as usize;
+                    if self.current_slot >= self.slots.len() {
+                        self.current_slot = self.slots.len() - 1;
+                    }
+                }
+                code if code == AbsoluteAxisType::ABS_MT_TRACKING_ID.0 => {
+                    let index = self.current_slot;
+                    if event.value() < 0 {
+                        if self.slots[index].id.is_some() {
+                            self.slots[index].phase = Some(crate::hardware::TouchPhase::Up);
+                        }
+                    } else {
+                        let id = event.value() as crate::hardware::ContactId;
+                        if self.slots[index].id.is_some_and(|old_id| old_id != id) {
+                            self.emit_slot(
+                                index,
+                                crate::hardware::TouchPhase::Cancel,
+                                modifiers,
+                                output,
+                            );
+                        }
+                        let slot = &mut self.slots[index];
+                        slot.id = Some(id);
+                        slot.phase = Some(crate::hardware::TouchPhase::Down);
+                        slot.changed = false;
+                    }
+                }
+                code if code == AbsoluteAxisType::ABS_MT_POSITION_X.0
+                    || (self.profile.legacy_single_touch && code == AbsoluteAxisType::ABS_X.0) =>
+                {
+                    self.slots[self.current_slot].x = event.value();
+                    self.slots[self.current_slot].changed = true;
+                }
+                code if code == AbsoluteAxisType::ABS_MT_POSITION_Y.0
+                    || (self.profile.legacy_single_touch && code == AbsoluteAxisType::ABS_Y.0) =>
+                {
+                    self.slots[self.current_slot].y = event.value();
+                    self.slots[self.current_slot].changed = true;
+                }
+                code if code == AbsoluteAxisType::ABS_MT_PRESSURE.0
+                    || (self.profile.legacy_single_touch
+                        && code == AbsoluteAxisType::ABS_PRESSURE.0) =>
+                {
+                    self.slots[self.current_slot].pressure = Some(event.value());
+                    self.slots[self.current_slot].changed = true;
+                }
+                code if code == AbsoluteAxisType::ABS_MT_TOUCH_MAJOR.0 => {
+                    self.slots[self.current_slot].width = Some(event.value());
+                    self.slots[self.current_slot].changed = true;
+                }
+                code if code == AbsoluteAxisType::ABS_MT_TOUCH_MINOR.0 => {
+                    self.slots[self.current_slot].height = Some(event.value());
+                    self.slots[self.current_slot].changed = true;
+                }
+                _ => {}
+            },
+            EventType::KEY
+                if self.profile.legacy_single_touch && event.code() == Key::BTN_TOUCH.code() =>
+            {
+                let slot = &mut self.slots[0];
+                if event.value() == 1 {
+                    slot.id = Some(0);
+                    slot.phase = Some(crate::hardware::TouchPhase::Down);
+                } else if event.value() == 0 && slot.id.is_some() {
+                    slot.phase = Some(crate::hardware::TouchPhase::Up);
+                }
+            }
+            EventType::SYNCHRONIZATION if event.code() == Synchronization::SYN_DROPPED.0 => {
+                self.cancel_all(modifiers, output);
+            }
+            EventType::SYNCHRONIZATION if event.code() == Synchronization::SYN_REPORT.0 => {
+                for index in 0..self.slots.len() {
+                    let phase = self.slots[index].phase.or_else(|| {
+                        self.slots[index]
+                            .id
+                            .filter(|_| self.slots[index].changed)
+                            .map(|_| crate::hardware::TouchPhase::Move)
+                    });
+                    if let Some(phase) = phase {
+                        self.emit_slot(index, phase, modifiers, output);
+                    }
+                    self.slots[index].changed = false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn cancel_all(
+        &mut self,
+        modifiers: ModifierState,
+        output: &mut Vec<crate::hardware::TouchEvent>,
+    ) {
+        for index in 0..self.slots.len() {
+            if self.slots[index].id.is_some() {
+                self.emit_slot(
+                    index,
+                    crate::hardware::TouchPhase::Cancel,
+                    modifiers,
+                    output,
+                );
+            }
+        }
+    }
+
+    fn emit_slot(
+        &mut self,
+        index: usize,
+        phase: crate::hardware::TouchPhase,
+        modifiers: ModifierState,
+        output: &mut Vec<crate::hardware::TouchEvent>,
+    ) {
+        let slot = &mut self.slots[index];
+        let Some(id) = slot.id else { return };
+        output.push(crate::hardware::TouchEvent {
+            phase,
+            id,
+            time: self.started.elapsed().as_secs_f64(),
+            x: self.profile.x_range.normalize(slot.x) * sliver_core::STRIP_W,
+            y: self.profile.y_range.normalize(slot.y) * sliver_core::STRIP_H,
+            modifiers,
+            pressure: slot
+                .pressure
+                .zip(self.profile.pressure_range)
+                .map(|(value, range)| range.normalize(value)),
+            width: slot
+                .width
+                .zip(self.profile.width_range)
+                .map(|(value, range)| range.normalize(value)),
+            height: slot
+                .height
+                .zip(self.profile.height_range)
+                .map(|(value, range)| range.normalize(value)),
+        });
+        if matches!(
+            phase,
+            crate::hardware::TouchPhase::Up | crate::hardware::TouchPhase::Cancel
+        ) {
+            *slot = TouchSlot::default();
+        } else {
+            slot.phase = None;
+        }
+    }
 }
 
 struct TouchInput {
     device: evdev::Device,
-    range: (i32, i32),
-    last_x: Option<i32>,
-    touching: bool,
+    state: TouchState,
     grabbed: bool,
 }
 
@@ -270,7 +506,7 @@ impl TouchInput {
         let mut device = evdev::Device::open(TOUCH_DEV)?;
         set_nonblocking(device.as_raw_fd())?;
 
-        // Exclusive: taps on the strip are ours, not the compositor's cursor.
+        // Exclusive: touches on the strip are ours, not the compositor's cursor.
         let grabbed = match device.grab() {
             Ok(()) => true,
             Err(e) => {
@@ -279,23 +515,50 @@ impl TouchInput {
             }
         };
 
-        let range = device
-            .get_abs_state()
-            .ok()
-            .and_then(|state| {
-                let mt = &state[AbsoluteAxisType::ABS_MT_POSITION_X.0 as usize];
-                let plain = &state[AbsoluteAxisType::ABS_X.0 as usize];
-                let pick = if mt.maximum > mt.minimum { mt } else { plain };
-                (pick.maximum > pick.minimum).then_some((pick.minimum, pick.maximum))
+        let abs_state = device.get_abs_state().ok();
+        let range_for = |axis: AbsoluteAxisType| {
+            abs_state.as_ref().and_then(|state| {
+                let info = state[axis.0 as usize];
+                AxisRange::new(info.minimum, info.maximum)
             })
-            .unwrap_or((0, sliver_core::STRIP_W as i32));
-        eprintln!("touch: x range {range:?}");
+        };
+        let mt_x = range_for(AbsoluteAxisType::ABS_MT_POSITION_X);
+        let mt_y = range_for(AbsoluteAxisType::ABS_MT_POSITION_Y);
+        let legacy_x = range_for(AbsoluteAxisType::ABS_X);
+        let legacy_y = range_for(AbsoluteAxisType::ABS_Y);
+        let x_range = mt_x.or(legacy_x).unwrap_or(AxisRange {
+            min: 0,
+            max: sliver_core::STRIP_W as i32,
+        });
+        let y_range = mt_y.or(legacy_y).unwrap_or(AxisRange {
+            min: 0,
+            max: sliver_core::STRIP_H as i32,
+        });
+        let slot_range = range_for(AbsoluteAxisType::ABS_MT_SLOT);
+        let slot_count = slot_range
+            .map(|range| (range.max - range.min + 1).max(1) as usize)
+            .unwrap_or(1);
+        let has_mt = mt_x.is_some() && mt_y.is_some() && slot_range.is_some();
+        let slot_min = slot_range.map_or(0, |range| range.min);
+        let pressure_range = range_for(AbsoluteAxisType::ABS_MT_PRESSURE)
+            .or_else(|| range_for(AbsoluteAxisType::ABS_PRESSURE));
+        let width_range = range_for(AbsoluteAxisType::ABS_MT_TOUCH_MAJOR);
+        let height_range = range_for(AbsoluteAxisType::ABS_MT_TOUCH_MINOR);
+        let profile = TouchProfile {
+            slot_min,
+            slot_count,
+            x_range,
+            y_range,
+            pressure_range,
+            width_range,
+            height_range,
+            legacy_single_touch: !has_mt,
+        };
+        eprintln!("touch: logical ranges x={x_range:?} y={y_range:?}, slots={slot_count}");
 
         Ok(Self {
             device,
-            range,
-            last_x: None,
-            touching: false,
+            state: TouchState::new(profile),
             grabbed,
         })
     }
@@ -309,7 +572,17 @@ impl TouchInput {
         result
     }
 
-    fn drain(&mut self, output: &mut Vec<HardwareEvent>) -> io::Result<bool> {
+    fn cancel(&mut self, output: &mut Vec<HardwareEvent>, modifiers: ModifierState) {
+        let mut touch_events = Vec::new();
+        self.state.cancel_all(modifiers, &mut touch_events);
+        output.extend(touch_events.into_iter().map(HardwareEvent::Touch));
+    }
+
+    fn drain(
+        &mut self,
+        output: &mut Vec<HardwareEvent>,
+        modifiers: ModifierState,
+    ) -> io::Result<bool> {
         let events: Vec<InputEvent> = match self.device.fetch_events() {
             Ok(events) => events.collect(),
             Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(false),
@@ -320,37 +593,13 @@ impl TouchInput {
             return Ok(false);
         }
 
-        use evdev::AbsoluteAxisType;
+        let mut touch_events = Vec::new();
         for event in events {
-            match event.event_type() {
-                EventType::ABSOLUTE => {
-                    let code = event.code();
-                    if code == AbsoluteAxisType::ABS_MT_POSITION_X.0
-                        || code == AbsoluteAxisType::ABS_X.0
-                    {
-                        self.last_x = Some(event.value());
-                    } else if code == AbsoluteAxisType::ABS_MT_TRACKING_ID.0 {
-                        self.touching = event.value() >= 0;
-                    }
-                }
-                EventType::KEY => {
-                    if event.code() == Key::BTN_TOUCH.code() {
-                        self.touching = event.value() == 1;
-                    }
-                }
-                // A touch that just ended with a position on record is a
-                // tap. If taps land mirrored, flip the mapping here.
-                EventType::SYNCHRONIZATION if !self.touching => {
-                    if let Some(raw) = self.last_x.take() {
-                        output.push(HardwareEvent::TouchTap {
-                            x: normalize_touch_x(raw, self.range),
-                        });
-                    }
-                }
-                _ => {}
-            }
+            self.state.process(event, modifiers, &mut touch_events);
         }
-        Ok(true)
+        let progress = !touch_events.is_empty();
+        output.extend(touch_events.into_iter().map(HardwareEvent::Touch));
+        Ok(progress)
     }
 }
 
@@ -399,7 +648,11 @@ impl KeyboardInput {
         Ok(Self { path, device })
     }
 
-    fn drain(&mut self, output: &mut Vec<HardwareEvent>) -> io::Result<bool> {
+    fn drain(
+        &mut self,
+        output: &mut Vec<HardwareEvent>,
+        modifiers: &mut ModifierState,
+    ) -> io::Result<bool> {
         let events: Vec<InputEvent> = match self.device.fetch_events() {
             Ok(events) => events.collect(),
             Err(e) if e.kind() == ErrorKind::WouldBlock => return Ok(false),
@@ -426,6 +679,7 @@ impl KeyboardInput {
             }
 
             if let Some(modifier) = modifier_for(event.code()) {
+                modifiers.set(modifier, active);
                 output.push(HardwareEvent::Modifier { modifier, active });
             }
         }
@@ -570,6 +824,7 @@ pub(crate) struct M2TouchBar {
     shown: bool,
     touch: Option<TouchInput>,
     keyboard: Option<KeyboardInput>,
+    modifiers: ModifierState,
     fn_emitter: Option<FnEmitter>,
 }
 
@@ -583,6 +838,7 @@ impl M2TouchBar {
             shown: false,
             touch: None,
             keyboard: None,
+            modifiers: ModifierState::default(),
             fn_emitter: None,
         }
     }
@@ -593,6 +849,7 @@ impl M2TouchBar {
 
     fn claim_inner(&mut self) -> Result<()> {
         ensure!(!self.is_claimed(), "Touch Bar is already claimed");
+        self.modifiers = ModifierState::default();
 
         let mut claim = claim_card()?;
         let (panel_width, panel_height) = claim.mode.size();
@@ -679,7 +936,7 @@ impl M2TouchBar {
             // Preserve the old daemon's cross-device ordering: update Fn and
             // modifiers before interpreting a touch from the same poll.
             let keyboard_error = match self.keyboard.as_mut() {
-                Some(keyboard) => match keyboard.drain(&mut output) {
+                Some(keyboard) => match keyboard.drain(&mut output, &mut self.modifiers) {
                     Ok(progress) => {
                         made_progress |= progress;
                         None
@@ -701,7 +958,7 @@ impl M2TouchBar {
             }
 
             let touch_error = match self.touch.as_mut() {
-                Some(touch) => match touch.drain(&mut output) {
+                Some(touch) => match touch.drain(&mut output, self.modifiers) {
                     Ok(progress) => {
                         made_progress |= progress;
                         None
@@ -712,6 +969,9 @@ impl M2TouchBar {
             };
             if let Some(error) = touch_error {
                 eprintln!("touch: reader stopped: {error}");
+                if let Some(touch) = self.touch.as_mut() {
+                    touch.cancel(&mut output, self.modifiers);
+                }
                 self.touch = None;
             }
 
@@ -779,6 +1039,7 @@ impl M2TouchBar {
         }
         self.touch = None;
         self.keyboard = None;
+        self.modifiers = ModifierState::default();
         self.fn_emitter = None;
 
         let framebuffer = self.framebuffer.take();
@@ -829,25 +1090,35 @@ impl TouchBarHardware for M2TouchBar {
         Ok(())
     }
 
-    fn set_backlight(&mut self, level: f64) -> Result<()> {
+    fn get_backlight(&mut self) -> Result<f64> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        validate_backlight(level)?;
-
-        const DIRECTORY: &str = "/sys/class/backlight/228600000.dsi.0";
-        const BRIGHTNESS: &str = "/sys/class/backlight/228600000.dsi.0/brightness";
-        const MAX_BRIGHTNESS: &str = "/sys/class/backlight/228600000.dsi.0/max_brightness";
-
-        let max = std::fs::read_to_string(MAX_BRIGHTNESS)
-            .with_context(|| format!("reading {DIRECTORY}/max_brightness"))?
+        let maximum = std::fs::read_to_string(MAX_BACKLIGHT)
+            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/max_brightness"))?
             .trim()
             .parse::<u32>()
-            .with_context(|| format!("parsing {DIRECTORY}/max_brightness"))?;
-        let value = (level * f64::from(max)).round() as u32;
+            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/max_brightness"))?;
+        let current = std::fs::read_to_string(BACKLIGHT)
+            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/brightness"))?
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/brightness"))?;
+        normalize_backlight_level(current, maximum)
+    }
+
+    fn set_backlight(&mut self, level: f64) -> Result<()> {
+        ensure!(self.is_claimed(), "Touch Bar is not claimed");
+
+        let maximum = std::fs::read_to_string(MAX_BACKLIGHT)
+            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/max_brightness"))?
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/max_brightness"))?;
+        let value = backlight_value(level, maximum)?;
         let mut brightness = OpenOptions::new()
             .write(true)
-            .open(BRIGHTNESS)
-            .with_context(|| format!("opening {BRIGHTNESS}"))?;
-        write!(brightness, "{value}").with_context(|| format!("writing {BRIGHTNESS}"))?;
+            .open(BACKLIGHT)
+            .with_context(|| format!("opening {BACKLIGHT}"))?;
+        write!(brightness, "{value}").with_context(|| format!("writing {BACKLIGHT}"))?;
         Ok(())
     }
 
@@ -988,6 +1259,117 @@ mod tests {
         assert_eq!(normalize_touch_x(11_522, range), 1004.0);
         assert_eq!(normalize_touch_x(23_044, range), 2008.0);
         assert_eq!(normalize_touch_x(24_000, range), 2008.0);
+    }
+
+    #[test]
+    fn mt_slots_emit_normalized_lifecycle_and_modifier_snapshots() -> Result<()> {
+        use evdev::{AbsoluteAxisType as Axis, Synchronization};
+
+        let mut touch = TouchState::new(TouchProfile {
+            slot_min: 0,
+            slot_count: 2,
+            x_range: AxisRange::new(0, 100).expect("valid x range"),
+            y_range: AxisRange::new(0, 10).expect("valid y range"),
+            pressure_range: AxisRange::new(0, 10),
+            width_range: AxisRange::new(0, 100),
+            height_range: AxisRange::new(0, 100),
+            legacy_single_touch: false,
+        });
+        let mut output = Vec::new();
+        let mut down_modifiers = ModifierState::default();
+        down_modifiers.set(Modifier::LeftCtrl, true);
+        let mut move_modifiers = ModifierState::default();
+        move_modifiers.set(Modifier::RightAlt, true);
+
+        for event in [
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_SLOT.0, 0),
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_TRACKING_ID.0, 41),
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_POSITION_X.0, 50),
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_POSITION_Y.0, 5),
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_PRESSURE.0, 5),
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_TOUCH_MAJOR.0, 25),
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_TOUCH_MINOR.0, 10),
+            InputEvent::new(EventType::SYNCHRONIZATION, Synchronization::SYN_REPORT.0, 0),
+        ] {
+            touch.process(event, down_modifiers, &mut output);
+        }
+
+        touch.process(
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_POSITION_X.0, 75),
+            move_modifiers,
+            &mut output,
+        );
+        touch.process(
+            InputEvent::new(EventType::SYNCHRONIZATION, Synchronization::SYN_REPORT.0, 0),
+            move_modifiers,
+            &mut output,
+        );
+        touch.process(
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_TRACKING_ID.0, -1),
+            ModifierState::default(),
+            &mut output,
+        );
+        touch.process(
+            InputEvent::new(EventType::SYNCHRONIZATION, Synchronization::SYN_REPORT.0, 0),
+            ModifierState::default(),
+            &mut output,
+        );
+
+        assert_eq!(output.len(), 3);
+        assert_eq!(output[0].phase, crate::hardware::TouchPhase::Down);
+        assert_eq!(output[0].id, 41);
+        assert_eq!(output[0].x, 1004.0);
+        assert_eq!(output[0].y, 30.0);
+        assert!(output[0].modifiers.is_active(Modifier::LeftCtrl));
+        assert_eq!(output[0].pressure, Some(0.5));
+        assert_eq!(output[0].width, Some(0.25));
+        assert_eq!(output[0].height, Some(0.1));
+        assert_eq!(output[1].phase, crate::hardware::TouchPhase::Move);
+        assert!(output[1].modifiers.is_active(Modifier::RightAlt));
+        assert_eq!(output[1].x, 1506.0);
+        assert_eq!(output[2].phase, crate::hardware::TouchPhase::Up);
+        assert!(output[2].time >= output[0].time);
+        Ok(())
+    }
+
+    #[test]
+    fn syn_dropped_cancels_active_contacts() {
+        use evdev::{AbsoluteAxisType as Axis, Synchronization};
+
+        let mut touch = TouchState::new(TouchProfile {
+            slot_min: 0,
+            slot_count: 1,
+            x_range: AxisRange::new(0, 100).expect("valid x range"),
+            y_range: AxisRange::new(0, 10).expect("valid y range"),
+            pressure_range: None,
+            width_range: None,
+            height_range: None,
+            legacy_single_touch: false,
+        });
+        let mut output = Vec::new();
+        for event in [
+            InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_TRACKING_ID.0, 9),
+            InputEvent::new(EventType::SYNCHRONIZATION, Synchronization::SYN_REPORT.0, 0),
+            InputEvent::new(
+                EventType::SYNCHRONIZATION,
+                Synchronization::SYN_DROPPED.0,
+                0,
+            ),
+        ] {
+            touch.process(event, ModifierState::default(), &mut output);
+        }
+
+        assert_eq!(output[0].phase, crate::hardware::TouchPhase::Down);
+        assert_eq!(output[1].phase, crate::hardware::TouchPhase::Cancel);
+    }
+
+    #[test]
+    fn backlight_values_normalize_and_round() -> Result<()> {
+        assert_eq!(normalize_backlight_level(3, 4)?, 0.75);
+        assert_eq!(backlight_value(0.75, 4)?, 3);
+        assert!(normalize_backlight_level(5, 4).is_err());
+        assert!(backlight_value(0.5, 0).is_err());
+        Ok(())
     }
 
     #[test]

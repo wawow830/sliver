@@ -1,18 +1,27 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
 
-use anyhow::{anyhow, Context, Result};
-use mlua::{Function, HookTriggers, Lua, MultiValue, Table, Value, VmState};
+use anyhow::{anyhow, ensure, Context, Result};
+use mlua::{
+    Function, HookTriggers, Lua, MultiValue, Table, UserData, UserDataMethods, Value, VmState,
+};
 
-use crate::hardware::LogicalFrame;
+use crate::hardware::{LogicalFrame, Modifier, TouchEvent, TouchPhase};
 use crate::lua_canvas::{create_path, Canvas};
 
 pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
     pub(crate) frame: LogicalFrame,
+    pub(crate) pending_backlight: Option<f64>,
+}
+
+pub(crate) struct WorkerEffects {
+    pub(crate) frame: Option<LogicalFrame>,
+    pub(crate) backlight: Option<f64>,
+    pub(crate) next_timer_deadline: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +47,12 @@ pub(crate) struct LuaWorker {
 enum WorkerCommand {
     #[allow(dead_code)]
     Render(mpsc::SyncSender<std::result::Result<LogicalFrame, String>>),
+    Commit(f64, mpsc::SyncSender<std::result::Result<(), String>>),
+    Drive(
+        f64,
+        Vec<TouchEvent>,
+        mpsc::SyncSender<std::result::Result<WorkerEffects, String>>,
+    ),
     Shutdown(
         StopReason,
         mpsc::SyncSender<std::result::Result<(), String>>,
@@ -50,9 +65,10 @@ struct Runtime {
     render: Function,
     stop: Option<Function>,
     _visibility: Option<Function>,
-    _touch: Option<Function>,
+    touch: Option<Function>,
     _key: Option<Function>,
     source: PathBuf,
+    controls: RuntimeControls,
 }
 
 struct CallbackRefs {
@@ -64,14 +80,57 @@ struct CallbackRefs {
     render: Function,
 }
 
+#[derive(Clone)]
+struct RuntimeControls {
+    redraw_pending: Rc<Cell<bool>>,
+    timers: Rc<RefCell<TimerRegistry>>,
+    committed: Rc<Cell<bool>>,
+    now_seconds: Rc<Cell<Option<f64>>>,
+    backlight_level: Rc<Cell<f64>>,
+    pending_backlight: Rc<Cell<Option<f64>>>,
+}
+
+struct TimerRegistry {
+    next_id: u64,
+    entries: Vec<TimerEntry>,
+}
+
+struct TimerEntry {
+    id: u64,
+    delay: f64,
+    interval: Option<f64>,
+    next_deadline: Option<f64>,
+    callback: Function,
+}
+
+struct TimerHandle {
+    id: u64,
+    timers: Rc<RefCell<TimerRegistry>>,
+}
+
+struct DueTimer {
+    id: u64,
+    scheduled_deadline: f64,
+    interval: Option<f64>,
+    callback: Function,
+}
+
 impl LuaWorker {
     pub(crate) fn stage(source: &Path) -> Result<StagedLuaWorker> {
+        Self::stage_with_backlight(source, 0.0)
+    }
+
+    pub(crate) fn stage_with_backlight(
+        source: &Path,
+        initial_backlight: f64,
+    ) -> Result<StagedLuaWorker> {
+        validate_backlight_level(initial_backlight)?;
         let source = source.to_path_buf();
         let (command_tx, command_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let owner = thread::Builder::new()
             .name("sliver-lua".into())
-            .spawn(move || owner_main(source, command_rx, ready_tx))
+            .spawn(move || owner_main(source, initial_backlight, command_rx, ready_tx))
             .context("starting Lua owner thread")?;
 
         let mut worker = Self {
@@ -79,7 +138,11 @@ impl LuaWorker {
             owner: Some(owner),
         };
         match ready_rx.recv() {
-            Ok(Ok(frame)) => Ok(StagedLuaWorker { worker, frame }),
+            Ok(Ok(staged)) => Ok(StagedLuaWorker {
+                worker,
+                frame: staged.frame,
+                pending_backlight: staged.pending_backlight,
+            }),
             Ok(Err(error)) => {
                 worker.abandon();
                 Err(anyhow!(error))
@@ -91,8 +154,6 @@ impl LuaWorker {
         }
     }
 
-    // Kept crate-private for the worker lifecycle that will request redraws.
-    // It does not add timers or a Lua redraw operation.
     #[allow(dead_code)]
     pub(crate) fn render_next(&self) -> Result<LogicalFrame> {
         let commands = self
@@ -106,6 +167,36 @@ impl LuaWorker {
         reply_rx
             .recv()
             .context("Lua owner thread exited while rendering")?
+            .map_err(|error| anyhow!(error))
+    }
+
+    pub(crate) fn commit(&self, now_seconds: f64) -> Result<()> {
+        let commands = self
+            .commands
+            .as_ref()
+            .context("Lua worker command channel is closed")?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(WorkerCommand::Commit(now_seconds, reply_tx))
+            .context("committing Lua worker timers")?;
+        reply_rx
+            .recv()
+            .context("Lua owner thread exited while committing")?
+            .map_err(|error| anyhow!(error))
+    }
+
+    pub(crate) fn drive(&self, now_seconds: f64, events: Vec<TouchEvent>) -> Result<WorkerEffects> {
+        let commands = self
+            .commands
+            .as_ref()
+            .context("Lua worker command channel is closed")?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(WorkerCommand::Drive(now_seconds, events, reply_tx))
+            .context("driving Lua worker")?;
+        reply_rx
+            .recv()
+            .context("Lua owner thread exited while driving")?
             .map_err(|error| anyhow!(error))
     }
 
@@ -148,30 +239,46 @@ impl Drop for LuaWorker {
     }
 }
 
+struct StagedRuntime {
+    frame: LogicalFrame,
+    pending_backlight: Option<f64>,
+}
+
 fn owner_main(
     source: PathBuf,
+    initial_backlight: f64,
     commands: mpsc::Receiver<WorkerCommand>,
-    ready: mpsc::SyncSender<std::result::Result<LogicalFrame, String>>,
+    ready: mpsc::SyncSender<std::result::Result<StagedRuntime, String>>,
 ) {
-    let (runtime, frame) = match Runtime::load_and_render(&source) {
+    let (runtime, frame) = match Runtime::load_and_render(&source, initial_backlight) {
         Ok(staged) => staged,
         Err(error) => {
             let _ = ready.send(Err(error));
             return;
         }
     };
-    if ready.send(Ok(frame)).is_err() {
+    let staged = StagedRuntime {
+        frame,
+        pending_backlight: runtime.pending_backlight(),
+    };
+    if ready.send(Ok(staged)).is_err() {
         return;
     }
 
     run_commands(runtime, commands);
 }
 
-fn run_commands(runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
+fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
     loop {
         match commands.recv() {
             Ok(WorkerCommand::Render(reply)) => {
                 let _ = reply.send(runtime.render_frame());
+            }
+            Ok(WorkerCommand::Commit(now_seconds, reply)) => {
+                let _ = reply.send(runtime.commit(now_seconds));
+            }
+            Ok(WorkerCommand::Drive(now_seconds, events, reply)) => {
+                let _ = reply.send(runtime.drive(now_seconds, events));
             }
             Ok(WorkerCommand::Shutdown(reason, reply)) => {
                 let _ = reply.send(runtime.stop(reason));
@@ -183,13 +290,95 @@ fn run_commands(runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
 }
 
 impl Runtime {
-    fn load_and_render(source: &Path) -> std::result::Result<(Self, LogicalFrame), String> {
+    fn pending_backlight(&self) -> Option<f64> {
+        self.controls.pending_backlight.get()
+    }
+
+    fn commit(&mut self, now_seconds: f64) -> std::result::Result<(), String> {
+        validate_now(now_seconds)?;
+        if self.controls.committed.replace(true) {
+            return Err("Lua worker was already committed".into());
+        }
+        self.controls.timers.borrow_mut().activate(now_seconds);
+        self.controls.pending_backlight.set(None);
+        Ok(())
+    }
+
+    fn drive(
+        &mut self,
+        now_seconds: f64,
+        events: Vec<TouchEvent>,
+    ) -> std::result::Result<WorkerEffects, String> {
+        validate_now(now_seconds)?;
+        if !self.controls.committed.get() {
+            return Err("Lua worker has not been committed".into());
+        }
+
+        self.controls.now_seconds.set(Some(now_seconds));
+        let result = (|| {
+            self.dispatch_touch(events)?;
+            self.run_due_timers(now_seconds)?;
+            let frame = if self.controls.redraw_pending.replace(false) {
+                Some(self.render_frame()?)
+            } else {
+                None
+            };
+            let backlight = self.controls.pending_backlight.take();
+            let next_timer_deadline = self.controls.timers.borrow().next_deadline();
+            Ok(WorkerEffects {
+                frame,
+                backlight,
+                next_timer_deadline,
+            })
+        })();
+        self.controls.now_seconds.set(None);
+        result
+    }
+
+    fn dispatch_touch(&self, events: Vec<TouchEvent>) -> std::result::Result<(), String> {
+        let Some(touch) = &self.touch else {
+            return Ok(());
+        };
+        for event in events {
+            let table = touch_event_table(&self._lua, &event)
+                .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
+            touch
+                .call::<()>(table)
+                .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn run_due_timers(&self, now_seconds: f64) -> std::result::Result<(), String> {
+        loop {
+            let Some(due) = self.controls.timers.borrow().due(now_seconds) else {
+                return Ok(());
+            };
+            let result = due
+                .callback
+                .call::<()>(())
+                .map_err(|error| diagnostic("timer", &self.source, error.to_string()));
+            self.controls.timers.borrow_mut().finish(
+                due.id,
+                due.scheduled_deadline,
+                due.interval,
+                now_seconds,
+            );
+            result?;
+        }
+    }
+
+    fn load_and_render(
+        source: &Path,
+        initial_backlight: f64,
+    ) -> std::result::Result<(Self, LogicalFrame), String> {
         let bytes =
             std::fs::read(source).map_err(|error| diagnostic("load", source, error.to_string()))?;
         let lua = unsafe { Lua::unsafe_new() };
         configure_lua_path(&lua, source)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
-        let loaded_v1 = install_v1_module(&lua)
+        let controls = RuntimeControls::new(initial_backlight);
+        let loaded_v1 = install_v1_module(&lua, &controls)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let source_name = format!("@{}", source.display());
         let entry = lua
@@ -273,15 +462,17 @@ impl Runtime {
             render,
             stop,
             _visibility: visibility,
-            _touch: touch,
+            touch,
             _key: key,
             source: source.to_path_buf(),
+            controls,
         };
         let frame = runtime.render_frame()?;
         Ok((runtime, frame))
     }
 
     fn render_frame(&self) -> std::result::Result<LogicalFrame, String> {
+        self.controls.redraw_pending.set(false);
         let surface = cairo::ImageSurface::create(
             cairo::Format::ARgb32,
             sliver_core::STRIP_W as i32,
@@ -349,21 +540,278 @@ fn configure_lua_path(lua: &Lua, source: &Path) -> mlua::Result<()> {
     )
 }
 
-fn install_v1_module(lua: &Lua) -> mlua::Result<Rc<Cell<bool>>> {
+impl RuntimeControls {
+    fn new(initial_backlight: f64) -> Self {
+        Self {
+            redraw_pending: Rc::new(Cell::new(false)),
+            timers: Rc::new(RefCell::new(TimerRegistry::new())),
+            committed: Rc::new(Cell::new(false)),
+            now_seconds: Rc::new(Cell::new(None)),
+            backlight_level: Rc::new(Cell::new(initial_backlight)),
+            pending_backlight: Rc::new(Cell::new(None)),
+        }
+    }
+}
+
+impl TimerRegistry {
+    fn new() -> Self {
+        Self {
+            next_id: 1,
+            entries: Vec::new(),
+        }
+    }
+
+    fn add(
+        &mut self,
+        delay: f64,
+        interval: Option<f64>,
+        callback: Function,
+        now_seconds: Option<f64>,
+    ) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        self.entries.push(TimerEntry {
+            id,
+            delay,
+            interval,
+            next_deadline: now_seconds.map(|now| now + delay),
+            callback,
+        });
+        id
+    }
+
+    fn activate(&mut self, now_seconds: f64) {
+        for entry in &mut self.entries {
+            if entry.next_deadline.is_none() {
+                entry.next_deadline = Some(now_seconds + entry.delay);
+            }
+        }
+    }
+
+    fn cancel(&mut self, id: u64) {
+        self.entries.retain(|entry| entry.id != id);
+    }
+
+    fn due(&self, now_seconds: f64) -> Option<DueTimer> {
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                let deadline = entry.next_deadline?;
+                (deadline <= now_seconds).then_some((deadline, entry))
+            })
+            .min_by(|(left, _), (right, _)| left.total_cmp(right))
+            .map(|(scheduled_deadline, entry)| DueTimer {
+                id: entry.id,
+                scheduled_deadline,
+                interval: entry.interval,
+                callback: entry.callback.clone(),
+            })
+    }
+
+    fn finish(&mut self, id: u64, scheduled_deadline: f64, interval: Option<f64>, now: f64) {
+        let Some(index) = self.entries.iter().position(|entry| entry.id == id) else {
+            return;
+        };
+        match interval {
+            None => {
+                self.entries.swap_remove(index);
+            }
+            Some(interval) => {
+                let elapsed = (now - scheduled_deadline).max(0.0);
+                let skipped = (elapsed / interval).floor() + 1.0;
+                let mut next = scheduled_deadline + skipped * interval;
+                if !next.is_finite() || next <= now {
+                    next = now + interval;
+                }
+                self.entries[index].next_deadline = Some(next);
+            }
+        }
+    }
+
+    fn next_deadline(&self) -> Option<f64> {
+        self.entries
+            .iter()
+            .filter_map(|entry| entry.next_deadline)
+            .min_by(f64::total_cmp)
+    }
+}
+
+impl UserData for TimerHandle {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("cancel", |_, timer, ()| {
+            timer.timers.borrow_mut().cancel(timer.id);
+            Ok(())
+        });
+    }
+}
+
+fn validate_backlight_level(level: f64) -> Result<()> {
+    ensure!(
+        level.is_finite() && (0.0..=1.0).contains(&level),
+        "backlight level must be finite and between 0.0 and 1.0"
+    );
+    Ok(())
+}
+
+fn validate_now(now_seconds: f64) -> std::result::Result<(), String> {
+    if now_seconds.is_finite() {
+        Ok(())
+    } else {
+        Err("worker time must be finite".into())
+    }
+}
+
+fn validate_after_delay(delay: f64) -> mlua::Result<()> {
+    if delay.is_finite() && delay >= 0.0 {
+        Ok(())
+    } else {
+        Err(mlua::Error::runtime(
+            "timer.after delay must be finite and non-negative",
+        ))
+    }
+}
+
+fn validate_every_interval(interval: f64) -> mlua::Result<()> {
+    if interval.is_finite() && interval > 0.0 {
+        Ok(())
+    } else {
+        Err(mlua::Error::runtime(
+            "timer.every interval must be finite and positive",
+        ))
+    }
+}
+
+fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<Cell<bool>>> {
     let loaded = Rc::new(Cell::new(false));
     let loaded_by_require = loaded.clone();
+    let loader_controls = controls.clone();
     let loader = lua.create_function(move |lua, _: MultiValue| {
         loaded_by_require.set(true);
         let module = lua.create_table()?;
         module.set("api_version", 1)?;
         let path = lua.create_function(create_path)?;
         module.set("path", path)?;
+
+        let redraw_pending = loader_controls.redraw_pending.clone();
+        module.set(
+            "redraw",
+            lua.create_function(move |_, ()| {
+                redraw_pending.set(true);
+                Ok(())
+            })?,
+        )?;
+
+        let timer = lua.create_table()?;
+        let after_controls = loader_controls.clone();
+        timer.set(
+            "after",
+            lua.create_function(move |lua, (delay, callback): (f64, Function)| {
+                validate_after_delay(delay)?;
+                let now = if after_controls.committed.get() {
+                    after_controls.now_seconds.get()
+                } else {
+                    None
+                };
+                let id = after_controls
+                    .timers
+                    .borrow_mut()
+                    .add(delay, None, callback, now);
+                lua.create_userdata(TimerHandle {
+                    id,
+                    timers: after_controls.timers.clone(),
+                })
+            })?,
+        )?;
+        let every_controls = loader_controls.clone();
+        timer.set(
+            "every",
+            lua.create_function(move |lua, (interval, callback): (f64, Function)| {
+                validate_every_interval(interval)?;
+                let now = if every_controls.committed.get() {
+                    every_controls.now_seconds.get()
+                } else {
+                    None
+                };
+                let id =
+                    every_controls
+                        .timers
+                        .borrow_mut()
+                        .add(interval, Some(interval), callback, now);
+                lua.create_userdata(TimerHandle {
+                    id,
+                    timers: every_controls.timers.clone(),
+                })
+            })?,
+        )?;
+        module.set("timer", timer)?;
+
+        let backlight = lua.create_table()?;
+        let get_level = loader_controls.backlight_level.clone();
+        backlight.set(
+            "get",
+            lua.create_function(move |_, ()| Ok(get_level.get()))?,
+        )?;
+        let set_level = loader_controls.backlight_level.clone();
+        let pending_level = loader_controls.pending_backlight.clone();
+        backlight.set(
+            "set",
+            lua.create_function(move |_, level: f64| {
+                validate_backlight_level(level)
+                    .map_err(|error| mlua::Error::runtime(error.to_string()))?;
+                if set_level.get() != level {
+                    set_level.set(level);
+                    pending_level.set(Some(level));
+                }
+                Ok(())
+            })?,
+        )?;
+        module.set("backlight", backlight)?;
         Ok(module)
     })?;
     let package: Table = lua.globals().get("package")?;
     let preload: Table = package.get("preload")?;
     preload.set("sliver.v1", loader)?;
     Ok(loaded)
+}
+
+fn touch_event_table(lua: &Lua, event: &TouchEvent) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    let phase = match event.phase {
+        TouchPhase::Down => "down",
+        TouchPhase::Move => "move",
+        TouchPhase::Up => "up",
+        TouchPhase::Cancel => "cancel",
+    };
+    table.set("phase", phase)?;
+    table.set("id", event.id)?;
+    table.set("time", event.time)?;
+    table.set("x", event.x)?;
+    table.set("y", event.y)?;
+
+    let modifiers = lua.create_table()?;
+    for (name, modifier) in [
+        ("left_ctrl", Modifier::LeftCtrl),
+        ("right_ctrl", Modifier::RightCtrl),
+        ("left_alt", Modifier::LeftAlt),
+        ("right_alt", Modifier::RightAlt),
+        ("left_shift", Modifier::LeftShift),
+        ("right_shift", Modifier::RightShift),
+        ("left_super", Modifier::LeftSuper),
+        ("right_super", Modifier::RightSuper),
+    ] {
+        modifiers.set(name, event.modifiers.is_active(modifier))?;
+    }
+    table.set("modifiers", modifiers)?;
+    if let Some(pressure) = event.pressure {
+        table.set("pressure", pressure)?;
+    }
+    if let Some(width) = event.width {
+        table.set("width", width)?;
+    }
+    if let Some(height) = event.height {
+        table.set("height", height)?;
+    }
+    Ok(table)
 }
 
 fn validate_application(value: Value, loaded_v1: &Cell<bool>) -> mlua::Result<()> {

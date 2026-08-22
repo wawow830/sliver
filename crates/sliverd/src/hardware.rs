@@ -54,11 +54,32 @@ impl ModifierState {
     }
 }
 
+pub(crate) type ContactId = u32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TouchPhase {
+    Down,
+    Move,
+    Up,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TouchEvent {
+    pub(crate) phase: TouchPhase,
+    pub(crate) id: ContactId,
+    pub(crate) time: f64,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) modifiers: ModifierState,
+    pub(crate) pressure: Option<f64>,
+    pub(crate) width: Option<f64>,
+    pub(crate) height: Option<f64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum HardwareEvent {
-    TouchTap {
-        x: f64,
-    },
+    Touch(TouchEvent),
     Fn {
         active: bool,
     },
@@ -66,8 +87,7 @@ pub(crate) enum HardwareEvent {
         modifier: Modifier,
         active: bool,
     },
-    // The fake exposes these lifecycle inputs now; production begins emitting
-    // them when device recovery moves behind this seam.
+    // Hardware lifecycle inputs remain generic at this seam.
     #[allow(dead_code)]
     Device {
         present: bool,
@@ -128,9 +148,7 @@ pub(crate) trait TouchBarHardware {
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>>;
     fn present(&mut self, frame: &LogicalFrame) -> Result<()>;
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()>;
-    // The current TOML daemon never changes brightness, but the hardware seam
-    // owns the operation and its fake records it.
-    #[allow(dead_code)]
+    fn get_backlight(&mut self) -> Result<f64>;
     fn set_backlight(&mut self, level: f64) -> Result<()>;
     fn release(&mut self) -> Result<()>;
 }
@@ -212,6 +230,7 @@ mod fake {
         events: Vec<HardwareEvent>,
         actions: Vec<FakeAction>,
         frames: Vec<FrameSnapshot>,
+        backlight: f64,
     }
 
     impl FakeTouchBar {
@@ -229,6 +248,10 @@ mod fake {
 
         pub(crate) fn presented_frames(&self) -> &[FrameSnapshot] {
             &self.frames
+        }
+
+        pub(crate) fn backlight_level(&self) -> f64 {
+            self.backlight
         }
     }
 
@@ -282,9 +305,15 @@ mod fake {
             Ok(())
         }
 
+        fn get_backlight(&mut self) -> Result<f64> {
+            ensure!(self.claimed, "fake Touch Bar is not claimed");
+            Ok(self.backlight)
+        }
+
         fn set_backlight(&mut self, level: f64) -> Result<()> {
             ensure!(self.claimed, "fake Touch Bar is not claimed");
             super::validate_backlight(level)?;
+            self.backlight = level;
             self.actions.push(FakeAction::Backlight(level));
             Ok(())
         }
@@ -296,5 +325,56 @@ mod fake {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fake_round_trips_lifecycle_touch_snapshots() -> Result<()> {
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        let mut modifiers = ModifierState::default();
+        modifiers.set(Modifier::LeftCtrl, true);
+        let touch = TouchEvent {
+            phase: TouchPhase::Down,
+            id: 7,
+            time: 1.25,
+            x: 100.0,
+            y: 20.0,
+            modifiers,
+            pressure: Some(0.5),
+            width: Some(0.25),
+            height: None,
+        };
+
+        hardware.inject(HardwareEvent::Touch(touch));
+
+        assert_eq!(
+            hardware.poll(Duration::ZERO)?,
+            vec![HardwareEvent::Touch(touch)]
+        );
+        hardware.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn fake_backlight_tracks_validated_writes() -> Result<()> {
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        assert_eq!(hardware.get_backlight()?, 0.0);
+
+        hardware.set_backlight(0.75)?;
+
+        assert_eq!(hardware.get_backlight()?, 0.75);
+        assert_eq!(
+            hardware.actions(),
+            &[FakeAction::Grab, FakeAction::Backlight(0.75)]
+        );
+        assert!(hardware.set_backlight(1.01).is_err());
+        assert_eq!(hardware.backlight_level(), 0.75);
+        Ok(())
     }
 }

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::hardware::{HardwareEvent, LogicalFrame, ModifierState, TouchBarHardware};
+use crate::hardware::{HardwareEvent, LogicalFrame, ModifierState, TouchBarHardware, TouchPhase};
 use crate::m2_hardware::{self, M2TouchBar};
 
 /// How long a tapped widget stays lit.
@@ -112,7 +112,11 @@ impl Daemon {
                 HardwareEvent::Modifier { modifier, active } => {
                     self.modifiers.set(modifier, active)
                 }
-                HardwareEvent::TouchTap { x } => self.handle_touch(hardware, x)?,
+                // The legacy TOML product remains release-triggered until #16 removes it.
+                HardwareEvent::Touch(event) if event.phase == TouchPhase::Up => {
+                    self.handle_touch(hardware, event.x)?
+                }
+                HardwareEvent::Touch(_) => {}
                 HardwareEvent::Device { present } => eprintln!(
                     "hardware device: {}",
                     if present { "available" } else { "unavailable" }
@@ -251,7 +255,7 @@ fn run_with_hardware<H: TouchBarHardware>(cfg: sliver_core::Config, mut hardware
 fn present_lua_once<H: TouchBarHardware>(source: &std::path::Path, hardware: &mut H) -> Result<()> {
     hardware.claim()?;
     let run_result = (|| -> Result<()> {
-        let crate::lua_worker::StagedLuaWorker { worker, frame } =
+        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
             crate::lua_worker::LuaWorker::stage(source)?;
         hardware.present(&frame)?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)
@@ -282,8 +286,23 @@ pub fn probe() -> Result<()> {
 mod tests {
     use super::*;
     use crate::hardware::{
-        FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, Modifier,
+        FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, Modifier, TouchEvent,
+        TouchPhase,
     };
+
+    fn legacy_touch_up(x: f64) -> HardwareEvent {
+        HardwareEvent::Touch(TouchEvent {
+            phase: TouchPhase::Up,
+            id: 1,
+            time: 0.0,
+            x,
+            y: sliver_core::STRIP_H / 2.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        })
+    }
 
     #[test]
     fn lua_v1_frame_crosses_the_hardware_seam() -> Result<()> {
@@ -752,7 +771,7 @@ mod tests {
         )?;
         let mut hardware = FakeTouchBar::new();
         hardware.claim()?;
-        let crate::lua_worker::StagedLuaWorker { worker, frame } =
+        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
             crate::lua_worker::LuaWorker::stage(&source)?;
         hardware.present(&frame)?;
         let frame = worker.render_next()?;
@@ -807,7 +826,7 @@ mod tests {
         )?;
         let mut hardware = FakeTouchBar::new();
         hardware.claim()?;
-        let crate::lua_worker::StagedLuaWorker { worker, frame } =
+        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
             crate::lua_worker::LuaWorker::stage(&source)?;
         hardware.present(&frame)?;
         let frame = worker.render_next()?;
@@ -1394,7 +1413,7 @@ mod tests {
             .clone();
         assert_eq!(applied.rgba_at(0, 0), [0, 0, 255, 255]);
 
-        hardware.inject(HardwareEvent::TouchTap { x: 100.0 });
+        hardware.inject(legacy_touch_up(100.0));
         daemon.step(&mut hardware, Duration::ZERO)?;
         assert_ne!(
             &applied,
@@ -1440,7 +1459,7 @@ mod tests {
             .clone();
         assert_eq!(function_row.rgba_at(0, 0), [0, 0, 0, 255]);
 
-        hardware.inject(HardwareEvent::TouchTap { x: 260.0 });
+        hardware.inject(legacy_touch_up(260.0));
         daemon.step(&mut hardware, Duration::ZERO)?;
         let pressed_function_row = hardware
             .presented_frames()

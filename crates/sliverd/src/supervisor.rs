@@ -41,7 +41,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
             selected_path.display()
         );
 
-        let StagedLuaWorker { worker, frame } = LuaWorker::stage(&selected_path)?;
+        let StagedLuaWorker { worker, frame, .. } = LuaWorker::stage(&selected_path)?;
         let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
         let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
         path_state.commit()?;
@@ -177,6 +177,10 @@ mod tests {
 
         fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
             self.inner.tap_function_key(index, modifiers)
+        }
+
+        fn get_backlight(&mut self) -> Result<f64> {
+            self.inner.get_backlight()
         }
 
         fn set_backlight(&mut self, level: f64) -> Result<()> {
