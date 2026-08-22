@@ -286,6 +286,7 @@ pub(crate) fn validate_backlight(level: f64) -> Result<()> {
 pub(crate) trait TouchBarHardware {
     fn claim(&mut self) -> Result<()>;
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>>;
+    fn input_state(&self) -> InputState;
     fn present(&mut self, frame: &LogicalFrame) -> Result<()>;
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()>;
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()>;
@@ -305,8 +306,8 @@ mod fake {
 
     use super::{
         function_key_output, modifier_output_keys, tap_key_events, ConsumerKey, HardwareEvent,
-        KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent,
-        TouchBarHardware,
+        InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, ObservedKey, OutputKey,
+        SyntheticKeyEvent, TouchBarHardware,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,6 +381,7 @@ mod fake {
         actions: Vec<FakeAction>,
         frames: Vec<FrameSnapshot>,
         backlight: f64,
+        input_state: InputState,
         virtual_keyboard_name: Option<String>,
         virtual_keyboard_creations: usize,
         synthetic_keys: Vec<FakeKeyEvent>,
@@ -449,7 +451,26 @@ mod fake {
                     .extract_if(.., |(scheduled, _)| *scheduled == poll)
                     .map(|(_, event)| event),
             );
-            Ok(mem::take(&mut self.events))
+            let events = mem::take(&mut self.events);
+            for event in &events {
+                match *event {
+                    HardwareEvent::Fn { active } => {
+                        self.input_state.apply(ObservedKey::Fn, active);
+                    }
+                    HardwareEvent::Modifier { modifier, active } => {
+                        self.input_state
+                            .apply(ObservedKey::Modifier(modifier), active);
+                    }
+                    HardwareEvent::Touch(_)
+                    | HardwareEvent::Device { .. }
+                    | HardwareEvent::Visibility { .. } => {}
+                }
+            }
+            Ok(events)
+        }
+
+        fn input_state(&self) -> InputState {
+            self.input_state
         }
 
         fn present(&mut self, frame: &LogicalFrame) -> Result<()> {

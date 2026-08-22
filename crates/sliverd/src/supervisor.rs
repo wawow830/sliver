@@ -700,19 +700,20 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     #[allow(dead_code)]
-    fn reset_owner_state(&mut self) {
+    fn reset_owner_state(&mut self, input_state: InputState) {
         self.down_contacts.clear();
         self.ignored_contacts.clear();
         self.touch_queue.drain();
         self.next_timer_deadline = None;
-        self.input_state = InputState::default();
+        self.input_state = input_state;
     }
 
     #[allow(dead_code)]
     pub(crate) fn handoff_owner(&mut self) -> Result<()> {
         self.release_synthetic_keys()?;
         let stop_result = self.stop_active_worker(StopReason::Logout);
-        self.reset_owner_state();
+        let input_state = self.hardware.input_state();
+        self.reset_owner_state(input_state);
         stop_result
     }
 
@@ -927,9 +928,9 @@ mod tests {
     use anyhow::{bail, Context, Result};
 
     use crate::hardware::{
-        ConsumerKey, FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, KeyboardKey,
-        LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
-        TouchEvent, TouchPhase,
+        ConsumerKey, FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, InputState,
+        KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent,
+        TouchBarHardware, TouchEvent, TouchPhase,
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
@@ -990,6 +991,10 @@ mod tests {
 
         fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
             self.inner.poll(timeout)
+        }
+
+        fn input_state(&self) -> InputState {
+            self.inner.input_state()
         }
 
         fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
@@ -1064,6 +1069,10 @@ mod tests {
 
         fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
             self.inner.poll(timeout)
+        }
+
+        fn input_state(&self) -> InputState {
+            self.inner.input_state()
         }
 
         fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
@@ -1180,15 +1189,6 @@ mod tests {
                 height: None,
             }));
         supervisor.step_at(1.0)?;
-
-        supervisor.handoff_owner()?;
-        assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
-        assert_eq!(supervisor.hardware().inner.virtual_keyboard_creations(), 1);
-        assert_eq!(
-            supervisor.hardware().inner.virtual_keyboard_name(),
-            Some("Sliver Keyboard")
-        );
-
         supervisor
             .hardware_mut()
             .inner
@@ -1200,6 +1200,16 @@ mod tests {
                 modifier: Modifier::LeftCtrl,
                 active: true,
             });
+        supervisor.step_at(1.5)?;
+
+        supervisor.handoff_owner()?;
+        assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
+        assert_eq!(supervisor.hardware().inner.virtual_keyboard_creations(), 1);
+        assert_eq!(
+            supervisor.hardware().inner.virtual_keyboard_name(),
+            Some("Sliver Keyboard")
+        );
+
         supervisor.apply(&new_source)?;
         assert_eq!(std::fs::read_to_string(&state_log)?, "true:true");
         supervisor.shutdown()?;

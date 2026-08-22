@@ -21,7 +21,7 @@ use evdev::{AttributeSet, EventType, InputEvent, Key};
 
 use crate::hardware::{
     function_key_output, modifier_output_keys, tap_key_events, validate_backlight, ConsumerKey,
-    HardwareEvent, KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey,
+    HardwareEvent, InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey,
     SyntheticKeyEvent, TouchBarHardware,
 };
 
@@ -1213,6 +1213,13 @@ impl TouchBarHardware for M2TouchBar {
 
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
         self.poll_inner(timeout)
+    }
+
+    fn input_state(&self) -> InputState {
+        InputState {
+            fn_active: self.fn_active,
+            modifiers: self.modifiers,
+        }
     }
 
     fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
