@@ -367,7 +367,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         requested_path: &Path,
         authorization: Option<(PeerCredentials, AuthorizationGrant)>,
     ) -> Result<()> {
-        let Err(candidate_error) = self.apply_candidate(requested_path, authorization) else {
+        let Err(candidate_error) = self.apply_candidate(requested_path, authorization, true) else {
             return Ok(());
         };
         let candidate_message = candidate_error.to_string();
@@ -394,22 +394,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn startup_candidate(&mut self, path: &Path, persist_path: bool) -> Result<()> {
-        let result = self.apply_candidate(path, None);
-        if result.is_ok() && !persist_path {
-            match std::fs::remove_file(&self.state_file) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error).context("clearing default selected-path state"),
-            }
-            self.selected_path = None;
-        }
-        result
+        self.apply_candidate(path, None, persist_path)
     }
 
     fn apply_candidate(
         &mut self,
         requested_path: &Path,
         authorization: Option<(PeerCredentials, AuthorizationGrant)>,
+        persist_path: bool,
     ) -> Result<()> {
         let selected_path = absolute_lexical(requested_path)?;
         let metadata = std::fs::metadata(&selected_path)
@@ -438,12 +430,18 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let frame = staged_frame.frame;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
-        let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
-        let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
+        let previous_path_state = persist_path
+            .then(|| PathStateSnapshot::capture(&self.state_file))
+            .transpose()?;
+        let path_state = persist_path
+            .then(|| PreparedPathState::prepare(&self.state_file, &selected_path))
+            .transpose()?;
         if let Some((peer, grant)) = authorization {
             self.authorizer.recheck(peer, &grant)?;
         }
-        path_state.commit()?;
+        if let Some(path_state) = path_state {
+            path_state.commit()?;
+        }
 
         let old_frame = self.active.as_ref().map(|active| active.frame.clone());
         let old_backlight = latest_backlight;
@@ -453,7 +451,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if let Some(level) = pending_backlight {
             if let Err(error) = self.hardware.set_backlight(level) {
                 return self.rollback_candidate(
-                    previous_path_state,
+                    previous_path_state.as_ref(),
                     old_frame.as_ref(),
                     old_backlight,
                     false,
@@ -466,7 +464,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         if let Err(error) = self.hardware.present(&frame) {
             return self.rollback_candidate(
-                previous_path_state,
+                previous_path_state.as_ref(),
                 old_frame.as_ref(),
                 old_backlight,
                 true,
@@ -478,7 +476,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let now = self.now_seconds();
         if let Err(error) = worker.commit(now, self.input_state) {
             return self.rollback_candidate(
-                previous_path_state,
+                previous_path_state.as_ref(),
                 old_frame.as_ref(),
                 old_backlight,
                 true,
@@ -489,7 +487,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         if let Err(error) = self.release_synthetic_keys() {
             return self.rollback_candidate(
-                previous_path_state,
+                previous_path_state.as_ref(),
                 old_frame.as_ref(),
                 old_backlight,
                 true,
@@ -565,7 +563,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn rollback_candidate(
         &mut self,
-        previous_path_state: PathStateSnapshot,
+        previous_path_state: Option<&PathStateSnapshot>,
         old_frame: Option<&LogicalFrame>,
         old_backlight: f64,
         restore_frame: bool,
@@ -589,10 +587,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 ));
             }
         }
-        if let Err(restore_error) = previous_path_state.restore(&self.state_file) {
-            error = error.context(format!(
-                "restoring selected path after candidate failure also failed: {restore_error:#}"
-            ));
+        if let Some(previous_path_state) = previous_path_state {
+            if let Err(restore_error) = previous_path_state.restore(&self.state_file) {
+                error = error.context(format!(
+                    "restoring selected path after candidate failure also failed: {restore_error:#}"
+                ));
+            }
         }
         Err(error)
     }
