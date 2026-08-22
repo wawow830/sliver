@@ -88,6 +88,53 @@ impl DriveOptions {
     }
 }
 
+pub(crate) struct DriveRequest {
+    now_seconds: f64,
+    input_state: InputState,
+    transitions: Vec<InputTransition>,
+    delta: f64,
+    events: Vec<TouchEvent>,
+    options: DriveOptions,
+}
+
+#[allow(dead_code)]
+impl DriveRequest {
+    pub(crate) fn new(
+        now_seconds: f64,
+        input_state: InputState,
+        transitions: Vec<InputTransition>,
+        delta: f64,
+        events: Vec<TouchEvent>,
+    ) -> Self {
+        Self {
+            now_seconds,
+            input_state,
+            transitions,
+            delta,
+            events,
+            options: DriveOptions::default(),
+        }
+    }
+
+    pub(crate) fn with_visibility(
+        mut self,
+        visible: bool,
+        reason: VisibilityReason,
+        force_render: bool,
+    ) -> Self {
+        self.options = DriveOptions {
+            visibility: Some((visible, reason)),
+            force_render,
+        };
+        self
+    }
+
+    pub(crate) fn with_events(mut self, events: Vec<TouchEvent>) -> Self {
+        self.events = events;
+        self
+    }
+}
+
 struct RuntimeEffects {
     frame: Option<FrameTiming>,
     backlight: Option<f64>,
@@ -145,12 +192,7 @@ enum WorkerCommand {
     RetryPending(f64, mpsc::SyncSender<std::result::Result<bool, String>>),
     PendingBacklight(mpsc::SyncSender<std::result::Result<Option<f64>, String>>),
     Drive(
-        f64,
-        InputState,
-        Vec<InputTransition>,
-        f64,
-        Vec<TouchEvent>,
-        DriveOptions,
+        DriveRequest,
         mpsc::SyncSender<std::result::Result<RuntimeEffects, String>>,
     ),
     RestoreBacklight(f64, mpsc::SyncSender<std::result::Result<(), String>>),
@@ -446,21 +488,24 @@ impl LuaWorker {
         events: Vec<TouchEvent>,
         options: DriveOptions,
     ) -> Result<WorkerEffects> {
+        self.drive_request(DriveRequest {
+            now_seconds,
+            input_state,
+            transitions,
+            delta,
+            events,
+            options,
+        })
+    }
+
+    pub(crate) fn drive_request(&self, request: DriveRequest) -> Result<WorkerEffects> {
         let commands = self
             .commands
             .as_ref()
             .context("Lua worker command channel is closed")?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
-            .send(WorkerCommand::Drive(
-                now_seconds,
-                input_state,
-                transitions,
-                delta,
-                events,
-                options,
-                reply_tx,
-            ))
+            .send(WorkerCommand::Drive(request, reply_tx))
             .context("driving Lua worker")?;
         let effects = reply_rx
             .recv()
@@ -602,23 +647,8 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
             Ok(WorkerCommand::PendingBacklight(reply)) => {
                 let _ = reply.send(Ok(runtime.pending_backlight()));
             }
-            Ok(WorkerCommand::Drive(
-                now_seconds,
-                input_state,
-                transitions,
-                delta,
-                events,
-                options,
-                reply,
-            )) => {
-                let _ = reply.send(runtime.drive(
-                    now_seconds,
-                    input_state,
-                    transitions,
-                    delta,
-                    events,
-                    options,
-                ));
+            Ok(WorkerCommand::Drive(request, reply)) => {
+                let _ = reply.send(runtime.drive(request));
             }
             Ok(WorkerCommand::RestoreBacklight(level, reply)) => {
                 let _ = reply.send(runtime.restore_backlight(level));
@@ -705,15 +735,15 @@ impl Runtime {
         Ok(())
     }
 
-    fn drive(
-        &mut self,
-        now_seconds: f64,
-        input_state: InputState,
-        transitions: Vec<InputTransition>,
-        delta: f64,
-        events: Vec<TouchEvent>,
-        options: DriveOptions,
-    ) -> std::result::Result<RuntimeEffects, String> {
+    fn drive(&mut self, request: DriveRequest) -> std::result::Result<RuntimeEffects, String> {
+        let DriveRequest {
+            now_seconds,
+            input_state,
+            transitions,
+            delta,
+            events,
+            options,
+        } = request;
         let timing = FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
         if !self.controls.committed.get() {
             return Err("Lua worker has not been committed".into());
