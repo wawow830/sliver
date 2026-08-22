@@ -123,12 +123,15 @@ impl<H: TouchBarHardware> Drop for Supervisor<H> {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use anyhow::{Context, Result};
 
     use crate::hardware::{FakeAction, FakeTouchBar};
 
-    use super::Supervisor;
+    use super::{serve_connection, Supervisor};
 
     #[test]
     fn rejected_candidate_preserves_active_state_and_replacement_stops_after_commit() -> Result<()>
@@ -306,6 +309,100 @@ mod tests {
         );
         supervisor.apply(&source)?;
         assert_eq!(supervisor.hardware().presented_frames().len(), 2);
+        assert_eq!(
+            supervisor.hardware().presented_frames()[1].rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_apply_requests_are_processed_in_arrival_order() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let gate = directory.path().join("gate");
+        let staging = directory.path().join("staging");
+        let first = directory.path().join("first.lua");
+        std::fs::write(
+            &first,
+            format!(
+                r#"
+                local staging = assert(io.open({staging:?}, "w"))
+                staging:write("ready")
+                staging:close()
+                while true do
+                    local gate = io.open({gate:?})
+                    if gate then gate:close(); break end
+                end
+                require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }}
+                "#,
+                staging = staging.to_string_lossy(),
+                gate = gate.to_string_lossy(),
+            ),
+        )?;
+        let second = directory.path().join("second.lua");
+        std::fs::write(
+            &second,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1) end }",
+        )?;
+        let invalid = directory.path().join("invalid.lua");
+        std::fs::write(
+            &invalid,
+            "require('sliver.v1'); return { api_version = 1, render = function() error('queued failure') end }",
+        )?;
+        let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar>> {
+            let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept()?;
+                serve_connection(&mut stream, &mut supervisor)?;
+            }
+            Ok(supervisor)
+        });
+
+        let first_socket = socket.clone();
+        let first_path = first.clone();
+        let first_client =
+            thread::spawn(move || crate::apply_ipc::request_apply_at(&first_socket, &first_path));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !staging.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        anyhow::ensure!(staging.exists(), "first candidate never entered staging");
+        let second_socket = socket.clone();
+        let second_path = second.clone();
+        let second_client =
+            thread::spawn(move || crate::apply_ipc::request_apply_at(&second_socket, &second_path));
+        let invalid_socket = socket.clone();
+        let invalid_client =
+            thread::spawn(move || crate::apply_ipc::request_apply_at(&invalid_socket, &invalid));
+        thread::sleep(Duration::from_millis(50));
+        std::fs::write(&gate, "go")?;
+
+        first_client.join().expect("first apply client panicked")?;
+        second_client
+            .join()
+            .expect("second apply client panicked")?;
+        let invalid_error = invalid_client
+            .join()
+            .expect("invalid apply client panicked")
+            .expect_err("invalid queued candidate was accepted");
+        assert!(format!("{invalid_error:#}").contains("queued failure"));
+        let supervisor = server.join().expect("supervisor server panicked")?;
+
+        assert_eq!(supervisor.hardware().presented_frames().len(), 2);
+        assert_eq!(
+            supervisor.hardware().presented_frames()[0].rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
         assert_eq!(
             supervisor.hardware().presented_frames()[1].rgba_at(10, 10),
             [0, 0, 255, 255]

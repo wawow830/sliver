@@ -9,6 +9,11 @@ use anyhow::{bail, ensure, Context, Result};
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn request_apply(path: &Path) -> Result<()> {
+    let socket = supervisor_socket_path()?;
+    request_apply_at(&socket, path)
+}
+
+pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
     let path = absolute_lexical(path)?;
     let bytes = path.as_os_str().as_bytes();
     ensure!(
@@ -16,8 +21,7 @@ pub(crate) fn request_apply(path: &Path) -> Result<()> {
         "config path is too long to send to the supervisor"
     );
 
-    let socket = supervisor_socket_path()?;
-    let mut stream = UnixStream::connect(&socket)
+    let mut stream = UnixStream::connect(socket)
         .with_context(|| format!("connecting to Sliver supervisor at {}", socket.display()))?;
     write_bytes(&mut stream, bytes)?;
     stream.shutdown(std::net::Shutdown::Write)?;
