@@ -566,9 +566,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
-        let effects = active
+        let effects = match active
             .worker
-            .drive(now, self.input_state, transitions, touches)?;
+            .drive(now, self.input_state, transitions, touches)
+        {
+            Ok(effects) => effects,
+            Err(error) => return self.fail_active_worker(error),
+        };
         self.next_timer_deadline = if effects.redraw_pending {
             Some(now)
         } else {
@@ -576,7 +580,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .next_timer_deadline
                 .or_else(|| effects.frame.as_ref().map(|_| now))
         };
-        self.apply_effects(effects)
+        if let Err(error) = self.apply_effects(effects) {
+            return self.fail_active_worker(error);
+        }
+        Ok(())
+    }
+
+    fn fail_active_worker(&mut self, error: anyhow::Error) -> Result<()> {
+        if let Err(cleanup_error) = self.release_synthetic_keys() {
+            return Err(error.context(format!(
+                "releasing synthetic keys after worker failure also failed: {cleanup_error:#}"
+            )));
+        }
+        Err(error)
     }
 
     fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
@@ -1139,6 +1155,63 @@ mod tests {
                 .context("new frame was not committed")?
                 .rgba_at(10, 10),
             [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn held_synthetic_keys_are_released_when_a_worker_fails() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("failing-key.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.x == 1 then
+                        sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                    else
+                        error("worker failed after holding a key")
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let touch = |id, x| TouchEvent {
+            phase: TouchPhase::Down,
+            id,
+            time: 0.0,
+            x,
+            y: 1.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(touch(1, 1.0)));
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(touch(2, 2.0)));
+        let error = supervisor
+            .step_at(2.0)
+            .expect_err("worker failure was swallowed");
+        assert!(format!("{error:#}").contains("worker failed after holding a key"));
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions()[1],
+            vec![FakeKeyEvent {
+                key: FakeKey::Keyboard(KeyboardKey::F2),
+                active: false,
+            }]
         );
         supervisor.shutdown()?;
         Ok(())
