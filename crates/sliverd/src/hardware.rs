@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use cairo::ImageSurface;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,25 +56,71 @@ impl ModifierState {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum HardwareEvent {
-    TouchTap { x: f64 },
-    Fn { active: bool },
-    Modifier { modifier: Modifier, active: bool },
-    Device { present: bool },
-    Visibility { visible: bool },
+    TouchTap {
+        x: f64,
+    },
+    Fn {
+        active: bool,
+    },
+    Modifier {
+        modifier: Modifier,
+        active: bool,
+    },
+    // The fake exposes these lifecycle inputs now; production begins emitting
+    // them when device recovery moves behind this seam.
+    #[allow(dead_code)]
+    Device {
+        present: bool,
+    },
+    #[allow(dead_code)]
+    Visibility {
+        visible: bool,
+    },
 }
 
+#[derive(Clone)]
 pub(crate) struct LogicalFrame {
-    surface: ImageSurface,
+    width: usize,
+    height: usize,
+    stride: usize,
+    pixels: Vec<u8>,
 }
 
 impl LogicalFrame {
-    pub(crate) fn new(surface: ImageSurface) -> Self {
-        Self { surface }
+    pub(crate) fn from_surface(surface: &ImageSurface) -> Result<Self> {
+        let mut pixels = Vec::new();
+        surface.with_data(|data| pixels.extend_from_slice(data))?;
+        Ok(Self {
+            width: surface.width() as usize,
+            height: surface.height() as usize,
+            stride: surface.stride() as usize,
+            pixels,
+        })
     }
 
-    pub(crate) fn surface(&self) -> &ImageSurface {
-        &self.surface
+    pub(crate) fn width(&self) -> usize {
+        self.width
     }
+
+    pub(crate) fn height(&self) -> usize {
+        self.height
+    }
+
+    pub(crate) fn stride(&self) -> usize {
+        self.stride
+    }
+
+    pub(crate) fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+}
+
+pub(crate) fn validate_backlight(level: f64) -> Result<()> {
+    ensure!(
+        level.is_finite() && (0.0..=1.0).contains(&level),
+        "backlight level must be between 0.0 and 1.0"
+    );
+    Ok(())
 }
 
 pub(crate) trait TouchBarHardware {
@@ -82,9 +128,15 @@ pub(crate) trait TouchBarHardware {
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>>;
     fn present(&mut self, frame: &LogicalFrame) -> Result<()>;
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()>;
+    // The current TOML daemon never changes brightness, but the hardware seam
+    // owns the operation and its fake records it.
+    #[allow(dead_code)]
     fn set_backlight(&mut self, level: f64) -> Result<()>;
     fn release(&mut self) -> Result<()>;
 }
+
+#[cfg(test)]
+pub(crate) use fake::{FakeAction, FakeTouchBar};
 
 #[cfg(test)]
 mod fake {
@@ -115,16 +167,13 @@ mod fake {
     }
 
     impl FrameSnapshot {
-        fn capture(frame: &LogicalFrame) -> Result<Self> {
-            let surface = frame.surface();
-            let mut pixels = Vec::new();
-            surface.with_data(|data| pixels.extend_from_slice(data))?;
-            Ok(Self {
-                width: surface.width() as usize,
-                height: surface.height() as usize,
-                stride: surface.stride() as usize,
-                pixels,
-            })
+        fn capture(frame: &LogicalFrame) -> Self {
+            Self {
+                width: frame.width(),
+                height: frame.height(),
+                stride: frame.stride(),
+                pixels: frame.pixels().to_vec(),
+            }
         }
 
         pub(crate) fn dimensions(&self) -> (usize, usize) {
@@ -189,7 +238,7 @@ mod fake {
 
         fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
             ensure!(self.claimed, "fake Touch Bar is not claimed");
-            self.frames.push(FrameSnapshot::capture(frame)?);
+            self.frames.push(FrameSnapshot::capture(frame));
             self.actions.push(FakeAction::Present);
             Ok(())
         }
@@ -203,6 +252,7 @@ mod fake {
 
         fn set_backlight(&mut self, level: f64) -> Result<()> {
             ensure!(self.claimed, "fake Touch Bar is not claimed");
+            super::validate_backlight(level)?;
             self.actions.push(FakeAction::Backlight(level));
             Ok(())
         }
@@ -216,6 +266,3 @@ mod fake {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) use fake::{FakeAction, FakeTouchBar};

@@ -10,6 +10,7 @@
 
 mod drm_out;
 mod hardware;
+mod m2_hardware;
 
 use std::io::{Read, Write};
 
