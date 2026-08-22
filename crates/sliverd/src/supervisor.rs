@@ -322,7 +322,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if let Some((peer, grant)) = authorization {
             self.authorizer.recheck(peer, &grant)?;
         }
-        self.release_synthetic_keys()?;
         path_state.commit()?;
 
         let old_frame = self.active.as_ref().map(|active| active.frame.clone());
@@ -357,6 +356,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         let now = self.now_seconds();
         if let Err(error) = worker.commit(now, self.input_state) {
+            return self.rollback_candidate(
+                previous_path_state,
+                old_frame.as_ref(),
+                old_backlight,
+                true,
+                brightness_changed,
+                error,
+            );
+        }
+
+        if let Err(error) = self.release_synthetic_keys() {
             return self.rollback_candidate(
                 previous_path_state,
                 old_frame.as_ref(),
@@ -1114,7 +1124,7 @@ mod tests {
     }
 
     #[test]
-    fn key_cleanup_failure_rejects_candidate_before_commit() -> Result<()> {
+    fn key_cleanup_failure_rolls_back_candidate_after_commit_steps() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
         let old_source = directory.path().join("old.lua");
@@ -1176,7 +1186,7 @@ mod tests {
         assert!(format!("{error:#}").contains("injected synthetic key failure"));
         assert_eq!(
             supervisor.hardware().state_seen_at_key_failure,
-            old_source.as_os_str().as_encoded_bytes()
+            new_source.as_os_str().as_encoded_bytes()
         );
         assert_eq!(
             std::fs::read(&state_file)?,
