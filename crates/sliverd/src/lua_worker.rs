@@ -53,6 +53,7 @@ enum WorkerCommand {
         Vec<TouchEvent>,
         mpsc::SyncSender<std::result::Result<WorkerEffects, String>>,
     ),
+    RestoreBacklight(f64, mpsc::SyncSender<std::result::Result<(), String>>),
     Shutdown(
         StopReason,
         mpsc::SyncSender<std::result::Result<(), String>>,
@@ -200,6 +201,22 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))
     }
 
+    pub(crate) fn restore_backlight(&self, level: f64) -> Result<()> {
+        validate_backlight_level(level)?;
+        let commands = self
+            .commands
+            .as_ref()
+            .context("Lua worker command channel is closed")?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(WorkerCommand::RestoreBacklight(level, reply_tx))
+            .context("restoring Lua backlight state")?;
+        reply_rx
+            .recv()
+            .context("Lua owner thread exited while restoring backlight")?
+            .map_err(|error| anyhow!(error))
+    }
+
     pub(crate) fn shutdown(mut self, reason: StopReason) -> Result<()> {
         let commands = self
             .commands
@@ -280,6 +297,9 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
             Ok(WorkerCommand::Drive(now_seconds, events, reply)) => {
                 let _ = reply.send(runtime.drive(now_seconds, events));
             }
+            Ok(WorkerCommand::RestoreBacklight(level, reply)) => {
+                let _ = reply.send(runtime.restore_backlight(level));
+            }
             Ok(WorkerCommand::Shutdown(reason, reply)) => {
                 let _ = reply.send(runtime.stop(reason));
                 break;
@@ -292,6 +312,13 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
 impl Runtime {
     fn pending_backlight(&self) -> Option<f64> {
         self.controls.pending_backlight.get()
+    }
+
+    fn restore_backlight(&mut self, level: f64) -> std::result::Result<(), String> {
+        validate_backlight_level(level).map_err(|error| error.to_string())?;
+        self.controls.backlight_level.set(level);
+        self.controls.pending_backlight.set(None);
+        Ok(())
     }
 
     fn commit(&mut self, now_seconds: f64) -> std::result::Result<(), String> {
