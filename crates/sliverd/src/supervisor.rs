@@ -1280,6 +1280,11 @@ mod tests {
             active: true,
         });
         let mut supervisor = Supervisor::new(hardware, state_file)?;
+        assert_eq!(
+            supervisor.hardware().virtual_keyboard_name(),
+            Some("Sliver Keyboard")
+        );
+        assert_eq!(supervisor.hardware().virtual_keyboard_creations(), 1);
         supervisor.apply(&old_source)?;
         supervisor
             .hardware_mut()
@@ -1298,6 +1303,7 @@ mod tests {
         assert_eq!(supervisor.hardware().synthetic_transactions().len(), 1);
 
         supervisor.apply(&new_source)?;
+        assert_eq!(supervisor.hardware().virtual_keyboard_creations(), 1);
         assert_eq!(
             supervisor.hardware().synthetic_transactions()[1],
             vec![

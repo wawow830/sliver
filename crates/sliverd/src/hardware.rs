@@ -324,6 +324,8 @@ mod fake {
         actions: Vec<FakeAction>,
         frames: Vec<FrameSnapshot>,
         backlight: f64,
+        virtual_keyboard_name: Option<String>,
+        virtual_keyboard_creations: usize,
         synthetic_keys: Vec<FakeKeyEvent>,
         synthetic_transactions: Vec<Vec<FakeKeyEvent>>,
     }
@@ -353,6 +355,14 @@ mod fake {
             self.backlight
         }
 
+        pub(crate) fn virtual_keyboard_name(&self) -> Option<&str> {
+            self.virtual_keyboard_name.as_deref()
+        }
+
+        pub(crate) fn virtual_keyboard_creations(&self) -> usize {
+            self.virtual_keyboard_creations
+        }
+
         pub(crate) fn synthetic_keys(&self) -> &[FakeKeyEvent] {
             &self.synthetic_keys
         }
@@ -366,6 +376,10 @@ mod fake {
         fn claim(&mut self) -> Result<()> {
             ensure!(!self.claimed, "fake Touch Bar is already claimed");
             self.claimed = true;
+            if self.virtual_keyboard_name.is_none() {
+                self.virtual_keyboard_name = Some("Sliver Keyboard".into());
+                self.virtual_keyboard_creations += 1;
+            }
             self.actions.push(FakeAction::Grab);
             Ok(())
         }
