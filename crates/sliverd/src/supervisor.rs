@@ -896,16 +896,24 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     fn poll_hardware_deferred(&mut self, timeout: Duration) -> Result<()> {
         let now = self.now_seconds();
         for event in self.hardware.poll(timeout)? {
-            match event {
-                HardwareEvent::Touch(touch) => self.route_touch(touch)?,
-                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active, now),
-                HardwareEvent::Modifier { modifier, active } => {
-                    self.route_input(ObservedKey::Modifier(modifier), active, now)
-                }
-                HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
-            }
+            self.route_hardware_event(event, now)?;
         }
         Ok(())
+    }
+
+    fn route_hardware_event(&mut self, event: HardwareEvent, now: f64) -> Result<()> {
+        match event {
+            HardwareEvent::Touch(touch) => self.route_touch(touch),
+            HardwareEvent::Fn { active } => {
+                self.route_input(ObservedKey::Fn, active, now);
+                Ok(())
+            }
+            HardwareEvent::Modifier { modifier, active } => {
+                self.route_input(ObservedKey::Modifier(modifier), active, now);
+                Ok(())
+            }
+            HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => Ok(()),
+        }
     }
 
     fn check_worker_liveness(&mut self) -> Result<()> {
@@ -935,14 +943,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             {
                 self.enter_recovery()?;
             }
-            match event {
-                HardwareEvent::Touch(touch) => self.route_touch(touch)?,
-                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active, now),
-                HardwareEvent::Modifier { modifier, active } => {
-                    self.route_input(ObservedKey::Modifier(modifier), active, now)
-                }
-                HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
-            }
+            self.route_hardware_event(event, now)?;
         }
         if self.recovery.is_some() && !self.input_state.fn_active {
             self.exit_recovery(now)?;
