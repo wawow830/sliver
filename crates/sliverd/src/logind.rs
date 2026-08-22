@@ -305,14 +305,15 @@ pub(crate) use fake::FakeLogind;
 
 #[cfg(test)]
 mod fake {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant};
 
     use super::{ActiveSession, Logind, Session};
     use anyhow::Result;
 
     #[derive(Clone, Default)]
     pub(crate) struct FakeLogind {
-        state: Arc<Mutex<State>>,
+        state: Arc<(Mutex<State>, Condvar)>,
     }
 
     #[derive(Default)]
@@ -320,6 +321,8 @@ mod fake {
         sessions: std::collections::HashMap<libc::pid_t, Session>,
         active: std::collections::HashMap<String, ActiveSession>,
         generation: u64,
+        generation_reads: usize,
+        generation_hook: Option<(usize, String, ActiveSession)>,
     }
 
     impl FakeLogind {
@@ -328,7 +331,8 @@ mod fake {
         }
 
         pub(crate) fn set_session(&self, pid: libc::pid_t, session: Option<Session>) {
-            let mut state = self.state.lock().expect("fake logind mutex poisoned");
+            let (lock, _) = &*self.state;
+            let mut state = lock.lock().expect("fake logind mutex poisoned");
             if let Some(session) = session {
                 state.sessions.insert(pid, session);
             } else {
@@ -341,7 +345,8 @@ mod fake {
         }
 
         pub(crate) fn set_active(&self, seat: &str, session: Option<ActiveSession>) {
-            let mut state = self.state.lock().expect("fake logind mutex poisoned");
+            let (lock, _) = &*self.state;
+            let mut state = lock.lock().expect("fake logind mutex poisoned");
             if let Some(session) = session {
                 state.active.insert(seat.to_owned(), session);
             } else {
@@ -354,26 +359,73 @@ mod fake {
         }
 
         pub(crate) fn bump_generation(&self) {
-            let mut state = self.state.lock().expect("fake logind mutex poisoned");
+            let (lock, _) = &*self.state;
+            let mut state = lock.lock().expect("fake logind mutex poisoned");
             state.generation = state
                 .generation
                 .checked_add(1)
                 .expect("fake logind generation overflow");
         }
+
+        pub(crate) fn switch_active_on_generation_read(
+            &self,
+            read: usize,
+            seat: &str,
+            active: ActiveSession,
+        ) {
+            let (lock, _) = &*self.state;
+            let mut state = lock.lock().expect("fake logind mutex poisoned");
+            state.generation_hook = Some((read, seat.to_owned(), active));
+        }
+
+        pub(crate) fn wait_for_generation_reads(&self, expected: usize, timeout: Duration) -> bool {
+            let (lock, condition) = &*self.state;
+            let mut state = lock.lock().expect("fake logind mutex poisoned");
+            let deadline = Instant::now() + timeout;
+            while state.generation_reads < expected {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (next, result) = condition
+                    .wait_timeout(state, remaining)
+                    .expect("fake logind mutex poisoned");
+                state = next;
+                if result.timed_out() && state.generation_reads < expected {
+                    return false;
+                }
+            }
+            true
+        }
     }
 
     impl Logind for FakeLogind {
         fn generation(&self) -> Result<u64> {
-            Ok(self
-                .state
-                .lock()
-                .expect("fake logind mutex poisoned")
-                .generation)
+            let (lock, condition) = &*self.state;
+            let mut state = lock.lock().expect("fake logind mutex poisoned");
+            state.generation_reads += 1;
+            if state
+                .generation_hook
+                .as_ref()
+                .is_some_and(|(read, _, _)| *read == state.generation_reads)
+            {
+                let (_, seat, active) = state
+                    .generation_hook
+                    .take()
+                    .expect("generation hook was just checked");
+                state.active.insert(seat, active);
+                state.generation = state
+                    .generation
+                    .checked_add(1)
+                    .expect("fake logind generation overflow");
+            }
+            condition.notify_all();
+            Ok(state.generation)
         }
 
         fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>> {
-            Ok(self
-                .state
+            let (lock, _) = &*self.state;
+            Ok(lock
                 .lock()
                 .expect("fake logind mutex poisoned")
                 .sessions
@@ -382,8 +434,8 @@ mod fake {
         }
 
         fn active_session(&self, seat: &str) -> Result<Option<ActiveSession>> {
-            Ok(self
-                .state
+            let (lock, _) = &*self.state;
+            Ok(lock
                 .lock()
                 .expect("fake logind mutex poisoned")
                 .active

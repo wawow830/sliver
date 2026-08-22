@@ -1,5 +1,9 @@
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 
@@ -14,6 +18,17 @@ use crate::peer_credentials::PeerCredentials;
 struct ActiveConfig {
     worker: LuaWorker,
     _selected_path: PathBuf,
+}
+
+struct AuthorizedRequest {
+    path: PathBuf,
+    peer: PeerCredentials,
+    grant: AuthorizationGrant,
+}
+
+struct QueuedRequest {
+    stream: UnixStream,
+    request: Result<AuthorizedRequest>,
 }
 
 pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
@@ -47,9 +62,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.apply_candidate(requested_path, None)
     }
 
-    fn apply_authorized(&mut self, requested_path: &Path, peer: PeerCredentials) -> Result<()> {
-        let grant = self.authorizer.authorize(peer)?;
-        self.apply_candidate(requested_path, Some((peer, grant)))
+    fn apply_authorized(&mut self, request: AuthorizedRequest) -> Result<()> {
+        self.authorizer.recheck(request.peer, &request.grant)?;
+        self.apply_candidate(&request.path, Some((request.peer, request.grant)))
     }
 
     fn apply_candidate(
@@ -69,6 +84,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let StagedLuaWorker { worker, frame } = LuaWorker::stage(&selected_path)?;
         let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
         let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
+        // Keep this check beside the first Sliver-owned commit mutation. The
+        // logind monitor cannot lock the filesystem and hardware operations.
         if let Some((peer, grant)) = authorization {
             self.authorizer.recheck(peer, &grant)?;
         }
@@ -127,20 +144,114 @@ pub(crate) fn serve<H: TouchBarHardware, L: Logind>(
     listener: UnixListener,
     supervisor: &mut Supervisor<H, L>,
 ) -> Result<()> {
-    for connection in listener.incoming() {
-        let mut stream = connection.context("accepting apply request")?;
-        serve_connection(&mut stream, supervisor)?;
-    }
-    Ok(())
+    serve_queue(listener, supervisor, None)
 }
 
+#[cfg(test)]
+fn serve_for_test<H: TouchBarHardware, L: Logind>(
+    listener: UnixListener,
+    supervisor: &mut Supervisor<H, L>,
+    request_limit: usize,
+) -> Result<()> {
+    serve_queue(listener, supervisor, Some(request_limit))
+}
+
+fn serve_queue<H: TouchBarHardware, L: Logind>(
+    listener: UnixListener,
+    supervisor: &mut Supervisor<H, L>,
+    request_limit: Option<usize>,
+) -> Result<()> {
+    let authorizer = supervisor.authorizer.clone();
+    let (sender, receiver) = mpsc::channel();
+    let stop = Arc::new(AtomicBool::new(false));
+    let acceptor_stop = stop.clone();
+    let acceptor = thread::spawn(move || {
+        accept_requests(listener, authorizer, sender, request_limit, acceptor_stop)
+    });
+
+    let mut service_result = Ok(());
+    for queued in receiver {
+        if let Err(error) = serve_queued_request(queued, supervisor) {
+            service_result = Err(error);
+            break;
+        }
+    }
+
+    stop.store(true, Ordering::Release);
+    let acceptor_result = acceptor
+        .join()
+        .map_err(|_| anyhow::anyhow!("apply acceptor thread panicked"))?;
+    match (service_result, acceptor_result) {
+        (Err(error), Err(acceptor_error)) => {
+            Err(error).context(format!("apply acceptor failed also: {acceptor_error:#}"))
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn accept_requests<L: Logind>(
+    listener: UnixListener,
+    authorizer: SessionAuthorizer<L>,
+    sender: mpsc::Sender<QueuedRequest>,
+    request_limit: Option<usize>,
+    stop: Arc<AtomicBool>,
+) -> Result<()> {
+    listener
+        .set_nonblocking(true)
+        .context("making the apply listener nonblocking")?;
+    let mut sent = 0;
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let (mut stream, _) = match listener.accept() {
+            Ok(connection) => connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::park_timeout(Duration::from_millis(10));
+                continue;
+            }
+            Err(error) => return Err(error).context("accepting apply request"),
+        };
+        let request = read_authorized_request(&mut stream, &authorizer);
+        if sender.send(QueuedRequest { stream, request }).is_err() {
+            return Ok(());
+        }
+        sent += 1;
+        if request_limit.is_some_and(|limit| sent >= limit) {
+            return Ok(());
+        }
+    }
+}
+
+fn read_authorized_request<L: Logind>(
+    stream: &mut UnixStream,
+    authorizer: &SessionAuthorizer<L>,
+) -> Result<AuthorizedRequest> {
+    let peer = crate::peer_credentials::read(stream)?;
+    let path = crate::apply_ipc::read_request(stream)?;
+    let grant = authorizer.authorize(peer)?;
+    Ok(AuthorizedRequest { path, peer, grant })
+}
+
+fn serve_queued_request<H: TouchBarHardware, L: Logind>(
+    mut queued: QueuedRequest,
+    supervisor: &mut Supervisor<H, L>,
+) -> Result<()> {
+    let result = queued
+        .request
+        .and_then(|request| supervisor.apply_authorized(request));
+    crate::apply_ipc::write_reply(&mut queued.stream, &result).context("sending apply reply")
+}
+
+#[cfg(test)]
 fn serve_connection<H: TouchBarHardware, L: Logind>(
     stream: &mut UnixStream,
     supervisor: &mut Supervisor<H, L>,
 ) -> Result<()> {
-    let result = crate::peer_credentials::read(stream)
-        .and_then(|peer| crate::apply_ipc::read_request(stream).map(|path| (path, peer)))
-        .and_then(|(path, peer)| supervisor.apply_authorized(&path, peer));
+    let request = read_authorized_request(stream, &supervisor.authorizer);
+    let result = request.and_then(|request| supervisor.apply_authorized(request));
     crate::apply_ipc::write_reply(stream, &result).context("sending apply reply")
 }
 
@@ -168,7 +279,7 @@ mod tests {
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
-    use super::{serve_connection, Supervisor};
+    use super::{serve_connection, serve_for_test, Supervisor};
 
     struct FailingPresentHardware {
         inner: FakeTouchBar,
@@ -612,6 +723,64 @@ mod tests {
     }
 
     #[test]
+    fn session_switch_in_the_precommit_window_is_rejected() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let staged = directory.path().join("staged");
+        let source = directory.path().join("config.lua");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    start = function()
+                        local marker = assert(io.open({staged:?}, "w"))
+                        marker:close()
+                    end,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }}
+                "#,
+                staged = staged.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, uid) = active_local_logind("old-session");
+        logind.switch_active_on_generation_read(
+            6,
+            "seat0",
+            ActiveSession {
+                id: "new-session".into(),
+                uid,
+            },
+        );
+        let mut supervisor =
+            Supervisor::new_with_logind(FakeTouchBar::new(), state_file.clone(), logind)?;
+        let client_socket = socket.clone();
+        let client_source = source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&client_socket, &client_source)
+        });
+
+        let (mut stream, _) = listener.accept()?;
+        serve_connection(&mut stream, &mut supervisor)?;
+        let error = client
+            .join()
+            .expect("apply client panicked")
+            .expect_err("session switched during precommit but apply succeeded");
+        assert!(staged.exists());
+        assert!(format!("{error:#}").contains("session changed while checking authorization"));
+        assert!(!state_file.exists());
+        assert!(supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn session_change_during_staging_cancels_the_candidate_before_commit() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("supervisor.sock");
@@ -686,12 +855,13 @@ mod tests {
     }
 
     #[test]
-    fn queued_apply_is_cancelled_after_the_active_session_changes() -> Result<()> {
+    fn queued_apply_is_cancelled_after_a_session_changes_away_and_back() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("supervisor.sock");
         let listener = UnixListener::bind(&socket)?;
-        let marker = directory.path().join("staging");
-        let gate = directory.path().join("release");
+        let first_marker = directory.path().join("first-staging");
+        let first_gate = directory.path().join("first-release");
+        let second_marker = directory.path().join("second-staging");
         let first = directory.path().join("first.lua");
         std::fs::write(
             &first,
@@ -711,22 +881,29 @@ mod tests {
                     end,
                 }}
                 "#,
-                marker = marker.to_string_lossy(),
-                gate = gate.to_string_lossy(),
+                marker = first_marker.to_string_lossy(),
+                gate = first_gate.to_string_lossy(),
             ),
         )?;
         let second = directory.path().join("second.lua");
         std::fs::write(
             &second,
-            r#"
-            require("sliver.v1")
-            return {
-                api_version = 1,
-                render = function(canvas)
-                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
-                end,
-            }
-            "#,
+            format!(
+                r#"
+                require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    start = function()
+                        local marker = assert(io.open({marker:?}, "w"))
+                        marker:close()
+                    end,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                    end,
+                }}
+                "#,
+                marker = second_marker.to_string_lossy(),
+            ),
         )?;
         let state_file = directory.path().join("state/sliver/config-path");
         let (logind, uid) = active_local_logind("old-session");
@@ -735,10 +912,7 @@ mod tests {
         let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
             let mut supervisor =
                 Supervisor::new_with_logind(FakeTouchBar::new(), server_state, server_logind)?;
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept()?;
-                serve_connection(&mut stream, &mut supervisor)?;
-            }
+            serve_for_test(listener, &mut supervisor, 2)?;
             Ok(supervisor)
         });
         let first_socket = socket.clone();
@@ -748,17 +922,28 @@ mod tests {
         });
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !marker.exists() && Instant::now() < deadline {
+        while !first_marker.exists() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
-        anyhow::ensure!(marker.exists(), "first candidate never entered staging");
+        anyhow::ensure!(
+            first_marker.exists(),
+            "first candidate never entered staging"
+        );
 
         let second_socket = socket.clone();
         let second_client_source = second.clone();
         let second_client = thread::spawn(move || {
             crate::apply_ipc::request_apply_at(&second_socket, &second_client_source)
         });
-        thread::sleep(Duration::from_millis(50));
+        anyhow::ensure!(
+            logind.wait_for_generation_reads(6, Duration::from_secs(2)),
+            "second request was not authorized while the first candidate was staged"
+        );
+        assert!(
+            !second_marker.exists(),
+            "queued request started staging before the first request finished"
+        );
+
         logind.set_active(
             "seat0",
             Some(ActiveSession {
@@ -766,18 +951,26 @@ mod tests {
                 uid,
             }),
         );
-        std::fs::write(&gate, "continue")?;
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "old-session".into(),
+                uid,
+            }),
+        );
+        std::fs::write(&first_gate, "continue")?;
 
         let first_error = first_client
             .join()
             .expect("first apply client panicked")
-            .expect_err("staged apply committed after session change");
+            .expect_err("staged apply committed after session changed away and back");
         let second_error = second_client
             .join()
             .expect("second apply client panicked")
-            .expect_err("queued apply committed after session change");
-        assert!(format!("{first_error:#}").contains("not the active session"));
-        assert!(format!("{second_error:#}").contains("not the active session"));
+            .expect_err("queued apply committed after session changed away and back");
+        assert!(format!("{first_error:#}").contains("changed during config apply"));
+        assert!(format!("{second_error:#}").contains("changed during config apply"));
+        assert!(!second_marker.exists());
         let supervisor = server.join().expect("supervisor thread panicked")?;
         assert!(!state_file.exists());
         assert!(supervisor.hardware().presented_frames().is_empty());
