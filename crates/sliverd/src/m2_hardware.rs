@@ -20,9 +20,9 @@ use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, EventType, InputEvent, Key};
 
 use crate::hardware::{
-    function_key_output, modifier_output_keys, tap_key_events, validate_backlight, ConsumerKey,
-    HardwareEvent, InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey,
-    SyntheticKeyEvent, TouchBarHardware,
+    function_key_output, modifier_output_keys, output_key_metadata, tap_key_events,
+    validate_backlight, ConsumerKey, HardwareEvent, InputState, KeyboardKey, LogicalFrame,
+    Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
 };
 
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
@@ -34,30 +34,6 @@ const KEYBOARD_NAME: &str = "Apple MTP keyboard";
 const BACKLIGHT_DIRECTORY: &str = "/sys/class/backlight/228600000.dsi.0";
 const BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0/brightness";
 const MAX_BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0/max_brightness";
-const F_KEYS: [Key; 12] = [
-    Key::KEY_F1,
-    Key::KEY_F2,
-    Key::KEY_F3,
-    Key::KEY_F4,
-    Key::KEY_F5,
-    Key::KEY_F6,
-    Key::KEY_F7,
-    Key::KEY_F8,
-    Key::KEY_F9,
-    Key::KEY_F10,
-    Key::KEY_F11,
-    Key::KEY_F12,
-];
-const MOD_KEYS: [Key; 8] = [
-    Key::KEY_LEFTCTRL,
-    Key::KEY_RIGHTCTRL,
-    Key::KEY_LEFTALT,
-    Key::KEY_RIGHTALT,
-    Key::KEY_LEFTSHIFT,
-    Key::KEY_RIGHTSHIFT,
-    Key::KEY_LEFTMETA,
-    Key::KEY_RIGHTMETA,
-];
 
 /// A small wrapper keeps the Linux polling dependency private to this adapter.
 /// The crate currently gets libc transitively through evdev; it should be made
@@ -709,16 +685,19 @@ impl KeyboardInput {
 }
 
 fn modifier_for(code: u16) -> Option<Modifier> {
-    MOD_KEYS
-        .into_iter()
-        .zip(Modifier::ALL)
-        .find_map(|(key, modifier)| (key.code() == code).then_some(modifier))
+    output_key_metadata().iter().find_map(|metadata| {
+        let modifier = metadata.modifier?;
+        (output_key_code(metadata.key).code() == code).then_some(modifier)
+    })
 }
 
 fn modifier_state_from_key_state(key_state: &AttributeSet<Key>) -> ModifierState {
     let mut modifiers = ModifierState::default();
-    for (key, modifier) in MOD_KEYS.into_iter().zip(Modifier::ALL) {
-        if key_state.contains(key) {
+    for metadata in output_key_metadata() {
+        let Some(modifier) = metadata.modifier else {
+            continue;
+        };
+        if key_state.contains(output_key_code(metadata.key)) {
             modifiers.set(modifier, true);
         }
     }
@@ -730,8 +709,11 @@ fn initial_keyboard_events(key_state: &AttributeSet<Key>) -> Vec<HardwareEvent> 
     if key_state.contains(Key::KEY_FN) {
         events.push(HardwareEvent::Fn { active: true });
     }
-    for (key, modifier) in MOD_KEYS.into_iter().zip(Modifier::ALL) {
-        if key_state.contains(key) {
+    for metadata in output_key_metadata() {
+        let Some(modifier) = metadata.modifier else {
+            continue;
+        };
+        if key_state.contains(output_key_code(metadata.key)) {
             events.push(HardwareEvent::Modifier {
                 modifier,
                 active: true,
@@ -761,20 +743,9 @@ struct KeyboardEmitter {
 
 impl KeyboardEmitter {
     fn new() -> Result<Self> {
-        let keys: AttributeSet<Key> = F_KEYS
-            .into_iter()
-            .chain(MOD_KEYS)
-            .chain([
-                Key::KEY_ESC,
-                Key::KEY_BRIGHTNESSDOWN,
-                Key::KEY_BRIGHTNESSUP,
-                Key::KEY_PREVIOUSSONG,
-                Key::KEY_PLAYPAUSE,
-                Key::KEY_NEXTSONG,
-                Key::KEY_MUTE,
-                Key::KEY_VOLUMEDOWN,
-                Key::KEY_VOLUMEUP,
-            ])
+        let keys: AttributeSet<Key> = output_key_metadata()
+            .iter()
+            .map(|metadata| output_key_code(metadata.key))
             .collect();
         let device = VirtualDeviceBuilder::new()?
             .name("Sliver Keyboard")
