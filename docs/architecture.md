@@ -185,6 +185,9 @@ apply fails.
 
 ## Local apply authorization
 
+See [ADR 0001, local apply authorization](adr/0001-local-apply-authorization.md)
+for the decision and its transaction limit.
+
 `sliver FILE` sends only the normalized path to
 `$XDG_RUNTIME_DIR/sliver/supervisor.sock`. The supervisor reads the Unix
 kernel peer credentials and asks logind for the peer's session. It accepts a
