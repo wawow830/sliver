@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{ensure, Result};
 use memmap2::MmapMut;
@@ -10,6 +11,7 @@ const WRITING: u8 = 1;
 const READY: u8 = 2;
 const READING: u8 = 3;
 const RECLAIMING: u8 = 4;
+const MAX_FRAME_SLOT_WAIT: Duration = Duration::from_millis(50);
 
 #[cfg(test)]
 struct DropGate {
@@ -39,6 +41,24 @@ impl SelectionGate {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             selected: std::sync::Barrier::new(2),
+            resume: std::sync::Barrier::new(2),
+            active: AtomicU8::new(1),
+        })
+    }
+}
+
+#[cfg(test)]
+struct AcquisitionGate {
+    attempted: std::sync::Barrier,
+    resume: std::sync::Barrier,
+    active: AtomicU8,
+}
+
+#[cfg(test)]
+impl AcquisitionGate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            attempted: std::sync::Barrier::new(2),
             resume: std::sync::Barrier::new(2),
             active: AtomicU8::new(1),
         })
@@ -90,11 +110,15 @@ struct SharedSlots {
     height: usize,
     stride: usize,
     next_sequence: AtomicU64,
+    state_wait: Mutex<()>,
+    state_changed: Condvar,
     slots: [Slot; SLOT_COUNT],
     #[cfg(test)]
     drop_gate: Option<Arc<DropGate>>,
     #[cfg(test)]
     selection_gate: Option<Arc<SelectionGate>>,
+    #[cfg(test)]
+    acquisition_gate: Option<Arc<AcquisitionGate>>,
 }
 
 /// The fixed-size producer/broker handoff for decoded frames.
@@ -153,11 +177,15 @@ impl FrameSlots {
                 height,
                 stride,
                 next_sequence: AtomicU64::new(0),
+                state_wait: Mutex::new(()),
+                state_changed: Condvar::new(),
                 slots,
                 #[cfg(test)]
                 drop_gate: None,
                 #[cfg(test)]
                 selection_gate: None,
+                #[cfg(test)]
+                acquisition_gate: None,
             }),
         })
     }
@@ -187,6 +215,21 @@ impl FrameSlots {
         Arc::get_mut(&mut slots.inner)
             .expect("new slots have one owner")
             .selection_gate = Some(selection_gate);
+        Ok(slots)
+    }
+
+    #[cfg(test)]
+    fn new_with_reclamation_gates(
+        width: usize,
+        height: usize,
+        stride: usize,
+        selection_gate: Arc<SelectionGate>,
+        acquisition_gate: Arc<AcquisitionGate>,
+    ) -> Result<Self> {
+        let mut slots = Self::new_with_selection_gate(width, height, stride, selection_gate)?;
+        Arc::get_mut(&mut slots.inner)
+            .expect("new slots have one owner")
+            .acquisition_gate = Some(acquisition_gate);
         Ok(slots)
     }
 
@@ -221,8 +264,39 @@ impl FrameProducer {
             "frame pixels do not fill one shared slot"
         );
 
-        let Some(mut writer) = self.begin_write() else {
-            return Ok(false);
+        let deadline = Instant::now() + MAX_FRAME_SLOT_WAIT;
+        let mut writer = loop {
+            if let Some(writer) = self.begin_write() {
+                break writer;
+            }
+            #[cfg(test)]
+            if let Some(acquisition_gate) = &self.inner.acquisition_gate {
+                if acquisition_gate.active.swap(0, Ordering::AcqRel) != 0 {
+                    acquisition_gate.attempted.wait();
+                    acquisition_gate.resume.wait();
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            let wait = self
+                .inner
+                .state_wait
+                .lock()
+                .map_err(|_| anyhow::anyhow!("frame slot wait state was poisoned"))?;
+            if let Some(writer) = self.begin_write() {
+                drop(wait);
+                break writer;
+            }
+            let (_wait, result) = self
+                .inner
+                .state_changed
+                .wait_timeout(wait, remaining)
+                .map_err(|_| anyhow::anyhow!("frame slot wait state was poisoned"))?;
+            if result.timed_out() {
+                return Ok(false);
+            }
         };
         writer.write_complete(pixels)?;
         writer.publish(timing)?;
@@ -298,6 +372,7 @@ impl FrameWriter {
             .map_err(|_| anyhow::anyhow!("shared frame metadata was poisoned"))? = Some(timing);
         slot.sequence.store(sequence, Ordering::Relaxed);
         slot.state.store(READY, Ordering::Release);
+        self.inner.state_changed.notify_all();
         self.published = true;
         Ok(())
     }
@@ -313,6 +388,7 @@ impl Drop for FrameWriter {
             let _ =
                 slot.state
                     .compare_exchange(WRITING, FREE, Ordering::Release, Ordering::Relaxed);
+            self.inner.state_changed.notify_all();
             #[cfg(test)]
             if let Some(drop_gate) = &self.inner.drop_gate {
                 drop_gate.released.wait();
@@ -372,6 +448,7 @@ impl FrameBroker {
             } else {
                 slot.state.store(READY, Ordering::Release);
             }
+            self.inner.state_changed.notify_all();
         }
 
         let offset = index * self.inner.slot_bytes;
@@ -379,6 +456,7 @@ impl FrameBroker {
             Ok(storage) => storage[offset..offset + self.inner.slot_bytes].to_vec(),
             Err(_) => {
                 newest_slot.state.store(FREE, Ordering::Release);
+                self.inner.state_changed.notify_all();
                 return Err(anyhow::anyhow!("shared frame storage was poisoned"));
             }
         };
@@ -387,15 +465,18 @@ impl FrameBroker {
                 Some(timing) => timing,
                 None => {
                     newest_slot.state.store(FREE, Ordering::Release);
+                    self.inner.state_changed.notify_all();
                     return Err(anyhow::anyhow!("ready frame had no timing metadata"));
                 }
             },
             Err(_) => {
                 newest_slot.state.store(FREE, Ordering::Release);
+                self.inner.state_changed.notify_all();
                 return Err(anyhow::anyhow!("shared frame metadata was poisoned"));
             }
         };
         newest_slot.state.store(FREE, Ordering::Release);
+        self.inner.state_changed.notify_all();
 
         Ok(Some(CompletedFrame {
             width: self.inner.width,
@@ -446,6 +527,44 @@ mod tests {
             .take_newest()?
             .expect("newer frame was dropped");
         assert_eq!(second.pixels, frame(4));
+        Ok(())
+    }
+
+    #[test]
+    fn producer_waits_through_all_slots_held_by_broker_reclamation() -> Result<()> {
+        let selection_gate = SelectionGate::new();
+        let acquisition_gate = AcquisitionGate::new();
+        let slots = FrameSlots::new_with_reclamation_gates(
+            2,
+            1,
+            8,
+            selection_gate.clone(),
+            acquisition_gate.clone(),
+        )?;
+        let producer = slots.producer();
+        assert!(producer.publish(2, 1, 8, &frame(1), FrameTiming::new(1.0, 0.0)?,)?);
+        assert!(producer.publish(2, 1, 8, &frame(2), FrameTiming::new(2.0, 1.0)?,)?);
+        let _held_writer = producer.begin_write().expect("third slot was unavailable");
+        let broker = slots.broker();
+        let broker_thread = std::thread::spawn(move || broker.take_newest());
+
+        selection_gate.selected.wait();
+        let retry_producer = producer.clone();
+        let publish_thread = std::thread::spawn(move || {
+            retry_producer.publish(2, 1, 8, &frame(3), FrameTiming::new(3.0, 1.0).unwrap())
+        });
+        acquisition_gate.attempted.wait();
+        acquisition_gate.resume.wait();
+        selection_gate.resume.wait();
+
+        assert!(publish_thread
+            .join()
+            .expect("producer thread panicked")
+            .expect("producer publish failed"));
+        broker_thread
+            .join()
+            .expect("broker thread panicked")?
+            .expect("broker did not select a frame");
         Ok(())
     }
 
