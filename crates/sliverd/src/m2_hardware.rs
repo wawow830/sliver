@@ -639,6 +639,7 @@ fn open_main_keyboard() -> io::Result<(PathBuf, evdev::Device)> {
 struct KeyboardInput {
     path: PathBuf,
     device: evdev::Device,
+    initial_modifiers: ModifierState,
     pending: Vec<HardwareEvent>,
 }
 
@@ -646,25 +647,20 @@ impl KeyboardInput {
     fn open() -> io::Result<Self> {
         let (path, device) = open_main_keyboard()?;
         set_nonblocking(device.as_raw_fd())?;
-        let key_state = device.get_key_state().unwrap_or_default();
-        let mut pending = Vec::new();
-        if key_state.contains(Key::KEY_FN) {
-            pending.push(HardwareEvent::Fn { active: true });
-        }
-        for (key, modifier) in MOD_KEYS.into_iter().zip(Modifier::ALL) {
-            if key_state.contains(key) {
-                pending.push(HardwareEvent::Modifier {
-                    modifier,
-                    active: true,
-                });
-            }
-        }
+        let key_state = device.get_key_state()?;
+        let initial_modifiers = modifier_state_from_key_state(&key_state);
+        let pending = initial_keyboard_events(&key_state);
         eprintln!("fn: watching {} ({KEYBOARD_NAME})", path.display());
         Ok(Self {
             path,
             device,
+            initial_modifiers,
             pending,
         })
+    }
+
+    fn initial_modifiers(&self) -> ModifierState {
+        self.initial_modifiers
     }
 
     fn drain(
@@ -716,6 +712,32 @@ fn modifier_for(code: u16) -> Option<Modifier> {
         .into_iter()
         .zip(Modifier::ALL)
         .find_map(|(key, modifier)| (key.code() == code).then_some(modifier))
+}
+
+fn modifier_state_from_key_state(key_state: &AttributeSet<Key>) -> ModifierState {
+    let mut modifiers = ModifierState::default();
+    for (key, modifier) in MOD_KEYS.into_iter().zip(Modifier::ALL) {
+        if key_state.contains(key) {
+            modifiers.set(modifier, true);
+        }
+    }
+    modifiers
+}
+
+fn initial_keyboard_events(key_state: &AttributeSet<Key>) -> Vec<HardwareEvent> {
+    let mut events = Vec::new();
+    if key_state.contains(Key::KEY_FN) {
+        events.push(HardwareEvent::Fn { active: true });
+    }
+    for (key, modifier) in MOD_KEYS.into_iter().zip(Modifier::ALL) {
+        if key_state.contains(key) {
+            events.push(HardwareEvent::Modifier {
+                modifier,
+                active: true,
+            });
+        }
+    }
+    events
 }
 
 fn function_key_batches(
@@ -1000,7 +1022,9 @@ impl M2TouchBar {
                 None
             }
         };
-        self.keyboard = Some(KeyboardInput::open().context("opening internal keyboard")?);
+        let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
+        self.modifiers = keyboard.initial_modifiers();
+        self.keyboard = Some(keyboard);
         self.fn_emitter = Some(FnEmitter::new().context("creating Sliver Keyboard")?);
         Ok(())
     }
@@ -1464,10 +1488,28 @@ mod tests {
     }
 
     #[test]
-    fn function_key_batches_bridge_modifiers_in_one_device() -> Result<()> {
-        let mut modifiers = ModifierState::default();
-        modifiers.set(Modifier::LeftCtrl, true);
-        modifiers.set(Modifier::RightAlt, true);
+    fn evdev_key_state_seeds_modifier_snapshots_before_initial_events() -> Result<()> {
+        let key_state: AttributeSet<Key> = [Key::KEY_LEFTCTRL, Key::KEY_RIGHTALT, Key::KEY_FN]
+            .into_iter()
+            .collect();
+        let modifiers = modifier_state_from_key_state(&key_state);
+        assert!(modifiers.is_active(Modifier::LeftCtrl));
+        assert!(modifiers.is_active(Modifier::RightAlt));
+        assert!(!modifiers.is_active(Modifier::LeftAlt));
+        assert_eq!(
+            initial_keyboard_events(&key_state),
+            vec![
+                HardwareEvent::Fn { active: true },
+                HardwareEvent::Modifier {
+                    modifier: Modifier::LeftCtrl,
+                    active: true,
+                },
+                HardwareEvent::Modifier {
+                    modifier: Modifier::RightAlt,
+                    active: true,
+                },
+            ]
+        );
 
         let batches = function_key_batches(1, modifiers)?;
         let observed: Vec<Vec<(u16, i32)>> = batches
