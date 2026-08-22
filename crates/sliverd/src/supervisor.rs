@@ -408,9 +408,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     }
                 };
                 if let Some((peer, grant)) = authorization {
-                    if let Err(error) = self.authorizer.recheck(peer, &grant) {
-                        return Err(error);
-                    }
+                    self.authorizer.recheck(peer, &grant)?;
                 }
                 if let Err(state_error) = path_state.commit() {
                     return Err(candidate_error.context(format!(
@@ -1897,8 +1895,10 @@ mod tests {
             "require('sliver.v1'); return { api_version = 1, render = function() end }",
         )?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let mut input_state = InputState::default();
-        input_state.fn_active = true;
+        let input_state = InputState {
+            fn_active: true,
+            ..InputState::default()
+        };
         let mut supervisor =
             Supervisor::new(FakeTouchBar::with_input_state(input_state), state_file)?;
         supervisor.apply(&source)?;
