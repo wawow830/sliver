@@ -11,11 +11,13 @@ use anyhow::{ensure, Context, Result};
 use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::hardware::{
-    ContactId, HardwareEvent, InputState, InputTransition, LogicalFrame, ObservedKey,
-    TouchBarHardware, TouchEvent, TouchPhase,
+    ContactId, HardwareEvent, InputState, InputTransition, KeyboardKey, LogicalFrame, Modifier,
+    ObservedKey, OutputKey, SyntheticKeyEvent, TouchBarHardware, TouchEvent, TouchPhase,
 };
 use crate::logind::{Logind, RealLogind};
-use crate::lua_worker::{LuaWorker, StagedLuaWorker, StopReason, WorkerEffects};
+use crate::lua_worker::{
+    KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason, WorkerEffects,
+};
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
 
@@ -38,6 +40,11 @@ struct AuthorizedRequest {
 struct TouchQueue {
     events: Vec<Option<TouchEvent>>,
     moves: BTreeMap<ContactId, usize>,
+}
+
+#[derive(Clone, Default)]
+struct SyntheticState {
+    held: Vec<(crate::hardware::OutputKey, Vec<crate::hardware::OutputKey>)>,
 }
 
 impl TouchQueue {
@@ -68,6 +75,174 @@ impl TouchQueue {
     }
 }
 
+impl SyntheticState {
+    fn plan(
+        &self,
+        requests: &[KeyRequest],
+        input_state: InputState,
+    ) -> Result<(Self, Vec<SyntheticKeyEvent>)> {
+        let mut next = self.clone();
+        let mut events = Vec::new();
+        for request in requests {
+            match request.operation {
+                KeyOperation::Down => {
+                    ensure!(
+                        !next.held.iter().any(|(key, _)| *key == request.key),
+                        "synthetic key is already held"
+                    );
+                    let modifiers = next.resolve_modifiers(&request.modifiers, input_state)?;
+                    ensure!(
+                        !modifiers.contains(&request.key),
+                        "a synthetic key cannot mirror itself"
+                    );
+                    for modifier in &modifiers {
+                        if !next.is_held(*modifier) {
+                            events.push(SyntheticKeyEvent {
+                                key: *modifier,
+                                active: true,
+                            });
+                        }
+                    }
+                    events.push(SyntheticKeyEvent {
+                        key: request.key,
+                        active: true,
+                    });
+                    next.held.push((request.key, modifiers));
+                }
+                KeyOperation::Up => {
+                    let index = next
+                        .held
+                        .iter()
+                        .position(|(key, _)| *key == request.key)
+                        .context("synthetic key is not held")?;
+                    let (_, modifiers) = next.held.remove(index);
+                    events.push(SyntheticKeyEvent {
+                        key: request.key,
+                        active: false,
+                    });
+                    for modifier in modifiers.into_iter().rev() {
+                        if !next.is_held(modifier) {
+                            events.push(SyntheticKeyEvent {
+                                key: modifier,
+                                active: false,
+                            });
+                        }
+                    }
+                }
+                KeyOperation::Tap => {
+                    let modifiers = next.resolve_modifiers(&request.modifiers, input_state)?;
+                    ensure!(
+                        !modifiers.contains(&request.key),
+                        "a synthetic key cannot mirror itself"
+                    );
+                    let mirrored: Vec<_> = modifiers
+                        .into_iter()
+                        .filter(|modifier| !next.is_held(*modifier))
+                        .collect();
+                    events.extend(
+                        mirrored
+                            .iter()
+                            .copied()
+                            .map(|key| SyntheticKeyEvent { key, active: true }),
+                    );
+                    events.push(SyntheticKeyEvent {
+                        key: request.key,
+                        active: true,
+                    });
+                    events.push(SyntheticKeyEvent {
+                        key: request.key,
+                        active: false,
+                    });
+                    events.extend(
+                        mirrored
+                            .into_iter()
+                            .rev()
+                            .map(|key| SyntheticKeyEvent { key, active: false }),
+                    );
+                }
+            }
+        }
+        Ok((next, events))
+    }
+
+    fn resolve_modifiers(
+        &self,
+        mode: &ModifierMode,
+        input_state: InputState,
+    ) -> Result<Vec<OutputKey>> {
+        let modifiers = match mode {
+            ModifierMode::Inherit => Modifier::ALL
+                .into_iter()
+                .filter(|modifier| input_state.modifiers.is_active(*modifier))
+                .map(modifier_key)
+                .collect(),
+            ModifierMode::None => Vec::new(),
+            ModifierMode::Explicit(keys) => keys.clone(),
+        };
+        for key in &modifiers {
+            ensure!(
+                is_modifier_key(*key),
+                "explicit modifiers must be modifier keys"
+            );
+        }
+        ensure!(
+            modifiers.windows(2).all(|pair| pair[0] != pair[1]),
+            "explicit modifiers must not contain duplicates"
+        );
+        Ok(modifiers)
+    }
+
+    fn is_held(&self, key: OutputKey) -> bool {
+        self.held.iter().any(|(held, _)| *held == key)
+    }
+
+    fn release(&self) -> (Self, Vec<SyntheticKeyEvent>) {
+        let mut events = Vec::new();
+        for (key, modifiers) in self.held.iter().rev() {
+            events.push(SyntheticKeyEvent {
+                key: *key,
+                active: false,
+            });
+            for modifier in modifiers.iter().rev() {
+                events.push(SyntheticKeyEvent {
+                    key: *modifier,
+                    active: false,
+                });
+            }
+        }
+        (Self::default(), events)
+    }
+}
+
+fn is_modifier_key(key: OutputKey) -> bool {
+    matches!(
+        key,
+        OutputKey::Keyboard(
+            KeyboardKey::LeftCtrl
+                | KeyboardKey::RightCtrl
+                | KeyboardKey::LeftAlt
+                | KeyboardKey::RightAlt
+                | KeyboardKey::LeftShift
+                | KeyboardKey::RightShift
+                | KeyboardKey::LeftSuper
+                | KeyboardKey::RightSuper
+        )
+    )
+}
+
+fn modifier_key(modifier: Modifier) -> OutputKey {
+    OutputKey::Keyboard(match modifier {
+        Modifier::LeftCtrl => KeyboardKey::LeftCtrl,
+        Modifier::RightCtrl => KeyboardKey::RightCtrl,
+        Modifier::LeftAlt => KeyboardKey::LeftAlt,
+        Modifier::RightAlt => KeyboardKey::RightAlt,
+        Modifier::LeftShift => KeyboardKey::LeftShift,
+        Modifier::RightShift => KeyboardKey::RightShift,
+        Modifier::LeftSuper => KeyboardKey::LeftSuper,
+        Modifier::RightSuper => KeyboardKey::RightSuper,
+    })
+}
+
 pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
@@ -80,6 +255,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     ignored_contacts: BTreeSet<ContactId>,
     touch_queue: TouchQueue,
     next_timer_deadline: Option<f64>,
+    synthetic: SyntheticState,
     authorizer: SessionAuthorizer<L>,
 }
 
@@ -111,6 +287,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             ignored_contacts: BTreeSet::new(),
             touch_queue: TouchQueue::new(),
             next_timer_deadline: None,
+            synthetic: SyntheticState::default(),
             authorizer: SessionAuthorizer::new(logind),
         })
     }
