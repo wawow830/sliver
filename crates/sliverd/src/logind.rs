@@ -174,21 +174,11 @@ impl Logind for RealLogind {
 
     fn active_session(&self, seat: &str) -> Result<Option<ActiveSession>> {
         let seat = CString::new(seat).context("logind seat contains a NUL byte")?;
-        let mut id = ptr::null_mut();
         let mut uid = 0;
-        let code = unsafe { ffi::sd_seat_get_active(seat.as_ptr(), &mut id, &mut uid) };
-        if code < 0 {
-            free_string(id);
-            return missing_or_error("sd_seat_get_active", code);
-        }
-        if id.is_null() {
-            return Ok(None);
-        }
-
-        Ok(Some(ActiveSession {
-            id: unsafe { take_string(id) }?,
-            uid,
-        }))
+        let id = systemd_string("sd_seat_get_active", |output| unsafe {
+            ffi::sd_seat_get_active(seat.as_ptr(), output, &mut uid)
+        })?;
+        Ok(id.map(|id| ActiveSession { id, uid }))
     }
 }
 
