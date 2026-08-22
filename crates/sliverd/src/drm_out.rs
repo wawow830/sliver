@@ -600,6 +600,11 @@ mod tests {
                 "syntax error",
             ),
             (
+                "load",
+                "require('sliver.v1'); error('top-level boom')",
+                "top-level boom",
+            ),
+            (
                 "validation",
                 "require('sliver.v1'); return { api_version = 1, render = function() end, extra = true }",
                 "extra",
@@ -648,6 +653,37 @@ mod tests {
             assert!(hardware.presented_frames().is_empty());
             assert_eq!(hardware.actions(), &[FakeAction::Grab, FakeAction::Release]);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn lua_validation_diagnostic_uses_return_line_and_real_traceback() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("validation-line.lua");
+        std::fs::write(
+            &source,
+            concat!(
+                "require('sliver.v1')\n",
+                "local app = {\n",
+                "    api_version = 1,\n",
+                "    renderr = function() end,\n",
+                "    render = function() end,\n",
+                "}\n",
+                "return app\n",
+            ),
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        let error = present_lua_once(&source, &mut hardware)
+            .expect_err("unknown application field was accepted");
+
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains(&format!("{}:7", source.display())),
+            "validation diagnostic did not name the config return line: {diagnostic}"
+        );
+        assert!(diagnostic.contains("stack traceback:"), "{diagnostic}");
+        assert!(diagnostic.contains("sliver validation"), "{diagnostic}");
         Ok(())
     }
 

@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use anyhow::{anyhow, Context, Result};
-use mlua::{Function, Lua, MultiValue, Table, Value};
+use mlua::{Function, HookTriggers, Lua, MultiValue, Table, Value, VmState};
 
 use crate::hardware::LogicalFrame;
 use crate::lua_canvas::Canvas;
@@ -32,6 +32,15 @@ struct Runtime {
     _touch: Option<Function>,
     _key: Option<Function>,
     source: PathBuf,
+}
+
+struct CallbackRefs {
+    start: Option<Function>,
+    stop: Option<Function>,
+    visibility: Option<Function>,
+    touch: Option<Function>,
+    key: Option<Function>,
+    render: Function,
 }
 
 impl LuaWorker {
@@ -133,50 +142,77 @@ impl Runtime {
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let loaded_v1 = install_v1_module(&lua)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
-        let value = lua
+        let source_name = format!("@{}", source.display());
+        let entry = lua
             .load(&bytes)
-            .set_name(format!("@{}", source.display()))
-            .eval::<Value>()
+            .set_name(source_name.clone())
+            .into_function()
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
+
+        let last_entry_line = Rc::new(Cell::new(None));
+        let hook_line = last_entry_line.clone();
+        let hook_source = source_name.clone();
+        lua.set_hook(HookTriggers::EVERY_LINE, move |_, debug| {
+            let source = debug.source();
+            if source.source.as_deref() == Some(hook_source.as_str()) {
+                hook_line.set(debug.current_line());
+            }
+            Ok(VmState::Continue)
+        })
+        .map_err(|error| diagnostic("load", source, error.to_string()))?;
+
+        let validation_started = Rc::new(Cell::new(false));
+        let validator_started = validation_started.clone();
+        let validator_loaded_v1 = loaded_v1.clone();
+        let validator = lua
+            .create_function(move |_, value: Value| {
+                validator_started.set(true);
+                validate_application(value, validator_loaded_v1.as_ref())
+            })
+            .map_err(|error| diagnostic("load", source, error.to_string()))?;
+        let validation_result = lua
+            .load(
+                r#"
+                local entry, validate = ...
+                local application = entry()
+                validate(application)
+                return application
+                "#,
+            )
+            .set_name("=sliver validation")
+            .call::<Value>((entry, validator));
+        lua.remove_hook();
+
+        let value = validation_result.map_err(|error| {
+            if validation_started.get() {
+                validation_diagnostic(source, last_entry_line.get(), error.to_string())
+            } else {
+                diagnostic("load", source, error.to_string())
+            }
+        })?;
         let application = match value {
             Value::Table(application) => application,
             value => {
-                return Err(diagnostic(
-                    "validation",
+                return Err(validation_diagnostic(
                     source,
+                    last_entry_line.get(),
                     format!(
-                        "config must return an application table, got {}",
+                        "validation wrapper returned an application {}, not a table",
                         value.type_name()
                     ),
                 ));
             }
         };
-        if !loaded_v1.get() {
-            return Err(diagnostic(
-                "validation",
-                source,
-                "config must load sliver.v1".into(),
-            ));
-        }
-        validate_fields(&application, source)?;
-        match application.raw_get::<Value>("api_version") {
-            Ok(Value::Integer(1)) => {}
-            Ok(_) => {
-                return Err(diagnostic(
-                    "validation",
-                    source,
-                    "api_version must be integer 1".into(),
-                ));
-            }
-            Err(error) => return Err(diagnostic("validation", source, error.to_string())),
-        }
-
-        let start = optional_function(&application, "start", source)?;
-        let stop = optional_function(&application, "stop", source)?;
-        let visibility = optional_function(&application, "visibility", source)?;
-        let touch = optional_function(&application, "touch", source)?;
-        let key = optional_function(&application, "key", source)?;
-        let render = required_function(&application, "render", source)?;
+        let CallbackRefs {
+            start,
+            stop,
+            visibility,
+            touch,
+            key,
+            render,
+        } = extract_callback_refs(&application).map_err(|error| {
+            validation_diagnostic(source, last_entry_line.get(), error.to_string())
+        })?;
         if let Some(start) = start {
             start
                 .call::<()>(())
@@ -274,7 +310,33 @@ fn install_v1_module(lua: &Lua) -> mlua::Result<Rc<Cell<bool>>> {
     Ok(loaded)
 }
 
-fn validate_fields(application: &Table, source: &Path) -> std::result::Result<(), String> {
+fn validate_application(value: Value, loaded_v1: &Cell<bool>) -> mlua::Result<()> {
+    let application = match value {
+        Value::Table(application) => application,
+        value => {
+            return Err(mlua::Error::runtime(format!(
+                "config must return an application table, got {}",
+                value.type_name()
+            )));
+        }
+    };
+    if !loaded_v1.get() {
+        return Err(mlua::Error::runtime("config must load sliver.v1"));
+    }
+    validate_fields(&application)?;
+    match application.raw_get::<Value>("api_version")? {
+        Value::Integer(1) => {}
+        _ => {
+            return Err(mlua::Error::runtime("api_version must be integer 1"));
+        }
+    }
+    for field in ["start", "stop", "visibility", "touch", "key"] {
+        validate_callback(&application, field, false)?;
+    }
+    validate_callback(&application, "render", true)
+}
+
+fn validate_fields(application: &Table) -> mlua::Result<()> {
     const ALLOWED: [&str; 7] = [
         "api_version",
         "start",
@@ -286,67 +348,68 @@ fn validate_fields(application: &Table, source: &Path) -> std::result::Result<()
     ];
 
     for pair in application.pairs::<Value, Value>() {
-        let (key, _) = pair.map_err(|error| diagnostic("validation", source, error.to_string()))?;
+        let (key, _) = pair?;
         let Value::String(key) = key else {
-            return Err(diagnostic(
-                "validation",
-                source,
-                format!(
-                    "unknown non-string application field of type {}",
-                    key.type_name()
-                ),
-            ));
+            return Err(mlua::Error::runtime(format!(
+                "unknown non-string application field of type {}",
+                key.type_name()
+            )));
         };
-        let field = key
-            .to_str()
-            .map_err(|error| diagnostic("validation", source, error.to_string()))?;
+        let field = key.to_str()?;
         if !ALLOWED.contains(&field.as_ref()) {
-            return Err(diagnostic(
-                "validation",
-                source,
-                format!("unknown application field {field:?}"),
-            ));
+            return Err(mlua::Error::runtime(format!(
+                "unknown application field {field:?}"
+            )));
         }
     }
     Ok(())
 }
 
-fn optional_function(
-    application: &Table,
-    field: &str,
-    source: &Path,
-) -> std::result::Result<Option<Function>, String> {
-    match application.raw_get::<Value>(field) {
-        Ok(Value::Nil) => Ok(None),
-        Ok(Value::Function(function)) => Ok(Some(function)),
-        Ok(value) => Err(diagnostic(
-            "validation",
-            source,
-            format!("{field} must be a function, got {}", value.type_name()),
-        )),
-        Err(error) => Err(diagnostic("validation", source, error.to_string())),
+fn validate_callback(application: &Table, field: &str, required: bool) -> mlua::Result<()> {
+    match application.raw_get::<Value>(field)? {
+        Value::Nil if !required => Ok(()),
+        Value::Function(_) => Ok(()),
+        Value::Nil => Err(mlua::Error::runtime(format!(
+            "missing required {field} callback"
+        ))),
+        value => Err(mlua::Error::runtime(format!(
+            "{field} must be a function, got {}",
+            value.type_name()
+        ))),
     }
 }
 
-fn required_function(
-    application: &Table,
-    field: &str,
-    source: &Path,
-) -> std::result::Result<Function, String> {
-    optional_function(application, field, source)?.ok_or_else(|| {
-        diagnostic(
-            "validation",
-            source,
-            format!("missing required {field} callback"),
-        )
+fn extract_callback_refs(application: &Table) -> mlua::Result<CallbackRefs> {
+    Ok(CallbackRefs {
+        start: application.raw_get("start")?,
+        stop: application.raw_get("stop")?,
+        visibility: application.raw_get("visibility")?,
+        touch: application.raw_get("touch")?,
+        key: application.raw_get("key")?,
+        render: application.raw_get("render")?,
     })
 }
 
-fn diagnostic(stage: &str, source: &Path, detail: String) -> String {
-    let traceback = if detail.contains("stack traceback:") {
-        String::new()
+fn traceback_suffix(detail: &str) -> &'static str {
+    if detail.contains("stack traceback:") {
+        ""
     } else {
-        format!("\nstack traceback:\n\t{}:1: in {stage}", source.display())
-    };
+        "\nstack traceback: unavailable (no Lua traceback was produced)"
+    }
+}
+
+fn diagnostic(stage: &str, source: &Path, detail: String) -> String {
+    let traceback = traceback_suffix(&detail);
     format!("lua {} [{stage}]: {detail}{traceback}", source.display())
+}
+
+fn validation_diagnostic(source: &Path, line: Option<usize>, detail: String) -> String {
+    let location = line.map_or_else(
+        || format!("{} (line unavailable)", source.display()),
+        |line| format!("{}:{line}", source.display()),
+    );
+    format!(
+        "lua {location} [validation]: {detail}{}",
+        traceback_suffix(&detail)
+    )
 }
