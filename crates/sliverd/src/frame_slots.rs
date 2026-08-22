@@ -81,7 +81,8 @@ struct SharedSlots {
 /// Pixel bytes live in one anonymous mmap split into three fixed slots. State
 /// transitions publish a slot only after the complete row range has been
 /// copied. The broker never reads a slot in `WRITING`, so a producer that
-/// disappears halfway through a copy cannot expose those bytes.
+/// disappears halfway through a copy cannot expose those bytes. Worker death
+/// detection and the supervisor's recovery reaction belong to #10 and #11.
 #[derive(Clone)]
 pub(crate) struct FrameSlots {
     inner: Arc<SharedSlots>,
@@ -478,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn a_producer_that_disappears_during_write_does_not_stall_the_broker() -> Result<()> {
+    fn worker_crash_mid_write_leaves_the_broker_on_new_complete_frames() -> Result<()> {
         let slots = FrameSlots::new(2, 1, 8)?;
         let producer = slots.producer();
         let broker = slots.broker();
@@ -495,10 +496,9 @@ mod tests {
         assert!(broker.take_newest()?.is_none());
         let producer = slots.producer();
         assert!(producer.publish(2, 1, 8, &frame(5), FrameTiming::new(5.0, 0.0)?,)?);
-        assert_eq!(
-            broker.take_newest()?.expect("broker stalled").pixels,
-            frame(5)
-        );
+        let completed = broker.take_newest()?.expect("broker stalled");
+        assert_eq!(completed.pixels, frame(5));
+        assert_eq!(completed.timing.presentation_time, 5.0);
         Ok(())
     }
 }
