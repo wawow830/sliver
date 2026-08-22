@@ -855,12 +855,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn poll_hardware_deferred(&mut self, timeout: Duration) -> Result<()> {
+        let now = self.now_seconds();
         for event in self.hardware.poll(timeout)? {
             match event {
-                HardwareEvent::Touch(touch) => self.route_touch(touch),
-                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active),
+                HardwareEvent::Touch(touch) => self.route_touch(touch)?,
+                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active, now),
                 HardwareEvent::Modifier { modifier, active } => {
-                    self.route_input(ObservedKey::Modifier(modifier), active)
+                    self.route_input(ObservedKey::Modifier(modifier), active, now)
                 }
                 HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
             }
@@ -871,18 +872,22 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
         for event in events {
             match event {
-                HardwareEvent::Touch(touch) => self.route_touch(touch),
-                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active),
+                HardwareEvent::Touch(touch) => self.route_touch(touch)?,
+                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active, now),
                 HardwareEvent::Modifier { modifier, active } => {
-                    self.route_input(ObservedKey::Modifier(modifier), active)
+                    self.route_input(ObservedKey::Modifier(modifier), active, now)
                 }
                 HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
             }
         }
+        if self.recovery.is_some() && !self.input_state.fn_active {
+            self.exit_recovery(now)?;
+        }
         let timer_due = self
             .next_timer_deadline
             .is_some_and(|deadline| deadline <= now);
-        if self.active.is_some()
+        if self.recovery.is_none()
+            && self.active.is_some()
             && (!self.input_transitions.is_empty()
                 || !self.touch_queue.events.is_empty()
                 || timer_due)
@@ -890,6 +895,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             let transitions = std::mem::take(&mut self.input_transitions);
             let touches = self.touch_queue.drain();
             self.drive_active(now, transitions, touches)?;
+        }
+        if self.recovery.is_none()
+            && self.active.is_some()
+            && self
+                .fn_hold_started
+                .is_some_and(|started| now - started >= 3.0)
+        {
+            self.enter_recovery()?;
         }
         Ok(())
     }
@@ -921,19 +934,21 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .next_timer_deadline
                 .or_else(|| effects.frame.as_ref().map(|_| now))
         };
-        if let Err(error) = self.apply_effects(effects) {
-            return self.fail_active_worker(error);
-        }
-        Ok(())
+        self.apply_effects(effects)
     }
 
     fn fail_active_worker(&mut self, error: anyhow::Error) -> Result<()> {
-        if let Err(cleanup_error) = self.release_synthetic_keys() {
-            return Err(error.context(format!(
-                "releasing synthetic keys after worker failure also failed: {cleanup_error:#}"
-            )));
+        eprintln!("Lua worker entered recovery: {error:#}");
+        #[cfg(test)]
+        {
+            self.worker_failure = Some(format!("{error:#}"));
         }
-        Err(error)
+        if let Err(cleanup_error) = self.release_synthetic_keys() {
+            eprintln!("releasing synthetic keys after worker failure failed: {cleanup_error:#}");
+        }
+        self.active.take();
+        self.next_timer_deadline = None;
+        self.enter_recovery()
     }
 
     fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
@@ -1008,7 +1023,18 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn poll_wait(&self, now: f64) -> Duration {
-        let Some(deadline) = self.next_timer_deadline else {
+        let worker_deadline = self.next_timer_deadline;
+        let recovery_deadline = self
+            .fn_hold_started
+            .filter(|_| self.recovery.is_none())
+            .map(|started| started + 3.0);
+        let deadline = match (worker_deadline, recovery_deadline) {
+            (Some(worker), Some(recovery)) => Some(worker.min(recovery)),
+            (Some(worker), None) => Some(worker),
+            (None, Some(recovery)) => Some(recovery),
+            (None, None) => None,
+        };
+        let Some(deadline) = deadline else {
             return MAX_POLL_WAIT;
         };
         if deadline <= now {
@@ -1069,7 +1095,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     #[cfg(test)]
     fn step_at(&mut self, now: f64) -> Result<()> {
         let events = self.hardware.poll(Duration::ZERO)?;
-        self.process_events_at(now, events)
+        self.process_events_at(now, events)?;
+        #[cfg(test)]
+        if let Some(error) = self.worker_failure.take() {
+            return Err(anyhow::anyhow!(error));
+        }
+        Ok(())
     }
 
     pub(crate) fn shutdown(mut self) -> Result<()> {
@@ -1097,6 +1128,21 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     pub(crate) fn hardware_mut(&mut self) -> &mut H {
         &mut self.hardware
     }
+}
+
+fn read_selected_path(state_file: &Path) -> Result<Option<PathBuf>> {
+    let contents = match std::fs::read(state_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading selected-path state {}", state_file.display()))
+        }
+    };
+    ensure!(!contents.is_empty(), "selected-path state is empty");
+    let path = PathBuf::from(std::ffi::OsString::from_vec(contents));
+    ensure!(path.is_absolute(), "selected-path state is not absolute");
+    Ok(Some(path))
 }
 
 struct PendingRequest {
