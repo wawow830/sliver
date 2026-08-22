@@ -4735,6 +4735,132 @@ mod tests {
     }
 
     #[test]
+    fn injected_default_failure_enters_recovery_without_selecting_a_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let default = directory.path().join("missing-default.lua");
+        let (logind, _) = active_local_logind("failed-default-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(default),
+        )?;
+
+        assert!(!state_file.exists());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        assert!(!supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn saved_path_wins_over_an_injected_default() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let saved = directory.path().join("saved.lua");
+        let default = directory.path().join("default.lua");
+        std::fs::write(
+            &saved,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        std::fs::write(
+            &default,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1) end }",
+        )?;
+        PreparedPathState::prepare(&state_file, &saved)?.commit()?;
+        let (logind, _) = active_local_logind("saved-over-default-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(default),
+        )?;
+
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            saved.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("saved source was not presented")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn successful_live_apply_exits_failed_worker_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let missing = directory.path().join("missing.lua");
+        let healthy = directory.path().join("healthy.lua");
+        std::fs::write(
+            &healthy,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        assert!(supervisor.apply(&missing).is_err());
+        assert!(supervisor.recovery.is_some());
+
+        supervisor.apply(&healthy)?;
+
+        assert!(supervisor.active.is_some());
+        assert!(supervisor.recovery.is_none());
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            healthy.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn service_restart_retries_the_saved_source_once() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let saved = directory.path().join("saved.lua");
+        PreparedPathState::prepare(&state_file, &saved)?.commit()?;
+        let (first_logind, _) = active_local_logind("first-restart-session");
+        let first = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            first_logind,
+            None,
+        )?;
+        assert!(first.active.is_none());
+        assert!(first.recovery.is_some());
+        first.shutdown()?;
+
+        std::fs::write(
+            &saved,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let (second_logind, _) = active_local_logind("second-restart-session");
+        let second = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            second_logind,
+            None,
+        )?;
+
+        assert!(second.active.is_some());
+        assert!(second.recovery.is_none());
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            saved.as_os_str().as_encoded_bytes()
+        );
+        second.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn healthy_worker_enters_recovery_at_three_seconds_and_returns_after_fn_up() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("healthy.lua");
