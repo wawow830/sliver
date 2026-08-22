@@ -377,6 +377,31 @@ mod tests {
     }
 
     #[test]
+    fn lua_canvas_rejects_non_hex_color_digits_without_panicking() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalid-hex.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 10, 10, "#€€€")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        let error = present_lua_once(&source, &mut hardware)
+            .expect_err("invalid hexadecimal color digits were accepted");
+        assert!(format!("{error:#}").contains("hexadecimal"));
+        assert!(hardware.presented_frames().is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn lua_canvas_fills_an_immutable_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("path.lua");

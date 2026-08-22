@@ -177,9 +177,15 @@ impl Canvas {
         Ok(number)
     }
 
-    fn hex_channel(value: &str) -> mlua::Result<u8> {
-        u8::from_str_radix(value, 16)
-            .map_err(|_| mlua::Error::runtime("canvas:color contains invalid hexadecimal digits"))
+    fn hex_byte(high: char, low: char) -> mlua::Result<u8> {
+        let high = high.to_digit(16);
+        let low = low.to_digit(16);
+        match (high, low) {
+            (Some(high), Some(low)) => Ok((high * 16 + low) as u8),
+            _ => Err(mlua::Error::runtime(
+                "canvas:color contains invalid hexadecimal digits",
+            )),
+        }
     }
 
     fn parse_hex(value: &str) -> mlua::Result<Color> {
@@ -188,23 +194,21 @@ impl Canvas {
             .or_else(|| value.strip_prefix("0x"))
             .or_else(|| value.strip_prefix("0X"))
             .ok_or_else(|| mlua::Error::runtime("canvas:color hex value must start with #"))?;
-        let expanded = match value.len() {
-            3 | 4 => value
-                .chars()
-                .flat_map(|digit| [digit, digit])
-                .collect::<String>(),
-            6 | 8 => value.to_string(),
+        let digits: Vec<char> = value.chars().collect();
+        let expanded = match digits.len() {
+            3 | 4 => digits.iter().flat_map(|digit| [*digit, *digit]).collect(),
+            6 | 8 => digits,
             _ => {
                 return Err(mlua::Error::runtime(
                     "canvas:color hex value must have 3, 4, 6, or 8 digits",
                 ));
             }
         };
-        let red = Self::hex_channel(&expanded[0..2])?;
-        let green = Self::hex_channel(&expanded[2..4])?;
-        let blue = Self::hex_channel(&expanded[4..6])?;
+        let red = Self::hex_byte(expanded[0], expanded[1])?;
+        let green = Self::hex_byte(expanded[2], expanded[3])?;
+        let blue = Self::hex_byte(expanded[4], expanded[5])?;
         let alpha = if expanded.len() == 8 {
-            Self::hex_channel(&expanded[6..8])?
+            Self::hex_byte(expanded[6], expanded[7])?
         } else {
             u8::MAX
         };
