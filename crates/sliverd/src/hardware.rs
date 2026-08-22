@@ -325,6 +325,7 @@ mod fake {
         frames: Vec<FrameSnapshot>,
         backlight: f64,
         synthetic_keys: Vec<FakeKeyEvent>,
+        synthetic_transactions: Vec<Vec<FakeKeyEvent>>,
     }
 
     impl FakeTouchBar {
@@ -354,6 +355,10 @@ mod fake {
 
         pub(crate) fn synthetic_keys(&self) -> &[FakeKeyEvent] {
             &self.synthetic_keys
+        }
+
+        pub(crate) fn synthetic_transactions(&self) -> &[Vec<FakeKeyEvent>] {
+            &self.synthetic_transactions
         }
     }
 
@@ -386,6 +391,7 @@ mod fake {
 
         fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
             ensure!(self.claimed, "fake Touch Bar is not claimed");
+            let mut transaction = Vec::with_capacity(events.len());
             for event in events {
                 let key = match event.key {
                     OutputKey::Keyboard(key) => FakeKey::Keyboard(key),
@@ -396,8 +402,10 @@ mod fake {
                     active: event.active,
                 };
                 self.synthetic_keys.push(event);
+                transaction.push(event);
                 self.actions.push(FakeAction::SyntheticKey(event));
             }
+            self.synthetic_transactions.push(transaction);
             Ok(())
         }
 

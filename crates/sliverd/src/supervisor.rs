@@ -1208,6 +1208,114 @@ mod tests {
     }
 
     #[test]
+    fn key_taps_bridge_inherited_suppressed_and_explicit_modifiers_in_one_transaction() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("modifier-keys.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.tap(sliver.input.keys.keyboard.f2)
+                        sliver.input.key.tap(sliver.input.keys.keyboard.escape, { modifiers = false })
+                        sliver.input.key.tap(sliver.input.keys.keyboard.f3, {
+                            modifiers = { sliver.input.keys.keyboard.right_shift },
+                        })
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftAlt,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions(),
+            &[vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftAlt),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftAlt),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::RightShift),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F3),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::RightShift),
+                    active: false,
+                },
+            ]]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn lua_receives_fn_and_modifier_transitions_and_snapshots() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("input.lua");
