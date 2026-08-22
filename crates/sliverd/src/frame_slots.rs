@@ -277,20 +277,26 @@ impl FrameBroker {
         }
 
         let offset = index * self.inner.slot_bytes;
-        let pixels = {
-            let storage = self
-                .inner
-                .storage
-                .lock()
-                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
-            storage[offset..offset + self.inner.slot_bytes].to_vec()
+        let pixels = match self.inner.storage.lock() {
+            Ok(storage) => storage[offset..offset + self.inner.slot_bytes].to_vec(),
+            Err(_) => {
+                newest_slot.state.store(FREE, Ordering::Release);
+                return Err(anyhow::anyhow!("shared frame storage was poisoned"));
+            }
         };
-        let timing = newest_slot
-            .timing
-            .lock()
-            .map_err(|_| anyhow::anyhow!("shared frame metadata was poisoned"))?
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("ready frame had no timing metadata"))?;
+        let timing = match newest_slot.timing.lock() {
+            Ok(mut timing) => match timing.take() {
+                Some(timing) => timing,
+                None => {
+                    newest_slot.state.store(FREE, Ordering::Release);
+                    return Err(anyhow::anyhow!("ready frame had no timing metadata"));
+                }
+            },
+            Err(_) => {
+                newest_slot.state.store(FREE, Ordering::Release);
+                return Err(anyhow::anyhow!("shared frame metadata was poisoned"));
+            }
+        };
         newest_slot.state.store(FREE, Ordering::Release);
 
         Ok(Some(CompletedFrame {

@@ -174,12 +174,18 @@ impl Image {
                 pixels[output..output + 4].copy_from_slice(&pixel.to_ne_bytes());
             }
         }
+        let cairo_width =
+            i32::try_from(spec.width).map_err(|_| error("sliver.image.new width is too large"))?;
+        let cairo_height = i32::try_from(spec.height)
+            .map_err(|_| error("sliver.image.new height is too large"))?;
+        let cairo_stride = i32::try_from(output_stride)
+            .map_err(|_| error("sliver.image.new stride is too large"))?;
         let surface = ImageSurface::create_for_data(
             pixels,
             Format::ARgb32,
-            spec.width as i32,
-            spec.height as i32,
-            output_stride as i32,
+            cairo_width,
+            cairo_height,
+            cairo_stride,
         )
         .map_err(|error| mlua::Error::runtime(error.to_string()))?;
         Ok(Self {
