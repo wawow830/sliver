@@ -882,6 +882,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
             self.route_hardware_event(event, now)?;
         }
+        if self.recovery_due(now) {
+            self.enter_recovery()?;
+        }
         if self.recovery.is_some() && !self.input_state.fn_active {
             self.exit_recovery(now)?;
         }
@@ -897,9 +900,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             let transitions = std::mem::take(&mut self.input_transitions);
             let touches = self.touch_queue.drain();
             self.drive_active(now, transitions, touches)?;
-        }
-        if self.recovery_due(now) {
-            self.enter_recovery()?;
         }
         Ok(())
     }
@@ -1906,6 +1906,52 @@ mod tests {
         supervisor.step_at(2.9)?;
         assert!(supervisor.recovery.is_none());
         supervisor.step_at(3.1)?;
+        assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn deadline_takes_recovery_before_due_worker_drive() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timed.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                sliver.timer.after(3.0, function()
+                    record("timer")
+                    sliver.redraw()
+                end)
+                return {{
+                    api_version = 1,
+                    visibility = function(event)
+                        record("visibility:" .. tostring(event.visible))
+                    end,
+                    render = function() record("render") end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+
+        assert_eq!(std::fs::read_to_string(&log)?, "render\nvisibility:false\n");
         assert!(supervisor.recovery.is_some());
         supervisor.shutdown()?;
         Ok(())
