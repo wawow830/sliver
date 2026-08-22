@@ -755,6 +755,10 @@ mod tests {
             self.inner.present(frame)
         }
 
+        fn emit_key_events(&mut self, events: &[crate::hardware::SyntheticKeyEvent]) -> Result<()> {
+            self.inner.emit_key_events(events)
+        }
+
         fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
             self.inner.tap_function_key(index, modifiers)
         }

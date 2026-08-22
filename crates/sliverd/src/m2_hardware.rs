@@ -20,7 +20,8 @@ use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, EventType, InputEvent, Key};
 
 use crate::hardware::{
-    validate_backlight, HardwareEvent, LogicalFrame, Modifier, ModifierState, TouchBarHardware,
+    validate_backlight, ConsumerKey, HardwareEvent, KeyboardKey, LogicalFrame, Modifier,
+    ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
 };
 
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
@@ -731,19 +732,33 @@ fn function_key_batches(
     Ok(batches)
 }
 
-/// Virtual keyboard used solely to emit real F1-F12 key events.
+/// One virtual keyboard shared by the Lua worker and the fixed Fn row.
 struct FnEmitter {
     device: VirtualDevice,
 }
 
 impl FnEmitter {
     fn new() -> Result<Self> {
-        let keys: AttributeSet<Key> = F_KEYS.into_iter().chain(MOD_KEYS).collect();
+        let keys: AttributeSet<Key> = F_KEYS
+            .into_iter()
+            .chain(MOD_KEYS)
+            .chain([
+                Key::KEY_ESC,
+                Key::KEY_BRIGHTNESSDOWN,
+                Key::KEY_BRIGHTNESSUP,
+                Key::KEY_PREVIOUSSONG,
+                Key::KEY_PLAYPAUSE,
+                Key::KEY_NEXTSONG,
+                Key::KEY_MUTE,
+                Key::KEY_VOLUMEDOWN,
+                Key::KEY_VOLUMEUP,
+            ])
+            .collect();
         let device = VirtualDeviceBuilder::new()?
-            .name("Sliver Function Row")
+            .name("Sliver Keyboard")
             .with_keys(&keys)?
             .build()?;
-        eprintln!("fn: virtual F-key keyboard ready");
+        eprintln!("keyboard: virtual Sliver Keyboard ready");
         Ok(Self { device })
     }
 
@@ -752,6 +767,61 @@ impl FnEmitter {
             self.device.emit(&batch)?;
         }
         Ok(())
+    }
+
+    fn emit(&mut self, events: &[SyntheticKeyEvent]) -> io::Result<()> {
+        let events: Vec<_> = events
+            .iter()
+            .map(|event| {
+                InputEvent::new(
+                    EventType::KEY,
+                    output_key_code(event.key).code(),
+                    i32::from(event.active),
+                )
+            })
+            .collect();
+        if !events.is_empty() {
+            self.device.emit(&events)?;
+        }
+        Ok(())
+    }
+}
+
+fn output_key_code(key: OutputKey) -> Key {
+    match key {
+        OutputKey::Keyboard(key) => match key {
+            KeyboardKey::Escape => Key::KEY_ESC,
+            KeyboardKey::F1 => Key::KEY_F1,
+            KeyboardKey::F2 => Key::KEY_F2,
+            KeyboardKey::F3 => Key::KEY_F3,
+            KeyboardKey::F4 => Key::KEY_F4,
+            KeyboardKey::F5 => Key::KEY_F5,
+            KeyboardKey::F6 => Key::KEY_F6,
+            KeyboardKey::F7 => Key::KEY_F7,
+            KeyboardKey::F8 => Key::KEY_F8,
+            KeyboardKey::F9 => Key::KEY_F9,
+            KeyboardKey::F10 => Key::KEY_F10,
+            KeyboardKey::F11 => Key::KEY_F11,
+            KeyboardKey::F12 => Key::KEY_F12,
+            KeyboardKey::LeftCtrl => Key::KEY_LEFTCTRL,
+            KeyboardKey::RightCtrl => Key::KEY_RIGHTCTRL,
+            KeyboardKey::LeftAlt => Key::KEY_LEFTALT,
+            KeyboardKey::RightAlt => Key::KEY_RIGHTALT,
+            KeyboardKey::LeftShift => Key::KEY_LEFTSHIFT,
+            KeyboardKey::RightShift => Key::KEY_RIGHTSHIFT,
+            KeyboardKey::LeftSuper => Key::KEY_LEFTMETA,
+            KeyboardKey::RightSuper => Key::KEY_RIGHTMETA,
+        },
+        OutputKey::Consumer(key) => match key {
+            ConsumerKey::BrightnessDown => Key::KEY_BRIGHTNESSDOWN,
+            ConsumerKey::BrightnessUp => Key::KEY_BRIGHTNESSUP,
+            ConsumerKey::Previous => Key::KEY_PREVIOUSSONG,
+            ConsumerKey::PlayPause => Key::KEY_PLAYPAUSE,
+            ConsumerKey::Next => Key::KEY_NEXTSONG,
+            ConsumerKey::Mute => Key::KEY_MUTE,
+            ConsumerKey::VolumeDown => Key::KEY_VOLUMEDOWN,
+            ConsumerKey::VolumeUp => Key::KEY_VOLUMEUP,
+        },
     }
 }
 
@@ -1078,6 +1148,16 @@ impl TouchBarHardware for M2TouchBar {
 
     fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
         self.present_inner(frame)
+    }
+
+    fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
+        ensure!(self.is_claimed(), "Touch Bar is not claimed");
+        if let Some(emitter) = self.fn_emitter.as_mut() {
+            emitter
+                .emit(events)
+                .context("emitting synthetic keyboard events")?;
+        }
+        Ok(())
     }
 
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
