@@ -180,10 +180,7 @@ impl LuaWorker {
                     .context("Lua worker published no initial frame")?;
                 Ok(StagedLuaWorker {
                     worker,
-                    frame: TimedFrame {
-                        frame,
-                        timing: staged.timing,
-                    },
+                    frame,
                     pending_backlight: staged.pending_backlight,
                 })
             }
@@ -212,7 +209,9 @@ impl LuaWorker {
             .recv()
             .context("Lua owner thread exited while rendering")?
             .map_err(|error| anyhow!(error))?;
-        self.take_frame()?.context("Lua worker published no frame")
+        self.take_frame()?
+            .map(|frame| frame.frame)
+            .context("Lua worker published no frame")
     }
 
     pub(crate) fn commit(&self, now_seconds: f64) -> Result<()> {
@@ -249,12 +248,10 @@ impl LuaWorker {
             .context("Lua owner thread exited while driving")?
             .map_err(|error| anyhow!(error))?;
         let frame = match effects.frame {
-            Some(timing) => Some(TimedFrame {
-                frame: self
-                    .take_frame()?
+            Some(_) => Some(
+                self.take_frame()?
                     .context("Lua worker published no frame")?,
-                timing,
-            }),
+            ),
             None => None,
         };
         Ok(WorkerEffects {
@@ -264,12 +261,12 @@ impl LuaWorker {
         })
     }
 
-    fn take_frame(&self) -> Result<Option<LogicalFrame>> {
+    fn take_frame(&self) -> Result<Option<TimedFrame>> {
         let Some(completed) = self.broker.take_newest()? else {
             return Ok(None);
         };
-        let (frame, _) = LogicalFrame::from_completed(completed);
-        Ok(Some(frame))
+        let (frame, timing) = LogicalFrame::from_completed(completed);
+        Ok(Some(TimedFrame { frame, timing }))
     }
 
     pub(crate) fn restore_backlight(&self, level: f64) -> Result<()> {
@@ -328,7 +325,6 @@ impl Drop for LuaWorker {
 }
 
 struct StagedRuntime {
-    timing: FrameTiming,
     pending_backlight: Option<f64>,
 }
 
@@ -360,7 +356,6 @@ fn owner_main(
         return;
     }
     let staged = StagedRuntime {
-        timing,
         pending_backlight: runtime.pending_backlight(),
     };
     if ready.send(Ok(staged)).is_err() {
@@ -806,10 +801,10 @@ fn validate_backlight_level(level: f64) -> Result<()> {
 }
 
 fn validate_now(now_seconds: f64) -> std::result::Result<(), String> {
-    if now_seconds.is_finite() {
+    if now_seconds.is_finite() && now_seconds >= 0.0 {
         Ok(())
     } else {
-        Err("worker time must be finite".into())
+        Err("worker time must be finite and non-negative".into())
     }
 }
 

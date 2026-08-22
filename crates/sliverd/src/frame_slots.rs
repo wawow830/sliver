@@ -19,8 +19,8 @@ pub(crate) struct FrameTiming {
 impl FrameTiming {
     pub(crate) fn new(presentation_time: f64, delta: f64) -> Result<Self> {
         ensure!(
-            presentation_time.is_finite(),
-            "frame presentation time must be finite"
+            presentation_time.is_finite() && presentation_time >= 0.0,
+            "frame presentation time must be finite and non-negative"
         );
         ensure!(
             delta.is_finite() && delta >= 0.0,
