@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn lua_canvas_draws_a_filled_rectangle() -> Result<()> {
+    fn lua_canvas_draws_a_rectangle_from_normalized_srgb_components() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("rectangle.lua");
         std::fs::write(
@@ -343,7 +343,11 @@ mod tests {
             .presented_frames()
             .first()
             .context("worker did not present the rectangle")?;
-        assert_eq!(frame.rgba_at(20, 10), [255, 0, 0, 255]);
+        assert_eq!(
+            frame.rgba_at(20, 10),
+            [255, 0, 0, 255],
+            "normalized numeric sRGB components must produce the requested color"
+        );
         assert_eq!(frame.rgba_at(100, 10), [0, 0, 0, 255]);
         Ok(())
     }
@@ -544,6 +548,41 @@ mod tests {
             .context("worker did not present the alpha frame")?;
         assert_eq!(frame.rgba_at(10, 10), [128, 0, 0, 255]);
         assert_eq!(frame.rgba_at(30, 10), [0, 0, 255, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_source_over_composites_over_non_black_destination() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("source-over.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, "#204060")
+                    canvas:alpha(0.5)
+                    canvas:operator("source-over")
+                    canvas:rectangle(0, 0, 20, 20, "#e08040")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("source-over fixture did not present a frame")?;
+        assert_eq!(
+            frame.rgba_at(10, 10),
+            [128, 96, 80, 255],
+            "source-over must blend with the existing non-black destination"
+        );
         Ok(())
     }
 
