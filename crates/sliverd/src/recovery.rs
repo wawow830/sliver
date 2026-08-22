@@ -9,9 +9,13 @@ use crate::hardware::{ContactId, LogicalFrame, TouchEvent, TouchPhase};
 const KEY_COUNT: usize = 12;
 const PRESSED_RGB: (f64, f64, f64) = (0.22, 0.22, 0.22);
 
+struct RecoveryContact {
+    key: usize,
+    pressed: bool,
+}
+
 pub(crate) struct RecoveryState {
-    contacts: BTreeMap<ContactId, usize>,
-    pressed_contacts: BTreeSet<ContactId>,
+    contacts: BTreeMap<ContactId, RecoveryContact>,
     owner_is_healthy: bool,
 }
 
@@ -25,7 +29,6 @@ impl RecoveryState {
     pub(crate) fn new(owner_is_healthy: bool) -> Self {
         Self {
             contacts: BTreeMap::new(),
-            pressed_contacts: BTreeSet::new(),
             owner_is_healthy,
         }
     }
@@ -38,6 +41,18 @@ impl RecoveryState {
         self.owner_is_healthy = false;
     }
 
+    fn update_row_press(&self, row: &mut RecoveryRow, key: usize) {
+        if self
+            .contacts
+            .values()
+            .any(|contact| contact.key == key && contact.pressed)
+        {
+            row.press(key);
+        } else {
+            row.release(key);
+        }
+    }
+
     pub(crate) fn route_touch(
         &mut self,
         event: TouchEvent,
@@ -48,8 +63,13 @@ impl RecoveryState {
                 let Some(index) = RecoveryRow::hit_test(event.x, event.y) else {
                     return RecoveryTouchResult::Ignored;
                 };
-                self.contacts.insert(event.id, index);
-                self.pressed_contacts.insert(event.id);
+                self.contacts.insert(
+                    event.id,
+                    RecoveryContact {
+                        key: index,
+                        pressed: true,
+                    },
+                );
                 if row.is_pressed(index) {
                     RecoveryTouchResult::Ignored
                 } else {
@@ -58,48 +78,29 @@ impl RecoveryState {
                 }
             }
             TouchPhase::Move => {
-                let Some(index) = self.contacts.get(&event.id).copied() else {
-                    return RecoveryTouchResult::Ignored;
+                let key = {
+                    let Some(contact) = self.contacts.get_mut(&event.id) else {
+                        return RecoveryTouchResult::Ignored;
+                    };
+                    let inside = RecoveryRow::hit_test(event.x, event.y) == Some(contact.key);
+                    if inside == contact.pressed {
+                        return RecoveryTouchResult::Ignored;
+                    }
+                    contact.pressed = inside;
+                    contact.key
                 };
-                let inside = RecoveryRow::hit_test(event.x, event.y) == Some(index);
-                let was_inside = self.pressed_contacts.contains(&event.id);
-                if inside == was_inside {
-                    return RecoveryTouchResult::Ignored;
-                }
-                if inside {
-                    self.pressed_contacts.insert(event.id);
-                } else {
-                    self.pressed_contacts.remove(&event.id);
-                }
-                let any_pressed = self
-                    .pressed_contacts
-                    .iter()
-                    .any(|id| self.contacts.get(id) == Some(&index));
-                if any_pressed {
-                    row.press(index);
-                } else {
-                    row.release(index);
-                }
+                self.update_row_press(row, key);
                 RecoveryTouchResult::RowPressChanged
             }
             TouchPhase::Up | TouchPhase::Cancel => {
-                let Some(index) = self.contacts.remove(&event.id) else {
+                let Some(contact) = self.contacts.remove(&event.id) else {
                     return RecoveryTouchResult::Ignored;
                 };
                 let activate = event.phase == TouchPhase::Up
-                    && RecoveryRow::hit_test(event.x, event.y) == Some(index);
-                self.pressed_contacts.remove(&event.id);
-                let still_pressed = self
-                    .pressed_contacts
-                    .iter()
-                    .any(|id| self.contacts.get(id) == Some(&index));
-                if still_pressed {
-                    row.press(index);
-                } else {
-                    row.release(index);
-                }
+                    && RecoveryRow::hit_test(event.x, event.y) == Some(contact.key);
+                self.update_row_press(row, contact.key);
                 if activate {
-                    RecoveryTouchResult::Activate(index)
+                    RecoveryTouchResult::Activate(contact.key)
                 } else {
                     RecoveryTouchResult::RowPressChanged
                 }
