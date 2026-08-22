@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Context, Result};
 use mlua::{
@@ -198,6 +199,7 @@ impl LuaWorker {
     }
 
     pub(crate) fn render_at(&self, presentation_time: f64, delta: f64) -> Result<TimedFrame> {
+        let deadline = Instant::now() + Duration::from_millis(50);
         let commands = self
             .commands
             .as_ref()
@@ -213,12 +215,22 @@ impl LuaWorker {
         if let Some(frame) = self.take_frame()? {
             return Ok(frame);
         }
-        if !self.retry_pending(presentation_time)? {
-            return Err(anyhow!(
-                "candidate frame could not be published within bounded 50 ms slot wait"
-            ));
+        let mut backoff = Duration::from_millis(1);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(anyhow!(
+                    "candidate frame could not be published within bounded 50 ms slot wait"
+                ));
+            }
+            if self.retry_pending(presentation_time)? {
+                if let Some(frame) = self.take_frame()? {
+                    return Ok(frame);
+                }
+            }
+            thread::sleep(std::cmp::min(backoff, remaining));
+            backoff = std::cmp::min(backoff + backoff, Duration::from_millis(10));
         }
-        self.take_frame()?.context("Lua worker published no frame")
     }
 
     fn retry_pending(&self, presentation_time: f64) -> Result<bool> {
@@ -686,7 +698,7 @@ impl Runtime {
     ) -> std::result::Result<bool, String> {
         let published = self
             .producer
-            .publish(
+            .try_publish(
                 frame.width(),
                 frame.height(),
                 frame.stride(),

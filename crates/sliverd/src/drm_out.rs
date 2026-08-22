@@ -761,10 +761,12 @@ mod tests {
         let crate::lua_worker::StagedLuaWorker { worker } =
             crate::lua_worker::LuaWorker::stage(&source)?;
         let _held = worker.hold_slots_for_test();
+        let started = Instant::now();
         let error = match worker.render_at(1.0, 0.0) {
             Ok(_) => panic!("candidate render succeeded with permanently held slots"),
             Err(error) => error,
         };
+        assert!(started.elapsed() < Duration::from_millis(75));
         assert!(format!("{error:#}").contains("candidate frame could not be publish"));
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
         Ok(())
@@ -832,15 +834,22 @@ mod tests {
                 r##"
                 local sliver = require("sliver.v1")
                 local log = {log:?}
+                local function record(name)
+                    local file = assert(io.open(log, "a"))
+                    file:write(name, "\n")
+                    file:close()
+                end
+                sliver.timer.after(0.001, function() record("timer") end)
                 return {{
                     api_version = 1,
                     touch = function(event)
-                        if event.phase == "down" then sliver.redraw() end
+                        if event.phase == "down" then
+                            record("touch")
+                            sliver.redraw()
+                        end
                     end,
                     render = function(canvas)
-                        local file = assert(io.open(log, "a"))
-                        file:write("render\n")
-                        file:close()
+                        record("render")
                         canvas:rectangle(0, 0, 20, 20, "#0000ff")
                     end,
                 }}
@@ -852,6 +861,7 @@ mod tests {
             crate::lua_worker::LuaWorker::stage(&source)?;
         worker.commit(0.0)?;
         let mut held = worker.hold_slots_for_test();
+        let started = Instant::now();
         let effects = worker.drive(
             1.0,
             0.0,
@@ -867,11 +877,13 @@ mod tests {
                 height: None,
             }],
         )?;
+        assert!(started.elapsed() < Duration::from_millis(20));
+        assert_eq!(std::fs::read_to_string(&log)?, "touch\ntimer\nrender\n");
         assert!(effects.frame.is_none());
         drop(held.pop());
         let effects = worker.drive(2.0, 0.0, Vec::new())?;
         let frame = effects.frame.expect("pending frame was not retried");
-        assert_eq!(std::fs::read_to_string(log)?, "render\n");
+        assert_eq!(std::fs::read_to_string(log)?, "touch\ntimer\nrender\n");
         let mut hardware = FakeTouchBar::new();
         hardware.claim()?;
         hardware.present(&frame.frame)?;

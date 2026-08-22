@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
 use anyhow::{ensure, Result};
@@ -11,6 +12,7 @@ const WRITING: u8 = 1;
 const READY: u8 = 2;
 const READING: u8 = 3;
 const RECLAIMING: u8 = 4;
+#[cfg(test)]
 const MAX_FRAME_SLOT_WAIT: Duration = Duration::from_millis(50);
 
 #[cfg(test)]
@@ -110,6 +112,7 @@ struct SharedSlots {
     height: usize,
     stride: usize,
     next_sequence: AtomicU64,
+    #[cfg(test)]
     state_wait: Mutex<()>,
     state_changed: Condvar,
     slots: [Slot; SLOT_COUNT],
@@ -177,6 +180,7 @@ impl FrameSlots {
                 height,
                 stride,
                 next_sequence: AtomicU64::new(0),
+                #[cfg(test)]
                 state_wait: Mutex::new(()),
                 state_changed: Condvar::new(),
                 slots,
@@ -252,6 +256,31 @@ impl FrameProducer {
         (0..SLOT_COUNT).filter_map(|_| self.begin_write()).collect()
     }
 
+    pub(crate) fn try_publish(
+        &self,
+        width: usize,
+        height: usize,
+        stride: usize,
+        pixels: &[u8],
+        timing: FrameTiming,
+    ) -> Result<bool> {
+        ensure!(
+            (width, height, stride) == (self.inner.width, self.inner.height, self.inner.stride),
+            "frame dimensions do not match the shared slots"
+        );
+        ensure!(
+            pixels.len() == self.inner.slot_bytes,
+            "frame pixels do not fill one shared slot"
+        );
+        let Some(mut writer) = self.begin_write() else {
+            return Ok(false);
+        };
+        writer.write_complete(pixels)?;
+        writer.publish(timing)?;
+        Ok(true)
+    }
+
+    #[cfg(test)]
     pub(crate) fn publish(
         &self,
         width: usize,
