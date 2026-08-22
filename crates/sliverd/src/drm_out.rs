@@ -785,7 +785,7 @@ mod tests {
     }
 
     #[test]
-    fn lua_canvas_shapes_utf8_text_and_measures_it() -> Result<()> {
+    fn lua_canvas_shapes_mixed_bidirectional_utf8_and_measures_logical_size() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("text.lua");
         std::fs::write(
@@ -796,9 +796,12 @@ mod tests {
                 api_version = 1,
                 render = function(canvas)
                     local latin_width, latin_height = canvas:measure_text("A", 28)
+                    local rtl_width, rtl_height = canvas:measure_text("אבג العربية", 28)
                     local mixed_width, mixed_height = canvas:measure_text("A אבג العربية 日本", 28)
                     assert(latin_width > 0 and latin_height > 0)
-                    assert(mixed_width > latin_width and mixed_height > 0)
+                    assert(rtl_width > 0 and rtl_height > 0)
+                    assert(mixed_width > latin_width and mixed_width > rtl_width)
+                    assert(mixed_height > 0)
                     canvas:text(100, 5, "A אבג العربية 日本", 28, "#ffffff")
                 end,
             }
@@ -814,7 +817,45 @@ mod tests {
             .context("worker did not present the text")?;
         let shaped_pixel_exists =
             (5..50).any(|y| (100..180).any(|x| frame.rgba_at(x, y) != [0, 0, 0, 255]));
-        assert!(shaped_pixel_exists, "Pango did not draw any text pixels");
+        assert!(
+            shaped_pixel_exists,
+            "mixed bidirectional UTF-8 text produced no shaped glyph pixels"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_uses_system_fallback_for_non_latin_text() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("fallback-font.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    local width, height = canvas:measure_text("日本語", 28)
+                    assert(width > 0 and height > 0)
+                    canvas:text(100, 5, "日本語", 28, 1, 1, 1, 1)
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("system fallback fixture did not present a frame")?;
+        let fallback_pixels_exist =
+            (5..50).any(|y| (100..220).any(|x| frame.rgba_at(x, y) != [0, 0, 0, 255]));
+        assert!(
+            fallback_pixels_exist,
+            "system fallback string produced no glyph pixels"
+        );
         Ok(())
     }
 
