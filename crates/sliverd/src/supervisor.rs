@@ -1203,7 +1203,6 @@ mod tests {
             format!(
                 r#"
                 require("sliver.v1")
-                local sliver = require("sliver.v1")
                 local log = {log:?}
                 return {{
                     api_version = 1,
