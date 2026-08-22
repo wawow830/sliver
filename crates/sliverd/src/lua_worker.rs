@@ -59,6 +59,21 @@ pub(crate) struct KeyRequest {
     pub(crate) modifiers: ModifierMode,
 }
 
+#[derive(Default)]
+pub(crate) struct DriveOptions {
+    visibility: Option<(bool, String)>,
+    force_render: bool,
+}
+
+impl DriveOptions {
+    pub(crate) fn visibility(visible: bool, reason: &str, force_render: bool) -> Self {
+        Self {
+            visibility: Some((visible, reason.to_owned())),
+            force_render,
+        }
+    }
+}
+
 struct RuntimeEffects {
     frame: Option<FrameTiming>,
     backlight: Option<f64>,
@@ -121,8 +136,7 @@ enum WorkerCommand {
         Vec<InputTransition>,
         f64,
         Vec<TouchEvent>,
-        Option<(bool, String)>,
-        bool,
+        DriveOptions,
         mpsc::SyncSender<std::result::Result<RuntimeEffects, String>>,
     ),
     RestoreBacklight(f64, mpsc::SyncSender<std::result::Result<(), String>>),
@@ -405,8 +419,7 @@ impl LuaWorker {
             transitions,
             delta,
             events,
-            None,
-            false,
+            DriveOptions::default(),
         )
     }
 
@@ -417,8 +430,7 @@ impl LuaWorker {
         transitions: Vec<InputTransition>,
         delta: f64,
         events: Vec<TouchEvent>,
-        visibility: Option<(bool, &str)>,
-        force_render: bool,
+        options: DriveOptions,
     ) -> Result<WorkerEffects> {
         let commands = self
             .commands
@@ -432,8 +444,7 @@ impl LuaWorker {
                 transitions,
                 delta,
                 events,
-                visibility.map(|(visible, reason)| (visible, reason.to_owned())),
-                force_render,
+                options,
                 reply_tx,
             ))
             .context("driving Lua worker")?;
@@ -567,8 +578,7 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
                 transitions,
                 delta,
                 events,
-                visibility,
-                force_render,
+                options,
                 reply,
             )) => {
                 let _ = reply.send(runtime.drive(
@@ -577,8 +587,7 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
                     transitions,
                     delta,
                     events,
-                    visibility,
-                    force_render,
+                    options,
                 ));
             }
             Ok(WorkerCommand::RestoreBacklight(level, reply)) => {
@@ -673,8 +682,7 @@ impl Runtime {
         transitions: Vec<InputTransition>,
         delta: f64,
         events: Vec<TouchEvent>,
-        visibility: Option<(bool, String)>,
-        force_render: bool,
+        options: DriveOptions,
     ) -> std::result::Result<RuntimeEffects, String> {
         let timing = FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
         if !self.controls.committed.get() {
@@ -687,14 +695,14 @@ impl Runtime {
         let result = (|| {
             self.dispatch_keys(now_seconds, started, transitions)?;
             self.dispatch_touch(now_seconds, started, events)?;
-            if let Some((visible, reason)) = visibility {
+            if let Some((visible, reason)) = options.visibility {
                 self.dispatch_visibility(visible, &reason, now_seconds, started)?;
             }
             self.run_due_timers(now_seconds, started)?;
             self.controls
                 .now_seconds
                 .set(Some(sample_now(now_seconds, started)));
-            if force_render || self.controls.redraw_pending.replace(false) {
+            if options.force_render || self.controls.redraw_pending.replace(false) {
                 let frame = self.render_frame(now_seconds, delta)?;
                 self.pending_frame = Some(PendingFrame { frame, timing });
             }

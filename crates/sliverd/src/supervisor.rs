@@ -20,7 +20,8 @@ use crate::hardware::{
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
-    KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason, WorkerEffects,
+    DriveOptions, KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason,
+    WorkerEffects,
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
@@ -365,34 +366,30 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         requested_path: &Path,
         authorization: Option<(PeerCredentials, AuthorizationGrant)>,
     ) -> Result<()> {
-        let result = self.apply_candidate(requested_path, authorization);
-        if result.is_err()
-            && self.active.is_none()
-            && !result
-                .as_ref()
-                .unwrap_err()
-                .to_string()
-                .contains("active session")
-            && !result.as_ref().unwrap_err().to_string().contains("changed")
+        let Err(candidate_error) = self.apply_candidate(requested_path, authorization) else {
+            return Ok(());
+        };
+        let candidate_message = candidate_error.to_string();
+        if self.active.is_none()
+            && !candidate_message.contains("active session")
+            && !candidate_message.contains("changed")
         {
             if let Ok(path) = absolute_lexical(requested_path) {
                 self.selected_path = Some(path.clone());
                 let state_result = PreparedPathState::prepare(&self.state_file, &path)
                     .and_then(PreparedPathState::commit);
                 if let Err(state_error) = state_result {
-                    return Err(result.err().expect("candidate failed").context(format!(
+                    return Err(candidate_error.context(format!(
                         "preserving failed selected path also failed: {state_error:#}"
                     )));
                 }
                 if let Err(recovery_error) = self.enter_recovery() {
-                    return Err(result
-                        .err()
-                        .expect("candidate failed")
+                    return Err(candidate_error
                         .context(format!("entering recovery also failed: {recovery_error:#}")));
                 }
             }
         }
-        result
+        Err(candidate_error)
     }
 
     fn startup_candidate(&mut self, path: &Path, persist_path: bool) -> Result<()> {
@@ -783,8 +780,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 Vec::new(),
                 0.0,
                 cancels,
-                Some((false, "recovery")),
-                false,
+                DriveOptions::visibility(false, "recovery", false),
             );
             if let Err(error) = hidden {
                 eprintln!("healthy Lua worker failed while entering recovery: {error:#}");
@@ -839,8 +835,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             transitions,
             delta,
             Vec::new(),
-            Some((true, "recovery")),
-            true,
+            DriveOptions::visibility(true, "recovery", true),
         ) {
             Ok(effects) => effects,
             Err(error) => return self.fail_active_worker(error),
