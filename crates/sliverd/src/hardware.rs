@@ -304,8 +304,9 @@ mod fake {
     use anyhow::{ensure, Result};
 
     use super::{
-        ConsumerKey, HardwareEvent, KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey,
-        SyntheticKeyEvent, TouchBarHardware,
+        function_key_output, modifier_output_keys, tap_key_events, ConsumerKey, HardwareEvent,
+        KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent,
+        TouchBarHardware,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -480,30 +481,41 @@ mod fake {
 
         fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
             ensure!(self.claimed, "fake Touch Bar is not claimed");
-            ensure!(index < 12, "function-key index is out of range");
-            for modifier in Modifier::ALL {
-                if modifiers.is_active(modifier) {
-                    self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                        key: FakeKey::Modifier(modifier),
-                        active: true,
-                    }));
-                }
-            }
-            self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                key: FakeKey::Function(index),
-                active: true,
-            }));
-            self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                key: FakeKey::Function(index),
-                active: false,
-            }));
-            for modifier in Modifier::ALL.into_iter().rev() {
-                if modifiers.is_active(modifier) {
-                    self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                        key: FakeKey::Modifier(modifier),
-                        active: false,
-                    }));
-                }
+            let function_key = function_key_output(index)
+                .ok_or_else(|| anyhow::anyhow!("function-key index is out of range"))?;
+            for event in tap_key_events(function_key, &modifier_output_keys(modifiers)) {
+                let key = match event.key {
+                    key if key == function_key => FakeKey::Function(index),
+                    OutputKey::Keyboard(KeyboardKey::LeftCtrl) => {
+                        FakeKey::Modifier(Modifier::LeftCtrl)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::RightCtrl) => {
+                        FakeKey::Modifier(Modifier::RightCtrl)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::LeftAlt) => {
+                        FakeKey::Modifier(Modifier::LeftAlt)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::RightAlt) => {
+                        FakeKey::Modifier(Modifier::RightAlt)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::LeftShift) => {
+                        FakeKey::Modifier(Modifier::LeftShift)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::RightShift) => {
+                        FakeKey::Modifier(Modifier::RightShift)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::LeftSuper) => {
+                        FakeKey::Modifier(Modifier::LeftSuper)
+                    }
+                    OutputKey::Keyboard(KeyboardKey::RightSuper) => {
+                        FakeKey::Modifier(Modifier::RightSuper)
+                    }
+                    _ => unreachable!("function-key planner emitted an unsupported key"),
+                };
+                self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
+                    key,
+                    active: event.active,
+                }));
             }
             Ok(())
         }
