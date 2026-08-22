@@ -349,6 +349,34 @@ mod tests {
     }
 
     #[test]
+    fn lua_canvas_accepts_hex_srgb_colors() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("hex-color.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(10, 5, 40, 20, "#336699")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the hex-colored rectangle")?;
+        assert_eq!(frame.rgba_at(20, 10), [0x33, 0x66, 0x99, 0xff]);
+        Ok(())
+    }
+
+    #[test]
     fn lua_canvas_shapes_text_with_pango() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("text.lua");
