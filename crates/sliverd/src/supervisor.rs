@@ -40,10 +40,14 @@ struct ActiveConfig {
     contacts: BTreeMap<ContactId, TouchEvent>,
 }
 
-struct AuthorizedRequest {
-    path: PathBuf,
+struct ApplyAuthorization {
     peer: PeerCredentials,
     grant: AuthorizationGrant,
+}
+
+struct AuthorizedRequest {
+    path: PathBuf,
+    authorization: ApplyAuthorization,
 }
 
 enum CandidateFailure {
@@ -382,14 +386,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn apply_authorized(&mut self, request: AuthorizedRequest) -> Result<()> {
-        self.authorizer.recheck(request.peer, &request.grant)?;
-        self.apply_request(&request.path, Some((request.peer, request.grant)))
+        let AuthorizedRequest {
+            path,
+            authorization,
+        } = request;
+        self.authorizer
+            .recheck(authorization.peer, &authorization.grant)?;
+        self.apply_request(&path, Some(authorization))
     }
 
     fn apply_request(
         &mut self,
         requested_path: &Path,
-        authorization: Option<(PeerCredentials, AuthorizationGrant)>,
+        authorization: Option<ApplyAuthorization>,
     ) -> Result<()> {
         let candidate_error =
             match self.apply_candidate(requested_path, authorization.as_ref(), true) {
@@ -407,8 +416,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                         )))
                     }
                 };
-                if let Some((peer, grant)) = authorization {
-                    self.authorizer.recheck(peer, &grant)?;
+                if let Some(authorization) = authorization {
+                    self.authorizer
+                        .recheck(authorization.peer, &authorization.grant)?;
                 }
                 if let Err(state_error) = path_state.commit() {
                     return Err(candidate_error.context(format!(
@@ -442,7 +452,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     fn apply_candidate(
         &mut self,
         requested_path: &Path,
-        authorization: Option<&(PeerCredentials, AuthorizationGrant)>,
+        authorization: Option<&ApplyAuthorization>,
         persist_path: bool,
     ) -> std::result::Result<(), CandidateFailure> {
         let selected_path = absolute_lexical(requested_path)?;
@@ -480,9 +490,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let path_state = persist_path
             .then(|| PreparedPathState::prepare(&self.state_file, &selected_path))
             .transpose()?;
-        if let Some((peer, grant)) = authorization {
+        if let Some(authorization) = authorization {
             self.authorizer
-                .recheck(*peer, grant)
+                .recheck(authorization.peer, &authorization.grant)
                 .map_err(CandidateFailure::Authorization)?;
         }
         if let Some(path_state) = path_state {
@@ -1367,7 +1377,10 @@ fn authorize_path<L: Logind>(
     path: PathBuf,
 ) -> Result<AuthorizedRequest> {
     let grant = authorizer.authorize(peer)?;
-    Ok(AuthorizedRequest { path, peer, grant })
+    Ok(AuthorizedRequest {
+        path,
+        authorization: ApplyAuthorization { peer, grant },
+    })
 }
 
 #[cfg(test)]
