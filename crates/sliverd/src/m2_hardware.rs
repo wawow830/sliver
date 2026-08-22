@@ -973,6 +973,18 @@ impl M2TouchBar {
         self.claim.is_some()
     }
 
+    fn finish_claim_setup(&mut self, setup_result: Result<()>) -> Result<()> {
+        if let Err(error) = setup_result {
+            if let Err(cleanup_error) = self.release_inner() {
+                return Err(error.context(format!(
+                    "rolling back Touch Bar claim after setup failure also failed: {cleanup_error:#}"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn claim_inner(&mut self) -> Result<()> {
         ensure!(!self.is_claimed(), "Touch Bar is already claimed");
         self.fn_active = false;
@@ -1027,19 +1039,22 @@ impl M2TouchBar {
         self.dumb_buffer = dumb_buffer;
         self.physical_surface = Some(physical_surface);
 
-        self.touch = match TouchInput::open() {
-            Ok(touch) => Some(touch),
-            Err(e) => {
-                eprintln!("touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)");
-                None
-            }
-        };
-        let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
-        self.modifiers = keyboard.initial_modifiers();
-        self.keyboard = Some(keyboard);
-        self.keyboard_emitter
-            .ensure(|| KeyboardEmitter::new().context("creating Sliver Keyboard"))?;
-        Ok(())
+        let setup_result = (|| -> Result<()> {
+            self.touch = match TouchInput::open() {
+                Ok(touch) => Some(touch),
+                Err(e) => {
+                    eprintln!("touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)");
+                    None
+                }
+            };
+            let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
+            self.modifiers = keyboard.initial_modifiers();
+            self.keyboard = Some(keyboard);
+            self.keyboard_emitter
+                .ensure(|| KeyboardEmitter::new().context("creating Sliver Keyboard"))?;
+            Ok(())
+        })();
+        self.finish_claim_setup(setup_result)
     }
 
     fn remember_keyboard_events(&mut self, events: &[HardwareEvent]) {
@@ -1394,6 +1409,22 @@ fn hold() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_claim_setup_rolls_back_before_retry() {
+        let mut hardware = M2TouchBar::new();
+        let first = hardware
+            .finish_claim_setup(Err(anyhow::anyhow!("injected setup failure")))
+            .expect_err("injected setup failure was swallowed");
+        assert!(format!("{first:#}").contains("injected setup failure"));
+        assert!(!hardware.is_claimed());
+
+        let second = hardware
+            .finish_claim_setup(Err(anyhow::anyhow!("retry setup failure")))
+            .expect_err("retry setup failure was swallowed");
+        assert!(format!("{second:#}").contains("retry setup failure"));
+        assert!(!format!("{second:#}").contains("already claimed"));
+    }
 
     #[test]
     fn release_keeps_keyboard_emitter_for_reclaim() -> Result<()> {
