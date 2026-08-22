@@ -264,20 +264,8 @@ impl FrameProducer {
         pixels: &[u8],
         timing: FrameTiming,
     ) -> Result<bool> {
-        ensure!(
-            (width, height, stride) == (self.inner.width, self.inner.height, self.inner.stride),
-            "frame dimensions do not match the shared slots"
-        );
-        ensure!(
-            pixels.len() == self.inner.slot_bytes,
-            "frame pixels do not fill one shared slot"
-        );
-        let Some(mut writer) = self.begin_write() else {
-            return Ok(false);
-        };
-        writer.write_complete(pixels)?;
-        writer.publish(timing)?;
-        Ok(true)
+        self.validate_frame(width, height, stride, pixels)?;
+        self.publish_once(pixels, timing)
     }
 
     #[cfg(test)]
@@ -289,21 +277,12 @@ impl FrameProducer {
         pixels: &[u8],
         timing: FrameTiming,
     ) -> Result<bool> {
-        ensure!(
-            (width, height, stride) == (self.inner.width, self.inner.height, self.inner.stride),
-            "frame dimensions do not match the shared slots"
-        );
-        ensure!(
-            pixels.len() == self.inner.slot_bytes,
-            "frame pixels do not fill one shared slot"
-        );
-
+        self.validate_frame(width, height, stride, pixels)?;
         let deadline = Instant::now() + MAX_FRAME_SLOT_WAIT;
-        let mut writer = loop {
-            if let Some(writer) = self.begin_write() {
-                break writer;
+        loop {
+            if self.publish_once(pixels, timing)? {
+                return Ok(true);
             }
-            #[cfg(test)]
             if let Some(acquisition_gate) = &self.inner.acquisition_gate {
                 if acquisition_gate.active.swap(0, Ordering::AcqRel) != 0 {
                     acquisition_gate.attempted.wait();
@@ -319,9 +298,9 @@ impl FrameProducer {
                 .state_wait
                 .lock()
                 .map_err(|_| anyhow::anyhow!("frame slot wait state was poisoned"))?;
-            if let Some(writer) = self.begin_write() {
+            if self.publish_once(pixels, timing)? {
                 drop(wait);
-                break writer;
+                return Ok(true);
             }
             let (_wait, result) = self
                 .inner
@@ -331,6 +310,30 @@ impl FrameProducer {
             if result.timed_out() {
                 return Ok(false);
             }
+        }
+    }
+
+    fn validate_frame(
+        &self,
+        width: usize,
+        height: usize,
+        stride: usize,
+        pixels: &[u8],
+    ) -> Result<()> {
+        ensure!(
+            (width, height, stride) == (self.inner.width, self.inner.height, self.inner.stride),
+            "frame dimensions do not match the shared slots"
+        );
+        ensure!(
+            pixels.len() == self.inner.slot_bytes,
+            "frame pixels do not fill one shared slot"
+        );
+        Ok(())
+    }
+
+    fn publish_once(&self, pixels: &[u8], timing: FrameTiming) -> Result<bool> {
+        let Some(mut writer) = self.begin_write() else {
+            return Ok(false);
         };
         writer.write_complete(pixels)?;
         writer.publish(timing)?;
