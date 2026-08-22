@@ -21,7 +21,7 @@ pub(crate) struct LuaWorker {
 }
 
 enum WorkerCommand {
-    #[cfg(test)]
+    #[allow(dead_code)]
     Render(mpsc::SyncSender<std::result::Result<LogicalFrame, String>>),
     Shutdown(mpsc::SyncSender<std::result::Result<(), String>>),
     Abandon,
@@ -73,7 +73,9 @@ impl LuaWorker {
         }
     }
 
-    #[cfg(test)]
+    // Kept crate-private for the worker lifecycle that will request redraws.
+    // It does not add timers or a Lua redraw operation.
+    #[allow(dead_code)]
     pub(crate) fn render_next(&self) -> Result<LogicalFrame> {
         let commands = self
             .commands
@@ -147,7 +149,6 @@ fn owner_main(
     run_commands(runtime, commands);
 }
 
-#[cfg(test)]
 fn run_commands(runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
     loop {
         match commands.recv() {
@@ -160,13 +161,6 @@ fn run_commands(runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
             }
             Ok(WorkerCommand::Abandon) | Err(_) => break,
         }
-    }
-}
-
-#[cfg(not(test))]
-fn run_commands(runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
-    if let Ok(WorkerCommand::Shutdown(reply)) = commands.recv() {
-        let _ = reply.send(runtime.stop());
     }
 }
 
