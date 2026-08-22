@@ -139,6 +139,99 @@ pub(crate) struct SyntheticKeyEvent {
     pub(crate) active: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OutputKeyMetadata {
+    pub(crate) name: &'static str,
+    pub(crate) key: OutputKey,
+    pub(crate) function_row: Option<usize>,
+    pub(crate) modifier: Option<Modifier>,
+}
+
+impl OutputKeyMetadata {
+    const fn keyboard(name: &'static str, key: KeyboardKey) -> Self {
+        Self {
+            name,
+            key: OutputKey::Keyboard(key),
+            function_row: None,
+            modifier: None,
+        }
+    }
+
+    const fn function_row(name: &'static str, key: KeyboardKey, row: usize) -> Self {
+        Self {
+            name,
+            key: OutputKey::Keyboard(key),
+            function_row: Some(row),
+            modifier: None,
+        }
+    }
+
+    const fn modifier_key(name: &'static str, key: KeyboardKey, modifier: Modifier) -> Self {
+        Self {
+            name,
+            key: OutputKey::Keyboard(key),
+            function_row: None,
+            modifier: Some(modifier),
+        }
+    }
+
+    const fn consumer(name: &'static str, key: ConsumerKey) -> Self {
+        Self {
+            name,
+            key: OutputKey::Consumer(key),
+            function_row: None,
+            modifier: None,
+        }
+    }
+}
+
+const OUTPUT_KEY_METADATA: &[OutputKeyMetadata] = &[
+    OutputKeyMetadata::keyboard("escape", KeyboardKey::Escape),
+    OutputKeyMetadata::function_row("f1", KeyboardKey::F1, 0),
+    OutputKeyMetadata::function_row("f2", KeyboardKey::F2, 1),
+    OutputKeyMetadata::function_row("f3", KeyboardKey::F3, 2),
+    OutputKeyMetadata::function_row("f4", KeyboardKey::F4, 3),
+    OutputKeyMetadata::function_row("f5", KeyboardKey::F5, 4),
+    OutputKeyMetadata::function_row("f6", KeyboardKey::F6, 5),
+    OutputKeyMetadata::function_row("f7", KeyboardKey::F7, 6),
+    OutputKeyMetadata::function_row("f8", KeyboardKey::F8, 7),
+    OutputKeyMetadata::function_row("f9", KeyboardKey::F9, 8),
+    OutputKeyMetadata::function_row("f10", KeyboardKey::F10, 9),
+    OutputKeyMetadata::function_row("f11", KeyboardKey::F11, 10),
+    OutputKeyMetadata::function_row("f12", KeyboardKey::F12, 11),
+    OutputKeyMetadata::modifier_key("left_ctrl", KeyboardKey::LeftCtrl, Modifier::LeftCtrl),
+    OutputKeyMetadata::modifier_key("right_ctrl", KeyboardKey::RightCtrl, Modifier::RightCtrl),
+    OutputKeyMetadata::modifier_key("left_alt", KeyboardKey::LeftAlt, Modifier::LeftAlt),
+    OutputKeyMetadata::modifier_key("right_alt", KeyboardKey::RightAlt, Modifier::RightAlt),
+    OutputKeyMetadata::modifier_key("left_shift", KeyboardKey::LeftShift, Modifier::LeftShift),
+    OutputKeyMetadata::modifier_key("right_shift", KeyboardKey::RightShift, Modifier::RightShift),
+    OutputKeyMetadata::modifier_key("left_super", KeyboardKey::LeftSuper, Modifier::LeftSuper),
+    OutputKeyMetadata::modifier_key("right_super", KeyboardKey::RightSuper, Modifier::RightSuper),
+    OutputKeyMetadata::consumer("brightness_down", ConsumerKey::BrightnessDown),
+    OutputKeyMetadata::consumer("brightness_up", ConsumerKey::BrightnessUp),
+    OutputKeyMetadata::consumer("previous", ConsumerKey::Previous),
+    OutputKeyMetadata::consumer("play_pause", ConsumerKey::PlayPause),
+    OutputKeyMetadata::consumer("next", ConsumerKey::Next),
+    OutputKeyMetadata::consumer("mute", ConsumerKey::Mute),
+    OutputKeyMetadata::consumer("volume_down", ConsumerKey::VolumeDown),
+    OutputKeyMetadata::consumer("volume_up", ConsumerKey::VolumeUp),
+];
+
+pub(crate) fn output_key_metadata() -> &'static [OutputKeyMetadata] {
+    OUTPUT_KEY_METADATA
+}
+
+fn modifier_metadata(modifier: Modifier) -> &'static OutputKeyMetadata {
+    output_key_metadata()
+        .iter()
+        .find(|metadata| metadata.modifier == Some(modifier))
+        .expect("every modifier has output key metadata")
+}
+
+pub(crate) fn modifier_output_key(modifier: Modifier) -> OutputKey {
+    modifier_metadata(modifier).key
+}
+
 pub(crate) fn tap_key_events(key: OutputKey, modifiers: &[OutputKey]) -> Vec<SyntheticKeyEvent> {
     let mut events = modifiers
         .iter()
@@ -161,37 +254,15 @@ pub(crate) fn modifier_output_keys(state: ModifierState) -> Vec<OutputKey> {
     Modifier::ALL
         .into_iter()
         .filter(|modifier| state.is_active(*modifier))
-        .map(|modifier| {
-            OutputKey::Keyboard(match modifier {
-                Modifier::LeftCtrl => KeyboardKey::LeftCtrl,
-                Modifier::RightCtrl => KeyboardKey::RightCtrl,
-                Modifier::LeftAlt => KeyboardKey::LeftAlt,
-                Modifier::RightAlt => KeyboardKey::RightAlt,
-                Modifier::LeftShift => KeyboardKey::LeftShift,
-                Modifier::RightShift => KeyboardKey::RightShift,
-                Modifier::LeftSuper => KeyboardKey::LeftSuper,
-                Modifier::RightSuper => KeyboardKey::RightSuper,
-            })
-        })
+        .map(modifier_output_key)
         .collect()
 }
 
 pub(crate) fn function_key_output(index: usize) -> Option<OutputKey> {
-    Some(OutputKey::Keyboard(match index {
-        0 => KeyboardKey::F1,
-        1 => KeyboardKey::F2,
-        2 => KeyboardKey::F3,
-        3 => KeyboardKey::F4,
-        4 => KeyboardKey::F5,
-        5 => KeyboardKey::F6,
-        6 => KeyboardKey::F7,
-        7 => KeyboardKey::F8,
-        8 => KeyboardKey::F9,
-        9 => KeyboardKey::F10,
-        10 => KeyboardKey::F11,
-        11 => KeyboardKey::F12,
-        _ => return None,
-    }))
+    output_key_metadata()
+        .iter()
+        .find(|metadata| metadata.function_row == Some(index))
+        .map(|metadata| metadata.key)
 }
 
 pub(crate) type ContactId = u32;
