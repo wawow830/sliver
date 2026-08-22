@@ -245,6 +245,29 @@ fn run_with_hardware<H: TouchBarHardware>(cfg: sliver_core::Config, mut hardware
     }
 }
 
+/// Stage one Lua worker frame and pass only the completed frame through the
+/// broker's hardware seam. Issue #4 will keep staged workers alive for apply.
+#[allow(dead_code)]
+fn present_lua_once<H: TouchBarHardware>(source: &std::path::Path, hardware: &mut H) -> Result<()> {
+    hardware.claim()?;
+    let run_result = (|| -> Result<()> {
+        let crate::lua_worker::StagedLuaWorker { worker, frame } =
+            crate::lua_worker::LuaWorker::stage(source)?;
+        hardware.present(&frame)?;
+        worker.shutdown()
+    })();
+    let release_result = hardware.release();
+    match (run_result, release_result) {
+        (Err(error), Err(release_error)) => {
+            eprintln!("hardware release failed after Lua worker error: {release_error:#}");
+            Err(error)
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error).context("releasing Touch Bar hardware"),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
 /// Claim the real M2 strip and keep the current TOML behavior running.
 pub fn run(cfg: sliver_core::Config) -> Result<()> {
     run_with_hardware(cfg, M2TouchBar::new())
@@ -261,6 +284,40 @@ mod tests {
     use crate::hardware::{
         FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, Modifier,
     };
+
+    #[test]
+    fn lua_v1_frame_crosses_the_hardware_seam() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("config.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            assert(sliver.api_version == 1)
+            return {
+                api_version = 1,
+                render = function(_canvas)
+                    return "ignored"
+                end,
+            }
+            "#,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        assert_eq!(
+            hardware.actions(),
+            &[FakeAction::Grab, FakeAction::Present, FakeAction::Release]
+        );
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present its initial Lua frame")?;
+        assert_eq!(frame.dimensions(), (2008, 60));
+        assert_eq!(frame.rgba_at(0, 0), [0, 0, 0, 255]);
+        Ok(())
+    }
 
     #[test]
     fn live_toml_apply_and_widget_press_cross_the_hardware_seam() -> Result<()> {
