@@ -150,7 +150,28 @@ mod tests {
                 }),
                 "remote sessions",
             ),
+            (
+                "uid-mismatch",
+                Some(Session {
+                    id: "wrong-owner".into(),
+                    uid: uid.wrapping_add(1),
+                    seat: Some("seat0".into()),
+                    remote: false,
+                    active: true,
+                }),
+                Some(ActiveSession {
+                    id: "wrong-owner".into(),
+                    uid: uid.wrapping_add(1),
+                }),
+                "kernel peer UID",
+            ),
             ("cron", None, None, "does not belong to a logind session"),
+            (
+                "user-service",
+                None,
+                None,
+                "does not belong to a logind session",
+            ),
             (
                 "no-seat",
                 Some(Session {
