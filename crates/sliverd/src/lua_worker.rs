@@ -153,6 +153,7 @@ impl Runtime {
                 "config must load sliver.v1".into(),
             ));
         }
+        validate_fields(&application, source)?;
         match application.raw_get::<Value>("api_version") {
             Ok(Value::Integer(1)) => {}
             Ok(_) => {
@@ -231,6 +232,43 @@ fn install_v1_module(lua: &Lua) -> mlua::Result<Rc<Cell<bool>>> {
     let preload: Table = package.get("preload")?;
     preload.set("sliver.v1", loader)?;
     Ok(loaded)
+}
+
+fn validate_fields(application: &Table, source: &Path) -> std::result::Result<(), String> {
+    const ALLOWED: [&str; 7] = [
+        "api_version",
+        "start",
+        "stop",
+        "visibility",
+        "touch",
+        "key",
+        "render",
+    ];
+
+    for pair in application.pairs::<Value, Value>() {
+        let (key, _) = pair.map_err(|error| diagnostic("validation", source, error.to_string()))?;
+        let Value::String(key) = key else {
+            return Err(diagnostic(
+                "validation",
+                source,
+                format!(
+                    "unknown non-string application field of type {}",
+                    key.type_name()
+                ),
+            ));
+        };
+        let field = key
+            .to_str()
+            .map_err(|error| diagnostic("validation", source, error.to_string()))?;
+        if !ALLOWED.contains(&field.as_ref()) {
+            return Err(diagnostic(
+                "validation",
+                source,
+                format!("unknown application field {field:?}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn optional_function(

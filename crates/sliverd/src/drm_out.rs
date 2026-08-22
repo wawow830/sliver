@@ -379,6 +379,34 @@ mod tests {
     }
 
     #[test]
+    fn lua_application_rejects_unknown_fields() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("unknown-field.lua");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                renderr = function() end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        let error = present_lua_once(&source, &mut hardware)
+            .expect_err("unknown application field was accepted");
+
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("[validation]"), "{diagnostic}");
+        assert!(diagnostic.contains("renderr"), "{diagnostic}");
+        assert!(hardware.presented_frames().is_empty());
+        assert_eq!(hardware.actions(), &[FakeAction::Grab, FakeAction::Release]);
+        Ok(())
+    }
+
+    #[test]
     fn live_toml_apply_and_widget_press_cross_the_hardware_seam() -> Result<()> {
         let initial = sliver_core::parse_config(
             r##"
