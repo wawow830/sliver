@@ -5,9 +5,10 @@ use std::sync::mpsc;
 use std::thread;
 
 use anyhow::{anyhow, Context, Result};
-use mlua::{Function, Lua, MultiValue, Table, UserData, Value};
+use mlua::{Function, Lua, MultiValue, Table, Value};
 
 use crate::hardware::LogicalFrame;
+use crate::lua_canvas::Canvas;
 
 pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
@@ -29,10 +30,6 @@ struct Runtime {
     stop: Option<Function>,
     source: PathBuf,
 }
-
-struct InitialCanvas;
-
-impl UserData for InitialCanvas {}
 
 impl LuaWorker {
     pub(crate) fn stage(source: &Path) -> Result<StagedLuaWorker> {
@@ -189,9 +186,15 @@ impl Runtime {
         context
             .paint()
             .map_err(|error| diagnostic("render", source, error.to_string()))?;
-        render
-            .call::<()>(InitialCanvas)
+        let canvas = lua
+            .create_userdata(Canvas::new(&context))
             .map_err(|error| diagnostic("render", source, error.to_string()))?;
+        let render_result = render.call::<()>(canvas.clone());
+        canvas
+            .borrow::<Canvas>()
+            .map_err(|error| diagnostic("render", source, error.to_string()))?
+            .invalidate();
+        render_result.map_err(|error| diagnostic("render", source, error.to_string()))?;
         surface.flush();
         let frame = LogicalFrame::from_surface(&surface)
             .map_err(|error| diagnostic("render", source, format!("{error:#}")))?;

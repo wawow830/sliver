@@ -10,6 +10,7 @@
 
 mod drm_out;
 mod hardware;
+mod lua_canvas;
 mod lua_worker;
 mod m2_hardware;
 

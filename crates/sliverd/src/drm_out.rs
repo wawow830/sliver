@@ -320,6 +320,35 @@ mod tests {
     }
 
     #[test]
+    fn lua_canvas_draws_a_filled_rectangle() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("rectangle.lua");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(10, 5, 40, 20, 1, 0, 0, 1)
+                end,
+            }
+            "#,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the rectangle")?;
+        assert_eq!(frame.rgba_at(20, 10), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(100, 10), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
     fn live_toml_apply_and_widget_press_cross_the_hardware_seam() -> Result<()> {
         let initial = sliver_core::parse_config(
             r##"
