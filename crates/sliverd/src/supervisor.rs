@@ -300,6 +300,7 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
 impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     pub(crate) fn new_with_logind(mut hardware: H, state_file: PathBuf, logind: L) -> Result<Self> {
         hardware.claim()?;
+        let input_state = hardware.input_state();
         let backlight = match hardware.get_backlight() {
             Ok(level) => level,
             Err(error) => {
@@ -317,7 +318,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             claimed: true,
             origin: Instant::now(),
             backlight,
-            input_state: InputState::default(),
+            input_state,
             down_contacts: BTreeMap::new(),
             ignored_contacts: BTreeSet::new(),
             touch_queue: TouchQueue::new(),
@@ -4886,6 +4887,53 @@ mod tests {
 
         assert!(!log.exists() || !std::fs::read_to_string(&log)?.contains("down"));
         assert_eq!(supervisor.recovery.as_ref().map(|_| true), Some(true));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn startup_recovery_bridges_modifiers_from_the_claim_snapshot() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut input_state = InputState::default();
+        input_state.modifiers.set(Modifier::LeftCtrl, true);
+        let (logind, _) = active_local_logind("startup-recovery-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::with_input_state(input_state),
+            state_file,
+            logind,
+            None,
+        )?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
+        supervisor.step_at(2.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
         supervisor.shutdown()?;
         Ok(())
     }
