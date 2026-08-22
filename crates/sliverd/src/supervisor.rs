@@ -126,9 +126,193 @@ mod tests {
 
     use anyhow::{Context, Result};
 
-    use crate::hardware::FakeTouchBar;
+    use crate::hardware::{FakeAction, FakeTouchBar};
 
     use super::Supervisor;
+
+    #[test]
+    fn rejected_candidate_preserves_active_state_and_replacement_stops_after_commit() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let stop_log = directory.path().join("stop-log");
+        let old_source = directory.path().join("old.lua");
+        std::fs::write(
+            &old_source,
+            format!(
+                r#"
+                require("sliver.v1")
+                local state_file = {state_file:?}
+                local stop_log = {stop_log:?}
+                return {{
+                    api_version = 1,
+                    stop = function(reason)
+                        local selected = assert(io.open(state_file)):read("*a")
+                        local log = assert(io.open(stop_log, "w"))
+                        log:write(reason, ":", selected)
+                        log:close()
+                    end,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }}
+                "#,
+                state_file = state_file.to_string_lossy(),
+                stop_log = stop_log.to_string_lossy(),
+            ),
+        )?;
+        let bad_source = directory.path().join("bad.lua");
+        let irreversible_marker = directory.path().join("candidate-side-effect");
+        std::fs::write(
+            &bad_source,
+            format!(
+                r#"
+                require("sliver.v1")
+                local marker = assert(io.open({marker:?}, "w"))
+                marker:write("kept")
+                marker:close()
+                return {{
+                    api_version = 1,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1)
+                        error("candidate failed")
+                    end,
+                }}
+                "#,
+                marker = irreversible_marker.to_string_lossy(),
+            ),
+        )?;
+        let new_source = directory.path().join("new.lua");
+        std::fs::write(
+            &new_source,
+            r#"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        supervisor.apply(&old_source)?;
+
+        let error = supervisor
+            .apply(&bad_source)
+            .expect_err("failed candidate was committed");
+
+        assert!(format!("{error:#}").contains("candidate failed"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(std::fs::read_to_string(&irreversible_marker)?, "kept");
+        assert!(!stop_log.exists());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .context("old frame disappeared after rejection")?
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+
+        supervisor.apply(&new_source)?;
+
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            new_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&stop_log)?,
+            format!("replaced:{}", new_source.display())
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .actions()
+                .iter()
+                .filter(|action| matches!(action, FakeAction::Present))
+                .count(),
+            2
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .context("new frame was not committed")?
+                .rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn selected_path_normalization_preserves_the_final_symlink() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let target = directory.path().join("target");
+        std::fs::write(
+            &target,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let symlink = directory.path().join("selected");
+        std::os::unix::fs::symlink(&target, &symlink)?;
+        let nested = directory.path().join("nested");
+        std::fs::create_dir(&nested)?;
+        let requested = nested.join("..").join("selected");
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+
+        supervisor.apply(&requested)?;
+
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            symlink.as_os_str().as_encoded_bytes()
+        );
+        assert_ne!(
+            std::fs::read(&state_file)?,
+            target.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn source_changes_wait_for_an_explicit_fresh_reapply() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("config");
+        let state_file = directory.path().join("state/sliver/config-path");
+        let config = |red: u8, blue: u8| {
+            format!(
+                "require('sliver.v1'); return {{ api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, {}, 0, {}, 1) end }}",
+                f64::from(red) / 255.0,
+                f64::from(blue) / 255.0,
+            )
+        };
+        std::fs::write(&source, config(255, 0))?;
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        std::fs::write(&source, config(0, 255))?;
+
+        assert_eq!(supervisor.hardware().presented_frames().len(), 1);
+        assert_eq!(
+            supervisor.hardware().presented_frames()[0].rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        supervisor.apply(&source)?;
+        assert_eq!(supervisor.hardware().presented_frames().len(), 2);
+        assert_eq!(
+            supervisor.hardware().presented_frames()[1].rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
 
     #[test]
     fn successful_candidate_commits_frame_and_selected_path() -> Result<()> {
