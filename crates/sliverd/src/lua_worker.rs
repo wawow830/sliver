@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use mlua::{Function, HookTriggers, Lua, MultiValue, Table, Value, VmState};
 
 use crate::hardware::LogicalFrame;
-use crate::lua_canvas::Canvas;
+use crate::lua_canvas::{create_path, Canvas};
 
 pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
@@ -36,6 +36,8 @@ pub(crate) struct LuaWorker {
 }
 
 enum WorkerCommand {
+    #[allow(dead_code)]
+    Render(mpsc::SyncSender<std::result::Result<LogicalFrame, String>>),
     Shutdown(
         StopReason,
         mpsc::SyncSender<std::result::Result<(), String>>,
@@ -45,6 +47,7 @@ enum WorkerCommand {
 
 struct Runtime {
     _lua: Lua,
+    render: Function,
     stop: Option<Function>,
     _visibility: Option<Function>,
     _touch: Option<Function>,
@@ -86,6 +89,24 @@ impl LuaWorker {
                 Err(anyhow!("Lua owner thread exited before staging completed"))
             }
         }
+    }
+
+    // Kept crate-private for the worker lifecycle that will request redraws.
+    // It does not add timers or a Lua redraw operation.
+    #[allow(dead_code)]
+    pub(crate) fn render_next(&self) -> Result<LogicalFrame> {
+        let commands = self
+            .commands
+            .as_ref()
+            .context("Lua worker command channel is closed")?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(WorkerCommand::Render(reply_tx))
+            .context("requesting the next Lua frame")?;
+        reply_rx
+            .recv()
+            .context("Lua owner thread exited while rendering")?
+            .map_err(|error| anyhow!(error))
     }
 
     pub(crate) fn shutdown(mut self, reason: StopReason) -> Result<()> {
@@ -143,11 +164,21 @@ fn owner_main(
         return;
     }
 
-    match commands.recv() {
-        Ok(WorkerCommand::Shutdown(reason, reply)) => {
-            let _ = reply.send(runtime.stop(reason));
+    run_commands(runtime, commands);
+}
+
+fn run_commands(runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
+    loop {
+        match commands.recv() {
+            Ok(WorkerCommand::Render(reply)) => {
+                let _ = reply.send(runtime.render_frame());
+            }
+            Ok(WorkerCommand::Shutdown(reason, reply)) => {
+                let _ = reply.send(runtime.stop(reason));
+                break;
+            }
+            Ok(WorkerCommand::Abandon) | Err(_) => break,
         }
-        Ok(WorkerCommand::Abandon) | Err(_) => {}
     }
 }
 
@@ -237,42 +268,47 @@ impl Runtime {
                 .map_err(|error| diagnostic("start", source, error.to_string()))?;
         }
 
+        let runtime = Self {
+            _lua: lua,
+            render,
+            stop,
+            _visibility: visibility,
+            _touch: touch,
+            _key: key,
+            source: source.to_path_buf(),
+        };
+        let frame = runtime.render_frame()?;
+        Ok((runtime, frame))
+    }
+
+    fn render_frame(&self) -> std::result::Result<LogicalFrame, String> {
         let surface = cairo::ImageSurface::create(
             cairo::Format::ARgb32,
             sliver_core::STRIP_W as i32,
             sliver_core::STRIP_H as i32,
         )
-        .map_err(|error| diagnostic("render", source, error.to_string()))?;
+        .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
         let context = cairo::Context::new(&surface)
-            .map_err(|error| diagnostic("render", source, error.to_string()))?;
+            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
+        context.set_operator(cairo::Operator::Source);
         context.set_source_rgb(0.0, 0.0, 0.0);
         context
             .paint()
-            .map_err(|error| diagnostic("render", source, error.to_string()))?;
-        let canvas = lua
+            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
+        context.set_operator(cairo::Operator::Over);
+        let canvas = self
+            ._lua
             .create_userdata(Canvas::new(&context))
-            .map_err(|error| diagnostic("render", source, error.to_string()))?;
-        let render_result = render.call::<()>(canvas.clone());
+            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
+        let render_result = self.render.call::<()>(canvas.clone());
         canvas
             .borrow::<Canvas>()
-            .map_err(|error| diagnostic("render", source, error.to_string()))?
+            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?
             .invalidate();
-        render_result.map_err(|error| diagnostic("render", source, error.to_string()))?;
+        render_result.map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
         surface.flush();
-        let frame = LogicalFrame::from_surface(&surface)
-            .map_err(|error| diagnostic("render", source, format!("{error:#}")))?;
-
-        Ok((
-            Self {
-                _lua: lua,
-                stop,
-                _visibility: visibility,
-                _touch: touch,
-                _key: key,
-                source: source.to_path_buf(),
-            },
-            frame,
-        ))
+        LogicalFrame::from_surface(&surface)
+            .map_err(|error| diagnostic("render", &self.source, format!("{error:#}")))
     }
 
     fn stop(self, reason: StopReason) -> std::result::Result<(), String> {
@@ -320,6 +356,8 @@ fn install_v1_module(lua: &Lua) -> mlua::Result<Rc<Cell<bool>>> {
         loaded_by_require.set(true);
         let module = lua.create_table()?;
         module.set("api_version", 1)?;
+        let path = lua.create_function(create_path)?;
+        module.set("path", path)?;
         Ok(module)
     })?;
     let package: Table = lua.globals().get("package")?;

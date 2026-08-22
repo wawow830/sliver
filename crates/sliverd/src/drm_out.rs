@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn lua_canvas_draws_a_filled_rectangle() -> Result<()> {
+    fn lua_canvas_draws_a_rectangle_from_normalized_srgb_components() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("rectangle.lua");
         std::fs::write(
@@ -343,26 +343,541 @@ mod tests {
             .presented_frames()
             .first()
             .context("worker did not present the rectangle")?;
-        assert_eq!(frame.rgba_at(20, 10), [255, 0, 0, 255]);
+        assert_eq!(
+            frame.rgba_at(20, 10),
+            [255, 0, 0, 255],
+            "normalized numeric sRGB components must produce the requested color"
+        );
         assert_eq!(frame.rgba_at(100, 10), [0, 0, 0, 255]);
         Ok(())
     }
 
     #[test]
-    fn lua_canvas_shapes_text_with_pango() -> Result<()> {
+    fn lua_canvas_accepts_hex_srgb_colors() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let source = directory.path().join("text.lua");
+        let source = directory.path().join("hex-color.lua");
         std::fs::write(
             &source,
-            r#"
+            r##"
             require("sliver.v1")
             return {
                 api_version = 1,
                 render = function(canvas)
-                    canvas:text(100, 5, "Lua", 28, 1, 1, 1, 1)
+                    canvas:rectangle(10, 5, 40, 20, "#336699")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the hex-colored rectangle")?;
+        assert_eq!(frame.rgba_at(20, 10), [0x33, 0x66, 0x99, 0xff]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_rejects_non_hex_color_digits_without_panicking() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalid-hex.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 10, 10, "#€€€€€€")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        let error = present_lua_once(&source, &mut hardware)
+            .expect_err("invalid hexadecimal color digits were accepted");
+        assert!(format!("{error:#}").contains("hexadecimal"));
+        assert!(hardware.presented_frames().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_rejects_unrequested_operator_and_color_aliases() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let cases = [
+            (
+                "source-replace operator",
+                r##"canvas:operator("source-replace")"##,
+            ),
+            (
+                "short hexadecimal color",
+                r##"canvas:rectangle(0, 0, 10, 10, "#fff")"##,
+            ),
+            (
+                "0x hexadecimal color",
+                r##"canvas:rectangle(0, 0, 10, 10, "0xff0000")"##,
+            ),
+            (
+                "three numeric color components",
+                "canvas:rectangle(0, 0, 10, 10, 1, 0, 0)",
+            ),
+            (
+                "eight-digit hexadecimal color",
+                r##"canvas:rectangle(0, 0, 10, 10, "#ff000080")"##,
+            ),
+        ];
+
+        for (name, operation) in cases {
+            let source = directory.path().join(format!("{name}.lua"));
+            std::fs::write(
+                &source,
+                format!(
+                    r##"
+                    require("sliver.v1")
+                    return {{
+                        api_version = 1,
+                        render = function(canvas)
+                            {operation}
+                        end,
+                    }}
+                    "##,
+                    operation = operation
+                ),
+            )?;
+            let mut hardware = FakeTouchBar::new();
+
+            let error = present_lua_once(&source, &mut hardware)
+                .expect_err("an unrequested canvas alias was accepted");
+            assert!(
+                format!("{error:#}").contains("[render]"),
+                "{name} failed at an unexpected stage: {error:#}"
+            );
+            assert!(hardware.presented_frames().is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_fills_an_immutable_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("path.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local path = sliver.path({
+                { "move_to", 10, 5 },
+                { "line_to", 50, 5 },
+                { "line_to", 50, 25 },
+                { "line_to", 10, 25 },
+                { "close" },
+            })
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:fill(path, "#00ff00")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the reusable path")?;
+        assert_eq!(frame.rgba_at(20, 10), [0, 255, 0, 255]);
+        assert_eq!(frame.rgba_at(60, 10), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_strokes_a_reusable_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("stroke.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local path = sliver.path({
+                { "move_to", 10, 10 },
+                { "line_to", 50, 10 },
+                { "line_to", 50, 30 },
+                { "line_to", 10, 30 },
+                { "close" },
+            })
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:stroke(path, 4, "#ff0000")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the stroked path")?;
+        assert_eq!(frame.rgba_at(30, 10), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(30, 20), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_transforms_and_restores_drawing_state() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("transform.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:save()
+                    canvas:translate(10, 0)
+                    canvas:scale(2, 1)
+                    canvas:rectangle(0, 0, 10, 10, "#ff0000")
+                    canvas:restore()
+                    canvas:rectangle(0, 0, 5, 5, "#0000ff")
+                    canvas:save()
+                    canvas:translate(70, 10)
+                    canvas:rotate(math.pi / 2)
+                    canvas:rectangle(0, 0, 10, 5, "#00ff00")
+                    canvas:restore()
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the transformed frame")?;
+        assert_eq!(frame.rgba_at(2, 2), [0, 0, 255, 255]);
+        assert_eq!(frame.rgba_at(15, 5), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(30, 5), [0, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(67, 15), [0, 255, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_applies_alpha_and_restores_it() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("alpha.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:save()
+                    canvas:alpha(0.5)
+                    canvas:rectangle(0, 0, 20, 20, "#ff0000")
+                    canvas:restore()
+                    canvas:rectangle(20, 0, 20, 20, "#0000ff")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the alpha frame")?;
+        assert_eq!(frame.rgba_at(10, 10), [128, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(30, 10), [0, 0, 255, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_source_over_composites_over_non_black_destination() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("source-over.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, "#204060")
+                    canvas:alpha(0.5)
+                    canvas:operator("source-over")
+                    canvas:rectangle(0, 0, 20, 20, "#e08040")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("source-over fixture did not present a frame")?;
+        assert_eq!(
+            frame.rgba_at(10, 10),
+            [128, 96, 80, 255],
+            "source-over must blend with the existing non-black destination"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_supports_source_over_and_source_replacement() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("operators.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, "#ffffff")
+                    canvas:alpha(0.5)
+                    canvas:operator("source")
+                    canvas:rectangle(0, 0, 20, 20, "#ff0000")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the composited frame")?;
+        let pixel = frame.rgba_at(10, 10);
+        assert!(pixel[0] > 0, "source color was not written: {pixel:?}");
+        assert_eq!(pixel[1], 0);
+        assert_eq!(pixel[2], 0);
+        assert!(
+            pixel[3] < 200,
+            "source replacement retained the destination alpha: {pixel:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_clips_to_a_reusable_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("clip.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local clip = sliver.path({
+                { "move_to", 10, 10 },
+                { "line_to", 30, 10 },
+                { "line_to", 30, 30 },
+                { "line_to", 10, 30 },
+                { "close" },
+            })
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:clip(clip)
+                    canvas:rectangle(0, 0, 40, 40, "#ff0000")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the clipped frame")?;
+        assert_eq!(frame.rgba_at(20, 20), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(5, 20), [0, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(35, 20), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_clears_complete_frame_before_reusing_immutable_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("frames.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local path = sliver.path({
+                { "move_to", 0, 0 },
+                { "line_to", 20, 0 },
+                { "line_to", 20, 20 },
+                { "line_to", 0, 20 },
+                { "close" },
+            })
+            local frame = 0
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    frame = frame + 1
+                    if frame == 1 then
+                        canvas:fill(path, "#ff0000")
+                    else
+                        canvas:save()
+                        canvas:scale(0.5, 0.5)
+                        canvas:fill(path, "#00ff00")
+                        canvas:restore()
+                    end
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        let crate::lua_worker::StagedLuaWorker { worker, frame } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        hardware.present(&frame)?;
+        let frame = worker.render_next()?;
+        hardware.present(&frame)?;
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        hardware.release()?;
+
+        let frames = hardware.presented_frames();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(
+            frames[0].rgba_at(15, 15),
+            [255, 0, 0, 255],
+            "immutable path did not render the first frame"
+        );
+        assert_eq!(
+            frames[1].rgba_at(5, 5),
+            [0, 255, 0, 255],
+            "the same immutable path was not reusable in the next frame"
+        );
+        assert_eq!(
+            frames[1].rgba_at(15, 15),
+            [0, 0, 0, 255],
+            "complete-frame clearing retained pixels from the previous frame"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_resets_drawing_state_for_each_frame() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("frame-state.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            local frame = 0
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    frame = frame + 1
+                    if frame == 1 then
+                        canvas:translate(100, 0)
+                        canvas:alpha(0.5)
+                        canvas:operator("source")
+                        canvas:rectangle(0, 0, 10, 10, "#ff0000")
+                    else
+                        canvas:rectangle(0, 0, 10, 10, "#00ff00")
+                    end
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        let crate::lua_worker::StagedLuaWorker { worker, frame } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        hardware.present(&frame)?;
+        let frame = worker.render_next()?;
+        hardware.present(&frame)?;
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        hardware.release()?;
+
+        let frames = hardware.presented_frames();
+        assert!(frames[0].rgba_at(105, 5)[0] > 0);
+        assert_eq!(frames[1].rgba_at(5, 5), [0, 255, 0, 255]);
+        assert_eq!(
+            frames[1].rgba_at(105, 5),
+            [0, 0, 0, 255],
+            "a fresh frame retained the previous transform, alpha, or pixels"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_is_invalid_after_render_returns() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalidated.lua");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            local rendered_canvas
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    rendered_canvas = canvas
+                end,
+                stop = function()
+                    rendered_canvas:rectangle(0, 0, 1, 1, 1, 0, 0, 1)
                 end,
             }
             "#,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        let error = present_lua_once(&source, &mut hardware)
+            .expect_err("a frame canvas remained usable after render");
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("cannot be called after canvas invalidation"));
+        assert_eq!(hardware.presented_frames().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_shapes_mixed_bidirectional_utf8_and_measures_logical_size() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("text.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    local latin_width, latin_height = canvas:measure_text("A", 28)
+                    local rtl_width, rtl_height = canvas:measure_text("אבג العربية", 28)
+                    local mixed_width, mixed_height = canvas:measure_text("A אבג العربية 日本", 28)
+                    assert(latin_width > 0 and latin_height > 0)
+                    assert(rtl_width > 0 and rtl_height > 0)
+                    assert(mixed_width > latin_width and mixed_width > rtl_width)
+                    assert(mixed_height > 0)
+                    canvas:text(100, 5, "A אבג العربية 日本", 28, "#ffffff")
+                end,
+            }
+            "##,
         )?;
         let mut hardware = FakeTouchBar::new();
 
@@ -374,7 +889,45 @@ mod tests {
             .context("worker did not present the text")?;
         let shaped_pixel_exists =
             (5..50).any(|y| (100..180).any(|x| frame.rgba_at(x, y) != [0, 0, 0, 255]));
-        assert!(shaped_pixel_exists, "Pango did not draw any text pixels");
+        assert!(
+            shaped_pixel_exists,
+            "mixed bidirectional UTF-8 text produced no shaped glyph pixels"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_uses_system_fallback_for_non_latin_text() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("fallback-font.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    local width, height = canvas:measure_text("日本語", 28)
+                    assert(width > 0 and height > 0)
+                    canvas:text(100, 5, "日本語", 28, 1, 1, 1, 1)
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("system fallback fixture did not present a frame")?;
+        let fallback_pixels_exist =
+            (5..50).any(|y| (100..220).any(|x| frame.rgba_at(x, y) != [0, 0, 0, 255]));
+        assert!(
+            fallback_pixels_exist,
+            "system fallback string produced no glyph pixels"
+        );
         Ok(())
     }
 
