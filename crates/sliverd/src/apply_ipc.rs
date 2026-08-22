@@ -14,6 +14,8 @@ pub(crate) fn request_apply(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
+    // The supervisor owns the worker environment. Keep client environment and
+    // other process state out of this protocol; the request is only a path.
     let path = absolute_lexical(path)?;
     let bytes = path.as_os_str().as_bytes();
     ensure!(
