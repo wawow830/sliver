@@ -4703,6 +4703,15 @@ mod tests {
             }));
         supervisor.step_at(2.0)?;
         assert!(supervisor.hardware().synthetic_keys().is_empty());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("pressed recovery frame was not presented")
+                .rgba_at(10, 30),
+            [56, 56, 56, 255]
+        );
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Touch(TouchEvent {
@@ -4717,6 +4726,15 @@ mod tests {
                 height: None,
             }));
         supervisor.step_at(3.0)?;
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("released recovery frame was not presented")
+                .rgba_at(10, 30),
+            [0, 0, 0, 255]
+        );
         assert_eq!(
             supervisor.hardware().synthetic_keys(),
             &[
