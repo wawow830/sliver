@@ -1,6 +1,8 @@
+#[cfg(test)]
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
+#[cfg(test)]
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
@@ -42,6 +44,7 @@ pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn read_request(stream: &mut UnixStream) -> Result<PathBuf> {
     let bytes = read_bytes(stream).context("reading apply request")?;
     ensure!(!bytes.is_empty(), "config path is empty");

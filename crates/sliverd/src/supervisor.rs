@@ -1,12 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::io::{ErrorKind, Read};
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 
 use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
@@ -19,6 +22,8 @@ use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
 
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
+const REQUEST_QUEUE_CAPACITY: usize = 16;
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 struct ActiveConfig {
     worker: LuaWorker,
@@ -473,6 +478,62 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 }
 
+struct PendingRequest {
+    stream: UnixStream,
+    peer: PeerCredentials,
+    header: [u8; 4],
+    header_len: usize,
+    length: Option<usize>,
+    payload: Vec<u8>,
+    payload_len: usize,
+}
+
+impl PendingRequest {
+    fn new(stream: UnixStream) -> Result<Self> {
+        let peer = crate::peer_credentials::read(&stream)?;
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            stream,
+            peer,
+            header: [0; 4],
+            header_len: 0,
+            length: None,
+            payload: Vec::new(),
+            payload_len: 0,
+        })
+    }
+
+    fn try_path(&mut self) -> Result<Option<PathBuf>> {
+        while self.header_len < self.header.len() {
+            match self.stream.read(&mut self.header[self.header_len..]) {
+                Ok(0) => bail!("apply request ended before its length header"),
+                Ok(read) => self.header_len += read,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(None),
+                Err(error) => return Err(error).context("reading apply request length"),
+            }
+        }
+        if self.length.is_none() {
+            let length = u32::from_be_bytes(self.header) as usize;
+            ensure!(length <= MAX_REQUEST_BYTES, "IPC message is too large");
+            ensure!(length > 0, "config path is empty");
+            self.payload.resize(length, 0);
+            self.length = Some(length);
+        }
+        let length = self.length.expect("request length was initialized");
+        while self.payload_len < length {
+            match self.stream.read(&mut self.payload[self.payload_len..]) {
+                Ok(0) => bail!("apply request ended before its path payload"),
+                Ok(read) => self.payload_len += read,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(None),
+                Err(error) => return Err(error).context("reading apply request path"),
+            }
+        }
+        Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(
+            std::mem::take(&mut self.payload),
+        ))))
+    }
+}
+
 struct QueuedRequest {
     stream: UnixStream,
     request: Result<AuthorizedRequest>,
@@ -500,7 +561,7 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
     request_limit: Option<usize>,
 ) -> Result<()> {
     let authorizer = supervisor.authorizer.clone();
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(REQUEST_QUEUE_CAPACITY);
     let stop = Arc::new(AtomicBool::new(false));
     let acceptor_stop = stop.clone();
     let acceptor = thread::spawn(move || {
@@ -520,22 +581,16 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
                 if request_limit.is_some_and(|limit| processed >= limit) {
                     break;
                 }
+                if let Err(error) = supervisor.poll_hardware(Duration::ZERO) {
+                    service_result = Err(error);
+                    break;
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 let now = supervisor.now_seconds();
-                let wait = supervisor.poll_wait(now);
-                match supervisor.hardware.poll(wait) {
-                    Ok(events) => {
-                        let now = supervisor.now_seconds();
-                        if let Err(error) = supervisor.process_events_at(now, events) {
-                            service_result = Err(error);
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        service_result = Err(error);
-                        break;
-                    }
+                if let Err(error) = supervisor.poll_hardware(supervisor.poll_wait(now)) {
+                    service_result = Err(error);
+                    break;
                 }
             }
             Err(mpsc::TryRecvError::Disconnected) => break,
@@ -559,43 +614,82 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
 fn accept_requests<L: Logind>(
     listener: UnixListener,
     authorizer: SessionAuthorizer<L>,
-    sender: mpsc::Sender<QueuedRequest>,
+    sender: SyncSender<QueuedRequest>,
     request_limit: Option<usize>,
     stop: Arc<AtomicBool>,
 ) -> Result<()> {
     listener.set_nonblocking(true)?;
+    let mut pending: VecDeque<PendingRequest> = VecDeque::new();
+    let mut ready = None;
     let mut sent = 0;
     loop {
         if stop.load(Ordering::Acquire) {
             return Ok(());
         }
-        let (mut stream, _) = match listener.accept() {
-            Ok(connection) => connection,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::park_timeout(Duration::from_millis(10));
-                continue;
+
+        if ready.is_none() {
+            if let Some(request) = pending.front_mut() {
+                match request.try_path() {
+                    Ok(Some(path)) => {
+                        let request = pending.pop_front().expect("request was present");
+                        ready = Some(QueuedRequest {
+                            stream: request.stream,
+                            request: authorize_path(&authorizer, request.peer, path),
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        let request = pending.pop_front().expect("request was present");
+                        ready = Some(QueuedRequest {
+                            stream: request.stream,
+                            request: Err(error),
+                        });
+                    }
+                }
             }
-            Err(error) => return Err(error).context("accepting apply request"),
-        };
-        let request = read_authorized_request(&mut stream, &authorizer);
-        if sender.send(QueuedRequest { stream, request }).is_err() {
-            return Ok(());
         }
-        sent += 1;
-        if request_limit.is_some_and(|limit| sent >= limit) {
-            return Ok(());
+
+        if let Some(request) = ready.take() {
+            match sender.try_send(request) {
+                Ok(()) => {
+                    sent += 1;
+                    if request_limit.is_some_and(|limit| sent >= limit) {
+                        return Ok(());
+                    }
+                }
+                Err(TrySendError::Full(request)) => ready = Some(request),
+                Err(TrySendError::Disconnected(_)) => return Ok(()),
+            }
         }
+
+        if ready.is_none() && pending.len() < REQUEST_QUEUE_CAPACITY {
+            match listener.accept() {
+                Ok((stream, _)) => pending.push_back(PendingRequest::new(stream)?),
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error).context("accepting apply request"),
+            }
+        }
+        thread::park_timeout(Duration::from_millis(1));
     }
 }
 
+fn authorize_path<L: Logind>(
+    authorizer: &SessionAuthorizer<L>,
+    peer: PeerCredentials,
+    path: PathBuf,
+) -> Result<AuthorizedRequest> {
+    let grant = authorizer.authorize(peer)?;
+    Ok(AuthorizedRequest { path, peer, grant })
+}
+
+#[cfg(test)]
 fn read_authorized_request<L: Logind>(
     stream: &mut UnixStream,
     authorizer: &SessionAuthorizer<L>,
 ) -> Result<AuthorizedRequest> {
     let peer = crate::peer_credentials::read(stream)?;
     let path = crate::apply_ipc::read_request(stream)?;
-    let grant = authorizer.authorize(peer)?;
-    Ok(AuthorizedRequest { path, peer, grant })
+    authorize_path(authorizer, peer, path)
 }
 
 fn serve_queued_request<H: TouchBarHardware, L: Logind>(
@@ -613,13 +707,8 @@ fn serve_connection<H: TouchBarHardware, L: Logind>(
     stream: &mut UnixStream,
     supervisor: &mut Supervisor<H, L>,
 ) -> Result<()> {
-    let result = (|| {
-        let peer = crate::peer_credentials::read(stream)?;
-        let path = crate::apply_ipc::read_request(stream)?;
-        let grant = supervisor.authorizer.authorize(peer)?;
-        Ok(AuthorizedRequest { path, peer, grant })
-    })()
-    .and_then(|request| supervisor.apply_authorized(request));
+    let result = read_authorized_request(stream, &supervisor.authorizer)
+        .and_then(|request| supervisor.apply_authorized(request));
     crate::apply_ipc::write_reply(stream, &result).context("sending apply reply")
 }
 
@@ -635,8 +724,9 @@ impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
     use std::os::unix::fs::PermissionsExt;
-    use std::os::unix::net::UnixListener;
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -731,6 +821,128 @@ mod tests {
         fn release(&mut self) -> Result<()> {
             self.inner.release()
         }
+    }
+
+    #[test]
+    fn partial_client_disconnect_does_not_block_shutdown() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _uid) = active_local_logind("seat-session");
+        let server = thread::spawn(move || -> Result<()> {
+            let mut supervisor =
+                Supervisor::new_with_logind(FakeTouchBar::new(), state_file, logind)?;
+            serve_for_test(listener, &mut supervisor, 1)
+        });
+
+        let mut client = UnixStream::connect(&socket)?;
+        client.write_all(&(5u32.to_be_bytes()))?;
+        client.write_all(b"x")?;
+        client.shutdown(std::net::Shutdown::Write)?;
+        let mut reply = Vec::new();
+        client.read_to_end(&mut reply)?;
+
+        server.join().expect("supervisor thread panicked")?;
+        assert_eq!(reply.first(), Some(&1));
+        Ok(())
+    }
+
+    #[test]
+    fn request_load_does_not_starve_hardware_polling_between_applies() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let timer_marker = directory.path().join("timer-fired");
+        let first_marker = directory.path().join("first-started");
+        let second_marker = directory.path().join("second-started");
+        let second_gate = directory.path().join("second-release");
+        let first = directory.path().join("first.lua");
+        std::fs::write(
+            &first,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local staging = assert(io.open({staging:?}, "w"))
+                staging:close()
+                local marker = {marker:?}
+                sliver.timer.after(0, function()
+                    local file = assert(io.open(marker, "w"))
+                    file:close()
+                end)
+                local gate = {gate:?}
+                while true do
+                    local file = io.open(gate)
+                    if file then file:close(); break end
+                end
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                staging = first_marker.to_string_lossy(),
+                marker = timer_marker.to_string_lossy(),
+                gate = directory.path().join("first-release").to_string_lossy(),
+            ),
+        )?;
+        let first_gate = directory.path().join("first-release");
+        let second = directory.path().join("second.lua");
+        std::fs::write(
+            &second,
+            format!(
+                r#"
+                local marker = assert(io.open({marker:?}, "w"))
+                marker:close()
+                local gate = {gate:?}
+                while true do
+                    local file = io.open(gate)
+                    if file then file:close(); break end
+                end
+                require("sliver.v1")
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                marker = second_marker.to_string_lossy(),
+                gate = second_gate.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _uid) = active_local_logind("seat-session");
+        let server_logind = logind.clone();
+        let server_state = state_file.clone();
+        let server = thread::spawn(move || -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
+            let mut supervisor =
+                Supervisor::new_with_logind(FakeTouchBar::new(), server_state, server_logind)?;
+            serve_for_test(listener, &mut supervisor, 2)?;
+            Ok(supervisor)
+        });
+
+        let first_socket = socket.clone();
+        let first_client =
+            thread::spawn(move || crate::apply_ipc::request_apply_at(&first_socket, &first));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !first_marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        anyhow::ensure!(first_marker.exists(), "first request did not enter staging");
+        let second_socket = socket.clone();
+        let second_client =
+            thread::spawn(move || crate::apply_ipc::request_apply_at(&second_socket, &second));
+        std::fs::write(&first_gate, "go")?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !second_marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        anyhow::ensure!(
+            second_marker.exists(),
+            "second request did not enter staging"
+        );
+        assert!(
+            timer_marker.exists(),
+            "timer polling was starved between requests"
+        );
+        std::fs::write(&second_gate, "go")?;
+        first_client.join().expect("first client panicked")?;
+        second_client.join().expect("second client panicked")?;
+        let supervisor = server.join().expect("supervisor thread panicked")?;
+        supervisor.shutdown()?;
+        Ok(())
     }
 
     #[test]
