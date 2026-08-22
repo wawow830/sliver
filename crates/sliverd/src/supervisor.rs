@@ -4639,7 +4639,7 @@ mod tests {
                     visibility = function(event) record("visibility:" .. tostring(event.visible)) end,
                     touch = function(event) record("touch:" .. event.phase) end,
                     key = function(event) record("key:" .. event.key .. ":" .. event.phase) end,
-                    render = function() end,
+                    render = function() record("render") end,
                 }}
                 "#,
                 log = log.to_string_lossy(),
@@ -4676,6 +4676,20 @@ mod tests {
             events.lines().filter(|line| *line == "touch:down").count(),
             1
         );
+        let lines: Vec<_> = events.lines().collect();
+        let fn_up = lines
+            .iter()
+            .position(|line| *line == "key:fn:up")
+            .expect("Fn-up was not delivered");
+        let visible = lines
+            .iter()
+            .position(|line| *line == "visibility:true")
+            .expect("visibility restoration was not delivered");
+        let render = lines
+            .iter()
+            .rposition(|line| *line == "render")
+            .expect("return render was not requested");
+        assert!(fn_up < visible && visible < render);
         supervisor.shutdown()?;
         Ok(())
     }
