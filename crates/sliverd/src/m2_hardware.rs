@@ -760,16 +760,6 @@ fn function_key_events(index: usize, modifiers: ModifierState) -> io::Result<Vec
         .collect())
 }
 
-fn ensure_optional_emitter<T>(
-    emitter: &mut Option<T>,
-    create: impl FnOnce() -> Result<T>,
-) -> Result<()> {
-    if emitter.is_none() {
-        *emitter = Some(create()?);
-    }
-    Ok(())
-}
-
 /// One virtual keyboard shared by the Lua worker and the fixed Fn row.
 struct KeyboardEmitter {
     device: VirtualDevice,
@@ -1031,9 +1021,10 @@ impl M2TouchBar {
             let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);
-            ensure_optional_emitter(&mut self.keyboard_emitter, || {
-                KeyboardEmitter::new().context("creating Sliver Keyboard")
-            })?;
+            if self.keyboard_emitter.is_none() {
+                self.keyboard_emitter =
+                    Some(KeyboardEmitter::new().context("creating Sliver Keyboard")?);
+            }
             Ok(())
         })();
         self.finish_claim_setup(setup_result)
@@ -1409,17 +1400,22 @@ mod tests {
 
     #[test]
     fn release_keeps_keyboard_emitter_for_reclaim() -> Result<()> {
-        let mut emitter = None;
-        ensure_optional_emitter(&mut emitter, || Ok(7_u8))?;
-        let first = emitter.as_ref().expect("keyboard emitter was not created") as *const u8;
-
-        let second_claim = ensure_optional_emitter(&mut emitter, || Ok(8_u8));
-        assert!(second_claim.is_ok());
-        let second = emitter
+        let mut hardware = M2TouchBar::new();
+        hardware.keyboard_emitter = Some(KeyboardEmitter::new()?);
+        let first = hardware
+            .keyboard_emitter
             .as_ref()
-            .expect("release discarded the keyboard emitter") as *const u8;
+            .expect("keyboard emitter was not created")
+            as *const KeyboardEmitter;
+
+        hardware.release_inner()?;
+
+        let second = hardware
+            .keyboard_emitter
+            .as_ref()
+            .expect("release discarded the keyboard emitter")
+            as *const KeyboardEmitter;
         assert_eq!(first, second);
-        assert_eq!(*emitter.as_ref().expect("emitter disappeared"), 7);
         Ok(())
     }
 
