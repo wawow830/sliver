@@ -673,7 +673,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .route_touch(event, &mut self.recovery_row);
             match result {
                 RecoveryTouchResult::Ignored => {}
-                RecoveryTouchResult::Changed => self.present_recovery()?,
+                RecoveryTouchResult::RowPressChanged => self.present_recovery()?,
                 RecoveryTouchResult::Activate(index) => {
                     self.present_recovery()?;
                     self.activate_recovery_key(index)?;

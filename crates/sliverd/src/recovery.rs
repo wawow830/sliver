@@ -7,7 +7,7 @@ use crate::frame_canvas::FrameCanvas;
 use crate::hardware::{function_key_output, ContactId, LogicalFrame, TouchEvent, TouchPhase};
 
 const KEY_COUNT: usize = 12;
-const PRESSED: (f64, f64, f64) = (0.22, 0.22, 0.22);
+const PRESSED_RGB: (f64, f64, f64) = (0.22, 0.22, 0.22);
 
 pub(crate) struct RecoveryState {
     contacts: BTreeMap<ContactId, usize>,
@@ -17,7 +17,7 @@ pub(crate) struct RecoveryState {
 
 pub(crate) enum RecoveryTouchResult {
     Ignored,
-    Changed,
+    RowPressChanged,
     Activate(usize),
 }
 
@@ -54,7 +54,7 @@ impl RecoveryState {
                     RecoveryTouchResult::Ignored
                 } else {
                     row.press(index);
-                    RecoveryTouchResult::Changed
+                    RecoveryTouchResult::RowPressChanged
                 }
             }
             TouchPhase::Move => {
@@ -80,7 +80,7 @@ impl RecoveryState {
                 } else {
                     row.release(index);
                 }
-                RecoveryTouchResult::Changed
+                RecoveryTouchResult::RowPressChanged
             }
             TouchPhase::Up | TouchPhase::Cancel => {
                 let Some(index) = self.contacts.remove(&event.id) else {
@@ -101,7 +101,7 @@ impl RecoveryState {
                 if activate {
                     RecoveryTouchResult::Activate(index)
                 } else {
-                    RecoveryTouchResult::Changed
+                    RecoveryTouchResult::RowPressChanged
                 }
             }
         }
@@ -155,7 +155,7 @@ impl RecoveryRow {
         for index in 0..KEY_COUNT {
             let left = index as f64 * key_width;
             if self.is_pressed(index) {
-                context.set_source_rgb(PRESSED.0, PRESSED.1, PRESSED.2);
+                context.set_source_rgb(PRESSED_RGB.0, PRESSED_RGB.1, PRESSED_RGB.2);
                 context.rectangle(left, 0.0, key_width, sliver_core::STRIP_H);
                 context.fill().context("filling recovery press feedback")?;
             }
