@@ -26,6 +26,24 @@ impl DropGate {
     }
 }
 
+#[cfg(test)]
+struct SelectionGate {
+    selected: std::sync::Barrier,
+    resume: std::sync::Barrier,
+    active: AtomicU8,
+}
+
+#[cfg(test)]
+impl SelectionGate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            selected: std::sync::Barrier::new(2),
+            resume: std::sync::Barrier::new(2),
+            active: AtomicU8::new(1),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FrameTiming {
     pub(crate) presentation_time: f64,
@@ -74,6 +92,8 @@ struct SharedSlots {
     slots: [Slot; SLOT_COUNT],
     #[cfg(test)]
     drop_gate: Option<Arc<DropGate>>,
+    #[cfg(test)]
+    selection_gate: Option<Arc<SelectionGate>>,
 }
 
 /// The fixed-size producer/broker handoff for decoded frames.
@@ -135,6 +155,8 @@ impl FrameSlots {
                 slots,
                 #[cfg(test)]
                 drop_gate: None,
+                #[cfg(test)]
+                selection_gate: None,
             }),
         })
     }
@@ -150,6 +172,20 @@ impl FrameSlots {
         Arc::get_mut(&mut slots.inner)
             .expect("new slots have one owner")
             .drop_gate = Some(drop_gate);
+        Ok(slots)
+    }
+
+    #[cfg(test)]
+    fn new_with_selection_gate(
+        width: usize,
+        height: usize,
+        stride: usize,
+        selection_gate: Arc<SelectionGate>,
+    ) -> Result<Self> {
+        let mut slots = Self::new(width, height, stride)?;
+        Arc::get_mut(&mut slots.inner)
+            .expect("new slots have one owner")
+            .selection_gate = Some(selection_gate);
         Ok(slots)
     }
 
@@ -307,9 +343,17 @@ impl FrameBroker {
         {
             return Ok(None);
         }
+        let selected_sequence = newest_slot.sequence.load(Ordering::Acquire);
+        #[cfg(test)]
+        if let Some(selection_gate) = &self.inner.selection_gate {
+            if selection_gate.active.swap(0, Ordering::AcqRel) != 0 {
+                selection_gate.selected.wait();
+                selection_gate.resume.wait();
+            }
+        }
 
         for (older_index, slot) in self.inner.slots.iter().enumerate() {
-            if older_index != index {
+            if older_index != index && slot.sequence.load(Ordering::Acquire) < selected_sequence {
                 let _ =
                     slot.state
                         .compare_exchange(READY, FREE, Ordering::AcqRel, Ordering::Relaxed);
@@ -359,6 +403,33 @@ mod tests {
 
     fn frame(value: u8) -> Vec<u8> {
         vec![value; 8]
+    }
+
+    #[test]
+    fn broker_keeps_frames_published_after_selection_snapshot() -> Result<()> {
+        let gate = SelectionGate::new();
+        let slots = FrameSlots::new_with_selection_gate(2, 1, 8, gate.clone())?;
+        let producer = slots.producer();
+        assert!(producer.publish(2, 1, 8, &frame(1), FrameTiming::new(1.0, 0.0)?,)?);
+        assert!(producer.publish(2, 1, 8, &frame(2), FrameTiming::new(2.0, 1.0)?,)?);
+        let broker = slots.broker();
+        let broker_thread = std::thread::spawn(move || broker.take_newest());
+
+        gate.selected.wait();
+        assert!(producer.publish(2, 1, 8, &frame(3), FrameTiming::new(3.0, 1.0)?,)?);
+        gate.resume.wait();
+
+        let first = broker_thread
+            .join()
+            .expect("broker thread panicked")?
+            .expect("selected frame was lost");
+        assert_eq!(first.pixels, frame(2));
+        let second = slots
+            .broker()
+            .take_newest()?
+            .expect("newer frame was dropped");
+        assert_eq!(second.pixels, frame(3));
+        Ok(())
     }
 
     #[test]
