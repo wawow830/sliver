@@ -51,6 +51,17 @@ struct AuthorizedRequest {
     grant: AuthorizationGrant,
 }
 
+enum CandidateFailure {
+    Candidate(anyhow::Error),
+    Authorization(anyhow::Error),
+}
+
+impl From<anyhow::Error> for CandidateFailure {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Candidate(error)
+    }
+}
+
 struct TouchQueue {
     events: Vec<Option<TouchEvent>>,
     moves: BTreeMap<ContactId, usize>,
@@ -367,14 +378,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         requested_path: &Path,
         authorization: Option<(PeerCredentials, AuthorizationGrant)>,
     ) -> Result<()> {
-        let Err(candidate_error) = self.apply_candidate(requested_path, authorization, true) else {
-            return Ok(());
+        let candidate_error = match self.apply_candidate(requested_path, authorization, true) {
+            Ok(()) => return Ok(()),
+            Err(CandidateFailure::Authorization(error)) => return Err(error),
+            Err(CandidateFailure::Candidate(error)) => error,
         };
-        let candidate_message = candidate_error.to_string();
-        if self.active.is_none()
-            && !candidate_message.contains("active session")
-            && !candidate_message.contains("changed")
-        {
+        if self.active.is_none() {
             if let Ok(path) = absolute_lexical(requested_path) {
                 self.selected_path = Some(path.clone());
                 let state_result = PreparedPathState::prepare(&self.state_file, &path)
@@ -394,7 +403,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn startup_candidate(&mut self, path: &Path, persist_path: bool) -> Result<()> {
-        let result = self.apply_candidate(path, None, persist_path);
+        let result =
+            self.apply_candidate(path, None, persist_path)
+                .map_err(|failure| match failure {
+                    CandidateFailure::Candidate(error) | CandidateFailure::Authorization(error) => {
+                        error
+                    }
+                });
         if result.is_ok() && !persist_path {
             self.selected_path = None;
         }
@@ -406,15 +421,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         requested_path: &Path,
         authorization: Option<(PeerCredentials, AuthorizationGrant)>,
         persist_path: bool,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), CandidateFailure> {
         let selected_path = absolute_lexical(requested_path)?;
         let metadata = std::fs::metadata(&selected_path)
             .with_context(|| format!("reading config metadata for {}", selected_path.display()))?;
-        ensure!(
-            metadata.is_file(),
-            "config is not a regular file: {}",
-            selected_path.display()
-        );
+        if !metadata.is_file() {
+            return Err(anyhow::anyhow!(
+                "config is not a regular file: {}",
+                selected_path.display()
+            )
+            .into());
+        }
 
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
@@ -441,7 +458,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .then(|| PreparedPathState::prepare(&self.state_file, &selected_path))
             .transpose()?;
         if let Some((peer, grant)) = authorization {
-            self.authorizer.recheck(peer, &grant)?;
+            self.authorizer
+                .recheck(peer, &grant)
+                .map_err(CandidateFailure::Authorization)?;
         }
         if let Some(path_state) = path_state {
             path_state.commit()?;
@@ -573,7 +592,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         restore_frame: bool,
         restore_backlight: bool,
         error: anyhow::Error,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), CandidateFailure> {
         let mut error = error;
         if restore_frame {
             if let Some(frame) = old_frame {
@@ -598,7 +617,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 ));
             }
         }
-        Err(error)
+        Err(CandidateFailure::Candidate(error))
     }
 
     fn route_input(&mut self, key: ObservedKey, active: bool, now: f64) {
@@ -4265,6 +4284,77 @@ mod tests {
         assert!(format!("{error:#}").contains("session changed while checking authorization"));
         assert!(!state_file.exists());
         assert!(supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn final_authorization_failure_does_not_select_failed_path_without_worker() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let started = directory.path().join("started");
+        let release = directory.path().join("release");
+        let source = directory.path().join("config.lua");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local marker = assert(io.open({started:?}, "w"))
+                marker:close()
+                while true do
+                    local gate = io.open({release:?})
+                    if gate then gate:close(); break end
+                end
+                require("sliver.v1")
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                started = started.to_string_lossy(),
+                release = release.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, uid) = active_local_logind("old-session");
+        let mut supervisor =
+            Supervisor::new_with_logind(FakeTouchBar::new(), state_file.clone(), logind.clone())?;
+        let client_socket = socket.clone();
+        let client_source = source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&client_socket, &client_source)
+        });
+
+        let (mut stream, _) = listener.accept()?;
+        let request = super::read_authorized_request(&mut stream, &supervisor.authorizer)?;
+        let flip_logind = logind.clone();
+        let flip_started = started.clone();
+        let flip_release = release.clone();
+        let flip = thread::spawn(move || {
+            while !flip_started.exists() {
+                thread::sleep(Duration::from_millis(1));
+            }
+            flip_logind.set_session(
+                std::process::id() as libc::pid_t,
+                Some(Session {
+                    id: "old-session".into(),
+                    uid,
+                    seat: Some("seat0".into()),
+                    remote: false,
+                    active: false,
+                }),
+            );
+            std::fs::write(flip_release, "continue").expect("release candidate staging");
+        });
+        let result = supervisor.apply_authorized(request);
+        flip.join().expect("authorization flip panicked");
+        crate::apply_ipc::write_reply(&mut stream, &result)?;
+        let error = client
+            .join()
+            .expect("apply client panicked")
+            .expect_err("inactive final authorization check was accepted");
+        assert!(format!("{error:#}").contains("session is inactive"));
+        assert!(!state_file.exists());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_none());
         supervisor.shutdown()?;
         Ok(())
     }
