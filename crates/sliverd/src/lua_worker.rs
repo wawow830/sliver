@@ -21,12 +21,15 @@ pub(crate) struct LuaWorker {
 }
 
 enum WorkerCommand {
+    #[cfg(test)]
+    Render(mpsc::SyncSender<std::result::Result<LogicalFrame, String>>),
     Shutdown(mpsc::SyncSender<std::result::Result<(), String>>),
     Abandon,
 }
 
 struct Runtime {
     _lua: Lua,
+    render: Function,
     stop: Option<Function>,
     _visibility: Option<Function>,
     _touch: Option<Function>,
@@ -68,6 +71,22 @@ impl LuaWorker {
                 Err(anyhow!("Lua owner thread exited before staging completed"))
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn render_next(&self) -> Result<LogicalFrame> {
+        let commands = self
+            .commands
+            .as_ref()
+            .context("Lua worker command channel is closed")?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(WorkerCommand::Render(reply_tx))
+            .context("requesting the next Lua frame")?;
+        reply_rx
+            .recv()
+            .context("Lua owner thread exited while rendering")?
+            .map_err(|error| anyhow!(error))
     }
 
     pub(crate) fn shutdown(mut self) -> Result<()> {
@@ -125,11 +144,18 @@ fn owner_main(
         return;
     }
 
-    match commands.recv() {
-        Ok(WorkerCommand::Shutdown(reply)) => {
-            let _ = reply.send(runtime.stop());
+    loop {
+        match commands.recv() {
+            #[cfg(test)]
+            Ok(WorkerCommand::Render(reply)) => {
+                let _ = reply.send(runtime.render_frame());
+            }
+            Ok(WorkerCommand::Shutdown(reply)) => {
+                let _ = reply.send(runtime.stop());
+                break;
+            }
+            Ok(WorkerCommand::Abandon) | Err(_) => break,
         }
-        Ok(WorkerCommand::Abandon) | Err(_) => {}
     }
 }
 
@@ -219,42 +245,47 @@ impl Runtime {
                 .map_err(|error| diagnostic("start", source, error.to_string()))?;
         }
 
+        let runtime = Self {
+            _lua: lua,
+            render,
+            stop,
+            _visibility: visibility,
+            _touch: touch,
+            _key: key,
+            source: source.to_path_buf(),
+        };
+        let frame = runtime.render_frame()?;
+        Ok((runtime, frame))
+    }
+
+    fn render_frame(&self) -> std::result::Result<LogicalFrame, String> {
         let surface = cairo::ImageSurface::create(
             cairo::Format::ARgb32,
             sliver_core::STRIP_W as i32,
             sliver_core::STRIP_H as i32,
         )
-        .map_err(|error| diagnostic("render", source, error.to_string()))?;
+        .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
         let context = cairo::Context::new(&surface)
-            .map_err(|error| diagnostic("render", source, error.to_string()))?;
+            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
+        context.set_operator(cairo::Operator::Source);
         context.set_source_rgb(0.0, 0.0, 0.0);
         context
             .paint()
-            .map_err(|error| diagnostic("render", source, error.to_string()))?;
-        let canvas = lua
+            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
+        context.set_operator(cairo::Operator::Over);
+        let canvas = self
+            ._lua
             .create_userdata(Canvas::new(&context))
-            .map_err(|error| diagnostic("render", source, error.to_string()))?;
-        let render_result = render.call::<()>(canvas.clone());
+            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
+        let render_result = self.render.call::<()>(canvas.clone());
         canvas
             .borrow::<Canvas>()
-            .map_err(|error| diagnostic("render", source, error.to_string()))?
+            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?
             .invalidate();
-        render_result.map_err(|error| diagnostic("render", source, error.to_string()))?;
+        render_result.map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
         surface.flush();
-        let frame = LogicalFrame::from_surface(&surface)
-            .map_err(|error| diagnostic("render", source, format!("{error:#}")))?;
-
-        Ok((
-            Self {
-                _lua: lua,
-                stop,
-                _visibility: visibility,
-                _touch: touch,
-                _key: key,
-                source: source.to_path_buf(),
-            },
-            frame,
-        ))
+        LogicalFrame::from_surface(&surface)
+            .map_err(|error| diagnostic("render", &self.source, format!("{error:#}")))
     }
 
     fn stop(self) -> std::result::Result<(), String> {

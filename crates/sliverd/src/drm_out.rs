@@ -596,6 +596,86 @@ mod tests {
     }
 
     #[test]
+    fn lua_canvas_reuses_paths_across_fresh_frames() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("frames.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local path = sliver.path({
+                { "move_to", 0, 0 },
+                { "line_to", 20, 0 },
+                { "line_to", 20, 20 },
+                { "line_to", 0, 20 },
+                { "close" },
+            })
+            local frame = 0
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    frame = frame + 1
+                    if frame == 1 then
+                        canvas:fill(path, "#ff0000")
+                    else
+                        canvas:save()
+                        canvas:scale(0.5, 0.5)
+                        canvas:fill(path, "#00ff00")
+                        canvas:restore()
+                    end
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        let crate::lua_worker::StagedLuaWorker { worker, frame } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        hardware.present(&frame)?;
+        let frame = worker.render_next()?;
+        hardware.present(&frame)?;
+        worker.shutdown()?;
+        hardware.release()?;
+
+        let frames = hardware.presented_frames();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].rgba_at(15, 15), [255, 0, 0, 255]);
+        assert_eq!(frames[1].rgba_at(5, 5), [0, 255, 0, 255]);
+        assert_eq!(frames[1].rgba_at(15, 15), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_is_invalid_after_render_returns() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalidated.lua");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            local rendered_canvas
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    rendered_canvas = canvas
+                end,
+                stop = function()
+                    rendered_canvas:rectangle(0, 0, 1, 1, 1, 0, 0, 1)
+                end,
+            }
+            "#,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        let error = present_lua_once(&source, &mut hardware)
+            .expect_err("a frame canvas remained usable after render");
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("cannot be called after canvas invalidation"));
+        assert_eq!(hardware.presented_frames().len(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn lua_canvas_shapes_utf8_text_and_measures_it() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("text.lua");
