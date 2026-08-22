@@ -121,6 +121,8 @@ enum WorkerCommand {
         Vec<InputTransition>,
         f64,
         Vec<TouchEvent>,
+        Option<(bool, String)>,
+        bool,
         mpsc::SyncSender<std::result::Result<RuntimeEffects, String>>,
     ),
     RestoreBacklight(f64, mpsc::SyncSender<std::result::Result<(), String>>),
@@ -397,6 +399,27 @@ impl LuaWorker {
         delta: f64,
         events: Vec<TouchEvent>,
     ) -> Result<WorkerEffects> {
+        self.drive_with_visibility(
+            now_seconds,
+            input_state,
+            transitions,
+            delta,
+            events,
+            None,
+            false,
+        )
+    }
+
+    pub(crate) fn drive_with_visibility(
+        &self,
+        now_seconds: f64,
+        input_state: InputState,
+        transitions: Vec<InputTransition>,
+        delta: f64,
+        events: Vec<TouchEvent>,
+        visibility: Option<(bool, &str)>,
+        force_render: bool,
+    ) -> Result<WorkerEffects> {
         let commands = self
             .commands
             .as_ref()
@@ -409,6 +432,8 @@ impl LuaWorker {
                 transitions,
                 delta,
                 events,
+                visibility.map(|(visible, reason)| (visible, reason.to_owned())),
+                force_render,
                 reply_tx,
             ))
             .context("driving Lua worker")?;
@@ -542,10 +567,19 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
                 transitions,
                 delta,
                 events,
+                visibility,
+                force_render,
                 reply,
             )) => {
-                let _ =
-                    reply.send(runtime.drive(now_seconds, input_state, transitions, delta, events));
+                let _ = reply.send(runtime.drive(
+                    now_seconds,
+                    input_state,
+                    transitions,
+                    delta,
+                    events,
+                    visibility,
+                    force_render,
+                ));
             }
             Ok(WorkerCommand::RestoreBacklight(level, reply)) => {
                 let _ = reply.send(runtime.restore_backlight(level));
@@ -639,6 +673,8 @@ impl Runtime {
         transitions: Vec<InputTransition>,
         delta: f64,
         events: Vec<TouchEvent>,
+        visibility: Option<(bool, String)>,
+        force_render: bool,
     ) -> std::result::Result<RuntimeEffects, String> {
         let timing = FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
         if !self.controls.committed.get() {
@@ -651,11 +687,14 @@ impl Runtime {
         let result = (|| {
             self.dispatch_keys(now_seconds, started, transitions)?;
             self.dispatch_touch(now_seconds, started, events)?;
+            if let Some((visible, reason)) = visibility {
+                self.dispatch_visibility(visible, &reason, now_seconds, started)?;
+            }
             self.run_due_timers(now_seconds, started)?;
             self.controls
                 .now_seconds
                 .set(Some(sample_now(now_seconds, started)));
-            if self.controls.redraw_pending.replace(false) {
+            if force_render || self.controls.redraw_pending.replace(false) {
                 let frame = self.render_frame(now_seconds, delta)?;
                 self.pending_frame = Some(PendingFrame { frame, timing });
             }
@@ -702,6 +741,34 @@ impl Runtime {
                 .map_err(|error| diagnostic("key", &self.source, error.to_string()))?;
         }
         Ok(())
+    }
+
+    fn dispatch_visibility(
+        &self,
+        visible: bool,
+        reason: &str,
+        now_seconds: f64,
+        started: Instant,
+    ) -> std::result::Result<(), String> {
+        let Some(visibility) = &self._visibility else {
+            return Ok(());
+        };
+        self.controls
+            .now_seconds
+            .set(Some(sample_now(now_seconds, started)));
+        let table = self
+            ._lua
+            .create_table()
+            .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
+        table
+            .set("visible", visible)
+            .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
+        table
+            .set("reason", reason)
+            .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
+        visibility
+            .call::<()>(table)
+            .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))
     }
 
     fn dispatch_touch(
