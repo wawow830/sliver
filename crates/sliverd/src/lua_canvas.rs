@@ -346,6 +346,59 @@ impl UserData for Canvas {
                     "canvas:fill failed: {error}"
                 )))
         });
+        methods.add_method("stroke", |_, canvas, args: MultiValue| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:stroke cannot be called after canvas invalidation",
+                ));
+            }
+            let values = args.into_vec();
+            if values.len() < 3 {
+                return Err(mlua::Error::runtime(
+                    "canvas:stroke needs a path, line width, and a color",
+                ));
+            }
+            let path = match &values[0] {
+                Value::UserData(path) => path.borrow::<Path>()?,
+                value => {
+                    return Err(mlua::Error::runtime(format!(
+                        "canvas:stroke path must be a sliver path, got {}",
+                        value.type_name()
+                    )));
+                }
+            };
+            let width = match &values[1] {
+                Value::Integer(value) => *value as f64,
+                Value::Number(value) => *value,
+                value => {
+                    return Err(mlua::Error::runtime(format!(
+                        "canvas:stroke line width must be a number, got {}",
+                        value.type_name()
+                    )));
+                }
+            };
+            if !width.is_finite() || width <= 0.0 {
+                return Err(mlua::Error::runtime(
+                    "canvas:stroke line width must be finite and positive",
+                ));
+            }
+            let color = Canvas::parse_color(&values[2..])?;
+            canvas.context.set_source_rgba(
+                color.red,
+                color.green,
+                color.blue,
+                color.alpha,
+            );
+            canvas.context.set_line_width(width);
+            canvas.context.new_path();
+            path.append_to(&canvas.context);
+            canvas
+                .context
+                .stroke()
+                .map_err(|error| mlua::Error::runtime(format!(
+                    "canvas:stroke failed: {error}"
+                )))
+        });
         methods.add_method(
             "text",
             |_, canvas, (x, y, text, font_size, r, g, b, a): (f64, f64, String, f64, f64, f64, f64, f64)| {

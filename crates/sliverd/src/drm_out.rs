@@ -413,6 +413,42 @@ mod tests {
     }
 
     #[test]
+    fn lua_canvas_strokes_a_reusable_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("stroke.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local path = sliver.path({
+                { "move_to", 10, 10 },
+                { "line_to", 50, 10 },
+                { "line_to", 50, 30 },
+                { "line_to", 10, 30 },
+                { "close" },
+            })
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:stroke(path, 4, "#ff0000")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the stroked path")?;
+        assert_eq!(frame.rgba_at(30, 10), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(30, 20), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
     fn lua_canvas_shapes_text_with_pango() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("text.lua");
