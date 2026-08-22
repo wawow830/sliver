@@ -1155,6 +1155,8 @@ dependencies = [
  "evdev",
  "libc",
  "mlua",
+ "pango",
+ "pangocairo",
  "sliver-core",
  "tempfile",
 ]

@@ -84,5 +84,45 @@ impl UserData for Canvas {
                     )))
             },
         );
+        methods.add_method(
+            "text",
+            |_, canvas, (x, y, text, font_size, r, g, b, a): (f64, f64, String, f64, f64, f64, f64, f64)| {
+                if canvas.invalidated.get() {
+                    return Err(mlua::Error::runtime(
+                        "canvas:text cannot be called after canvas invalidation",
+                    ));
+                }
+                if !x.is_finite() || !y.is_finite() {
+                    return Err(mlua::Error::runtime(
+                        "canvas:text coordinates must be finite",
+                    ));
+                }
+                if !font_size.is_finite() || font_size <= 0.0 {
+                    return Err(mlua::Error::runtime(
+                        "canvas:text font size must be finite and positive",
+                    ));
+                }
+                for (name, value) in [("red", r), ("green", g), ("blue", b), ("alpha", a)] {
+                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                        return Err(mlua::Error::runtime(format!(
+                            "canvas:text {name} must be between 0.0 and 1.0"
+                        )));
+                    }
+                }
+
+                let layout = pangocairo::functions::create_layout(&canvas.context);
+                layout.set_text(&text);
+                let mut font = pango::FontDescription::from_string("Sans");
+                font.set_absolute_size(font_size * f64::from(pango::SCALE));
+                layout.set_font_description(Some(&font));
+                canvas.context.set_operator(cairo::Operator::Over);
+                canvas.context.set_source_rgba(r, g, b, a);
+                canvas.context.move_to(x, y);
+                pangocairo::functions::show_layout(&canvas.context, &layout);
+                canvas.context.status().map_err(|error| {
+                    mlua::Error::runtime(format!("canvas:text drawing failed: {error}"))
+                })
+            },
+        );
     }
 }

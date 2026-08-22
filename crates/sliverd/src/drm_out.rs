@@ -349,6 +349,36 @@ mod tests {
     }
 
     #[test]
+    fn lua_canvas_shapes_text_with_pango() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("text.lua");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:text(100, 5, "Lua", 28, 1, 1, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the text")?;
+        let shaped_pixel_exists =
+            (5..50).any(|y| (100..180).any(|x| frame.rgba_at(x, y) != [0, 0, 0, 255]));
+        assert!(shaped_pixel_exists, "Pango did not draw any text pixels");
+        Ok(())
+    }
+
+    #[test]
     fn live_toml_apply_and_widget_press_cross_the_hardware_seam() -> Result<()> {
         let initial = sliver_core::parse_config(
             r##"
