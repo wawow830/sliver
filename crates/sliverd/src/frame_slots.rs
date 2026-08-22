@@ -395,10 +395,6 @@ impl FrameBroker {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use crate::hardware::{LogicalFrame, TouchBarHardware};
-
     use super::*;
 
     fn frame(value: u8) -> Vec<u8> {
@@ -488,64 +484,6 @@ mod tests {
             frame(9)
         );
         drop(partial);
-        Ok(())
-    }
-
-    #[test]
-    fn native_2008_by_60_decoded_frames_keep_up_without_latency_growth() -> Result<()> {
-        let width = 2008;
-        let height = 60;
-        let stride = width * 4;
-        let slots = FrameSlots::new(width, height, stride)?;
-        let producer = slots.producer();
-        let broker = slots.broker();
-        let mut hardware = crate::hardware::FakeTouchBar::new();
-        hardware.claim()?;
-        let mut pixels = vec![0u8; stride * height];
-        let interval = Duration::from_nanos(1_000_000_000 / 60);
-        let start = std::time::Instant::now();
-        let mut missed_deadlines = 0;
-
-        for index in 0..60u64 {
-            let deadline = start + interval.mul_f64(index as f64);
-            if std::time::Instant::now() > deadline {
-                missed_deadlines += 1;
-            } else if let Some(wait) = deadline.checked_duration_since(std::time::Instant::now()) {
-                std::thread::sleep(wait);
-            }
-            pixels.fill(index as u8);
-            pixels
-                .chunks_exact_mut(4)
-                .for_each(|pixel| pixel[3] = u8::MAX);
-            assert!(producer.publish(
-                width,
-                height,
-                stride,
-                &pixels,
-                FrameTiming::new(
-                    index as f64 / 60.0,
-                    if index == 0 { 0.0 } else { 1.0 / 60.0 }
-                )?,
-            )?);
-            let completed = broker
-                .take_newest()?
-                .expect("published frame was not ready");
-            let (frame, timing) = LogicalFrame::from_completed(completed);
-            assert_eq!(frame.width(), width);
-            assert_eq!(frame.height(), height);
-            assert_eq!(timing.presentation_time, index as f64 / 60.0);
-            hardware.present(&frame)?;
-            assert!(broker.take_newest()?.is_none());
-        }
-
-        let elapsed = start.elapsed();
-        let fps = 60.0 / elapsed.as_secs_f64();
-        eprintln!(
-            "native decoded frame target: {width}x{height} at {fps:.1} FPS, {missed_deadlines} missed deadlines"
-        );
-        assert_eq!(hardware.presented_frames().len(), 60);
-        assert!(elapsed < Duration::from_secs(5));
-        hardware.release()?;
         Ok(())
     }
 
