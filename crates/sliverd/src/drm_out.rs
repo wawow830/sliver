@@ -377,6 +377,42 @@ mod tests {
     }
 
     #[test]
+    fn lua_canvas_fills_an_immutable_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("path.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local path = sliver.path({
+                { "move_to", 10, 5 },
+                { "line_to", 50, 5 },
+                { "line_to", 50, 25 },
+                { "line_to", 10, 25 },
+                { "close" },
+            })
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:fill(path, "#00ff00")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the reusable path")?;
+        assert_eq!(frame.rgba_at(20, 10), [0, 255, 0, 255]);
+        assert_eq!(frame.rgba_at(60, 10), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
     fn lua_canvas_shapes_text_with_pango() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("text.lua");

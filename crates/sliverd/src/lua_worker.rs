@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use mlua::{Function, HookTriggers, Lua, MultiValue, Table, Value, VmState};
 
 use crate::hardware::LogicalFrame;
-use crate::lua_canvas::Canvas;
+use crate::lua_canvas::{create_path, Canvas};
 
 pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
@@ -302,6 +302,8 @@ fn install_v1_module(lua: &Lua) -> mlua::Result<Rc<Cell<bool>>> {
         loaded_by_require.set(true);
         let module = lua.create_table()?;
         module.set("api_version", 1)?;
+        let path = lua.create_function(create_path)?;
+        module.set("path", path)?;
         Ok(module)
     })?;
     let package: Table = lua.globals().get("package")?;

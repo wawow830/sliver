@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use cairo::Context;
-use mlua::{MultiValue, UserData, UserDataMethods, Value};
+use mlua::{AnyUserData, MultiValue, Table, UserData, UserDataMethods, Value};
 
 #[derive(Clone, Copy)]
 struct Color {
@@ -9,6 +9,91 @@ struct Color {
     green: f64,
     blue: f64,
     alpha: f64,
+}
+
+enum PathCommand {
+    MoveTo(f64, f64),
+    LineTo(f64, f64),
+    CurveTo(f64, f64, f64, f64, f64, f64),
+    Close,
+}
+
+pub(crate) struct Path {
+    commands: Vec<PathCommand>,
+}
+
+impl Path {
+    fn from_table(commands: &Table) -> mlua::Result<Self> {
+        let mut path = Vec::with_capacity(commands.raw_len());
+        for value in commands.sequence_values::<Table>() {
+            let command = value?;
+            let name: String = command.get(1)?;
+            match name.as_str() {
+                "move_to" => path.push(PathCommand::MoveTo(
+                    path_number(&command, 2, "x")?,
+                    path_number(&command, 3, "y")?,
+                )),
+                "line_to" => path.push(PathCommand::LineTo(
+                    path_number(&command, 2, "x")?,
+                    path_number(&command, 3, "y")?,
+                )),
+                "curve_to" => path.push(PathCommand::CurveTo(
+                    path_number(&command, 2, "x1")?,
+                    path_number(&command, 3, "y1")?,
+                    path_number(&command, 4, "x2")?,
+                    path_number(&command, 5, "y2")?,
+                    path_number(&command, 6, "x3")?,
+                    path_number(&command, 7, "y3")?,
+                )),
+                "close" => path.push(PathCommand::Close),
+                _ => {
+                    return Err(mlua::Error::runtime(format!(
+                        "sliver.path: unknown command {name:?}"
+                    )));
+                }
+            }
+        }
+        Ok(Self { commands: path })
+    }
+
+    fn append_to(&self, context: &Context) {
+        for command in &self.commands {
+            match command {
+                PathCommand::MoveTo(x, y) => context.move_to(*x, *y),
+                PathCommand::LineTo(x, y) => context.line_to(*x, *y),
+                PathCommand::CurveTo(x1, y1, x2, y2, x3, y3) => {
+                    context.curve_to(*x1, *y1, *x2, *y2, *x3, *y3)
+                }
+                PathCommand::Close => context.close_path(),
+            }
+        }
+    }
+}
+
+impl UserData for Path {}
+
+fn path_number(command: &Table, index: i64, name: &str) -> mlua::Result<f64> {
+    let value: Value = command.get(index)?;
+    let value = match value {
+        Value::Integer(value) => value as f64,
+        Value::Number(value) => value,
+        value => {
+            return Err(mlua::Error::runtime(format!(
+                "sliver.path: {name} must be a number, got {}",
+                value.type_name()
+            )));
+        }
+    };
+    if !value.is_finite() {
+        return Err(mlua::Error::runtime(format!(
+            "sliver.path: {name} must be finite"
+        )));
+    }
+    Ok(value)
+}
+
+pub(crate) fn create_path(lua: &mlua::Lua, commands: Table) -> mlua::Result<AnyUserData> {
+    lua.create_userdata(Path::from_table(&commands)?)
 }
 
 pub(crate) struct Canvas {
@@ -222,6 +307,43 @@ impl UserData for Canvas {
                 .fill()
                 .map_err(|error| mlua::Error::runtime(format!(
                     "canvas:rectangle fill failed: {error}"
+                )))
+        });
+        methods.add_method("fill", |_, canvas, args: MultiValue| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:fill cannot be called after canvas invalidation",
+                ));
+            }
+            let values = args.into_vec();
+            if values.len() < 2 {
+                return Err(mlua::Error::runtime(
+                    "canvas:fill needs a path and a color",
+                ));
+            }
+            let path = match &values[0] {
+                Value::UserData(path) => path.borrow::<Path>()?,
+                value => {
+                    return Err(mlua::Error::runtime(format!(
+                        "canvas:fill path must be a sliver path, got {}",
+                        value.type_name()
+                    )));
+                }
+            };
+            let color = Canvas::parse_color(&values[1..])?;
+            canvas.context.set_source_rgba(
+                color.red,
+                color.green,
+                color.blue,
+                color.alpha,
+            );
+            canvas.context.new_path();
+            path.append_to(&canvas.context);
+            canvas
+                .context
+                .fill()
+                .map_err(|error| mlua::Error::runtime(format!(
+                    "canvas:fill failed: {error}"
                 )))
         });
         methods.add_method(
