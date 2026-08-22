@@ -12,7 +12,7 @@ use mlua::{
 };
 
 use crate::hardware::{
-    ConsumerKey, InputState, InputTransition, KeyboardKey, LogicalFrame, Modifier, ObservedKey,
+    output_key_metadata, InputState, InputTransition, LogicalFrame, Modifier, ObservedKey,
     OutputKey, TouchEvent, TouchPhase,
 };
 use crate::lua_canvas::{create_path, Canvas};
@@ -860,43 +860,13 @@ impl UserData for LuaKey {}
 fn create_key_constants(lua: &Lua) -> mlua::Result<Table> {
     let keys = lua.create_table()?;
     let keyboard = lua.create_table()?;
-    for (name, key) in [
-        ("escape", KeyboardKey::Escape),
-        ("f1", KeyboardKey::F1),
-        ("f2", KeyboardKey::F2),
-        ("f3", KeyboardKey::F3),
-        ("f4", KeyboardKey::F4),
-        ("f5", KeyboardKey::F5),
-        ("f6", KeyboardKey::F6),
-        ("f7", KeyboardKey::F7),
-        ("f8", KeyboardKey::F8),
-        ("f9", KeyboardKey::F9),
-        ("f10", KeyboardKey::F10),
-        ("f11", KeyboardKey::F11),
-        ("f12", KeyboardKey::F12),
-        ("left_ctrl", KeyboardKey::LeftCtrl),
-        ("right_ctrl", KeyboardKey::RightCtrl),
-        ("left_alt", KeyboardKey::LeftAlt),
-        ("right_alt", KeyboardKey::RightAlt),
-        ("left_shift", KeyboardKey::LeftShift),
-        ("right_shift", KeyboardKey::RightShift),
-        ("left_super", KeyboardKey::LeftSuper),
-        ("right_super", KeyboardKey::RightSuper),
-    ] {
-        keyboard.set(name, lua.create_userdata(LuaKey(OutputKey::Keyboard(key)))?)?;
-    }
     let consumer = lua.create_table()?;
-    for (name, key) in [
-        ("brightness_down", ConsumerKey::BrightnessDown),
-        ("brightness_up", ConsumerKey::BrightnessUp),
-        ("previous", ConsumerKey::Previous),
-        ("play_pause", ConsumerKey::PlayPause),
-        ("next", ConsumerKey::Next),
-        ("mute", ConsumerKey::Mute),
-        ("volume_down", ConsumerKey::VolumeDown),
-        ("volume_up", ConsumerKey::VolumeUp),
-    ] {
-        consumer.set(name, lua.create_userdata(LuaKey(OutputKey::Consumer(key)))?)?;
+    for metadata in output_key_metadata() {
+        let table = match metadata.key {
+            OutputKey::Keyboard(_) => &keyboard,
+            OutputKey::Consumer(_) => &consumer,
+        };
+        table.set(metadata.name, lua.create_userdata(LuaKey(metadata.key))?)?;
     }
     keys.set("keyboard", keyboard)?;
     keys.set("consumer", consumer)?;
@@ -1099,16 +1069,11 @@ fn key_event_table(lua: &Lua, transition: &InputTransition) -> mlua::Result<Tabl
 }
 
 fn modifier_name(modifier: Modifier) -> &'static str {
-    match modifier {
-        Modifier::LeftCtrl => "left_ctrl",
-        Modifier::RightCtrl => "right_ctrl",
-        Modifier::LeftAlt => "left_alt",
-        Modifier::RightAlt => "right_alt",
-        Modifier::LeftShift => "left_shift",
-        Modifier::RightShift => "right_shift",
-        Modifier::LeftSuper => "left_super",
-        Modifier::RightSuper => "right_super",
-    }
+    output_key_metadata()
+        .iter()
+        .find(|metadata| metadata.modifier == Some(modifier))
+        .map(|metadata| metadata.name)
+        .expect("every modifier has output key metadata")
 }
 
 fn input_state_table(lua: &Lua, state: InputState) -> mlua::Result<Table> {
@@ -1137,17 +1102,8 @@ fn touch_event_table(lua: &Lua, event: &TouchEvent) -> mlua::Result<Table> {
     table.set("y", event.y)?;
 
     let modifiers = lua.create_table()?;
-    for (name, modifier) in [
-        ("left_ctrl", Modifier::LeftCtrl),
-        ("right_ctrl", Modifier::RightCtrl),
-        ("left_alt", Modifier::LeftAlt),
-        ("right_alt", Modifier::RightAlt),
-        ("left_shift", Modifier::LeftShift),
-        ("right_shift", Modifier::RightShift),
-        ("left_super", Modifier::LeftSuper),
-        ("right_super", Modifier::RightSuper),
-    ] {
-        modifiers.set(name, event.modifiers.is_active(modifier))?;
+    for modifier in Modifier::ALL {
+        modifiers.set(modifier_name(modifier), event.modifiers.is_active(modifier))?;
     }
     table.set("modifiers", modifiers)?;
     if let Some(pressure) = event.pressure {
