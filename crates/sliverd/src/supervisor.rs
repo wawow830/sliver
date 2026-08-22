@@ -1413,7 +1413,7 @@ mod tests {
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
-    use super::{serve_connection, serve_for_test, Supervisor};
+    use super::{serve_connection, serve_for_test, PreparedPathState, Supervisor};
 
     fn active_local_logind(session_id: &str) -> (FakeLogind, libc::uid_t) {
         let uid = unsafe { libc::getuid() };
