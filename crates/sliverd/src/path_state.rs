@@ -73,7 +73,10 @@ impl PreparedPathState {
         })?;
         self.temp_file.take();
 
-        sync_directory(state_directory(&self.state_file))
+        if let Err(error) = sync_directory(state_directory(&self.state_file)) {
+            eprintln!("selected-path directory sync failed after commit: {error:#}");
+        }
+        Ok(())
     }
 }
 

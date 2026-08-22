@@ -18,6 +18,19 @@ fn missing_config_path_is_a_usage_error() {
 }
 
 #[test]
+fn help_and_version_are_conventional() {
+    for flag in ["--help", "--version"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_sliver"))
+            .arg(flag)
+            .output()
+            .expect("failed to run sliver informational flag");
+        assert!(output.status.success(), "{flag}: {:?}", output.status);
+        assert!(!output.stdout.is_empty(), "{flag} produced no output");
+        assert!(output.stderr.is_empty(), "{flag} wrote to stderr");
+    }
+}
+
+#[test]
 fn invalid_usage_and_supervisor_failures_use_distinct_statuses() {
     let directory = tempfile::tempdir().expect("failed to create temporary directory");
     let source = directory.path().join("config.lua");

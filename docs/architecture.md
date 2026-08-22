@@ -167,3 +167,18 @@ Sliver cannot own the panel simultaneously.
 
 Button/label actions execute with the Sliver user's privileges through
 `sh -c`. Configs must therefore be treated as executable content.
+
+## Lua apply transaction
+
+`sliver FILE` sends an absolute, lexically normalized path to the per-user
+supervisor. The supervisor starts a fresh Lua worker and waits for its first
+complete frame before changing the active frame or `$XDG_STATE_HOME/sliver/config-path`.
+After both commit, it asks the replaced worker to stop. A rejected candidate
+leaves the active worker, frame, and selected path unchanged. Sliver does not
+watch the source or imported files. Reapplying the same path starts a new
+worker.
+
+The transaction covers only state owned by Sliver. Lua runs as trusted user
+code while staging. Filesystem writes, child processes, network requests, and
+native-module effects happen immediately and cannot be rolled back when an
+apply fails.
