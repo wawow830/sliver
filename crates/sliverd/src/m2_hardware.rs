@@ -977,20 +977,8 @@ impl M2TouchBar {
                 None
             }
         };
-        self.keyboard = match KeyboardInput::open() {
-            Ok(keyboard) => Some(keyboard),
-            Err(e) => {
-                eprintln!("fn: can't find keyboard: {e}");
-                None
-            }
-        };
-        self.fn_emitter = match FnEmitter::new() {
-            Ok(emitter) => Some(emitter),
-            Err(e) => {
-                eprintln!("fn: can't create virtual keyboard: {e:#}");
-                None
-            }
-        };
+        self.keyboard = Some(KeyboardInput::open().context("opening internal keyboard")?);
+        self.fn_emitter = Some(FnEmitter::new().context("creating Sliver Keyboard")?);
         Ok(())
     }
 
