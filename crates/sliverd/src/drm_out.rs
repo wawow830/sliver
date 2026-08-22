@@ -449,6 +449,153 @@ mod tests {
     }
 
     #[test]
+    fn lua_canvas_transforms_and_restores_drawing_state() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("transform.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:save()
+                    canvas:translate(10, 0)
+                    canvas:scale(2, 1)
+                    canvas:rectangle(0, 0, 10, 10, "#ff0000")
+                    canvas:restore()
+                    canvas:rectangle(0, 0, 5, 5, "#0000ff")
+                    canvas:save()
+                    canvas:translate(70, 10)
+                    canvas:rotate(math.pi / 2)
+                    canvas:rectangle(0, 0, 10, 5, "#00ff00")
+                    canvas:restore()
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the transformed frame")?;
+        assert_eq!(frame.rgba_at(2, 2), [0, 0, 255, 255]);
+        assert_eq!(frame.rgba_at(15, 5), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(30, 5), [0, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(67, 15), [0, 255, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_applies_alpha_and_restores_it() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("alpha.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:save()
+                    canvas:alpha(0.5)
+                    canvas:rectangle(0, 0, 20, 20, "#ff0000")
+                    canvas:restore()
+                    canvas:rectangle(20, 0, 20, 20, "#0000ff")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the alpha frame")?;
+        assert_eq!(frame.rgba_at(10, 10), [128, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(30, 10), [0, 0, 255, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_supports_source_over_and_source_replacement() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("operators.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, "#ffffff")
+                    canvas:alpha(0.5)
+                    canvas:operator("source")
+                    canvas:rectangle(0, 0, 20, 20, "#ff0000")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the composited frame")?;
+        let pixel = frame.rgba_at(10, 10);
+        assert!(pixel[0] > 0, "source color was not written: {pixel:?}");
+        assert_eq!(pixel[1], 0);
+        assert_eq!(pixel[2], 0);
+        assert!(pixel[3] < 200, "source replacement retained the destination alpha: {pixel:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_clips_to_a_reusable_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("clip.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local clip = sliver.path({
+                { "move_to", 10, 10 },
+                { "line_to", 30, 10 },
+                { "line_to", 30, 30 },
+                { "line_to", 10, 30 },
+                { "close" },
+            })
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:clip(clip)
+                    canvas:rectangle(0, 0, 40, 40, "#ff0000")
+                end,
+            }
+            "##,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        let frame = hardware
+            .presented_frames()
+            .first()
+            .context("worker did not present the clipped frame")?;
+        assert_eq!(frame.rgba_at(20, 20), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(5, 20), [0, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(35, 20), [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[test]
     fn lua_canvas_shapes_text_with_pango() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("text.lua");

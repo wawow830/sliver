@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use cairo::Context;
 use mlua::{AnyUserData, MultiValue, Table, UserData, UserDataMethods, Value};
@@ -99,6 +99,8 @@ pub(crate) fn create_path(lua: &mlua::Lua, commands: Table) -> mlua::Result<AnyU
 pub(crate) struct Canvas {
     context: Context,
     invalidated: Cell<bool>,
+    alpha: Cell<f64>,
+    saved: RefCell<Vec<f64>>,
 }
 
 impl Canvas {
@@ -106,6 +108,8 @@ impl Canvas {
         Self {
             context: context.clone(),
             invalidated: Cell::new(false),
+            alpha: Cell::new(1.0),
+            saved: RefCell::new(Vec::new()),
         }
     }
 
@@ -202,6 +206,21 @@ impl Canvas {
         })
     }
 
+    fn status(context: &Context, operation: &str) -> mlua::Result<()> {
+        context
+            .status()
+            .map_err(|error| mlua::Error::runtime(format!("canvas:{operation} failed: {error}")))
+    }
+
+    fn set_source(&self, color: Color) {
+        self.context.set_source_rgba(
+            color.red,
+            color.green,
+            color.blue,
+            color.alpha * self.alpha.get(),
+        );
+    }
+
     fn parse_color(values: &[Value]) -> mlua::Result<Color> {
         let Some(first) = values.first() else {
             return Err(mlua::Error::runtime("canvas:color is missing"));
@@ -294,12 +313,7 @@ impl UserData for Canvas {
             Canvas::validate_geometry(x, y, width, height)?;
             let color = Canvas::parse_color(&values[4..])?;
 
-            canvas.context.set_source_rgba(
-                color.red,
-                color.green,
-                color.blue,
-                color.alpha,
-            );
+            canvas.set_source(color);
             canvas.context.new_path();
             canvas.context.rectangle(x, y, width, height);
             canvas
@@ -331,12 +345,7 @@ impl UserData for Canvas {
                 }
             };
             let color = Canvas::parse_color(&values[1..])?;
-            canvas.context.set_source_rgba(
-                color.red,
-                color.green,
-                color.blue,
-                color.alpha,
-            );
+            canvas.set_source(color);
             canvas.context.new_path();
             path.append_to(&canvas.context);
             canvas
@@ -345,6 +354,32 @@ impl UserData for Canvas {
                 .map_err(|error| mlua::Error::runtime(format!(
                     "canvas:fill failed: {error}"
                 )))
+        });
+        methods.add_method("clip", |_, canvas, args: MultiValue| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:clip cannot be called after canvas invalidation",
+                ));
+            }
+            let values = args.into_vec();
+            if values.len() != 1 {
+                return Err(mlua::Error::runtime(
+                    "canvas:clip needs exactly one path",
+                ));
+            }
+            let path = match &values[0] {
+                Value::UserData(path) => path.borrow::<Path>()?,
+                value => {
+                    return Err(mlua::Error::runtime(format!(
+                        "canvas:clip path must be a sliver path, got {}",
+                        value.type_name()
+                    )));
+                }
+            };
+            canvas.context.new_path();
+            path.append_to(&canvas.context);
+            canvas.context.clip();
+            Canvas::status(&canvas.context, "clip")
         });
         methods.add_method("stroke", |_, canvas, args: MultiValue| {
             if canvas.invalidated.get() {
@@ -383,12 +418,7 @@ impl UserData for Canvas {
                 ));
             }
             let color = Canvas::parse_color(&values[2..])?;
-            canvas.context.set_source_rgba(
-                color.red,
-                color.green,
-                color.blue,
-                color.alpha,
-            );
+            canvas.set_source(color);
             canvas.context.set_line_width(width);
             canvas.context.new_path();
             path.append_to(&canvas.context);
@@ -398,6 +428,115 @@ impl UserData for Canvas {
                 .map_err(|error| mlua::Error::runtime(format!(
                     "canvas:stroke failed: {error}"
                 )))
+        });
+        methods.add_method("save", |_, canvas, ()| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:save cannot be called after canvas invalidation",
+                ));
+            }
+            canvas
+                .context
+                .save()
+                .map_err(|error| mlua::Error::runtime(format!("canvas:save failed: {error}")))?;
+            canvas.saved.borrow_mut().push(canvas.alpha.get());
+            Ok(())
+        });
+        methods.add_method("restore", |_, canvas, ()| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:restore cannot be called after canvas invalidation",
+                ));
+            }
+            if canvas.saved.borrow().is_empty() {
+                return Err(mlua::Error::runtime(
+                    "canvas:restore has no matching save",
+                ));
+            }
+            canvas.context.restore().map_err(|error| {
+                mlua::Error::runtime(format!("canvas:restore failed: {error}"))
+            })?;
+            let alpha = canvas
+                .saved
+                .borrow_mut()
+                .pop()
+                .expect("save stack was checked above");
+            canvas.alpha.set(alpha);
+            Ok(())
+        });
+        methods.add_method("translate", |_, canvas, (x, y): (f64, f64)| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:translate cannot be called after canvas invalidation",
+                ));
+            }
+            for (name, value) in [("x", x), ("y", y)] {
+                if !value.is_finite() {
+                    return Err(mlua::Error::runtime(format!(
+                        "canvas:translate {name} must be finite"
+                    )));
+                }
+            }
+            canvas.context.translate(x, y);
+            Canvas::status(&canvas.context, "translate")
+        });
+        methods.add_method("scale", |_, canvas, (x, y): (f64, f64)| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:scale cannot be called after canvas invalidation",
+                ));
+            }
+            for (name, value) in [("x", x), ("y", y)] {
+                if !value.is_finite() {
+                    return Err(mlua::Error::runtime(format!(
+                        "canvas:scale {name} must be finite"
+                    )));
+                }
+            }
+            canvas.context.scale(x, y);
+            Canvas::status(&canvas.context, "scale")
+        });
+        methods.add_method("rotate", |_, canvas, angle: f64| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:rotate cannot be called after canvas invalidation",
+                ));
+            }
+            if !angle.is_finite() {
+                return Err(mlua::Error::runtime(
+                    "canvas:rotate angle must be finite",
+                ));
+            }
+            canvas.context.rotate(angle);
+            Canvas::status(&canvas.context, "rotate")
+        });
+        methods.add_method("alpha", |_, canvas, alpha: f64| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:alpha cannot be called after canvas invalidation",
+                ));
+            }
+            Canvas::validate_channel("alpha", alpha)?;
+            canvas.alpha.set(alpha);
+            Ok(())
+        });
+        methods.add_method("operator", |_, canvas, name: String| {
+            if canvas.invalidated.get() {
+                return Err(mlua::Error::runtime(
+                    "canvas:operator cannot be called after canvas invalidation",
+                ));
+            }
+            let operator = match name.as_str() {
+                "source-over" => cairo::Operator::Over,
+                "source" | "source-replace" => cairo::Operator::Source,
+                _ => {
+                    return Err(mlua::Error::runtime(
+                        "canvas:operator accepts only source-over or source",
+                    ));
+                }
+            };
+            canvas.context.set_operator(operator);
+            Canvas::status(&canvas.context, "operator")
         });
         methods.add_method(
             "text",
