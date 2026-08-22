@@ -28,6 +28,7 @@ use crate::peer_credentials::PeerCredentials;
 use crate::recovery::{RecoveryRow, RecoveryState, RecoveryTouchResult};
 
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
+const RECOVERY_HOLD_SECONDS: f64 = 3.0;
 const REQUEST_QUEUE_CAPACITY: usize = 16;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
@@ -838,6 +839,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
+    fn recovery_deadline(&self) -> Option<f64> {
+        if self.recovery.is_some() || self.active.is_none() {
+            return None;
+        }
+        self.fn_hold_started
+            .map(|started| started + RECOVERY_HOLD_SECONDS)
+    }
+
+    fn recovery_due(&self, now: f64) -> bool {
+        self.recovery_deadline()
+            .is_some_and(|deadline| deadline <= now)
+    }
+
     fn route_hardware_event(&mut self, event: HardwareEvent, now: f64) -> Result<()> {
         match event {
             HardwareEvent::Touch(touch) => self.route_touch(touch),
@@ -871,13 +885,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
         self.check_worker_liveness()?;
         for event in events {
-            if matches!(event, HardwareEvent::Touch(_))
-                && self.recovery.is_none()
-                && self.active.is_some()
-                && self
-                    .fn_hold_started
-                    .is_some_and(|started| now - started >= 3.0)
-            {
+            if matches!(event, HardwareEvent::Touch(_)) && self.recovery_due(now) {
                 self.enter_recovery()?;
             }
             self.route_hardware_event(event, now)?;
@@ -898,12 +906,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             let touches = self.touch_queue.drain();
             self.drive_active(now, transitions, touches)?;
         }
-        if self.recovery.is_none()
-            && self.active.is_some()
-            && self
-                .fn_hold_started
-                .is_some_and(|started| now - started >= 3.0)
-        {
+        if self.recovery_due(now) {
             self.enter_recovery()?;
         }
         Ok(())
@@ -1050,10 +1053,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn poll_wait(&self, now: f64) -> Duration {
         let worker_deadline = self.next_timer_deadline;
-        let recovery_deadline = self
-            .fn_hold_started
-            .filter(|_| self.recovery.is_none())
-            .map(|started| started + 3.0);
+        let recovery_deadline = self.recovery_deadline();
         let deadline = match (worker_deadline, recovery_deadline) {
             (Some(worker), Some(recovery)) => Some(worker.min(recovery)),
             (Some(worker), None) => Some(worker),
