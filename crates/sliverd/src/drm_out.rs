@@ -743,6 +743,34 @@ mod tests {
     }
 
     #[test]
+    fn candidate_render_rejects_permanently_held_slots_with_bounded_error() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("candidate-pressure.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, "#0000ff")
+                end,
+            }
+            "##,
+        )?;
+        let crate::lua_worker::StagedLuaWorker { worker } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        let _held = worker.hold_slots_for_test();
+        let error = match worker.render_at(1.0, 0.0) {
+            Ok(_) => panic!("candidate render succeeded with permanently held slots"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("candidate frame could not be publish"));
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        Ok(())
+    }
+
+    #[test]
     fn dropped_lua_frame_does_not_poison_later_render_commands() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("dropped-frame.lua");
@@ -789,6 +817,74 @@ mod tests {
             [0, 0, 255, 255]
         );
         hardware.release()?;
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pending_lua_frame_retries_without_rerender_after_slots_free() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("pending-frame.lua");
+        let log = directory.path().join("pending-renders");
+        std::fs::write(
+            &source,
+            format!(
+                r##"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        if event.phase == "down" then sliver.redraw() end
+                    end,
+                    render = function(canvas)
+                        local file = assert(io.open(log, "a"))
+                        file:write("render\n")
+                        file:close()
+                        canvas:rectangle(0, 0, 20, 20, "#0000ff")
+                    end,
+                }}
+                "##,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let crate::lua_worker::StagedLuaWorker { worker } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        worker.commit(0.0)?;
+        let mut held = worker.hold_slots_for_test();
+        let effects = worker.drive(
+            1.0,
+            0.0,
+            vec![TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 1.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }],
+        )?;
+        assert!(effects.frame.is_none());
+        drop(held.pop());
+        let effects = worker.drive(2.0, 0.0, Vec::new())?;
+        let frame = effects.frame.expect("pending frame was not retried");
+        assert_eq!(std::fs::read_to_string(log)?, "render\n");
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&frame.frame)?;
+        assert_eq!(
+            hardware
+                .presented_frames()
+                .last()
+                .context("pending frame was not presented")?
+                .rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        hardware.release()?;
+        drop(held);
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
         Ok(())
     }

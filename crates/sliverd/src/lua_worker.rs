@@ -37,6 +37,13 @@ struct RuntimeEffects {
     next_timer_deadline: Option<f64>,
 }
 
+struct PendingFrame {
+    frame: LogicalFrame,
+    timing: FrameTiming,
+}
+
+const PENDING_FRAME_RETRY_SECONDS: f64 = 0.005;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StopReason {
     Replaced,
@@ -64,6 +71,7 @@ enum WorkerCommand {
     #[allow(dead_code)]
     Render(f64, f64, mpsc::SyncSender<std::result::Result<(), String>>),
     Commit(f64, mpsc::SyncSender<std::result::Result<(), String>>),
+    RetryPending(f64, mpsc::SyncSender<std::result::Result<bool, String>>),
     PendingBacklight(mpsc::SyncSender<std::result::Result<Option<f64>, String>>),
     Drive(
         f64,
@@ -89,6 +97,8 @@ struct Runtime {
     source: PathBuf,
     controls: RuntimeControls,
     producer: FrameProducer,
+    pending_frame: Option<PendingFrame>,
+    pending_retry_deadline: Option<f64>,
 }
 
 struct CallbackRefs {
@@ -200,7 +210,30 @@ impl LuaWorker {
             .recv()
             .context("Lua owner thread exited while rendering")?
             .map_err(|error| anyhow!(error))?;
+        if let Some(frame) = self.take_frame()? {
+            return Ok(frame);
+        }
+        if !self.retry_pending(presentation_time)? {
+            return Err(anyhow!(
+                "candidate frame could not be published within bounded 50 ms slot wait"
+            ));
+        }
         self.take_frame()?.context("Lua worker published no frame")
+    }
+
+    fn retry_pending(&self, presentation_time: f64) -> Result<bool> {
+        let commands = self
+            .commands
+            .as_ref()
+            .context("Lua worker command channel is closed")?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        commands
+            .send(WorkerCommand::RetryPending(presentation_time, reply_tx))
+            .context("retrying a pending Lua frame")?;
+        reply_rx
+            .recv()
+            .context("Lua owner thread exited while retrying a frame")?
+            .map_err(|error| anyhow!(error))
     }
 
     #[cfg(test)]
@@ -380,17 +413,17 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
     loop {
         match commands.recv() {
             Ok(WorkerCommand::Render(presentation_time, delta, reply)) => {
-                let result = FrameTiming::new(presentation_time, delta)
-                    .map_err(|error| error.to_string())
-                    .and_then(|timing| {
-                        runtime
-                            .render_frame(presentation_time, delta)
-                            .and_then(|frame| runtime.publish_frame(&frame, timing).map(|_| ()))
-                    });
+                let result = runtime.render_and_queue(presentation_time, delta);
                 let _ = reply.send(result);
             }
             Ok(WorkerCommand::Commit(now_seconds, reply)) => {
                 let _ = reply.send(runtime.commit(now_seconds));
+            }
+            Ok(WorkerCommand::RetryPending(presentation_time, reply)) => {
+                let result = runtime
+                    .try_publish_pending(presentation_time)
+                    .map(|timing| timing.is_some());
+                let _ = reply.send(result);
             }
             Ok(WorkerCommand::PendingBacklight(reply)) => {
                 let _ = reply.send(Ok(runtime.pending_backlight()));
@@ -413,6 +446,49 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
 impl Runtime {
     fn pending_backlight(&self) -> Option<f64> {
         self.controls.pending_backlight.get()
+    }
+
+    fn render_and_queue(
+        &mut self,
+        presentation_time: f64,
+        delta: f64,
+    ) -> std::result::Result<(), String> {
+        let timing =
+            FrameTiming::new(presentation_time, delta).map_err(|error| error.to_string())?;
+        let frame = self.render_frame(presentation_time, delta)?;
+        self.pending_frame = Some(PendingFrame { frame, timing });
+        self.try_publish_pending(presentation_time)?;
+        Ok(())
+    }
+
+    fn try_publish_pending(
+        &mut self,
+        now_seconds: f64,
+    ) -> std::result::Result<Option<FrameTiming>, String> {
+        let Some(pending) = self.pending_frame.take() else {
+            self.pending_retry_deadline = None;
+            return Ok(None);
+        };
+        if self.publish_frame(&pending.frame, pending.timing)? {
+            self.pending_retry_deadline = None;
+            Ok(Some(pending.timing))
+        } else {
+            self.pending_frame = Some(pending);
+            self.pending_retry_deadline = Some(now_seconds + PENDING_FRAME_RETRY_SECONDS);
+            Ok(None)
+        }
+    }
+
+    fn next_deadline(&self) -> Option<f64> {
+        match (
+            self.controls.timers.borrow().next_deadline(),
+            self.pending_retry_deadline,
+        ) {
+            (Some(timer), Some(retry)) => Some(timer.min(retry)),
+            (Some(timer), None) => Some(timer),
+            (None, Some(retry)) => Some(retry),
+            (None, None) => None,
+        }
     }
 
     fn restore_backlight(&mut self, level: f64) -> std::result::Result<(), String> {
@@ -447,18 +523,13 @@ impl Runtime {
         let result = (|| {
             self.dispatch_touch(events)?;
             self.run_due_timers(now_seconds)?;
-            let frame = if self.controls.redraw_pending.replace(false) {
+            if self.controls.redraw_pending.replace(false) {
                 let frame = self.render_frame(now_seconds, delta)?;
-                if self.publish_frame(&frame, timing)? {
-                    Some(timing)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+                self.pending_frame = Some(PendingFrame { frame, timing });
+            }
+            let frame = self.try_publish_pending(now_seconds)?;
             let backlight = self.controls.pending_backlight.take();
-            let next_timer_deadline = self.controls.timers.borrow().next_deadline();
+            let next_timer_deadline = self.next_deadline();
             Ok(RuntimeEffects {
                 frame,
                 backlight,
@@ -602,6 +673,8 @@ impl Runtime {
             source: source.to_path_buf(),
             controls,
             producer,
+            pending_frame: None,
+            pending_retry_deadline: None,
         };
         Ok(runtime)
     }
