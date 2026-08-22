@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{ensure, Result};
@@ -22,7 +22,10 @@ impl FrameTiming {
             presentation_time.is_finite(),
             "frame presentation time must be finite"
         );
-        ensure!(delta.is_finite() && delta >= 0.0, "frame delta must be finite and non-negative");
+        ensure!(
+            delta.is_finite() && delta >= 0.0,
+            "frame delta must be finite and non-negative"
+        );
         Ok(Self {
             presentation_time,
             delta,
@@ -100,7 +103,10 @@ impl FrameSlots {
     pub(crate) fn new(width: usize, height: usize, stride: usize) -> Result<Self> {
         ensure!(width > 0, "frame width must be positive");
         ensure!(height > 0, "frame height must be positive");
-        ensure!(stride >= width.saturating_mul(4), "frame stride is too small");
+        ensure!(
+            stride >= width.saturating_mul(4),
+            "frame stride is too small"
+        );
         let slot_bytes = stride
             .checked_mul(height)
             .ok_or_else(|| anyhow::anyhow!("frame slot size overflows usize"))?;
@@ -149,8 +155,7 @@ impl FrameProducer {
         timing: FrameTiming,
     ) -> Result<bool> {
         ensure!(
-            (width, height, stride)
-                == (self.inner.width, self.inner.height, self.inner.stride),
+            (width, height, stride) == (self.inner.width, self.inner.height, self.inner.stride),
             "frame dimensions do not match the shared slots"
         );
         ensure!(
@@ -185,12 +190,7 @@ impl FrameProducer {
                     .min_by_key(|(_, slot)| slot.sequence.load(Ordering::Acquire))
                     .and_then(|(index, slot)| {
                         slot.state
-                            .compare_exchange(
-                                READY,
-                                WRITING,
-                                Ordering::Acquire,
-                                Ordering::Relaxed,
-                            )
+                            .compare_exchange(READY, WRITING, Ordering::Acquire, Ordering::Relaxed)
                             .ok()
                             .map(|_| index)
                     })
@@ -249,9 +249,9 @@ impl Drop for FrameWriter {
     fn drop(&mut self) {
         if !self.published {
             let slot = &self.inner.slots[self.index];
-            let _ = slot
-                .state
-                .compare_exchange(WRITING, FREE, Ordering::Release, Ordering::Relaxed);
+            let _ =
+                slot.state
+                    .compare_exchange(WRITING, FREE, Ordering::Release, Ordering::Relaxed);
             if let Ok(mut timing) = slot.timing.lock() {
                 *timing = None;
             }
@@ -284,9 +284,9 @@ impl FrameBroker {
 
         for (older_index, slot) in self.inner.slots.iter().enumerate() {
             if older_index != index {
-                let _ = slot
-                    .state
-                    .compare_exchange(READY, FREE, Ordering::AcqRel, Ordering::Relaxed);
+                let _ =
+                    slot.state
+                        .compare_exchange(READY, FREE, Ordering::AcqRel, Ordering::Relaxed);
             }
         }
 
@@ -319,6 +319,10 @@ impl FrameBroker {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use crate::hardware::{LogicalFrame, TouchBarHardware};
+
     use super::*;
 
     fn frame(value: u8) -> Vec<u8> {
@@ -356,15 +360,73 @@ mod tests {
         partial.write_bytes(&[7, 7, 7, 7])?;
 
         assert!(broker.take_newest()?.is_none());
-        assert!(producer.publish(
-            2,
-            1,
-            8,
-            &frame(9),
-            FrameTiming::new(2.0, 0.0)?,
-        )?);
-        assert_eq!(broker.take_newest()?.expect("complete slot stalled").pixels(), frame(9));
+        assert!(producer.publish(2, 1, 8, &frame(9), FrameTiming::new(2.0, 0.0)?,)?);
+        assert_eq!(
+            broker
+                .take_newest()?
+                .expect("complete slot stalled")
+                .pixels(),
+            frame(9)
+        );
         drop(partial);
+        Ok(())
+    }
+
+    #[test]
+    fn native_2008_by_60_decoded_frames_keep_up_without_latency_growth() -> Result<()> {
+        let width = 2008;
+        let height = 60;
+        let stride = width * 4;
+        let slots = FrameSlots::new(width, height, stride)?;
+        let producer = slots.producer();
+        let broker = slots.broker();
+        let mut hardware = crate::hardware::FakeTouchBar::new();
+        hardware.claim()?;
+        let mut pixels = vec![0u8; stride * height];
+        let interval = Duration::from_nanos(1_000_000_000 / 60);
+        let start = std::time::Instant::now();
+        let mut missed_deadlines = 0;
+
+        for index in 0..60u64 {
+            let deadline = start + interval.mul_f64(index as f64);
+            if std::time::Instant::now() > deadline {
+                missed_deadlines += 1;
+            } else if let Some(wait) = deadline.checked_duration_since(std::time::Instant::now()) {
+                std::thread::sleep(wait);
+            }
+            pixels.fill(index as u8);
+            pixels
+                .chunks_exact_mut(4)
+                .for_each(|pixel| pixel[3] = u8::MAX);
+            assert!(producer.publish(
+                width,
+                height,
+                stride,
+                &pixels,
+                FrameTiming::new(
+                    index as f64 / 60.0,
+                    if index == 0 { 0.0 } else { 1.0 / 60.0 }
+                )?,
+            )?);
+            let completed = broker
+                .take_newest()?
+                .expect("published frame was not ready");
+            let (frame, timing) = LogicalFrame::from_completed(completed);
+            assert_eq!(frame.width(), width);
+            assert_eq!(frame.height(), height);
+            assert_eq!(timing.presentation_time, index as f64 / 60.0);
+            hardware.present(&frame)?;
+            assert!(broker.take_newest()?.is_none());
+        }
+
+        let elapsed = start.elapsed();
+        let fps = 60.0 / elapsed.as_secs_f64();
+        eprintln!(
+            "native decoded frame target: {width}x{height} at {fps:.1} FPS, {missed_deadlines} missed deadlines"
+        );
+        assert_eq!(hardware.presented_frames().len(), 60);
+        assert!(elapsed < Duration::from_secs(5));
+        hardware.release()?;
         Ok(())
     }
 
@@ -375,7 +437,9 @@ mod tests {
         let broker = slots.broker();
         std::thread::spawn(move || {
             let mut partial = producer.begin_write().expect("first slot was unavailable");
-            partial.write_bytes(&[3, 3, 3, 3]).expect("partial write failed");
+            partial
+                .write_bytes(&[3, 3, 3, 3])
+                .expect("partial write failed");
             std::mem::forget(partial);
         })
         .join()
@@ -383,14 +447,11 @@ mod tests {
 
         assert!(broker.take_newest()?.is_none());
         let producer = slots.producer();
-        assert!(producer.publish(
-            2,
-            1,
-            8,
-            &frame(5),
-            FrameTiming::new(5.0, 0.0)?,
-        )?);
-        assert_eq!(broker.take_newest()?.expect("broker stalled").pixels(), frame(5));
+        assert!(producer.publish(2, 1, 8, &frame(5), FrameTiming::new(5.0, 0.0)?,)?);
+        assert_eq!(
+            broker.take_newest()?.expect("broker stalled").pixels(),
+            frame(5)
+        );
         Ok(())
     }
 }

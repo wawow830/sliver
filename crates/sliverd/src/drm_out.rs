@@ -746,13 +746,13 @@ mod tests {
             &source,
             r#"
             local sliver = require("sliver.v1")
-            local image = sliver.image.new(
-                string.char(255, 0, 0, 255, 0, 0, 255, 255),
-                "rgba8",
-                2,
-                1,
-                8
-            )
+            local image = sliver.image.new {
+                data = string.char(255, 0, 0, 255, 0, 0, 255, 255),
+                format = "rgba8",
+                width = 2,
+                height = 1,
+                stride = 8,
+            }
             return {
                 api_version = 1,
                 render = function(canvas)
@@ -762,16 +762,19 @@ mod tests {
                         { x = 0, y = 0, width = 2, height = 1 },
                         "nearest"
                     )
+                    local pixels = string.char(0, 255, 0, 255, 99, 99, 99, 99)
                     canvas:raw_pixels(
-                        string.char(0, 255, 0, 255),
+                        pixels,
                         "bgra8",
                         1,
                         1,
-                        4,
+                        8,
                         { x = 0, y = 0, width = 1, height = 1 },
                         { x = 3, y = 0, width = 1, height = 1 },
                         "nearest"
                     )
+                    pixels = nil
+                    collectgarbage("collect")
                 end,
             }
             "#,
@@ -788,6 +791,80 @@ mod tests {
         assert_eq!(frame.rgba_at(0, 0), [255, 0, 0, 255]);
         assert_eq!(frame.rgba_at(1, 0), [0, 0, 255, 255]);
         assert_eq!(frame.rgba_at(3, 0), [0, 255, 0, 255]);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_keeps_image_premultiplication_private() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("alpha-image.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local image = sliver.image.new(string.char(255, 0, 0, 128), "rgba8", 1, 1, 4)
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:image(
+                        image,
+                        { x = 0, y = 0, width = 1, height = 1 },
+                        { x = 10, y = 10, width = 1, height = 1 },
+                        "nearest"
+                    )
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let frame = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .context("alpha image frame was not presented")?;
+        assert_eq!(frame.rgba_at(10, 10), [128, 0, 0, 255]);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_defaults_decoded_image_scaling_to_linear_filtering() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("linear-image.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local image = sliver.image.new(string.char(255, 0, 0, 255, 0, 0, 255, 255), "rgba8", 2, 1, 8)
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:image(
+                        image,
+                        { x = 0, y = 0, width = 2, height = 1 },
+                        { x = 0, y = 0, width = 4, height = 2 }
+                    )
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        let pixel = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .context("linear image frame was not presented")?
+            .rgba_at(2, 1);
+        assert!(
+            pixel[0] > 0 && pixel[2] > 0,
+            "default filter was not linear: {pixel:?}"
+        );
         supervisor.shutdown()?;
         Ok(())
     }

@@ -54,13 +54,7 @@ impl ImageSpec {
                 "sliver.image.new needs data, format, width, height, and stride",
             ));
         }
-        Self::from_parts(
-            &values[0],
-            &values[1],
-            &values[2],
-            &values[3],
-            &values[4],
-        )
+        Self::from_parts(&values[0], &values[1], &values[2], &values[3], &values[4])
     }
 
     fn from_table(table: &Table) -> mlua::Result<Self> {
@@ -264,7 +258,9 @@ impl Rect {
         let height = table_number(table, "height", 4, name)?;
         for (field, number) in [("x", x), ("y", y), ("width", width), ("height", height)] {
             if !number.is_finite() {
-                return Err(error(format!("canvas:{name} rectangle {field} must be finite")));
+                return Err(error(format!(
+                    "canvas:{name} rectangle {field} must be finite"
+                )));
             }
         }
         Ok(Self {
@@ -344,7 +340,11 @@ fn positive_integer(value: &Value, name: &str) -> mlua::Result<usize> {
     usize::try_from(*value)
         .ok()
         .filter(|value| *value > 0)
-        .ok_or_else(|| error(format!("sliver.image.new {name} must be a positive integer")))
+        .ok_or_else(|| {
+            error(format!(
+                "sliver.image.new {name} must be a positive integer"
+            ))
+        })
 }
 
 fn premultiply(channel: u8, alpha: u8) -> u8 {

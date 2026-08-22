@@ -119,11 +119,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
             worker,
             frame: staged_frame,
             pending_backlight,
-        } = LuaWorker::stage_with_backlight_at(
-            &selected_path,
-            current_backlight,
-            stage_time,
-        )?;
+        } = LuaWorker::stage_with_backlight_at(&selected_path, current_backlight, stage_time)?;
         let crate::lua_worker::TimedFrame {
             frame,
             timing: frame_timing,

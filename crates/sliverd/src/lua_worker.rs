@@ -9,7 +9,7 @@ use mlua::{
     Function, HookTriggers, Lua, MultiValue, Table, UserData, UserDataMethods, Value, VmState,
 };
 
-use crate::frame_slots::{FrameBroker, FrameSlots, FrameTiming, FrameProducer};
+use crate::frame_slots::{FrameBroker, FrameProducer, FrameSlots, FrameTiming};
 use crate::hardware::{LogicalFrame, Modifier, TouchEvent, TouchPhase};
 use crate::lua_canvas::{create_path, Canvas};
 use crate::lua_image::create_image;
@@ -181,7 +181,9 @@ impl LuaWorker {
         };
         match ready_rx.recv() {
             Ok(Ok(staged)) => {
-                let frame = worker.take_frame()?.context("Lua worker published no initial frame")?;
+                let frame = worker
+                    .take_frame()?
+                    .context("Lua worker published no initial frame")?;
                 Ok(StagedLuaWorker {
                     worker,
                     frame: TimedFrame {
@@ -253,7 +255,9 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))?;
         let frame = match effects.frame {
             Some(timing) => Some(TimedFrame {
-                frame: self.take_frame()?.context("Lua worker published no frame")?,
+                frame: self
+                    .take_frame()?
+                    .context("Lua worker published no frame")?,
                 timing,
             }),
             None => None,
@@ -341,18 +345,14 @@ fn owner_main(
     commands: mpsc::Receiver<WorkerCommand>,
     ready: mpsc::SyncSender<std::result::Result<StagedRuntime, String>>,
 ) {
-    let (runtime, frame) = match Runtime::load_and_render(
-        &source,
-        initial_backlight,
-        initial_time,
-        producer,
-    ) {
-        Ok(staged) => staged,
-        Err(error) => {
-            let _ = ready.send(Err(error));
-            return;
-        }
-    };
+    let (runtime, frame) =
+        match Runtime::load_and_render(&source, initial_backlight, initial_time, producer) {
+            Ok(staged) => staged,
+            Err(error) => {
+                let _ = ready.send(Err(error));
+                return;
+            }
+        };
     let timing = match FrameTiming::new(initial_time, 0.0) {
         Ok(timing) => timing,
         Err(error) => {
@@ -379,12 +379,10 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
     loop {
         match commands.recv() {
             Ok(WorkerCommand::Render(reply)) => {
-                let result = runtime
-                    .render_frame(0.0, 0.0)
-                    .and_then(|frame| {
-                        let timing = FrameTiming::new(0.0, 0.0).map_err(|error| error.to_string())?;
-                        runtime.publish_frame(&frame, timing).map(|_| ())
-                    });
+                let result = runtime.render_frame(0.0, 0.0).and_then(|frame| {
+                    let timing = FrameTiming::new(0.0, 0.0).map_err(|error| error.to_string())?;
+                    runtime.publish_frame(&frame, timing).map(|_| ())
+                });
                 let _ = reply.send(result);
             }
             Ok(WorkerCommand::Commit(now_seconds, reply)) => {
@@ -444,7 +442,8 @@ impl Runtime {
             self.run_due_timers(now_seconds)?;
             let frame = if self.controls.redraw_pending.replace(false) {
                 let frame = self.render_frame(now_seconds, delta)?;
-                let timing = FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
+                let timing =
+                    FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
                 self.publish_frame(&frame, timing)?;
                 Some(timing)
             } else {
@@ -819,10 +818,7 @@ fn validate_now(now_seconds: f64) -> std::result::Result<(), String> {
     }
 }
 
-fn validate_frame_timing(
-    presentation_time: f64,
-    delta: f64,
-) -> std::result::Result<(), String> {
+fn validate_frame_timing(presentation_time: f64, delta: f64) -> std::result::Result<(), String> {
     validate_now(presentation_time)?;
     if delta.is_finite() && delta >= 0.0 {
         Ok(())
