@@ -1043,10 +1043,6 @@ mod tests {
     }
 
     impl SharedFakeHardware {
-        fn new() -> (Self, Rc<RefCell<Vec<FakeKeyEvent>>>) {
-            Self::with_order(None)
-        }
-
         fn with_order(
             order_file: Option<std::path::PathBuf>,
         ) -> (Self, Rc<RefCell<Vec<FakeKeyEvent>>>) {
@@ -1115,6 +1111,13 @@ mod tests {
         }
 
         fn release(&mut self) -> Result<()> {
+            if let Some(path) = &self.order_file {
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?;
+                writeln!(file, "hardware-release")?;
+            }
             self.inner.release()
         }
     }
@@ -1237,7 +1240,8 @@ mod tests {
                 "#,
             )?;
             let state_file = directory.path().join("state/sliver/config-path");
-            let (hardware, synthetic) = SharedFakeHardware::new();
+            let order_file = directory.path().join("shutdown-order");
+            let (hardware, synthetic) = SharedFakeHardware::with_order(Some(order_file.clone()));
             let mut supervisor = Supervisor::new(hardware, state_file)?;
             supervisor.apply(&source)?;
             supervisor
@@ -1261,6 +1265,10 @@ mod tests {
                 drop(supervisor);
             }
             let events = synthetic.borrow().clone();
+            assert_eq!(
+                std::fs::read_to_string(order_file)?,
+                "key-up\nhardware-release\n"
+            );
             Ok(events)
         };
 
