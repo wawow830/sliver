@@ -132,6 +132,11 @@ LeftAlt up
 LeftCtrl up
 ```
 
+The hardware seam receives each synthetic sequence as one ordered batch. The
+M2 adapter submits that batch once to `VirtualDevice::emit`. A partial device
+write is handled as device loss by issue #14. This path does not retry,
+recreate, or roll back a partially written device.
+
 ## Live-apply socket
 
 Path:

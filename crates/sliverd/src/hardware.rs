@@ -288,6 +288,8 @@ pub(crate) trait TouchBarHardware {
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>>;
     fn input_state(&self) -> InputState;
     fn present(&mut self, frame: &LogicalFrame) -> Result<()>;
+    /// Sends the complete ordered sequence as one virtual-device batch.
+    /// Implementations must preserve slice order and must not split or delay it.
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()>;
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()>;
     fn get_backlight(&mut self) -> Result<f64>;
@@ -591,6 +593,54 @@ mod tests {
         assert_eq!(
             hardware.poll(Duration::ZERO)?,
             vec![HardwareEvent::Touch(touch)]
+        );
+        hardware.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn fake_key_batch_preserves_one_ordered_transaction() -> Result<()> {
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.emit_key_events(&[
+            SyntheticKeyEvent {
+                key: OutputKey::Keyboard(KeyboardKey::LeftCtrl),
+                active: true,
+            },
+            SyntheticKeyEvent {
+                key: OutputKey::Keyboard(KeyboardKey::F2),
+                active: true,
+            },
+            SyntheticKeyEvent {
+                key: OutputKey::Keyboard(KeyboardKey::F2),
+                active: false,
+            },
+            SyntheticKeyEvent {
+                key: OutputKey::Keyboard(KeyboardKey::LeftCtrl),
+                active: false,
+            },
+        ])?;
+
+        assert_eq!(
+            hardware.synthetic_transactions(),
+            &[vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]]
         );
         hardware.release()?;
         Ok(())
