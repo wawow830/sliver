@@ -748,16 +748,10 @@ fn function_key_events(index: usize, modifiers: ModifierState) -> io::Result<Vec
             "function-key index out of range",
         )
     })?;
-    Ok(tap_key_events(key, &modifier_output_keys(modifiers))
-        .into_iter()
-        .map(|event| {
-            InputEvent::new(
-                EventType::KEY,
-                output_key_code(event.key).code(),
-                i32::from(event.active),
-            )
-        })
-        .collect())
+    Ok(encode_synthetic_key_events(&tap_key_events(
+        key,
+        &modifier_output_keys(modifiers),
+    )))
 }
 
 /// One virtual keyboard shared by the Lua worker and the fixed Fn row.
@@ -795,21 +789,25 @@ impl KeyboardEmitter {
     }
 
     fn emit(&mut self, events: &[SyntheticKeyEvent]) -> io::Result<()> {
-        let events: Vec<_> = events
-            .iter()
-            .map(|event| {
-                InputEvent::new(
-                    EventType::KEY,
-                    output_key_code(event.key).code(),
-                    i32::from(event.active),
-                )
-            })
-            .collect();
+        let events = encode_synthetic_key_events(events);
         if !events.is_empty() {
             self.device.emit(&events)?;
         }
         Ok(())
     }
+}
+
+fn encode_synthetic_key_events(events: &[SyntheticKeyEvent]) -> Vec<InputEvent> {
+    events
+        .iter()
+        .map(|event| {
+            InputEvent::new(
+                EventType::KEY,
+                output_key_code(event.key).code(),
+                i32::from(event.active),
+            )
+        })
+        .collect()
 }
 
 fn output_key_code(key: OutputKey) -> Key {
