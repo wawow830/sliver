@@ -114,11 +114,12 @@ impl<H: TouchBarHardware> Supervisor<H> {
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
+        let stage_time = self.now_seconds();
         let StagedLuaWorker {
             worker,
             frame: staged_frame,
             pending_backlight,
-        } = LuaWorker::stage_with_backlight_at(&selected_path, current_backlight, 0.0)?;
+        } = LuaWorker::stage_with_backlight_at(&selected_path, current_backlight, stage_time)?;
         let frame = staged_frame.frame;
         self.poll_hardware(Duration::ZERO)?;
         let latest_backlight = self.hardware.get_backlight()?;
@@ -1139,6 +1140,71 @@ mod tests {
         assert_eq!(lines[0][1], 0.0);
         assert!(lines[1][0] > lines[0][0]);
         assert!((lines[1][1] - (1.0 - committed_at)).abs() < 0.002);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn reapplying_after_a_later_frame_keeps_timestamps_monotonic() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old-timing.lua");
+        let new_source = directory.path().join("new-timing.lua");
+        let old_log = directory.path().join("old-timing");
+        let new_log = directory.path().join("new-timing");
+        let config = |log: &std::path::Path, timer: bool| {
+            let timer = if timer {
+                "sliver.timer.after(0.01, function() sliver.redraw() end)"
+            } else {
+                ""
+            };
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local file_name = {log:?}
+                {timer}
+                return {{
+                    api_version = 1,
+                    render = function(_, time, delta)
+                        local file = assert(io.open(file_name, "a"))
+                        file:write(time, " ", delta, "\n")
+                        file:close()
+                    end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+                timer = timer,
+            )
+        };
+        std::fs::write(&old_source, config(&old_log, true))?;
+        std::fs::write(&new_source, config(&new_log, false))?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&old_source)?;
+        std::thread::sleep(Duration::from_millis(40));
+        let now = supervisor.now_seconds();
+        supervisor.step_at(now)?;
+        supervisor.apply(&new_source)?;
+
+        let parse = |path: &std::path::Path| -> Result<Vec<[f64; 2]>> {
+            std::fs::read_to_string(path)?
+                .lines()
+                .map(|line| {
+                    let values: Vec<_> = line
+                        .split_whitespace()
+                        .map(|value| value.parse::<f64>())
+                        .collect::<std::result::Result<_, _>>()?;
+                    anyhow::ensure!(values.len() == 2, "frame timing line had the wrong shape");
+                    Ok([values[0], values[1]])
+                })
+                .collect()
+        };
+        let old_frames = parse(&old_log)?;
+        let new_frames = parse(&new_log)?;
+        assert_eq!(old_frames.len(), 2);
+        assert_eq!(new_frames.len(), 1);
+        assert!(old_frames[1][0] >= old_frames[0][0]);
+        assert!(new_frames[0][0] >= old_frames[1][0]);
+        assert_eq!(new_frames[0][1], 0.0);
         supervisor.shutdown()?;
         Ok(())
     }
