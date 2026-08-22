@@ -104,10 +104,12 @@ impl SyntheticState {
                             });
                         }
                     }
-                    events.push(SyntheticKeyEvent {
-                        key: request.key,
-                        active: true,
-                    });
+                    if !is_modifier_key(request.key) || next.modifier_count(request.key) == 0 {
+                        events.push(SyntheticKeyEvent {
+                            key: request.key,
+                            active: true,
+                        });
+                    }
                     next.held.push((request.key, modifiers));
                 }
                 KeyOperation::Up => {
@@ -117,10 +119,12 @@ impl SyntheticState {
                         .position(|(key, _)| *key == request.key)
                         .context("synthetic key is not held")?;
                     let (_, modifiers) = next.held.remove(index);
-                    events.push(SyntheticKeyEvent {
-                        key: request.key,
-                        active: false,
-                    });
+                    if !is_modifier_key(request.key) || next.modifier_count(request.key) == 0 {
+                        events.push(SyntheticKeyEvent {
+                            key: request.key,
+                            active: false,
+                        });
+                    }
                     for modifier in modifiers.into_iter().rev() {
                         if next.modifier_count(modifier) == 0 {
                             events.push(SyntheticKeyEvent {
@@ -157,16 +161,17 @@ impl SyntheticState {
             ModifierMode::None => Vec::new(),
             ModifierMode::Explicit(keys) => keys.clone(),
         };
+        let mut seen = BTreeSet::new();
         for key in &modifiers {
             ensure!(
                 is_modifier_key(*key),
                 "explicit modifiers must be modifier keys"
             );
+            ensure!(
+                seen.insert(*key),
+                "explicit modifiers must not contain duplicates"
+            );
         }
-        ensure!(
-            modifiers.windows(2).all(|pair| pair[0] != pair[1]),
-            "explicit modifiers must not contain duplicates"
-        );
         Ok(modifiers)
     }
 
@@ -175,18 +180,22 @@ impl SyntheticState {
     }
 
     fn modifier_count(&self, modifier: OutputKey) -> usize {
-        self.held
-            .iter()
-            .flat_map(|(_, modifiers)| modifiers)
-            .filter(|held| **held == modifier)
-            .count()
+        self.held.iter().filter(|(key, _)| *key == modifier).count()
+            + self
+                .held
+                .iter()
+                .flat_map(|(_, modifiers)| modifiers)
+                .filter(|held| **held == modifier)
+                .count()
     }
 
     fn release(&self) -> (Self, Vec<SyntheticKeyEvent>) {
         let mut remaining = self.clone();
         let mut events = Vec::new();
         while let Some((key, modifiers)) = remaining.held.pop() {
-            events.push(SyntheticKeyEvent { key, active: false });
+            if !is_modifier_key(key) || remaining.modifier_count(key) == 0 {
+                events.push(SyntheticKeyEvent { key, active: false });
+            }
             for modifier in modifiers.into_iter().rev() {
                 if remaining.modifier_count(modifier) == 0 {
                     events.push(SyntheticKeyEvent {
@@ -1703,6 +1712,115 @@ mod tests {
             width: None,
             height: None,
         }
+    }
+
+    #[test]
+    fn explicit_modifier_lists_reject_nonadjacent_duplicates() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("duplicate-modifiers.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local keys = sliver.input.keys
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.tap(keys.keyboard.f2, {
+                            modifiers = {
+                                keys.keyboard.left_ctrl,
+                                keys.keyboard.left_alt,
+                                keys.keyboard.left_ctrl,
+                            },
+                        })
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("nonadjacent duplicate modifier was accepted");
+        assert!(format!("{error:#}").contains("must not contain duplicates"));
+        assert!(supervisor.hardware().synthetic_transactions().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_modifier_shares_ownership_with_mirrored_modifier() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("modifier-owner.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local keys = sliver.input.keys.keyboard
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.id == 1 and event.phase == "down" then
+                        sliver.input.key.down(keys.left_ctrl, { modifiers = false })
+                    elseif event.id == 2 and event.phase == "down" then
+                        sliver.input.key.down(keys.f2, {
+                            modifiers = { keys.left_ctrl },
+                        })
+                    elseif event.id == 1 and event.phase == "up" then
+                        sliver.input.key.up(keys.left_ctrl)
+                    elseif event.id == 2 and event.phase == "up" then
+                        sliver.input.key.up(keys.f2)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        for (id, phase) in [
+            (1, TouchPhase::Down),
+            (2, TouchPhase::Down),
+            (1, TouchPhase::Up),
+            (2, TouchPhase::Up),
+        ] {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, phase)));
+        }
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_transactions()[0],
+            vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
     }
 
     #[test]
