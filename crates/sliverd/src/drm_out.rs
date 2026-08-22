@@ -391,7 +391,7 @@ mod tests {
             return {
                 api_version = 1,
                 render = function(canvas)
-                    canvas:rectangle(0, 0, 10, 10, "#€€€")
+                    canvas:rectangle(0, 0, 10, 10, "#€€€€€€")
                 end,
             }
             "##,
@@ -402,6 +402,62 @@ mod tests {
             .expect_err("invalid hexadecimal color digits were accepted");
         assert!(format!("{error:#}").contains("hexadecimal"));
         assert!(hardware.presented_frames().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn lua_canvas_rejects_unrequested_operator_and_color_aliases() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let cases = [
+            (
+                "source-replace operator",
+                r##"canvas:operator("source-replace")"##,
+            ),
+            (
+                "short hexadecimal color",
+                r##"canvas:rectangle(0, 0, 10, 10, "#fff")"##,
+            ),
+            (
+                "0x hexadecimal color",
+                r##"canvas:rectangle(0, 0, 10, 10, "0xff0000")"##,
+            ),
+            (
+                "three numeric color components",
+                "canvas:rectangle(0, 0, 10, 10, 1, 0, 0)",
+            ),
+            (
+                "eight-digit hexadecimal color",
+                r##"canvas:rectangle(0, 0, 10, 10, "#ff000080")"##,
+            ),
+        ];
+
+        for (name, operation) in cases {
+            let source = directory.path().join(format!("{name}.lua"));
+            std::fs::write(
+                &source,
+                format!(
+                    r##"
+                    require("sliver.v1")
+                    return {{
+                        api_version = 1,
+                        render = function(canvas)
+                            {operation}
+                        end,
+                    }}
+                    "##,
+                    operation = operation
+                ),
+            )?;
+            let mut hardware = FakeTouchBar::new();
+
+            let error = present_lua_once(&source, &mut hardware)
+                .expect_err("an unrequested canvas alias was accepted");
+            assert!(
+                format!("{error:#}").contains("[render]"),
+                "{name} failed at an unexpected stage: {error:#}"
+            );
+            assert!(hardware.presented_frames().is_empty());
+        }
         Ok(())
     }
 

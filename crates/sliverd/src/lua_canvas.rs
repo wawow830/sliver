@@ -191,27 +191,17 @@ impl Canvas {
     fn parse_hex(value: &str) -> mlua::Result<Color> {
         let value = value
             .strip_prefix('#')
-            .or_else(|| value.strip_prefix("0x"))
-            .or_else(|| value.strip_prefix("0X"))
             .ok_or_else(|| mlua::Error::runtime("canvas:color hex value must start with #"))?;
         let digits: Vec<char> = value.chars().collect();
-        let expanded = match digits.len() {
-            3 | 4 => digits.iter().flat_map(|digit| [*digit, *digit]).collect(),
-            6 | 8 => digits,
-            _ => {
-                return Err(mlua::Error::runtime(
-                    "canvas:color hex value must have 3, 4, 6, or 8 digits",
-                ));
-            }
-        };
-        let red = Self::hex_byte(expanded[0], expanded[1])?;
-        let green = Self::hex_byte(expanded[2], expanded[3])?;
-        let blue = Self::hex_byte(expanded[4], expanded[5])?;
-        let alpha = if expanded.len() == 8 {
-            Self::hex_byte(expanded[6], expanded[7])?
-        } else {
-            u8::MAX
-        };
+        if digits.len() != 6 {
+            return Err(mlua::Error::runtime(
+                "canvas:color hex value must have exactly 6 digits",
+            ));
+        }
+        let red = Self::hex_byte(digits[0], digits[1])?;
+        let green = Self::hex_byte(digits[2], digits[3])?;
+        let blue = Self::hex_byte(digits[4], digits[5])?;
+        let alpha = u8::MAX;
         Ok(Color {
             red: f64::from(red) / 255.0,
             green: f64::from(green) / 255.0,
@@ -263,19 +253,15 @@ impl Canvas {
             return Self::parse_hex(value.to_str()?.as_ref());
         }
 
-        if !(3..=4).contains(&values.len()) {
+        if values.len() != 4 {
             return Err(mlua::Error::runtime(
-                "canvas:color needs a hex string or three or four normalized components",
+                "canvas:color needs a hex string or four normalized components",
             ));
         }
         let red = Self::number(&values[0], "red")?;
         let green = Self::number(&values[1], "green")?;
         let blue = Self::number(&values[2], "blue")?;
-        let alpha = if values.len() == 4 {
-            Self::number(&values[3], "alpha")?
-        } else {
-            1.0
-        };
+        let alpha = Self::number(&values[3], "alpha")?;
         Ok(Color {
             red,
             green,
@@ -498,7 +484,7 @@ impl UserData for Canvas {
             }
             let operator = match name.as_str() {
                 "source-over" => cairo::Operator::Over,
-                "source" | "source-replace" => cairo::Operator::Source,
+                "source" => cairo::Operator::Source,
                 _ => {
                     return Err(mlua::Error::runtime(
                         "canvas:operator accepts only source-over or source",
