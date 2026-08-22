@@ -541,12 +541,19 @@ mod tests {
         std::fs::write(
             &c_source,
             r#"
+            #include <stddef.h>
+
             typedef struct lua_State lua_State;
             typedef long long lua_Integer;
+            typedef double lua_Number;
+            extern void luaL_checkversion_(lua_State *, lua_Number, size_t);
+            extern lua_Number lua_version(lua_State *);
             extern void lua_pushinteger(lua_State *, lua_Integer);
 
             int luaopen_native_probe(lua_State *state) {
-                lua_pushinteger(state, 54);
+                size_t numeric_sizes = sizeof(lua_Integer) * 16 + sizeof(lua_Number);
+                luaL_checkversion_(state, 504.0, numeric_sizes);
+                lua_pushinteger(state, (lua_Integer)lua_version(state));
                 return 1;
             }
             "#,
@@ -565,7 +572,7 @@ mod tests {
             r#"
             local probe = require("native_probe")
             require("sliver.v1")
-            assert(probe == 54)
+            assert(probe == 504)
             return {
                 api_version = 1,
                 render = function(canvas)
@@ -578,6 +585,11 @@ mod tests {
 
         present_lua_once(&source, &mut hardware)?;
 
+        let process_maps = std::fs::read_to_string("/proc/self/maps")?;
+        assert!(
+            !process_maps.lines().any(|line| line.contains("liblua")),
+            "C module resolved against a dynamic Lua library"
+        );
         assert_eq!(
             hardware
                 .presented_frames()
