@@ -948,6 +948,7 @@ pub(crate) struct M2TouchBar {
     shown: bool,
     touch: Option<TouchInput>,
     keyboard: Option<KeyboardInput>,
+    fn_active: bool,
     modifiers: ModifierState,
     keyboard_emitter: PersistentEmitter<KeyboardEmitter>,
 }
@@ -962,6 +963,7 @@ impl M2TouchBar {
             shown: false,
             touch: None,
             keyboard: None,
+            fn_active: false,
             modifiers: ModifierState::default(),
             keyboard_emitter: PersistentEmitter::default(),
         }
@@ -973,6 +975,7 @@ impl M2TouchBar {
 
     fn claim_inner(&mut self) -> Result<()> {
         ensure!(!self.is_claimed(), "Touch Bar is already claimed");
+        self.fn_active = false;
         self.modifiers = ModifierState::default();
 
         let mut claim = claim_card()?;
@@ -1039,6 +1042,36 @@ impl M2TouchBar {
         Ok(())
     }
 
+    fn remember_keyboard_events(&mut self, events: &[HardwareEvent]) {
+        for event in events {
+            match *event {
+                HardwareEvent::Fn { active } => self.fn_active = active,
+                HardwareEvent::Modifier { modifier, active } => {
+                    self.modifiers.set(modifier, active)
+                }
+                HardwareEvent::Touch(_)
+                | HardwareEvent::Device { .. }
+                | HardwareEvent::Visibility { .. } => {}
+            }
+        }
+    }
+
+    fn reset_keyboard_state(&mut self, output: &mut Vec<HardwareEvent>) {
+        if self.fn_active {
+            output.push(HardwareEvent::Fn { active: false });
+        }
+        for modifier in Modifier::ALL {
+            if self.modifiers.is_active(modifier) {
+                output.push(HardwareEvent::Modifier {
+                    modifier,
+                    active: false,
+                });
+            }
+        }
+        self.fn_active = false;
+        self.modifiers = ModifierState::default();
+    }
+
     fn poll_inner(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
         wait_for_input(self.touch.as_ref(), self.keyboard.as_ref(), timeout)
@@ -1050,6 +1083,7 @@ impl M2TouchBar {
 
             // Preserve the old daemon's cross-device ordering: update Fn and
             // modifiers before interpreting a touch from the same poll.
+            let keyboard_start = output.len();
             let keyboard_error = match self.keyboard.as_mut() {
                 Some(keyboard) => match keyboard.drain(&mut output, &mut self.modifiers) {
                     Ok(progress) => {
@@ -1060,6 +1094,7 @@ impl M2TouchBar {
                 },
                 None => None,
             };
+            self.remember_keyboard_events(&output[keyboard_start..]);
             if let Some(error) = keyboard_error {
                 if let Some(keyboard) = self.keyboard.as_ref() {
                     eprintln!(
@@ -1069,6 +1104,7 @@ impl M2TouchBar {
                 } else {
                     eprintln!("fn: keyboard reader stopped: {error}");
                 }
+                self.reset_keyboard_state(&mut output);
                 self.keyboard = None;
             }
 
@@ -1154,6 +1190,7 @@ impl M2TouchBar {
         }
         self.touch = None;
         self.keyboard = None;
+        self.fn_active = false;
         self.modifiers = ModifierState::default();
         self.keyboard_emitter.release();
 
@@ -1512,6 +1549,34 @@ mod tests {
         assert!(normalize_backlight_level(5, 4).is_err());
         assert!(backlight_value(0.5, 0).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn keyboard_failure_releases_fn_and_modifier_snapshots() {
+        let mut hardware = M2TouchBar::new();
+        hardware.fn_active = true;
+        hardware.modifiers.set(Modifier::LeftCtrl, true);
+        hardware.modifiers.set(Modifier::RightAlt, true);
+        let mut output = Vec::new();
+
+        hardware.reset_keyboard_state(&mut output);
+
+        assert_eq!(
+            output,
+            vec![
+                HardwareEvent::Fn { active: false },
+                HardwareEvent::Modifier {
+                    modifier: Modifier::LeftCtrl,
+                    active: false,
+                },
+                HardwareEvent::Modifier {
+                    modifier: Modifier::RightAlt,
+                    active: false,
+                },
+            ]
+        );
+        assert!(!hardware.fn_active);
+        assert_eq!(hardware.modifiers, ModifierState::default());
     }
 
     #[test]
