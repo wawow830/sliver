@@ -854,6 +854,9 @@ impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
     fn drop(&mut self) {
         self.active.take();
         if self.claimed {
+            if let Err(error) = self.release_synthetic_keys() {
+                eprintln!("synthetic key cleanup failed during supervisor drop: {error:#}");
+            }
             let _ = self.hardware.release();
             self.claimed = false;
         }
@@ -862,8 +865,10 @@ impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
+    use std::rc::Rc;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -871,7 +876,8 @@ mod tests {
 
     use crate::hardware::{
         ConsumerKey, FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, KeyboardKey,
-        LogicalFrame, Modifier, ModifierState, TouchBarHardware, TouchEvent, TouchPhase,
+        LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
+        TouchEvent, TouchPhase,
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
@@ -971,6 +977,131 @@ mod tests {
         fn release(&mut self) -> Result<()> {
             self.inner.release()
         }
+    }
+
+    struct SharedFakeHardware {
+        inner: FakeTouchBar,
+        synthetic: Rc<RefCell<Vec<FakeKeyEvent>>>,
+    }
+
+    impl SharedFakeHardware {
+        fn new() -> (Self, Rc<RefCell<Vec<FakeKeyEvent>>>) {
+            let synthetic = Rc::new(RefCell::new(Vec::new()));
+            (
+                Self {
+                    inner: FakeTouchBar::new(),
+                    synthetic: synthetic.clone(),
+                },
+                synthetic,
+            )
+        }
+    }
+
+    impl TouchBarHardware for SharedFakeHardware {
+        fn claim(&mut self) -> Result<()> {
+            self.inner.claim()
+        }
+
+        fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+            self.inner.poll(timeout)
+        }
+
+        fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
+            self.inner.present(frame)
+        }
+
+        fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
+            for event in events {
+                let key = match event.key {
+                    OutputKey::Keyboard(key) => FakeKey::Keyboard(key),
+                    OutputKey::Consumer(key) => FakeKey::Consumer(key),
+                };
+                self.synthetic.borrow_mut().push(FakeKeyEvent {
+                    key,
+                    active: event.active,
+                });
+            }
+            self.inner.emit_key_events(events)
+        }
+
+        fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
+            self.inner.tap_function_key(index, modifiers)
+        }
+
+        fn get_backlight(&mut self) -> Result<f64> {
+            self.inner.get_backlight()
+        }
+
+        fn set_backlight(&mut self, level: f64) -> Result<()> {
+            self.inner.set_backlight(level)
+        }
+
+        fn release(&mut self) -> Result<()> {
+            self.inner.release()
+        }
+    }
+
+    #[test]
+    fn shutdown_and_drop_release_tracked_synthetic_keys() -> Result<()> {
+        let exercise = |shutdown: bool| -> Result<Vec<FakeKeyEvent>> {
+            let directory = tempfile::tempdir()?;
+            let source = directory.path().join("held.lua");
+            std::fs::write(
+                &source,
+                r#"
+                local sliver = require("sliver.v1")
+                return {
+                    api_version = 1,
+                    touch = function(event)
+                        if event.phase == "down" then
+                            sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                        end
+                    end,
+                    render = function() end,
+                }
+                "#,
+            )?;
+            let state_file = directory.path().join("state/sliver/config-path");
+            let (hardware, synthetic) = SharedFakeHardware::new();
+            let mut supervisor = Supervisor::new(hardware, state_file)?;
+            supervisor.apply(&source)?;
+            supervisor
+                .hardware_mut()
+                .inner
+                .inject(HardwareEvent::Touch(TouchEvent {
+                    phase: TouchPhase::Down,
+                    id: 1,
+                    time: 0.0,
+                    x: 1.0,
+                    y: 1.0,
+                    modifiers: ModifierState::default(),
+                    pressure: None,
+                    width: None,
+                    height: None,
+                }));
+            supervisor.step_at(1.0)?;
+            if shutdown {
+                supervisor.shutdown()?;
+            } else {
+                drop(supervisor);
+            }
+            let events = synthetic.borrow().clone();
+            Ok(events)
+        };
+
+        let expected = vec![
+            FakeKeyEvent {
+                key: FakeKey::Keyboard(KeyboardKey::F2),
+                active: true,
+            },
+            FakeKeyEvent {
+                key: FakeKey::Keyboard(KeyboardKey::F2),
+                active: false,
+            },
+        ];
+        assert_eq!(exercise(true)?, expected);
+        assert_eq!(exercise(false)?, expected);
+        Ok(())
     }
 
     #[test]
