@@ -247,6 +247,11 @@ impl FrameSlots {
 }
 
 impl FrameProducer {
+    #[cfg(test)]
+    pub(crate) fn hold_slots_for_test(&self) -> Vec<FrameWriter> {
+        (0..SLOT_COUNT).filter_map(|_| self.begin_write()).collect()
+    }
+
     pub(crate) fn publish(
         &self,
         width: usize,

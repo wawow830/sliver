@@ -743,6 +743,57 @@ mod tests {
     }
 
     #[test]
+    fn dropped_lua_frame_does_not_poison_later_render_commands() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("dropped-frame.lua");
+        std::fs::write(
+            &source,
+            r##"
+            require("sliver.v1")
+            local renders = 0
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    renders = renders + 1
+                    if renders == 1 then
+                        canvas:rectangle(0, 0, 20, 20, "#ff0000")
+                    else
+                        canvas:rectangle(0, 0, 20, 20, "#0000ff")
+                    end
+                end,
+            }
+            "##,
+        )?;
+        let crate::lua_worker::StagedLuaWorker { worker } =
+            crate::lua_worker::LuaWorker::stage(&source)?;
+        let mut held = worker.hold_slots_for_test();
+        assert_eq!(held.len(), 3);
+        worker.render_to_slots_at(1.0, 0.0)?;
+        drop(held.pop());
+        worker.render_to_slots_at(2.0, 0.0)?;
+
+        let completed = worker
+            .broker_for_test()
+            .take_newest()?
+            .context("later complete frame was dropped")?;
+        let (frame, _) = LogicalFrame::from_completed(completed);
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&frame)?;
+        assert_eq!(
+            hardware
+                .presented_frames()
+                .last()
+                .context("later frame was not presented")?
+                .rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        hardware.release()?;
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        Ok(())
+    }
+
+    #[test]
     fn lua_raw_decoded_frames_hold_native_rate_under_broker_contention() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("raw-video.lua");

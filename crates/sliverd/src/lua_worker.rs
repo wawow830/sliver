@@ -9,6 +9,8 @@ use mlua::{
     Function, HookTriggers, Lua, MultiValue, Table, UserData, UserDataMethods, Value, VmState,
 };
 
+#[cfg(test)]
+use crate::frame_slots::FrameWriter;
 use crate::frame_slots::{FrameBroker, FrameProducer, FrameSlots, FrameTiming};
 use crate::hardware::{LogicalFrame, Modifier, TouchEvent, TouchPhase};
 use crate::lua_canvas::{create_path, Canvas};
@@ -54,6 +56,8 @@ pub(crate) struct LuaWorker {
     commands: Option<mpsc::Sender<WorkerCommand>>,
     owner: Option<thread::JoinHandle<()>>,
     broker: FrameBroker,
+    #[cfg(test)]
+    producer: FrameProducer,
 }
 
 enum WorkerCommand {
@@ -148,6 +152,8 @@ impl LuaWorker {
             sliver_core::STRIP_W as usize * 4,
         )?;
         let producer = slots.producer();
+        #[cfg(test)]
+        let test_producer = producer.clone();
         let broker = slots.broker();
         let (command_tx, command_rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -160,6 +166,8 @@ impl LuaWorker {
             commands: Some(command_tx),
             owner: Some(owner),
             broker,
+            #[cfg(test)]
+            producer: test_producer,
         };
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(StagedLuaWorker { worker }),
@@ -215,6 +223,11 @@ impl LuaWorker {
     #[cfg(test)]
     pub(crate) fn broker_for_test(&self) -> FrameBroker {
         self.broker.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_slots_for_test(&self) -> Vec<FrameWriter> {
+        self.producer.hold_slots_for_test()
     }
 
     pub(crate) fn pending_backlight(&self) -> Result<Option<f64>> {
@@ -436,8 +449,11 @@ impl Runtime {
             self.run_due_timers(now_seconds)?;
             let frame = if self.controls.redraw_pending.replace(false) {
                 let frame = self.render_frame(now_seconds, delta)?;
-                self.publish_frame(&frame, timing)?;
-                Some(timing)
+                if self.publish_frame(&frame, timing)? {
+                    Some(timing)
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -594,7 +610,7 @@ impl Runtime {
         &self,
         frame: &LogicalFrame,
         timing: FrameTiming,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<bool, String> {
         let published = self
             .producer
             .publish(
@@ -605,11 +621,7 @@ impl Runtime {
                 timing,
             )
             .map_err(|error| error.to_string())?;
-        if published {
-            Ok(())
-        } else {
-            Err("no shared frame slot was available".into())
-        }
+        Ok(published)
     }
 
     fn render_frame(
