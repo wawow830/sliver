@@ -11,7 +11,8 @@ use anyhow::{ensure, Context, Result};
 use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::hardware::{
-    ContactId, HardwareEvent, InputState, LogicalFrame, TouchBarHardware, TouchEvent, TouchPhase,
+    ContactId, HardwareEvent, InputState, InputTransition, LogicalFrame, ObservedKey,
+    TouchBarHardware, TouchEvent, TouchPhase,
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{LuaWorker, StagedLuaWorker, StopReason, WorkerEffects};
@@ -74,6 +75,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     claimed: bool,
     origin: Instant,
     backlight: f64,
+    input_state: InputState,
     down_contacts: BTreeMap<ContactId, TouchEvent>,
     ignored_contacts: BTreeSet<ContactId>,
     touch_queue: TouchQueue,
@@ -104,6 +106,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             claimed: true,
             origin: Instant::now(),
             backlight,
+            input_state: InputState::default(),
             down_contacts: BTreeMap::new(),
             ignored_contacts: BTreeSet::new(),
             touch_queue: TouchQueue::new(),
@@ -147,7 +150,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             worker,
             frame,
             pending_backlight,
-        } = LuaWorker::stage_with_backlight(&selected_path, current_backlight)?;
+        } = LuaWorker::stage_with_backlight_and_input(
+            &selected_path,
+            current_backlight,
+            self.input_state,
+        )?;
         self.poll_hardware(Duration::ZERO)?;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
@@ -189,7 +196,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         let now = self.now_seconds();
-        if let Err(error) = worker.commit(now, InputState::default()) {
+        if let Err(error) = worker.commit(now, self.input_state) {
             return self.rollback_candidate(
                 previous_path_state,
                 old_frame.as_ref(),
@@ -225,7 +232,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 if let Err(error) =
                     replaced
                         .worker
-                        .drive(now, InputState::default(), Vec::new(), cancels)
+                        .drive(now, self.input_state, Vec::new(), cancels)
                 {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
@@ -325,28 +332,56 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
+        let mut transitions = Vec::new();
         for event in events {
-            if let HardwareEvent::Touch(touch) = event {
-                self.route_touch(touch);
+            match event {
+                HardwareEvent::Touch(touch) => self.route_touch(touch),
+                HardwareEvent::Fn { active } => {
+                    if self.input_state.apply(ObservedKey::Fn, active) {
+                        transitions.push(InputTransition {
+                            key: ObservedKey::Fn,
+                            active,
+                            state: self.input_state,
+                        });
+                    }
+                }
+                HardwareEvent::Modifier { modifier, active } => {
+                    if self
+                        .input_state
+                        .apply(ObservedKey::Modifier(modifier), active)
+                    {
+                        transitions.push(InputTransition {
+                            key: ObservedKey::Modifier(modifier),
+                            active,
+                            state: self.input_state,
+                        });
+                    }
+                }
+                HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
             }
         }
         let touches = self.touch_queue.drain();
         let timer_due = self
             .next_timer_deadline
             .is_some_and(|deadline| deadline <= now);
-        if !touches.is_empty() || timer_due {
-            self.drive_active(now, touches)?;
+        if !transitions.is_empty() || !touches.is_empty() || timer_due {
+            self.drive_active(now, transitions, touches)?;
         }
         Ok(())
     }
 
-    fn drive_active(&mut self, now: f64, touches: Vec<TouchEvent>) -> Result<()> {
+    fn drive_active(
+        &mut self,
+        now: f64,
+        transitions: Vec<InputTransition>,
+        touches: Vec<TouchEvent>,
+    ) -> Result<()> {
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
         let effects = active
             .worker
-            .drive(now, InputState::default(), Vec::new(), touches)?;
+            .drive(now, self.input_state, transitions, touches)?;
         self.next_timer_deadline = if effects.redraw_pending {
             Some(now)
         } else {
@@ -451,7 +486,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 if !cancels.is_empty() {
                     let _ = active
                         .worker
-                        .drive(now, InputState::default(), Vec::new(), cancels);
+                        .drive(now, self.input_state, Vec::new(), cancels);
                 }
                 active.worker.shutdown(StopReason::Shutdown)
             }
@@ -905,6 +940,77 @@ mod tests {
                 .context("new frame was not committed")?
                 .rgba_at(10, 10),
             [0, 0, 255, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn lua_receives_fn_and_modifier_transitions_and_snapshots() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("input.lua");
+        let log = directory.path().join("input-events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(line)
+                    local file = assert(io.open(log, "a"))
+                    file:write(line, "\n")
+                    file:close()
+                end
+                return {{
+                    api_version = 1,
+                    start = function()
+                        local state = sliver.input.state()
+                        assert(state.fn)
+                        assert(state.modifiers.left_ctrl)
+                        record("start:" .. tostring(state.fn) .. ":" .. tostring(state.modifiers.left_ctrl))
+                    end,
+                    key = function(event)
+                        local state = sliver.input.state()
+                        assert(event.state.fn == state.fn)
+                        assert(event.state.modifiers.right_alt == state.modifiers.right_alt)
+                        record(event.key .. ":" .. event.phase .. ":" .. tostring(state.fn) .. ":" .. tostring(state.modifiers.left_ctrl) .. ":" .. tostring(state.modifiers.right_alt))
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy()
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut hardware = FakeTouchBar::new();
+        hardware.inject(HardwareEvent::Fn { active: true });
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&source)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "start:true:true\n");
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.hardware_mut().inject(HardwareEvent::Modifier {
+            modifier: Modifier::RightAlt,
+            active: true,
+        });
+        supervisor.hardware_mut().inject(HardwareEvent::Modifier {
+            modifier: Modifier::RightAlt,
+            active: true,
+        });
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(
+            std::fs::read_to_string(&log)?,
+            "start:true:true\nfn:up:false:true:false\nright_alt:down:false:true:true\n"
         );
         supervisor.shutdown()?;
         Ok(())
