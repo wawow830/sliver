@@ -205,7 +205,7 @@ struct Runtime {
     _lua: Lua,
     render: Function,
     stop: Option<Function>,
-    _visibility: Option<Function>,
+    visibility: Option<Function>,
     touch: Option<Function>,
     key: Option<Function>,
     source: PathBuf,
@@ -775,7 +775,7 @@ impl Runtime {
         now_seconds: f64,
         started: Instant,
     ) -> std::result::Result<(), String> {
-        let Some(visibility) = &self._visibility else {
+        let Some(visibility) = &self.visibility else {
             return Ok(());
         };
         self.controls
@@ -944,7 +944,7 @@ impl Runtime {
             _lua: lua,
             render,
             stop,
-            _visibility: visibility,
+            visibility,
             touch,
             key,
             source: source.to_path_buf(),
