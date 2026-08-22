@@ -963,7 +963,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
         self.active.take();
         self.next_timer_deadline = None;
-        self.enter_recovery()
+        if let Some(recovery) = self.recovery.as_mut() {
+            recovery.owner_is_healthy = false;
+            Ok(())
+        } else {
+            self.enter_recovery()
+        }
     }
 
     fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
