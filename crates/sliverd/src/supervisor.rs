@@ -72,6 +72,24 @@ struct HeldSyntheticKey {
     modifiers: Vec<OutputKey>,
 }
 
+fn cancel_contacts(
+    worker: &LuaWorker,
+    contacts: &BTreeMap<ContactId, TouchEvent>,
+    now: f64,
+    input_state: InputState,
+    options: DriveOptions,
+) -> Result<WorkerEffects> {
+    let events = contacts
+        .values()
+        .map(|event| TouchEvent {
+            phase: TouchPhase::Cancel,
+            time: now,
+            ..*event
+        })
+        .collect();
+    worker.drive_with_visibility(now, input_state, Vec::new(), 0.0, events, options)
+}
+
 impl TouchQueue {
     fn new() -> Self {
         Self {
@@ -556,21 +574,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     eprintln!("replaced Lua worker did not receive deferred input: {error:#}");
                 }
             }
-            let cancels: Vec<_> = replaced
-                .contacts
-                .values()
-                .map(|event| TouchEvent {
-                    phase: TouchPhase::Cancel,
-                    time: now,
-                    ..*event
-                })
-                .collect();
-            if !cancels.is_empty() {
-                if let Err(error) =
-                    replaced
-                        .worker
-                        .drive(now, self.input_state, Vec::new(), 0.0, cancels)
-                {
+            if !replaced.contacts.is_empty() {
+                if let Err(error) = cancel_contacts(
+                    &replaced.worker,
+                    &replaced.contacts,
+                    now,
+                    self.input_state,
+                    DriveOptions::default(),
+                ) {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
                     );
@@ -746,24 +757,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let mut owner_is_healthy = false;
         if let Some(active) = self.active.as_mut() {
             owner_is_healthy = true;
-            let cancels: Vec<_> = active
-                .contacts
-                .values()
-                .map(|event| TouchEvent {
-                    phase: TouchPhase::Cancel,
-                    time: now,
-                    ..*event
-                })
-                .collect();
-            active.contacts.clear();
-            let hidden = active.worker.drive_with_visibility(
+            let hidden = cancel_contacts(
+                &active.worker,
+                &active.contacts,
                 now,
                 self.input_state,
-                Vec::new(),
-                0.0,
-                cancels,
                 DriveOptions::visibility(false, VisibilityReason::Recovery, false),
             );
+            active.contacts.clear();
             if let Err(error) = hidden {
                 eprintln!("healthy Lua worker failed while entering recovery: {error:#}");
                 self.active.take();
@@ -950,21 +951,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
         let now = self.now_seconds();
         if let Some(active) = self.active.take() {
-            let cancels: Vec<_> = active
-                .contacts
-                .values()
-                .map(|event| TouchEvent {
-                    phase: TouchPhase::Cancel,
-                    time: now,
-                    ..*event
-                })
-                .collect();
-            if !cancels.is_empty() {
-                if let Err(cancel_error) =
-                    active
-                        .worker
-                        .drive(now, self.input_state, Vec::new(), 0.0, cancels)
-                {
+            if !active.contacts.is_empty() {
+                if let Err(cancel_error) = cancel_contacts(
+                    &active.worker,
+                    &active.contacts,
+                    now,
+                    self.input_state,
+                    DriveOptions::default(),
+                ) {
                     eprintln!(
                         "failed Lua worker did not receive contact cancellation: {cancel_error:#}"
                     );
@@ -1081,20 +1075,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let Some(active) = self.active.take() else {
             return Ok(());
         };
-        let cancels: Vec<_> = active
-            .contacts
-            .values()
-            .map(|event| TouchEvent {
-                phase: TouchPhase::Cancel,
-                time: now,
-                ..*event
-            })
-            .collect();
-        if !cancels.is_empty() {
-            if let Err(error) = active
-                .worker
-                .drive(now, self.input_state, Vec::new(), 0.0, cancels)
-            {
+        if !active.contacts.is_empty() {
+            if let Err(error) = cancel_contacts(
+                &active.worker,
+                &active.contacts,
+                now,
+                self.input_state,
+                DriveOptions::default(),
+            ) {
                 eprintln!("active Lua worker did not receive contact cancellation: {error:#}");
             }
         }
