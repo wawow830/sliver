@@ -11,7 +11,7 @@ use anyhow::{ensure, Context, Result};
 use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::hardware::{
-    ContactId, HardwareEvent, LogicalFrame, TouchBarHardware, TouchEvent, TouchPhase,
+    ContactId, HardwareEvent, InputState, LogicalFrame, TouchBarHardware, TouchEvent, TouchPhase,
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{LuaWorker, StagedLuaWorker, StopReason, WorkerEffects};
@@ -189,7 +189,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         let now = self.now_seconds();
-        if let Err(error) = worker.commit(now) {
+        if let Err(error) = worker.commit(now, InputState::default()) {
             return self.rollback_candidate(
                 previous_path_state,
                 old_frame.as_ref(),
@@ -222,7 +222,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 })
                 .collect();
             if !cancels.is_empty() {
-                if let Err(error) = replaced.worker.drive(now, cancels) {
+                if let Err(error) =
+                    replaced
+                        .worker
+                        .drive(now, InputState::default(), Vec::new(), cancels)
+                {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
                     );
@@ -340,7 +344,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let Some(active) = self.active.as_ref() else {
             return Ok(());
         };
-        let effects = active.worker.drive(now, touches)?;
+        let effects = active
+            .worker
+            .drive(now, InputState::default(), Vec::new(), touches)?;
         self.next_timer_deadline = if effects.redraw_pending {
             Some(now)
         } else {
@@ -443,7 +449,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     })
                     .collect();
                 if !cancels.is_empty() {
-                    let _ = active.worker.drive(now, cancels);
+                    let _ = active
+                        .worker
+                        .drive(now, InputState::default(), Vec::new(), cancels);
                 }
                 active.worker.shutdown(StopReason::Shutdown)
             }
