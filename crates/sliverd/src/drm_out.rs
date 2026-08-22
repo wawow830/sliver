@@ -762,6 +762,12 @@ mod tests {
                         { x = 0, y = 0, width = 2, height = 1 },
                         "nearest"
                     )
+                    canvas:image(
+                        image,
+                        { x = 0, y = 0, width = 2, height = 1 },
+                        { x = 5, y = 0, width = 2, height = 1 },
+                        "nearest"
+                    )
                     local pixels = string.char(0, 255, 0, 255, 99, 99, 99, 99)
                     canvas:raw_pixels(
                         pixels,
@@ -791,6 +797,8 @@ mod tests {
         assert_eq!(frame.rgba_at(0, 0), [255, 0, 0, 255]);
         assert_eq!(frame.rgba_at(1, 0), [0, 0, 255, 255]);
         assert_eq!(frame.rgba_at(3, 0), [0, 255, 0, 255]);
+        assert_eq!(frame.rgba_at(5, 0), [255, 0, 0, 255]);
+        assert_eq!(frame.rgba_at(6, 0), [0, 0, 255, 255]);
         supervisor.shutdown()?;
         Ok(())
     }
