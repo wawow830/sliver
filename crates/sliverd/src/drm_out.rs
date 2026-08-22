@@ -255,8 +255,9 @@ fn run_with_hardware<H: TouchBarHardware>(cfg: sliver_core::Config, mut hardware
 fn present_lua_once<H: TouchBarHardware>(source: &std::path::Path, hardware: &mut H) -> Result<()> {
     hardware.claim()?;
     let run_result = (|| -> Result<()> {
-        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
+        let crate::lua_worker::StagedLuaWorker { worker } =
             crate::lua_worker::LuaWorker::stage(source)?;
+        let frame = worker.render_at(0.0, 0.0)?;
         hardware.present(&frame.frame)?;
         worker.shutdown(crate::lua_worker::StopReason::Shutdown)
     })();
@@ -749,7 +750,7 @@ mod tests {
             &source,
             r#"
             local sliver = require("sliver.v1")
-            local frame = -1
+            local frame = 0
             return {
                 api_version = 1,
                 render = function(canvas)
@@ -1096,8 +1097,9 @@ mod tests {
         )?;
         let mut hardware = FakeTouchBar::new();
         hardware.claim()?;
-        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
+        let crate::lua_worker::StagedLuaWorker { worker } =
             crate::lua_worker::LuaWorker::stage(&source)?;
+        let frame = worker.render_at(0.0, 0.0)?;
         hardware.present(&frame.frame)?;
         let frame = worker.render_next()?;
         hardware.present(&frame)?;
@@ -1151,8 +1153,9 @@ mod tests {
         )?;
         let mut hardware = FakeTouchBar::new();
         hardware.claim()?;
-        let crate::lua_worker::StagedLuaWorker { worker, frame, .. } =
+        let crate::lua_worker::StagedLuaWorker { worker } =
             crate::lua_worker::LuaWorker::stage(&source)?;
+        let frame = worker.render_at(0.0, 0.0)?;
         hardware.present(&frame.frame)?;
         let frame = worker.render_next()?;
         hardware.present(&frame)?;

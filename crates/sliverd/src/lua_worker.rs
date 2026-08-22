@@ -21,8 +21,6 @@ pub(crate) struct TimedFrame {
 
 pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
-    pub(crate) frame: TimedFrame,
-    pub(crate) pending_backlight: Option<f64>,
 }
 
 pub(crate) struct WorkerEffects {
@@ -135,16 +133,14 @@ struct DueTimer {
 
 impl LuaWorker {
     pub(crate) fn stage(source: &Path) -> Result<StagedLuaWorker> {
-        Self::stage_with_backlight_at(source, 0.0, 0.0)
+        Self::stage_with_backlight(source, 0.0)
     }
 
-    pub(crate) fn stage_with_backlight_at(
+    pub(crate) fn stage_with_backlight(
         source: &Path,
         initial_backlight: f64,
-        initial_time: f64,
     ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
-        FrameTiming::new(initial_time, 0.0)?;
         let source = source.to_path_buf();
         let slots = FrameSlots::new(
             sliver_core::STRIP_W as usize,
@@ -157,16 +153,7 @@ impl LuaWorker {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let owner = thread::Builder::new()
             .name("sliver-lua".into())
-            .spawn(move || {
-                owner_main(
-                    source,
-                    initial_backlight,
-                    initial_time,
-                    producer,
-                    command_rx,
-                    ready_tx,
-                )
-            })
+            .spawn(move || owner_main(source, initial_backlight, producer, command_rx, ready_tx))
             .context("starting Lua owner thread")?;
 
         let mut worker = Self {
@@ -175,16 +162,7 @@ impl LuaWorker {
             broker,
         };
         match ready_rx.recv() {
-            Ok(Ok(staged)) => {
-                let frame = worker
-                    .take_frame()?
-                    .context("Lua worker published no initial frame")?;
-                Ok(StagedLuaWorker {
-                    worker,
-                    frame,
-                    pending_backlight: staged.pending_backlight,
-                })
-            }
+            Ok(Ok(())) => Ok(StagedLuaWorker { worker }),
             Ok(Err(error)) => {
                 worker.abandon();
                 Err(anyhow!(error))
@@ -364,41 +342,21 @@ impl Drop for LuaWorker {
     }
 }
 
-struct StagedRuntime {
-    pending_backlight: Option<f64>,
-}
-
 fn owner_main(
     source: PathBuf,
     initial_backlight: f64,
-    initial_time: f64,
     producer: FrameProducer,
     commands: mpsc::Receiver<WorkerCommand>,
-    ready: mpsc::SyncSender<std::result::Result<StagedRuntime, String>>,
+    ready: mpsc::SyncSender<std::result::Result<(), String>>,
 ) {
-    let (runtime, frame) =
-        match Runtime::load_and_render(&source, initial_backlight, initial_time, producer) {
-            Ok(staged) => staged,
-            Err(error) => {
-                let _ = ready.send(Err(error));
-                return;
-            }
-        };
-    let timing = match FrameTiming::new(initial_time, 0.0) {
-        Ok(timing) => timing,
+    let runtime = match Runtime::load(&source, initial_backlight, producer) {
+        Ok(runtime) => runtime,
         Err(error) => {
-            let _ = ready.send(Err(error.to_string()));
+            let _ = ready.send(Err(error));
             return;
         }
     };
-    if let Err(error) = runtime.publish_frame(&frame, timing) {
-        let _ = ready.send(Err(error));
-        return;
-    }
-    let staged = StagedRuntime {
-        pending_backlight: runtime.pending_backlight(),
-    };
-    if ready.send(Ok(staged)).is_err() {
+    if ready.send(Ok(())).is_err() {
         return;
     }
 
@@ -528,12 +486,11 @@ impl Runtime {
         }
     }
 
-    fn load_and_render(
+    fn load(
         source: &Path,
         initial_backlight: f64,
-        initial_time: f64,
         producer: FrameProducer,
-    ) -> std::result::Result<(Self, LogicalFrame), String> {
+    ) -> std::result::Result<Self, String> {
         let bytes =
             std::fs::read(source).map_err(|error| diagnostic("load", source, error.to_string()))?;
         let lua = unsafe { Lua::unsafe_new() };
@@ -630,8 +587,7 @@ impl Runtime {
             controls,
             producer,
         };
-        let frame = runtime.render_frame(initial_time, 0.0)?;
-        Ok((runtime, frame))
+        Ok(runtime)
     }
 
     fn publish_frame(

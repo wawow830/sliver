@@ -114,23 +114,14 @@ impl<H: TouchBarHardware> Supervisor<H> {
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
-        let stage_time = self.now_seconds();
-        let StagedLuaWorker {
-            worker,
-            frame: staged_frame,
-            pending_backlight: _staged_backlight,
-        } = LuaWorker::stage_with_backlight_at(&selected_path, current_backlight, stage_time)?;
-        self.poll_hardware(Duration::ZERO)?;
-        let staged_frame = if self
+        let StagedLuaWorker { worker } =
+            LuaWorker::stage_with_backlight(&selected_path, current_backlight)?;
+        self.poll_hardware_deferred(Duration::ZERO)?;
+        let render_now = self.now_seconds();
+        let render_time = self
             .last_presented_time
-            .is_some_and(|last| staged_frame.timing.presentation_time < last)
-        {
-            let now = self.now_seconds();
-            let time = self.last_presented_time.map_or(now, |last| now.max(last));
-            worker.render_at(time, 0.0)?
-        } else {
-            staged_frame
-        };
+            .map_or(render_now, |last| render_now.max(last));
+        let staged_frame = worker.render_at(render_time, 0.0)?;
         let pending_backlight = worker.pending_backlight()?;
         let frame = staged_frame.frame;
         let latest_backlight = self.hardware.get_backlight()?;
@@ -185,6 +176,7 @@ impl<H: TouchBarHardware> Supervisor<H> {
         self.last_presented_time = Some(now);
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
+        let deferred_touches = self.touch_queue.drain();
         self.next_timer_deadline = Some(now);
         let replaced = self.active.replace(ActiveConfig {
             worker,
@@ -194,6 +186,11 @@ impl<H: TouchBarHardware> Supervisor<H> {
             contacts: BTreeMap::new(),
         });
         if let Some(replaced) = replaced {
+            if !deferred_touches.is_empty() {
+                if let Err(error) = replaced.worker.drive(now, 0.0, deferred_touches) {
+                    eprintln!("replaced Lua worker did not receive deferred touches: {error:#}");
+                }
+            }
             let cancels: Vec<_> = replaced
                 .contacts
                 .values()
@@ -300,6 +297,15 @@ impl<H: TouchBarHardware> Supervisor<H> {
         let events = self.hardware.poll(timeout)?;
         let now = self.now_seconds();
         self.process_events_at(now, events)
+    }
+
+    fn poll_hardware_deferred(&mut self, timeout: Duration) -> Result<()> {
+        for event in self.hardware.poll(timeout)? {
+            if let HardwareEvent::Touch(touch) = event {
+                self.route_touch(touch);
+            }
+        }
+        Ok(())
     }
 
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
@@ -1162,6 +1168,7 @@ mod tests {
         let candidate_source = directory.path().join("candidate-present.lua");
         let old_log = directory.path().join("old-present-times");
         let candidate_log = directory.path().join("candidate-present-times");
+        let candidate_counts = directory.path().join("candidate-counts");
         let old_config = format!(
             r#"
             local sliver = require("sliver.v1")
@@ -1184,23 +1191,35 @@ mod tests {
             r#"
             local sliver = require("sliver.v1")
             local log = {log:?}
+            local counts = {counts:?}
             local renders = 0
+            local registrations = 0
+            local function register_timer()
+                registrations = registrations + 1
+                sliver.timer.after(100, function() end)
+            end
             return {{
                 api_version = 1,
                 start = function()
+                    register_timer()
                     local deadline = os.clock() + 0.08
                     while os.clock() < deadline do end
                 end,
                 render = function(_, time, delta)
                     renders = renders + 1
-                    sliver.backlight.set(renders == 1 and 0.25 or 0.75)
+                    register_timer()
+                    sliver.backlight.set(0.75)
                     local file = assert(io.open(log, "a"))
                     file:write(time, " ", delta, "\n")
                     file:close()
+                    local count_file = assert(io.open(counts, "a"))
+                    count_file:write(renders, " ", registrations, "\n")
+                    count_file:close()
                 end,
             }}
             "#,
             log = candidate_log.to_string_lossy(),
+            counts = candidate_counts.to_string_lossy(),
         );
         std::fs::write(&old_source, old_config)?;
         std::fs::write(&candidate_source, candidate_config)?;
@@ -1238,19 +1257,21 @@ mod tests {
         };
         let old_frames = parse(&old_log)?;
         let candidate_frames = parse(&candidate_log)?;
+        let counts = std::fs::read_to_string(candidate_counts)?;
+        assert_eq!(old_frames.len(), 2);
         assert_eq!(
-            old_frames.len(),
+            supervisor.hardware().presented_frames().len(),
             2,
-            "old worker did not present during staging"
+            "old worker presented during candidate staging"
         );
         assert_eq!(
             candidate_frames.len(),
-            2,
-            "candidate was not retimed at commit"
+            1,
+            "candidate rendered more than once"
         );
         assert_eq!(candidate_frames[0][1], 0.0);
-        assert_eq!(candidate_frames[1][1], 0.0);
-        assert!(candidate_frames[1][0] >= old_frames[1][0]);
+        assert!(candidate_frames[0][0] >= old_frames[0][0]);
+        assert_eq!(counts, "1 2\n");
         assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         supervisor.shutdown()?;
         Ok(())
