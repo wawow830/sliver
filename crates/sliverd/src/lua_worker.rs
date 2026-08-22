@@ -12,7 +12,8 @@ use mlua::{
 };
 
 use crate::hardware::{
-    InputState, InputTransition, LogicalFrame, Modifier, ObservedKey, TouchEvent, TouchPhase,
+    ConsumerKey, InputState, InputTransition, KeyboardKey, LogicalFrame, Modifier, ObservedKey,
+    OutputKey, TouchEvent, TouchPhase,
 };
 use crate::lua_canvas::{create_path, Canvas};
 
@@ -25,8 +26,30 @@ pub(crate) struct StagedLuaWorker {
 pub(crate) struct WorkerEffects {
     pub(crate) frame: Option<LogicalFrame>,
     pub(crate) backlight: Option<f64>,
+    pub(crate) key_requests: Vec<KeyRequest>,
     pub(crate) next_timer_deadline: Option<f64>,
     pub(crate) redraw_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyOperation {
+    Down,
+    Up,
+    Tap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModifierMode {
+    Inherit,
+    None,
+    Explicit(Vec<OutputKey>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KeyRequest {
+    pub(crate) operation: KeyOperation,
+    pub(crate) key: OutputKey,
+    pub(crate) modifiers: ModifierMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +124,7 @@ struct RuntimeControls {
     backlight_level: Rc<Cell<f64>>,
     pending_backlight: Rc<Cell<Option<f64>>>,
     input_state: Rc<Cell<InputState>>,
+    key_requests: Rc<RefCell<Vec<KeyRequest>>>,
 }
 
 struct TimerRegistry {
@@ -120,6 +144,9 @@ struct TimerHandle {
     id: u64,
     timers: Rc<RefCell<TimerRegistry>>,
 }
+
+#[derive(Clone, Copy)]
+struct LuaKey(OutputKey);
 
 struct DueTimer {
     id: u64,
@@ -410,14 +437,19 @@ impl Runtime {
                 .set(Some(sample_now(now_seconds, started)));
             let redraw_pending = self.controls.redraw_pending.get();
             let backlight = self.controls.pending_backlight.take();
+            let key_requests = self.controls.key_requests.borrow_mut().drain(..).collect();
             let next_timer_deadline = self.controls.timers.borrow().next_deadline();
             Ok(WorkerEffects {
                 frame,
                 backlight,
+                key_requests,
                 next_timer_deadline,
                 redraw_pending,
             })
         })();
+        if result.is_err() {
+            self.controls.key_requests.borrow_mut().clear();
+        }
         self.controls.now_seconds.set(None);
         result
     }
@@ -680,6 +712,7 @@ impl RuntimeControls {
             backlight_level: Rc::new(Cell::new(initial_backlight)),
             pending_backlight: Rc::new(Cell::new(None)),
             input_state: Rc::new(Cell::new(initial_input)),
+            key_requests: Rc::new(RefCell::new(Vec::new())),
         }
     }
 }
@@ -819,6 +852,115 @@ fn validate_every_interval(interval: f64) -> mlua::Result<()> {
     }
 }
 
+impl UserData for LuaKey {}
+
+fn create_key_constants(lua: &Lua) -> mlua::Result<Table> {
+    let keys = lua.create_table()?;
+    let keyboard = lua.create_table()?;
+    for (name, key) in [
+        ("escape", KeyboardKey::Escape),
+        ("f1", KeyboardKey::F1),
+        ("f2", KeyboardKey::F2),
+        ("f3", KeyboardKey::F3),
+        ("f4", KeyboardKey::F4),
+        ("f5", KeyboardKey::F5),
+        ("f6", KeyboardKey::F6),
+        ("f7", KeyboardKey::F7),
+        ("f8", KeyboardKey::F8),
+        ("f9", KeyboardKey::F9),
+        ("f10", KeyboardKey::F10),
+        ("f11", KeyboardKey::F11),
+        ("f12", KeyboardKey::F12),
+        ("left_ctrl", KeyboardKey::LeftCtrl),
+        ("right_ctrl", KeyboardKey::RightCtrl),
+        ("left_alt", KeyboardKey::LeftAlt),
+        ("right_alt", KeyboardKey::RightAlt),
+        ("left_shift", KeyboardKey::LeftShift),
+        ("right_shift", KeyboardKey::RightShift),
+        ("left_super", KeyboardKey::LeftSuper),
+        ("right_super", KeyboardKey::RightSuper),
+    ] {
+        keyboard.set(name, lua.create_userdata(LuaKey(OutputKey::Keyboard(key)))?)?;
+    }
+    let consumer = lua.create_table()?;
+    for (name, key) in [
+        ("brightness_down", ConsumerKey::BrightnessDown),
+        ("brightness_up", ConsumerKey::BrightnessUp),
+        ("previous", ConsumerKey::Previous),
+        ("play_pause", ConsumerKey::PlayPause),
+        ("next", ConsumerKey::Next),
+        ("mute", ConsumerKey::Mute),
+        ("volume_down", ConsumerKey::VolumeDown),
+        ("volume_up", ConsumerKey::VolumeUp),
+    ] {
+        consumer.set(name, lua.create_userdata(LuaKey(OutputKey::Consumer(key)))?)?;
+    }
+    keys.set("keyboard", keyboard)?;
+    keys.set("consumer", consumer)?;
+    Ok(keys)
+}
+
+fn create_key_operation(
+    lua: &Lua,
+    controls: &RuntimeControls,
+    operation: KeyOperation,
+) -> mlua::Result<Function> {
+    let committed = controls.committed.clone();
+    let requests = controls.key_requests.clone();
+    lua.create_function(move |_, (value, options): (Value, Option<Table>)| {
+        if !committed.get() {
+            return Err(mlua::Error::runtime(
+                "synthetic key output is unavailable while staging",
+            ));
+        }
+        let key = parse_lua_key(value)?;
+        let modifiers = parse_modifier_mode(options)?;
+        requests.borrow_mut().push(KeyRequest {
+            operation,
+            key,
+            modifiers,
+        });
+        Ok(())
+    })
+}
+
+fn parse_lua_key(value: Value) -> mlua::Result<OutputKey> {
+    match value {
+        Value::UserData(value) => Ok(value.borrow::<LuaKey>()?.0),
+        value => Err(mlua::Error::runtime(format!(
+            "key constant must be a Sliver key, got {}",
+            value.type_name()
+        ))),
+    }
+}
+
+fn parse_modifier_mode(options: Option<Table>) -> mlua::Result<ModifierMode> {
+    let Some(options) = options else {
+        return Ok(ModifierMode::Inherit);
+    };
+    let value: Value = options.raw_get("modifiers")?;
+    match value {
+        Value::Nil => Ok(ModifierMode::Inherit),
+        Value::Boolean(false) => Ok(ModifierMode::None),
+        Value::String(value) => match value.to_str()?.as_ref() {
+            "inherit" | "default" => Ok(ModifierMode::Inherit),
+            "none" | "suppress" => Ok(ModifierMode::None),
+            value => Err(mlua::Error::runtime(format!(
+                "unknown modifier mode {value:?}"
+            ))),
+        },
+        Value::Table(values) => values
+            .sequence_values::<Value>()
+            .map(|value| value.and_then(parse_lua_key))
+            .collect::<mlua::Result<Vec<_>>>()
+            .map(ModifierMode::Explicit),
+        value => Err(mlua::Error::runtime(format!(
+            "key modifiers must be omitted, false, a mode, or a key list, got {}",
+            value.type_name()
+        ))),
+    }
+}
+
 fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<Cell<bool>>> {
     let loaded = Rc::new(Cell::new(false));
     let loaded_by_require = loaded.clone();
@@ -846,6 +988,25 @@ fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<C
             lua.create_function(move |lua, ()| input_state_table(lua, input_state.get()))?,
         )?;
         module.set("input", input)?;
+
+        let keys = create_key_constants(lua)?;
+        let key_api = lua.create_table()?;
+        for operation in [KeyOperation::Down, KeyOperation::Up, KeyOperation::Tap] {
+            let name = match operation {
+                KeyOperation::Down => "down",
+                KeyOperation::Up => "up",
+                KeyOperation::Tap => "tap",
+            };
+            key_api.set(
+                name,
+                create_key_operation(lua, &loader_controls, operation)?,
+            )?;
+        }
+        key_api.set("keyboard", keys.get::<Table>("keyboard")?)?;
+        key_api.set("consumer", keys.get::<Table>("consumer")?)?;
+        let input: Table = module.get("input")?;
+        input.set("keys", keys)?;
+        input.set("key", key_api)?;
 
         let timer = lua.create_table()?;
         let after_controls = loader_controls.clone();
