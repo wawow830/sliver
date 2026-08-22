@@ -106,18 +106,20 @@ Apple MTP keyboard
 Sliver observes it without grabbing it. `KEY_FN` press activates the generated
 F1–F12 layout; release restores the custom config.
 
-A uinput device named `Sliver Function Row` advertises:
+One persistent uinput device named `Sliver Keyboard` advertises:
 
 - F1–F12
 - left/right Ctrl
 - left/right Alt
 - left/right Shift
 - left/right Meta/Super
+- Escape and consumer media, brightness, mute, and volume keys
 
-Modifiers physically held on the Apple keyboard are mirrored around the
-function-key event on the virtual keyboard. This is required because Hyprland
-tracks modifiers per keyboard; without bridging, physical Ctrl+Alt and virtual
-F2 are not interpreted as one Ctrl+Alt+F2 chord.
+Lua key taps and the fixed function row use this device. Modifiers physically
+held on the Apple keyboard are mirrored around a key event when inherited.
+This is required because Hyprland tracks modifiers per keyboard; without
+bridging, physical Ctrl+Alt and virtual F2 are not interpreted as one
+Ctrl+Alt+F2 chord.
 
 For a held Ctrl+Alt and F2 tap, Sliver emits from one virtual device:
 
