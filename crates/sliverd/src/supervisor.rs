@@ -25,7 +25,7 @@ use crate::lua_worker::{
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
-use crate::recovery::RecoveryRow;
+use crate::recovery::{RecoveryRow, RecoveryState, RecoveryTouchResult};
 
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
 const REQUEST_QUEUE_CAPACITY: usize = 16;
@@ -37,12 +37,6 @@ struct ActiveConfig {
     frame: LogicalFrame,
     backlight: f64,
     contacts: BTreeMap<ContactId, TouchEvent>,
-}
-
-struct RecoveryState {
-    contacts: BTreeMap<ContactId, usize>,
-    pressed_contacts: BTreeSet<ContactId>,
-    owner_is_healthy: bool,
 }
 
 struct AuthorizedRequest {
@@ -648,18 +642,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     fn route_touch(&mut self, event: TouchEvent) -> Result<()> {
         match event.phase {
             TouchPhase::Down => {
-                if self.down_contacts.insert(event.id, event).is_some() {
+                if self.down_contacts.insert(event.id, event).is_some()
+                    || self.ignored_contacts.contains(&event.id)
+                {
                     return Ok(());
-                }
-                if self.ignored_contacts.contains(&event.id) {
-                    return Ok(());
-                }
-                if self.recovery.is_some() {
-                    return self.route_recovery_touch(event);
-                }
-                if let Some(active) = self.active.as_mut() {
-                    active.contacts.insert(event.id, event);
-                    self.touch_queue.push(event);
                 }
             }
             TouchPhase::Move => {
@@ -670,9 +656,40 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 if self.ignored_contacts.contains(&event.id) {
                     return Ok(());
                 }
-                if self.recovery.is_some() {
-                    return self.route_recovery_touch(event);
+            }
+            TouchPhase::Up | TouchPhase::Cancel => {
+                self.down_contacts.remove(&event.id);
+                if self.ignored_contacts.remove(&event.id) {
+                    return Ok(());
                 }
+            }
+        }
+
+        if self.recovery.is_some() {
+            let result = self
+                .recovery
+                .as_mut()
+                .expect("recovery state disappeared")
+                .route_touch(event, &mut self.recovery_row);
+            match result {
+                RecoveryTouchResult::Ignored => {}
+                RecoveryTouchResult::Changed => self.present_recovery()?,
+                RecoveryTouchResult::Activate(index) => {
+                    self.present_recovery()?;
+                    self.activate_recovery_key(index)?;
+                }
+            }
+            return Ok(());
+        }
+
+        match event.phase {
+            TouchPhase::Down => {
+                if let Some(active) = self.active.as_mut() {
+                    active.contacts.insert(event.id, event);
+                    self.touch_queue.push(event);
+                }
+            }
+            TouchPhase::Move => {
                 if let Some(active) = self.active.as_mut() {
                     if let std::collections::btree_map::Entry::Occupied(mut contact) =
                         active.contacts.entry(event.id)
@@ -683,103 +700,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 }
             }
             TouchPhase::Up | TouchPhase::Cancel => {
-                self.down_contacts.remove(&event.id);
-                if self.ignored_contacts.remove(&event.id) {
-                    return Ok(());
-                }
-                if self.recovery.is_some() {
-                    return self.route_recovery_touch(event);
-                }
                 if let Some(active) = self.active.as_mut() {
                     if active.contacts.remove(&event.id).is_some() {
                         self.touch_queue.push(event);
                     }
                 }
             }
-        }
-        Ok(())
-    }
-
-    fn route_recovery_touch(&mut self, event: TouchEvent) -> Result<()> {
-        let mut activation = None;
-        let changed = match event.phase {
-            TouchPhase::Down => {
-                let Some(index) = RecoveryRow::hit_test(event.x, event.y) else {
-                    return Ok(());
-                };
-                let recovery = self.recovery.as_mut().expect("recovery state disappeared");
-                recovery.contacts.insert(event.id, index);
-                recovery.pressed_contacts.insert(event.id);
-                if self.recovery_row.is_pressed(index) {
-                    false
-                } else {
-                    self.recovery_row.press(index);
-                    true
-                }
-            }
-            TouchPhase::Move => {
-                let Some(index) = self
-                    .recovery
-                    .as_ref()
-                    .and_then(|recovery| recovery.contacts.get(&event.id).copied())
-                else {
-                    return Ok(());
-                };
-                let inside = RecoveryRow::hit_test(event.x, event.y) == Some(index);
-                let recovery = self.recovery.as_mut().expect("recovery state disappeared");
-                let was_inside = recovery.pressed_contacts.contains(&event.id);
-                if inside == was_inside {
-                    false
-                } else {
-                    if inside {
-                        recovery.pressed_contacts.insert(event.id);
-                    } else {
-                        recovery.pressed_contacts.remove(&event.id);
-                    }
-                    let any_pressed = recovery
-                        .pressed_contacts
-                        .iter()
-                        .any(|id| recovery.contacts.get(id) == Some(&index));
-                    if any_pressed {
-                        self.recovery_row.press(index);
-                    } else {
-                        self.recovery_row.release(index);
-                    }
-                    true
-                }
-            }
-            TouchPhase::Up | TouchPhase::Cancel => {
-                let Some(index) = self
-                    .recovery
-                    .as_mut()
-                    .and_then(|recovery| recovery.contacts.remove(&event.id))
-                else {
-                    return Ok(());
-                };
-                let activate = event.phase == TouchPhase::Up
-                    && RecoveryRow::hit_test(event.x, event.y) == Some(index);
-                let recovery = self.recovery.as_mut().expect("recovery state disappeared");
-                recovery.pressed_contacts.remove(&event.id);
-                let still_pressed = recovery
-                    .pressed_contacts
-                    .iter()
-                    .any(|id| recovery.contacts.get(id) == Some(&index));
-                if still_pressed {
-                    self.recovery_row.press(index);
-                } else {
-                    self.recovery_row.release(index);
-                }
-                if activate {
-                    activation = Some(index);
-                }
-                true
-            }
-        };
-        if changed {
-            self.present_recovery()?;
-        }
-        if let Some(index) = activation {
-            self.activate_recovery_key(index)?;
         }
         Ok(())
     }
@@ -838,11 +764,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.next_timer_deadline = None;
         self.fn_hold_started = None;
         self.recovery_row.clear();
-        self.recovery = Some(RecoveryState {
-            contacts: BTreeMap::new(),
-            pressed_contacts: BTreeSet::new(),
-            owner_is_healthy,
-        });
+        self.recovery = Some(RecoveryState::new(owner_is_healthy));
         self.hardware
             .set_backlight(0.75)
             .context("setting recovery backlight")?;
@@ -854,7 +776,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let Some(recovery) = self.recovery.take() else {
             return Ok(());
         };
-        if !recovery.owner_is_healthy || self.active.is_none() {
+        if !recovery.owner_is_healthy() || self.active.is_none() {
             self.recovery = Some(recovery);
             return Ok(());
         }
@@ -1014,7 +936,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.active.take();
         self.next_timer_deadline = None;
         if let Some(recovery) = self.recovery.as_mut() {
-            recovery.owner_is_healthy = false;
+            recovery.mark_unhealthy();
             Ok(())
         } else {
             self.enter_recovery()

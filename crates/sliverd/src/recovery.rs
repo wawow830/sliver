@@ -1,12 +1,111 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use cairo::{FontSlant, FontWeight, Format, ImageSurface};
 
-use crate::hardware::{function_key_output, LogicalFrame};
+use crate::hardware::{function_key_output, ContactId, LogicalFrame, TouchEvent, TouchPhase};
 
 const KEY_COUNT: usize = 12;
 const PRESSED: (f64, f64, f64) = (0.22, 0.22, 0.22);
+
+pub(crate) struct RecoveryState {
+    contacts: BTreeMap<ContactId, usize>,
+    pressed_contacts: BTreeSet<ContactId>,
+    owner_is_healthy: bool,
+}
+
+pub(crate) enum RecoveryTouchResult {
+    Ignored,
+    Changed,
+    Activate(usize),
+}
+
+impl RecoveryState {
+    pub(crate) fn new(owner_is_healthy: bool) -> Self {
+        Self {
+            contacts: BTreeMap::new(),
+            pressed_contacts: BTreeSet::new(),
+            owner_is_healthy,
+        }
+    }
+
+    pub(crate) fn owner_is_healthy(&self) -> bool {
+        self.owner_is_healthy
+    }
+
+    pub(crate) fn mark_unhealthy(&mut self) {
+        self.owner_is_healthy = false;
+    }
+
+    pub(crate) fn route_touch(
+        &mut self,
+        event: TouchEvent,
+        row: &mut RecoveryRow,
+    ) -> RecoveryTouchResult {
+        match event.phase {
+            TouchPhase::Down => {
+                let Some(index) = RecoveryRow::hit_test(event.x, event.y) else {
+                    return RecoveryTouchResult::Ignored;
+                };
+                self.contacts.insert(event.id, index);
+                self.pressed_contacts.insert(event.id);
+                if row.is_pressed(index) {
+                    RecoveryTouchResult::Ignored
+                } else {
+                    row.press(index);
+                    RecoveryTouchResult::Changed
+                }
+            }
+            TouchPhase::Move => {
+                let Some(index) = self.contacts.get(&event.id).copied() else {
+                    return RecoveryTouchResult::Ignored;
+                };
+                let inside = RecoveryRow::hit_test(event.x, event.y) == Some(index);
+                let was_inside = self.pressed_contacts.contains(&event.id);
+                if inside == was_inside {
+                    return RecoveryTouchResult::Ignored;
+                }
+                if inside {
+                    self.pressed_contacts.insert(event.id);
+                } else {
+                    self.pressed_contacts.remove(&event.id);
+                }
+                let any_pressed = self
+                    .pressed_contacts
+                    .iter()
+                    .any(|id| self.contacts.get(id) == Some(&index));
+                if any_pressed {
+                    row.press(index);
+                } else {
+                    row.release(index);
+                }
+                RecoveryTouchResult::Changed
+            }
+            TouchPhase::Up | TouchPhase::Cancel => {
+                let Some(index) = self.contacts.remove(&event.id) else {
+                    return RecoveryTouchResult::Ignored;
+                };
+                let activate = event.phase == TouchPhase::Up
+                    && RecoveryRow::hit_test(event.x, event.y) == Some(index);
+                self.pressed_contacts.remove(&event.id);
+                let still_pressed = self
+                    .pressed_contacts
+                    .iter()
+                    .any(|id| self.contacts.get(id) == Some(&index));
+                if still_pressed {
+                    row.press(index);
+                } else {
+                    row.release(index);
+                }
+                if activate {
+                    RecoveryTouchResult::Activate(index)
+                } else {
+                    RecoveryTouchResult::Changed
+                }
+            }
+        }
+    }
+}
 
 /// The compiled escape row. It owns the recovery layout and drawing policy so
 /// the supervisor only has to route contacts and key events.
