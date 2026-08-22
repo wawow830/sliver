@@ -854,6 +854,42 @@ mod tests {
     }
 
     #[test]
+    fn lua_rejects_oversized_decoded_output_before_conversion() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("oversized-output.lua");
+        let too_large = 16 * 1024 * 1024 + 4;
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local image = sliver.image.new(
+                    string.rep("\0", {too_large}),
+                    "rgba8",
+                    1,
+                    {too_large} // 4,
+                    4
+                )
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                too_large = too_large
+            ),
+        )?;
+
+        let error = match crate::lua_worker::LuaWorker::stage(&source) {
+            Ok(staged) => {
+                staged
+                    .worker
+                    .shutdown(crate::lua_worker::StopReason::Shutdown)?;
+                panic!("oversized decoded output was accepted")
+            }
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("image storage is limited"));
+        Ok(())
+    }
+
+    #[test]
     fn lua_rejects_decoded_images_beyond_cairo_dimensions() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("wide-image.lua");
