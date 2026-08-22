@@ -2098,6 +2098,58 @@ mod tests {
     }
 
     #[test]
+    fn recovery_cancels_touch_and_releases_lua_held_key() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("keys.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f1
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(key)
+                    elseif event.phase == "cancel" then
+                        sliver.input.key.up(key)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(2.0)?;
+        supervisor.step_at(5.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn healthy_recovery_exits_before_later_same_batch_touch_up() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("healthy.lua");
