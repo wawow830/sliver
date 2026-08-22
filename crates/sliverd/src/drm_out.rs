@@ -23,6 +23,8 @@ use drm::Device as _;
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, EventType, InputEvent, Key};
 
+use crate::hardware::{HardwareEvent, LogicalFrame, ModifierState, TouchBarHardware};
+
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
 const PANEL_W: u32 = 60;
 const FB_PAD: u32 = 4;
@@ -485,6 +487,122 @@ impl Drop for Takeover {
     }
 }
 
+struct Daemon {
+    cfg: sliver_core::Config,
+    fn_layer: sliver_core::Config,
+    pressed: Option<(usize, Instant)>,
+    fn_active: bool,
+    modifiers: ModifierState,
+    last_tick: String,
+    dirty: bool,
+}
+
+impl Daemon {
+    fn new(cfg: sliver_core::Config) -> Self {
+        Self {
+            cfg,
+            fn_layer: sliver_core::function_row_config(),
+            pressed: None,
+            fn_active: false,
+            modifiers: ModifierState::default(),
+            last_tick: String::new(),
+            dirty: true,
+        }
+    }
+
+    fn start<H: TouchBarHardware>(&mut self, hardware: &mut H) -> Result<()> {
+        hardware.claim()?;
+        self.repaint(hardware)
+    }
+
+    fn step<H: TouchBarHardware>(&mut self, hardware: &mut H, timeout: Duration) -> Result<()> {
+        for event in hardware.poll(timeout)? {
+            match event {
+                HardwareEvent::Fn { active } if active != self.fn_active => {
+                    self.fn_active = active;
+                    self.pressed = None;
+                    self.dirty = true;
+                }
+                HardwareEvent::Fn { .. } => {}
+                HardwareEvent::Modifier { modifier, active } => {
+                    self.modifiers.set(modifier, active)
+                }
+                HardwareEvent::TouchTap { x } => self.handle_touch(hardware, x)?,
+                HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
+            }
+        }
+
+        if let Some((_, since)) = self.pressed {
+            if since.elapsed() > FLASH {
+                self.pressed = None;
+                self.dirty = true;
+            }
+        }
+        let tick = chrono::Local::now().format("%H:%M:%S").to_string();
+        if tick != self.last_tick {
+            self.last_tick = tick;
+            self.dirty = true;
+        }
+        if self.dirty {
+            self.repaint(hardware)?;
+        }
+        Ok(())
+    }
+
+    fn handle_touch<H: TouchBarHardware>(&mut self, hardware: &mut H, x: f64) -> Result<()> {
+        let active_cfg = if self.fn_active {
+            &self.fn_layer
+        } else {
+            &self.cfg
+        };
+        if let Some(index) = sliver_core::hit(active_cfg, x) {
+            self.pressed = Some((index, Instant::now()));
+            self.dirty = true;
+            if self.fn_active {
+                hardware.tap_function_key(index, self.modifiers)?;
+            } else if let Some(cmd) = self.cfg.action_at(index) {
+                let cmd = cmd.to_string();
+                std::thread::spawn(move || {
+                    let _ = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .status();
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_config(&mut self, cfg: sliver_core::Config) {
+        self.cfg = cfg;
+        self.pressed = None;
+        self.dirty = true;
+    }
+
+    fn repaint<H: TouchBarHardware>(&mut self, hardware: &mut H) -> Result<()> {
+        let surface = cairo::ImageSurface::create(
+            cairo::Format::ARgb32,
+            sliver_core::STRIP_W as i32,
+            sliver_core::STRIP_H as i32,
+        )?;
+        let cr = cairo::Context::new(&surface)?;
+        let active_cfg = if self.fn_active {
+            &self.fn_layer
+        } else {
+            &self.cfg
+        };
+        sliver_core::render(active_cfg, &cr, self.pressed.map(|(index, _)| index))?;
+        surface.flush();
+        hardware.present(&LogicalFrame::new(surface))?;
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn shutdown<H: TouchBarHardware>(&mut self, hardware: &mut H) -> Result<()> {
+        hardware.release()
+    }
+}
+
 /// Claim the strip and give it a pulse: heartbeat re-renders, touch
 /// highlights, live battery numbers, live configs over the socket.
 /// Ctrl-C lets go.
@@ -665,4 +783,59 @@ fn hold() -> Result<()> {
     }
     eprintln!("releasing the strip");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hardware::{FakeAction, FakeTouchBar, HardwareEvent, Modifier};
+
+    #[test]
+    fn current_function_row_crosses_the_hardware_seam() -> Result<()> {
+        let cfg = sliver_core::parse_config(
+            r##"
+            background = "#ff0000"
+            widgets = []
+            "##,
+        )?;
+        let mut daemon = Daemon::new(cfg);
+        let mut hardware = FakeTouchBar::new();
+
+        daemon.start(&mut hardware)?;
+        let first_frame = hardware
+            .presented_frames()
+            .first()
+            .context("daemon did not present its initial frame")?;
+        assert_eq!(first_frame.dimensions(), (2008, 60));
+        assert_eq!(first_frame.rgba_at(0, 0), [255, 0, 0, 255]);
+
+        hardware.inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        hardware.inject(HardwareEvent::Fn { active: true });
+        hardware.inject(HardwareEvent::TouchTap { x: 260.0 });
+        daemon.step(&mut hardware, Duration::ZERO)?;
+
+        assert!(hardware.actions().iter().any(|action| {
+            matches!(
+                action,
+                FakeAction::FunctionKeyTap {
+                    index: 1,
+                    modifiers,
+                } if modifiers.is_active(Modifier::LeftCtrl)
+            )
+        }));
+
+        daemon.shutdown(&mut hardware)?;
+        assert_eq!(
+            hardware
+                .actions()
+                .iter()
+                .filter(|action| matches!(action, FakeAction::Release))
+                .count(),
+            1
+        );
+        Ok(())
+    }
 }

@@ -9,6 +9,7 @@
 //! Milestone three: the strip listens. Touch, heartbeat, live apply.
 
 mod drm_out;
+mod hardware;
 
 use std::io::{Read, Write};
 
