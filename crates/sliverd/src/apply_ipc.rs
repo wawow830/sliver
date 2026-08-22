@@ -1,8 +1,6 @@
-#[cfg(test)]
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
-#[cfg(test)]
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
@@ -17,6 +15,8 @@ pub(crate) fn request_apply(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
+    // The supervisor owns the worker environment. Keep client environment and
+    // other process state out of this protocol; the request is only a path.
     let path = absolute_lexical(path)?;
     let bytes = path.as_os_str().as_bytes();
     ensure!(
@@ -42,7 +42,6 @@ pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn read_request(stream: &mut UnixStream) -> Result<PathBuf> {
     let bytes = read_bytes(stream).context("reading apply request")?;
     ensure!(!bytes.is_empty(), "config path is empty");

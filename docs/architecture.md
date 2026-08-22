@@ -179,3 +179,21 @@ The transaction covers only state owned by Sliver. Lua runs as trusted user
 code while staging. Filesystem writes, child processes, network requests, and
 native-module effects happen immediately and cannot be rolled back when an
 apply fails.
+
+## Local apply authorization
+
+See [ADR 0001, local apply authorization](adr/0001-local-apply-authorization.md)
+for the decision and its transaction limit.
+
+`sliver FILE` sends only the normalized path to
+`$XDG_RUNTIME_DIR/sliver/supervisor.sock`. The supervisor reads the Unix
+kernel peer credentials and asks logind for the peer's session. It accepts a
+non-root peer only when that peer belongs to the active, local, non-remote
+session on its seat. Inactive sessions, SSH sessions, cron and user-service
+processes without a qualifying session, and root are rejected.
+
+The supervisor checks the session before staging and again immediately before
+commit. A session switch cancels candidates that are staging or waiting in the
+FIFO request queue. Workers run with the supervisor's systemd user-manager
+environment. The protocol has no TCP listener or token field and carries no
+client environment.

@@ -128,6 +128,14 @@ fn successful_apply_is_silent_and_sends_absolute_path() {
             .expect("failed to read path length");
         let mut path = vec![0; u32::from_be_bytes(length) as usize];
         stream.read_exact(&mut path).expect("failed to read path");
+        let mut trailing = Vec::new();
+        stream
+            .read_to_end(&mut trailing)
+            .expect("failed to read the end of the apply request");
+        assert!(
+            trailing.is_empty(),
+            "client sent data beyond the config path"
+        );
         stream
             .write_all(&[0, 0, 0, 0, 0])
             .expect("failed to send success reply");
