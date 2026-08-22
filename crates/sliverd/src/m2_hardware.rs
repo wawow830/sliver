@@ -1025,7 +1025,10 @@ impl M2TouchBar {
         let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
         self.modifiers = keyboard.initial_modifiers();
         self.keyboard = Some(keyboard);
-        self.keyboard_emitter = Some(KeyboardEmitter::new().context("creating Sliver Keyboard")?);
+        if self.keyboard_emitter.is_none() {
+            self.keyboard_emitter =
+                Some(KeyboardEmitter::new().context("creating Sliver Keyboard")?);
+        }
         Ok(())
     }
 
@@ -1145,7 +1148,6 @@ impl M2TouchBar {
         self.touch = None;
         self.keyboard = None;
         self.modifiers = ModifierState::default();
-        self.keyboard_emitter = None;
 
         let framebuffer = self.framebuffer.take();
         let dumb_buffer = self.dumb_buffer.take();
@@ -1347,6 +1349,27 @@ fn hold() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_keeps_keyboard_emitter_for_reclaim() -> Result<()> {
+        let mut hardware = M2TouchBar::new();
+        hardware.keyboard_emitter = Some(KeyboardEmitter::new()?);
+        let first = hardware
+            .keyboard_emitter
+            .as_ref()
+            .expect("keyboard emitter was not created")
+            as *const KeyboardEmitter;
+
+        hardware.release_inner()?;
+
+        let second = hardware
+            .keyboard_emitter
+            .as_ref()
+            .expect("release discarded the keyboard emitter")
+            as *const KeyboardEmitter;
+        assert_eq!(first, second);
+        Ok(())
+    }
 
     #[test]
     fn framebuffer_copy_uses_visible_width_and_mode_height() -> Result<()> {
