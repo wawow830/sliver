@@ -129,6 +129,8 @@ impl Runtime {
         let bytes =
             std::fs::read(source).map_err(|error| diagnostic("load", source, error.to_string()))?;
         let lua = unsafe { Lua::unsafe_new() };
+        configure_lua_path(&lua, source)
+            .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let loaded_v1 = install_v1_module(&lua)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let value = lua
@@ -226,6 +228,22 @@ impl Runtime {
         }
         Ok(())
     }
+}
+
+fn configure_lua_path(lua: &Lua, source: &Path) -> mlua::Result<()> {
+    let directory = source.parent().unwrap_or_else(|| Path::new("."));
+    let package: Table = lua.globals().get("package")?;
+    let existing: String = package.get("path")?;
+    let direct = directory.join("?.lua");
+    let nested = directory.join("?/init.lua");
+    package.set(
+        "path",
+        format!(
+            "{};{};{existing}",
+            direct.to_string_lossy(),
+            nested.to_string_lossy()
+        ),
+    )
 }
 
 fn install_v1_module(lua: &Lua) -> mlua::Result<Rc<Cell<bool>>> {

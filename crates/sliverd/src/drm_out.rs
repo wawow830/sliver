@@ -494,6 +494,46 @@ mod tests {
     }
 
     #[test]
+    fn lua_worker_loads_relative_modules_with_full_lua_54() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("imports.lua");
+        std::fs::write(directory.path().join("helper.lua"), "return { red = 0.25 }")?;
+        std::fs::write(
+            &source,
+            r#"
+            local helper = require("helper")
+            require("sliver.v1")
+            assert(_VERSION == "Lua 5.4")
+            for _, library in ipairs({
+                coroutine, debug, io, math, os, package,
+                string, table, utf8,
+            }) do
+                assert(type(library) == "table")
+            end
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, helper.red, 0, 0, 1)
+                end,
+            }
+            "#,
+        )?;
+        let mut hardware = FakeTouchBar::new();
+
+        present_lua_once(&source, &mut hardware)?;
+
+        assert_eq!(
+            hardware
+                .presented_frames()
+                .first()
+                .context("worker did not present the imported config")?
+                .rgba_at(10, 10),
+            [64, 0, 0, 255]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn lua_diagnostics_name_source_line_traceback_and_stage() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("diagnostic.lua");
