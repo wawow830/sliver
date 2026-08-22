@@ -714,7 +714,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let stop_result = self.stop_active_worker(StopReason::Logout);
         let input_state = self.hardware.input_state();
         self.reset_owner_state(input_state);
-        stop_result
+        if let Err(error) = stop_result {
+            eprintln!("Lua worker logout cleanup failed during owner handoff: {error:#}");
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1203,7 +1206,6 @@ mod tests {
                 modifier: Modifier::LeftCtrl,
                 active: true,
             });
-        supervisor.step_at(1.5)?;
 
         supervisor.handoff_owner()?;
         assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
@@ -1215,6 +1217,60 @@ mod tests {
 
         supervisor.apply(&new_source)?;
         assert_eq!(std::fs::read_to_string(&state_log)?, "true:true");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn failing_logout_still_completes_owner_handoff() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let order_file = directory.path().join("failing-handoff-order");
+        let old_source = directory.path().join("failing-old.lua");
+        let new_source = directory.path().join("after-logout.lua");
+        std::fs::write(
+            &old_source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local order = {order:?}
+                return {{
+                    api_version = 1,
+                    stop = function(reason)
+                        local file = assert(io.open(order, "a"))
+                        file:write(reason, "\n")
+                        file:close()
+                        error("logout cleanup failed")
+                    end,
+                    touch = function(event)
+                        if event.phase == "down" then
+                            sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                        end
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                order = order_file.to_string_lossy(),
+            ),
+        )?;
+        std::fs::write(
+            &new_source,
+            "require(\"sliver.v1\"); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (hardware, _) = SharedFakeHardware::with_order(Some(order_file.clone()));
+        let mut supervisor = Supervisor::new(hardware, state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+
+        supervisor
+            .handoff_owner()
+            .expect("failing logout aborted owner handoff");
+        assert_eq!(std::fs::read_to_string(&order_file)?, "key-up\nlogout\n");
+        supervisor.apply(&new_source)?;
         supervisor.shutdown()?;
         Ok(())
     }
