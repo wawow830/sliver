@@ -114,6 +114,10 @@ impl DriveRequest {
         }
     }
 
+    pub(crate) fn without_input(now_seconds: f64, input_state: InputState) -> Self {
+        Self::new(now_seconds, input_state, Vec::new(), 0.0, Vec::new())
+    }
+
     pub(crate) fn with_visibility(
         mut self,
         visible: bool,
