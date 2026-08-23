@@ -25,7 +25,7 @@ use crate::lua_worker::{
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
-use crate::recovery::{RecoveryRow, RecoveryState, RecoveryTouchResult};
+use crate::recovery::{RecoverySession, RecoveryTouchResult};
 
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
 const RECOVERY_HOLD_SECONDS: f64 = 3.0;
@@ -287,8 +287,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     state_file: PathBuf,
     selected_path: Option<PathBuf>,
     active: Option<ActiveConfig>,
-    recovery: Option<RecoveryState>,
-    recovery_row: RecoveryRow,
+    recovery: Option<RecoverySession>,
     claimed: bool,
     origin: Instant,
     backlight: f64,
@@ -330,7 +329,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             selected_path: None,
             active: None,
             recovery: None,
-            recovery_row: RecoveryRow::new(),
             claimed: true,
             origin: Instant::now(),
             backlight,
@@ -563,7 +561,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
         self.selected_path = Some(selected_path.clone());
         self.recovery = None;
-        self.recovery_row.clear();
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         let deferred_touches = self.touch_queue.drain();
@@ -707,7 +704,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .recovery
                 .as_mut()
                 .expect("recovery state disappeared")
-                .route_touch(event, &mut self.recovery_row);
+                .route_touch(event);
             match result {
                 RecoveryTouchResult::Ignored => {}
                 RecoveryTouchResult::RowPressChanged => self.present_recovery()?,
@@ -758,7 +755,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn present_recovery(&mut self) -> Result<()> {
-        let frame = self.recovery_row.render()?;
+        let frame = self
+            .recovery
+            .as_ref()
+            .context("recovery session disappeared while rendering")?
+            .render()?;
         self.hardware.present(&frame)
     }
 
@@ -807,8 +808,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.input_transitions.clear();
         self.next_timer_deadline = next_timer_deadline;
         self.fn_hold_started = None;
-        self.recovery_row.clear();
-        self.recovery = Some(RecoveryState::new(owner_is_healthy));
+        self.recovery = Some(RecoverySession::new(owner_is_healthy));
         self.hardware
             .set_backlight(0.75)
             .context("setting recovery backlight")?;
@@ -824,7 +824,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             self.recovery = Some(recovery);
             return Ok(());
         }
-        self.recovery_row.clear();
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         let transitions = std::mem::take(&mut self.input_transitions);

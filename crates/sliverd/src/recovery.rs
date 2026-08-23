@@ -14,8 +14,9 @@ struct RecoveryContact {
     pressed: bool,
 }
 
-pub(crate) struct RecoveryState {
+pub(crate) struct RecoverySession {
     contacts: BTreeMap<ContactId, RecoveryContact>,
+    row: RecoveryRow,
     owner_is_healthy: bool,
 }
 
@@ -25,10 +26,11 @@ pub(crate) enum RecoveryTouchResult {
     Activate(usize),
 }
 
-impl RecoveryState {
+impl RecoverySession {
     pub(crate) fn new(owner_is_healthy: bool) -> Self {
         Self {
             contacts: BTreeMap::new(),
+            row: RecoveryRow::new(),
             owner_is_healthy,
         }
     }
@@ -41,23 +43,19 @@ impl RecoveryState {
         self.owner_is_healthy = false;
     }
 
-    fn update_row_press(&self, row: &mut RecoveryRow, key: usize) {
+    fn update_row_press(&mut self, key: usize) {
         if self
             .contacts
             .values()
             .any(|contact| contact.key == key && contact.pressed)
         {
-            row.press(key);
+            self.row.press(key);
         } else {
-            row.release(key);
+            self.row.release(key);
         }
     }
 
-    pub(crate) fn route_touch(
-        &mut self,
-        event: TouchEvent,
-        row: &mut RecoveryRow,
-    ) -> RecoveryTouchResult {
+    pub(crate) fn route_touch(&mut self, event: TouchEvent) -> RecoveryTouchResult {
         match event.phase {
             TouchPhase::Down => {
                 let Some(index) = RecoveryRow::hit_test(event.x, event.y) else {
@@ -70,10 +68,10 @@ impl RecoveryState {
                         pressed: true,
                     },
                 );
-                if row.is_pressed(index) {
+                if self.row.is_pressed(index) {
                     RecoveryTouchResult::Ignored
                 } else {
-                    row.press(index);
+                    self.row.press(index);
                     RecoveryTouchResult::RowPressChanged
                 }
             }
@@ -89,7 +87,7 @@ impl RecoveryState {
                     contact.pressed = inside;
                     contact.key
                 };
-                self.update_row_press(row, key);
+                self.update_row_press(key);
                 RecoveryTouchResult::RowPressChanged
             }
             TouchPhase::Up | TouchPhase::Cancel => {
@@ -98,7 +96,7 @@ impl RecoveryState {
                 };
                 let activate = event.phase == TouchPhase::Up
                     && RecoveryRow::hit_test(event.x, event.y) == Some(contact.key);
-                self.update_row_press(row, contact.key);
+                self.update_row_press(contact.key);
                 if activate {
                     RecoveryTouchResult::Activate(contact.key)
                 } else {
@@ -107,26 +105,26 @@ impl RecoveryState {
             }
         }
     }
+
+    pub(crate) fn render(&self) -> Result<LogicalFrame> {
+        self.row.render()
+    }
 }
 
 /// The compiled escape row. It owns the recovery layout and drawing policy so
 /// the supervisor only has to route contacts and key events.
-pub(crate) struct RecoveryRow {
+struct RecoveryRow {
     pressed: BTreeSet<usize>,
 }
 
 impl RecoveryRow {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self {
             pressed: BTreeSet::new(),
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.pressed.clear();
-    }
-
-    pub(crate) fn hit_test(x: f64, y: f64) -> Option<usize> {
+    fn hit_test(x: f64, y: f64) -> Option<usize> {
         if !(0.0..sliver_core::STRIP_H).contains(&y) || !(0.0..sliver_core::STRIP_W).contains(&x) {
             return None;
         }
@@ -134,15 +132,15 @@ impl RecoveryRow {
         (index < KEY_COUNT).then_some(index)
     }
 
-    pub(crate) fn press(&mut self, index: usize) {
+    fn press(&mut self, index: usize) {
         self.pressed.insert(index);
     }
 
-    pub(crate) fn release(&mut self, index: usize) {
+    fn release(&mut self, index: usize) {
         self.pressed.remove(&index);
     }
 
-    pub(crate) fn is_pressed(&self, index: usize) -> bool {
+    fn is_pressed(&self, index: usize) -> bool {
         self.pressed.contains(&index)
     }
 
