@@ -85,6 +85,15 @@ struct HeldSyntheticKey {
     modifiers: Vec<OutputKey>,
 }
 
+struct CandidateRollback<'a> {
+    previous_path_state: Option<&'a PathStateSnapshot>,
+    old_frame: Option<&'a LogicalFrame>,
+    old_backlight: f64,
+    restore_frame: bool,
+    restore_backlight: bool,
+    old_synthetic: Option<&'a SyntheticState>,
+}
+
 fn cancel_contacts(
     worker: &LuaWorker,
     contacts: &BTreeMap<ContactId, TouchEvent>,
@@ -565,12 +574,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             if !preserve_recovery {
                 if let Err(error) = self.hardware.set_backlight(level) {
                     return self.rollback_candidate(
-                        previous_path_state.as_ref(),
-                        old_frame.as_ref(),
-                        old_backlight,
-                        false,
-                        brightness_attempted,
-                        None,
+                        CandidateRollback {
+                            previous_path_state: previous_path_state.as_ref(),
+                            old_frame: old_frame.as_ref(),
+                            old_backlight,
+                            restore_frame: false,
+                            restore_backlight: brightness_attempted,
+                            old_synthetic: None,
+                        },
                         error,
                     );
                 }
@@ -581,12 +592,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if !preserve_recovery {
             if let Err(error) = self.hardware.present(&frame) {
                 return self.rollback_candidate(
-                    previous_path_state.as_ref(),
-                    old_frame.as_ref(),
-                    old_backlight,
-                    true,
-                    brightness_changed,
-                    None,
+                    CandidateRollback {
+                        previous_path_state: previous_path_state.as_ref(),
+                        old_frame: old_frame.as_ref(),
+                        old_backlight,
+                        restore_frame: true,
+                        restore_backlight: brightness_changed,
+                        old_synthetic: None,
+                    },
                     error,
                 );
             }
@@ -595,24 +608,28 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let now = self.now_seconds();
         if let Err(error) = worker.commit(now, self.input_state) {
             return self.rollback_candidate(
-                previous_path_state.as_ref(),
-                old_frame.as_ref(),
-                old_backlight,
-                !preserve_recovery,
-                brightness_changed,
-                None,
+                CandidateRollback {
+                    previous_path_state: previous_path_state.as_ref(),
+                    old_frame: old_frame.as_ref(),
+                    old_backlight,
+                    restore_frame: !preserve_recovery,
+                    restore_backlight: brightness_changed,
+                    old_synthetic: None,
+                },
                 error,
             );
         }
 
         if let Err(error) = self.release_synthetic_keys() {
             return self.rollback_candidate(
-                previous_path_state.as_ref(),
-                old_frame.as_ref(),
-                old_backlight,
-                !preserve_recovery,
-                brightness_changed,
-                None,
+                CandidateRollback {
+                    previous_path_state: previous_path_state.as_ref(),
+                    old_frame: old_frame.as_ref(),
+                    old_backlight,
+                    restore_frame: !preserve_recovery,
+                    restore_backlight: brightness_changed,
+                    old_synthetic: None,
+                },
                 error,
             );
         }
@@ -625,12 +642,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 {
                     return self
                         .rollback_candidate(
-                            previous_path_state.as_ref(),
-                            old_frame.as_ref(),
-                            old_backlight,
-                            !preserve_recovery,
-                            brightness_changed,
-                            Some(&old_synthetic),
+                            CandidateRollback {
+                                previous_path_state: previous_path_state.as_ref(),
+                                old_frame: old_frame.as_ref(),
+                                old_backlight,
+                                restore_frame: !preserve_recovery,
+                                restore_backlight: brightness_changed,
+                                old_synthetic: Some(&old_synthetic),
+                            },
                             error,
                         )
                         .map_err(|failure| match failure {
@@ -643,12 +662,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
             if let Err(error) = path_state.commit() {
                 return self.rollback_candidate(
-                    previous_path_state.as_ref(),
-                    old_frame.as_ref(),
-                    old_backlight,
-                    !preserve_recovery,
-                    brightness_changed,
-                    Some(&old_synthetic),
+                    CandidateRollback {
+                        previous_path_state: previous_path_state.as_ref(),
+                        old_frame: old_frame.as_ref(),
+                        old_backlight,
+                        restore_frame: !preserve_recovery,
+                        restore_backlight: brightness_changed,
+                        old_synthetic: Some(&old_synthetic),
+                    },
                     error,
                 );
             }
@@ -745,14 +766,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn rollback_candidate(
         &mut self,
-        previous_path_state: Option<&PathStateSnapshot>,
-        old_frame: Option<&LogicalFrame>,
-        old_backlight: f64,
-        restore_frame: bool,
-        restore_backlight: bool,
-        old_synthetic: Option<&SyntheticState>,
+        rollback: CandidateRollback<'_>,
         error: anyhow::Error,
     ) -> std::result::Result<(), CandidateFailure> {
+        let CandidateRollback {
+            previous_path_state,
+            old_frame,
+            old_backlight,
+            restore_frame,
+            restore_backlight,
+            old_synthetic,
+        } = rollback;
         let mut error = error;
         if restore_frame {
             let restore_result = match old_frame {
