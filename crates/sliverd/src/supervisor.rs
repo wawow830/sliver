@@ -296,7 +296,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     ignored_contacts: BTreeSet<ContactId>,
     touch_queue: TouchQueue,
     input_transitions: Vec<InputTransition>,
-    next_timer_deadline: Option<f64>,
+    next_worker_deadline: Option<f64>,
     fn_hold_started: Option<f64>,
     #[cfg(test)]
     worker_failure: Option<String>,
@@ -337,7 +337,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             ignored_contacts: BTreeSet::new(),
             touch_queue: TouchQueue::new(),
             input_transitions: Vec::new(),
-            next_timer_deadline: None,
+            next_worker_deadline: None,
             fn_hold_started: None,
             #[cfg(test)]
             worker_failure: None,
@@ -565,7 +565,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .extend(self.down_contacts.keys().copied());
         let deferred_touches = self.touch_queue.drain();
         let deferred_transitions = std::mem::take(&mut self.input_transitions);
-        self.next_timer_deadline = Some(now);
+        self.next_worker_deadline = Some(now);
         let replaced = self.active.replace(ActiveConfig {
             worker,
             _selected_path: selected_path,
@@ -856,9 +856,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             active.contacts.clear();
             hide_effects
         });
-        let next_timer_deadline = match hide_result {
+        let next_worker_deadline = match hide_result {
             Some(Ok(effects)) => match self.apply_key_effects(&effects.key_requests) {
-                Ok(()) => effects.next_timer_deadline,
+                Ok(()) => effects.next_worker_deadline,
                 Err(error) => {
                     eprintln!("healthy Lua worker failed while entering recovery: {error:#}");
                     self.active.take();
@@ -878,7 +878,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .extend(self.down_contacts.keys().copied());
         self.touch_queue.drain();
         self.input_transitions.clear();
-        self.next_timer_deadline = next_timer_deadline;
+        self.next_worker_deadline = next_worker_deadline;
         self.fn_hold_started = None;
         self.recovery = Some(RecoverySession::new(owner_is_healthy));
         self.hardware
@@ -1000,8 +1000,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if self.recovery.is_some() && !self.input_state.fn_active {
             self.exit_recovery(now)?;
         }
-        let timer_due = self
-            .next_timer_deadline
+        let worker_due = self
+            .next_worker_deadline
             .is_some_and(|deadline| deadline <= now);
         if self.recovery.is_some() {
             if self.active.is_some()
@@ -1009,14 +1009,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     .recovery
                     .as_ref()
                     .is_some_and(|recovery| recovery.owner_is_healthy())
-                && timer_due
+                && worker_due
             {
                 self.drive_hidden(now)?;
             }
         } else if self.active.is_some()
             && (!self.input_transitions.is_empty()
                 || !self.touch_queue.events.is_empty()
-                || timer_due)
+                || worker_due)
         {
             let transitions = std::mem::take(&mut self.input_transitions);
             let touches = self.touch_queue.drain();
@@ -1055,7 +1055,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         else {
             return Ok(());
         };
-        self.next_timer_deadline = effects.next_timer_deadline;
+        self.next_worker_deadline = effects.next_worker_deadline;
         self.apply_key_effects(&effects.key_requests)
     }
 
@@ -1084,11 +1084,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn schedule_effects(&mut self, now: f64, effects: &WorkerEffects) {
-        self.next_timer_deadline = if effects.redraw_pending {
+        self.next_worker_deadline = if effects.redraw_pending {
             Some(now)
         } else {
             effects
-                .next_timer_deadline
+                .next_worker_deadline
                 .or_else(|| effects.frame.as_ref().map(|_| now))
         };
     }
@@ -1117,7 +1117,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if let Err(cleanup_error) = self.release_synthetic_keys() {
             eprintln!("releasing synthetic keys after worker failure failed: {cleanup_error:#}");
         }
-        self.next_timer_deadline = None;
+        self.next_worker_deadline = None;
         if let Some(recovery) = self.recovery.as_mut() {
             recovery.mark_unhealthy();
             Ok(())
@@ -1202,7 +1202,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn poll_wait(&self, now: f64) -> Duration {
-        let deadline = earliest_deadline(self.next_timer_deadline, self.recovery_deadline());
+        let deadline = earliest_deadline(self.next_worker_deadline, self.recovery_deadline());
         let Some(deadline) = deadline else {
             return MAX_POLL_WAIT;
         };
@@ -1237,7 +1237,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.ignored_contacts.clear();
         self.touch_queue.drain();
         self.input_transitions.clear();
-        self.next_timer_deadline = None;
+        self.next_worker_deadline = None;
         self.input_state = input_state;
     }
 
@@ -5485,7 +5485,7 @@ mod tests {
         let state_file = directory.path().join("state/sliver/config-path");
         let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
         supervisor.apply(&source)?;
-        supervisor.next_timer_deadline = None;
+        supervisor.next_worker_deadline = None;
         supervisor
             .active
             .as_mut()

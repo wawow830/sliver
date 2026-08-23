@@ -35,7 +35,7 @@ pub(crate) struct WorkerEffects {
     pub(crate) frame: Option<TimedFrame>,
     pub(crate) backlight: Option<f64>,
     pub(crate) key_requests: Vec<KeyRequest>,
-    pub(crate) next_timer_deadline: Option<f64>,
+    pub(crate) next_worker_deadline: Option<f64>,
     pub(crate) redraw_pending: bool,
 }
 
@@ -141,7 +141,7 @@ struct RuntimeEffects {
     frame: Option<FrameTiming>,
     backlight: Option<f64>,
     key_requests: Vec<KeyRequest>,
-    next_timer_deadline: Option<f64>,
+    next_worker_deadline: Option<f64>,
     redraw_pending: bool,
 }
 
@@ -488,7 +488,7 @@ impl LuaWorker {
             frame,
             backlight: effects.backlight,
             key_requests: effects.key_requests,
-            next_timer_deadline: effects.next_timer_deadline,
+            next_worker_deadline: effects.next_worker_deadline,
             redraw_pending: effects.redraw_pending,
         })
     }
@@ -666,7 +666,7 @@ impl Runtime {
         }
     }
 
-    fn next_deadline(&self) -> Option<f64> {
+    fn next_worker_deadline(&self) -> Option<f64> {
         let pending_retry = self
             .visible
             .then_some(self.pending_retry_deadline)
@@ -744,12 +744,12 @@ impl Runtime {
             let redraw_pending = self.controls.redraw_pending.get();
             let backlight = self.controls.pending_backlight.take();
             let key_requests = self.controls.key_requests.borrow_mut().drain(..).collect();
-            let next_timer_deadline = self.next_deadline();
+            let next_worker_deadline = self.next_worker_deadline();
             Ok(RuntimeEffects {
                 frame,
                 backlight,
                 key_requests,
-                next_timer_deadline,
+                next_worker_deadline,
                 redraw_pending,
             })
         })();
