@@ -24,6 +24,12 @@ pub fn apply_config(path: &std::path::Path) -> Result<()> {
     apply_ipc::request_apply(path)
 }
 
+/// Ask the running per-user supervisor to select the embedded Lua default.
+#[doc(hidden)]
+pub fn apply_default() -> Result<()> {
+    apply_ipc::request_default()
+}
+
 /// Run the per-user supervisor process.
 #[doc(hidden)]
 pub fn supervisor_main() -> Result<()> {

@@ -1,34 +1,48 @@
-#[cfg(test)]
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::os::unix::ffi::OsStrExt;
-#[cfg(test)]
-use std::os::unix::ffi::OsStringExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, ensure, Context, Result};
 
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+const PATH_REQUEST: u8 = 0;
+const DEFAULT_REQUEST: u8 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ApplyRequest {
+    Path(PathBuf),
+    Default,
+}
 
 pub(crate) fn request_apply(path: &Path) -> Result<()> {
     let socket = supervisor_socket_path()?;
     request_apply_at(&socket, path)
 }
 
-pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
-    // The supervisor owns the worker environment. Keep client environment and
-    // other process state out of this protocol; the request is only a path.
-    let path = absolute_lexical(path)?;
-    let bytes = path.as_os_str().as_bytes();
-    ensure!(
-        bytes.len() <= MAX_MESSAGE_BYTES,
-        "config path is too long to send to the supervisor"
-    );
+pub(crate) fn request_default() -> Result<()> {
+    let socket = supervisor_socket_path()?;
+    request_default_at(&socket)
+}
 
+pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
+    let path = absolute_lexical(path)?;
+    request_at(socket, ApplyRequest::Path(path))
+}
+
+pub(crate) fn request_default_at(socket: &Path) -> Result<()> {
+    request_at(socket, ApplyRequest::Default)
+}
+
+fn request_at(socket: &Path, request: ApplyRequest) -> Result<()> {
+    // The supervisor owns the worker environment. Keep client environment and
+    // other process state out of this protocol; the request is only a tagged
+    // selection.
+    let payload = encode_request(&request)?;
     let mut stream = UnixStream::connect(socket)
         .with_context(|| format!("connecting to Sliver supervisor at {}", socket.display()))?;
-    write_bytes(&mut stream, bytes)?;
+    write_bytes(&mut stream, &payload)?;
     stream.shutdown(std::net::Shutdown::Write)?;
 
     let mut status = [0u8; 1];
@@ -44,11 +58,46 @@ pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
     }
 }
 
+fn encode_request(request: &ApplyRequest) -> Result<Vec<u8>> {
+    match request {
+        ApplyRequest::Path(path) => {
+            let bytes = path.as_os_str().as_bytes();
+            ensure!(
+                bytes.len() + 1 <= MAX_MESSAGE_BYTES,
+                "config path is too long to send to the supervisor"
+            );
+            let mut payload = Vec::with_capacity(bytes.len() + 1);
+            payload.push(PATH_REQUEST);
+            payload.extend_from_slice(bytes);
+            Ok(payload)
+        }
+        ApplyRequest::Default => Ok(vec![DEFAULT_REQUEST]),
+    }
+}
+
 #[cfg(test)]
-pub(crate) fn read_request(stream: &mut UnixStream) -> Result<PathBuf> {
+pub(crate) fn read_request(stream: &mut UnixStream) -> Result<ApplyRequest> {
     let bytes = read_bytes(stream).context("reading apply request")?;
-    ensure!(!bytes.is_empty(), "config path is empty");
-    Ok(PathBuf::from(OsString::from_vec(bytes)))
+    decode_request(&bytes)
+}
+
+pub(crate) fn decode_request(bytes: &[u8]) -> Result<ApplyRequest> {
+    let (tag, payload) = bytes
+        .split_first()
+        .context("apply request is empty")?;
+    match *tag {
+        PATH_REQUEST => {
+            ensure!(!payload.is_empty(), "config path is empty");
+            Ok(ApplyRequest::Path(PathBuf::from(OsString::from_vec(
+                payload.to_vec(),
+            ))))
+        }
+        DEFAULT_REQUEST => {
+            ensure!(payload.is_empty(), "default request has an unexpected payload");
+            Ok(ApplyRequest::Default)
+        }
+        other => bail!("unknown apply request tag {other}"),
+    }
 }
 
 pub(crate) fn write_reply(stream: &mut UnixStream, result: &Result<()>) -> Result<()> {

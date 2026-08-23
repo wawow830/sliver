@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
 
-use crate::apply_ipc::absolute_lexical;
+use crate::apply_ipc::{absolute_lexical, ApplyRequest};
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::hardware::{
     modifier_output_keys, tap_key_events, ContactId, HardwareEvent, InputState, InputTransition,
@@ -46,7 +46,7 @@ struct ApplyAuthorization {
 }
 
 struct AuthorizedRequest {
-    path: PathBuf,
+    request: ApplyRequest,
     authorization: ApplyAuthorization,
 }
 
@@ -386,12 +386,15 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn apply_authorized(&mut self, request: AuthorizedRequest) -> Result<()> {
         let AuthorizedRequest {
-            path,
+            request,
             authorization,
         } = request;
         self.authorizer
             .recheck(authorization.peer, &authorization.grant)?;
-        self.apply_request(&path, Some(authorization))
+        match request {
+            ApplyRequest::Path(path) => self.apply_request(&path, Some(authorization)),
+            ApplyRequest::Default => bail!("embedded default selection is not yet available"),
+        }
     }
 
     fn apply_request(
@@ -1308,7 +1311,7 @@ impl PendingRequest {
         })
     }
 
-    fn try_path(&mut self) -> Result<Option<PathBuf>> {
+    fn try_request(&mut self) -> Result<Option<ApplyRequest>> {
         while self.header_len < self.header.len() {
             match self.stream.read(&mut self.header[self.header_len..]) {
                 Ok(0) => bail!("apply request ended before its length header"),
@@ -1333,9 +1336,8 @@ impl PendingRequest {
                 Err(error) => return Err(error).context("reading apply request path"),
             }
         }
-        Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(
-            std::mem::take(&mut self.payload),
-        ))))
+        let payload = std::mem::take(&mut self.payload);
+        Ok(Some(crate::apply_ipc::decode_request(&payload)?))
     }
 }
 
@@ -1434,12 +1436,12 @@ fn accept_requests<L: Logind>(
 
         if ready.is_none() {
             if let Some(request) = pending.front_mut() {
-                match request.try_path() {
-                    Ok(Some(path)) => {
+                match request.try_request() {
+                    Ok(Some(request_value)) => {
                         let request = pending.pop_front().expect("request was present");
                         ready = Some(QueuedRequest {
                             stream: request.stream,
-                            request: authorize_path(&authorizer, request.peer, path),
+                            request: authorize_request(&authorizer, request.peer, request_value),
                         });
                     }
                     Ok(None) => {}
@@ -1478,14 +1480,14 @@ fn accept_requests<L: Logind>(
     }
 }
 
-fn authorize_path<L: Logind>(
+fn authorize_request<L: Logind>(
     authorizer: &SessionAuthorizer<L>,
     peer: PeerCredentials,
-    path: PathBuf,
+    request: ApplyRequest,
 ) -> Result<AuthorizedRequest> {
     let grant = authorizer.authorize(peer)?;
     Ok(AuthorizedRequest {
-        path,
+        request,
         authorization: ApplyAuthorization { peer, grant },
     })
 }
@@ -1496,8 +1498,8 @@ fn read_authorized_request<L: Logind>(
     authorizer: &SessionAuthorizer<L>,
 ) -> Result<AuthorizedRequest> {
     let peer = crate::peer_credentials::read(stream)?;
-    let path = crate::apply_ipc::read_request(stream)?;
-    authorize_path(authorizer, peer, path)
+    let request = crate::apply_ipc::read_request(stream)?;
+    authorize_request(authorizer, peer, request)
 }
 
 fn serve_queued_request<H: TouchBarHardware, L: Logind>(
