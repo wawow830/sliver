@@ -1693,6 +1693,19 @@ mod tests {
             .into_bytes()
     }
 
+    fn embedded_default_supervisor(
+        state_file: std::path::PathBuf,
+        session_id: &str,
+    ) -> Result<Supervisor<FakeTouchBar, FakeLogind>> {
+        let (logind, _) = active_local_logind(session_id);
+        Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(default_source::bytes().to_vec())),
+        )
+    }
+
     fn battery_cell() -> std::ops::Range<usize> {
         let width = 2008.0 / 11.0;
         let left = (7.0 * width) as usize;
@@ -5661,13 +5674,8 @@ mod tests {
     fn absent_state_starts_the_canonical_embedded_default_without_selecting_a_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let (logind, _) = active_local_logind("canonical-default-session");
-        let supervisor = Supervisor::new_with_startup_candidate(
-            FakeTouchBar::new(),
-            state_file.clone(),
-            logind,
-            Some(LuaSource::embedded(default_source::bytes().to_vec())),
-        )?;
+        let supervisor =
+            embedded_default_supervisor(state_file.clone(), "canonical-default-session")?;
 
         assert!(!state_file.exists());
         assert_eq!(supervisor.hardware().backlight_level(), 0.75);
@@ -5686,13 +5694,7 @@ mod tests {
     fn default_first_frame_style_and_normal_controls_cross_the_fake_touchbar() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let (logind, _) = active_local_logind("default-controls-session");
-        let mut supervisor = Supervisor::new_with_startup_candidate(
-            FakeTouchBar::new(),
-            state_file,
-            logind,
-            Some(LuaSource::embedded(default_source::bytes().to_vec())),
-        )?;
+        let mut supervisor = embedded_default_supervisor(state_file, "default-controls-session")?;
         let first = supervisor
             .hardware()
             .presented_frames()
@@ -6001,13 +6003,7 @@ mod tests {
     fn default_touch_contacts_highlight_cancel_activate_and_remain_independent() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let (logind, _) = active_local_logind("default-touch-session");
-        let mut supervisor = Supervisor::new_with_startup_candidate(
-            FakeTouchBar::new(),
-            state_file,
-            logind,
-            Some(LuaSource::embedded(default_source::bytes().to_vec())),
-        )?;
+        let mut supervisor = embedded_default_supervisor(state_file, "default-touch-session")?;
         let event = |id, phase, x| TouchEvent {
             phase,
             id,
@@ -6112,13 +6108,7 @@ mod tests {
     fn default_fn_down_immediately_selects_the_lua_function_layer() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let (logind, _) = active_local_logind("default-fn-session");
-        let mut supervisor = Supervisor::new_with_startup_candidate(
-            FakeTouchBar::new(),
-            state_file,
-            logind,
-            Some(LuaSource::embedded(default_source::bytes().to_vec())),
-        )?;
+        let mut supervisor = embedded_default_supervisor(state_file, "default-fn-session")?;
         let before = supervisor.hardware().presented_frames().len();
         supervisor
             .hardware_mut()
@@ -6319,13 +6309,8 @@ mod tests {
     fn changed_embedded_bytes_wait_for_the_next_default_worker_start() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let (logind, _) = active_local_logind("default-upgrade-session");
-        let mut supervisor = Supervisor::new_with_startup_candidate(
-            FakeTouchBar::new(),
-            state_file.clone(),
-            logind,
-            Some(LuaSource::embedded(default_source::bytes().to_vec())),
-        )?;
+        let mut supervisor =
+            embedded_default_supervisor(state_file.clone(), "default-upgrade-session")?;
         let original = supervisor
             .hardware()
             .presented_frames()
