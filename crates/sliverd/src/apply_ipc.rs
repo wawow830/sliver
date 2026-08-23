@@ -6,15 +6,11 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, ensure, Context, Result};
 
+use crate::config_selection::ConfigSelection;
+
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const PATH_REQUEST: u8 = 0;
 const DEFAULT_REQUEST: u8 = 1;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ApplyRequest {
-    Path(PathBuf),
-    Default,
-}
 
 pub(crate) fn request_apply(path: &Path) -> Result<()> {
     let socket = supervisor_socket_path()?;
@@ -28,14 +24,14 @@ pub(crate) fn request_default() -> Result<()> {
 
 pub(crate) fn request_apply_at(socket: &Path, path: &Path) -> Result<()> {
     let path = absolute_lexical(path)?;
-    request_at(socket, ApplyRequest::Path(path))
+    request_at(socket, ConfigSelection::Path(path))
 }
 
 pub(crate) fn request_default_at(socket: &Path) -> Result<()> {
-    request_at(socket, ApplyRequest::Default)
+    request_at(socket, ConfigSelection::Default)
 }
 
-fn request_at(socket: &Path, request: ApplyRequest) -> Result<()> {
+fn request_at(socket: &Path, request: ConfigSelection) -> Result<()> {
     // The supervisor owns the worker environment. Keep client environment and
     // other process state out of this protocol; the request is only a tagged
     // selection.
@@ -58,9 +54,9 @@ fn request_at(socket: &Path, request: ApplyRequest) -> Result<()> {
     }
 }
 
-fn encode_request(request: &ApplyRequest) -> Result<Vec<u8>> {
+fn encode_request(request: &ConfigSelection) -> Result<Vec<u8>> {
     match request {
-        ApplyRequest::Path(path) => {
+        ConfigSelection::Path(path) => {
             let bytes = path.as_os_str().as_bytes();
             ensure!(
                 bytes.len() < MAX_MESSAGE_BYTES,
@@ -71,22 +67,22 @@ fn encode_request(request: &ApplyRequest) -> Result<Vec<u8>> {
             payload.extend_from_slice(bytes);
             Ok(payload)
         }
-        ApplyRequest::Default => Ok(vec![DEFAULT_REQUEST]),
+        ConfigSelection::Default => Ok(vec![DEFAULT_REQUEST]),
     }
 }
 
 #[cfg(test)]
-pub(crate) fn read_request(stream: &mut UnixStream) -> Result<ApplyRequest> {
+pub(crate) fn read_request(stream: &mut UnixStream) -> Result<ConfigSelection> {
     let bytes = read_bytes(stream).context("reading apply request")?;
     decode_request(&bytes)
 }
 
-pub(crate) fn decode_request(bytes: &[u8]) -> Result<ApplyRequest> {
+pub(crate) fn decode_request(bytes: &[u8]) -> Result<ConfigSelection> {
     let (tag, payload) = bytes.split_first().context("apply request is empty")?;
     match *tag {
         PATH_REQUEST => {
             ensure!(!payload.is_empty(), "config path is empty");
-            Ok(ApplyRequest::Path(PathBuf::from(OsString::from_vec(
+            Ok(ConfigSelection::Path(PathBuf::from(OsString::from_vec(
                 payload.to_vec(),
             ))))
         }
@@ -95,7 +91,7 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<ApplyRequest> {
                 payload.is_empty(),
                 "default request has an unexpected payload"
             );
-            Ok(ApplyRequest::Default)
+            Ok(ConfigSelection::Default)
         }
         other => bail!("unknown apply request tag {other}"),
     }

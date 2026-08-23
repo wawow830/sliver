@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
 
-use crate::apply_ipc::{absolute_lexical, ApplyRequest};
+use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
+use crate::config_selection::ConfigSelection;
 use crate::default_source;
 use crate::hardware::{
     modifier_output_keys, tap_key_events, ContactId, HardwareEvent, InputState, InputTransition,
@@ -47,14 +48,8 @@ struct ApplyAuthorization {
 }
 
 struct AuthorizedRequest {
-    request: ApplyRequest,
+    request: ConfigSelection,
     authorization: ApplyAuthorization,
-}
-
-#[derive(Clone)]
-enum CandidateSelection {
-    Path(PathBuf),
-    Default,
 }
 
 enum SelectionState {
@@ -390,7 +385,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             default_source,
         )?;
         let saved = read_selected_path(&state_file)?;
-        let selection = saved.map_or(CandidateSelection::Default, CandidateSelection::Path);
+        let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
         if let Err(error) = supervisor.startup_candidate(selection) {
             eprintln!("selected Lua worker entered recovery: {error:#}");
             supervisor.enter_recovery()?;
@@ -404,12 +399,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     #[cfg(test)]
     pub(crate) fn apply(&mut self, requested_path: &Path) -> Result<()> {
-        self.apply_request(CandidateSelection::Path(requested_path.to_path_buf()), None)
+        self.apply_request(ConfigSelection::Path(requested_path.to_path_buf()), None)
     }
 
     #[cfg(test)]
     pub(crate) fn apply_default(&mut self) -> Result<()> {
-        self.apply_request(CandidateSelection::Default, None)
+        self.apply_request(ConfigSelection::Default, None)
     }
 
     #[cfg(test)]
@@ -424,21 +419,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         } = request;
         self.authorizer
             .recheck(authorization.peer, &authorization.grant)?;
-        let selection = match request {
-            ApplyRequest::Path(path) => CandidateSelection::Path(path),
-            ApplyRequest::Default => CandidateSelection::Default,
-        };
-        self.apply_request(selection, Some(authorization))
+        self.apply_request(request, Some(authorization))
     }
 
     fn apply_request(
         &mut self,
-        selection: CandidateSelection,
+        selection: ConfigSelection,
         authorization: Option<ApplyAuthorization>,
     ) -> Result<()> {
         let state_update = match &selection {
-            CandidateSelection::Path(path) => SelectionState::Set(absolute_lexical(path)?),
-            CandidateSelection::Default => SelectionState::Clear,
+            ConfigSelection::Path(path) => SelectionState::Set(absolute_lexical(path)?),
+            ConfigSelection::Default => SelectionState::Clear,
         };
         let candidate_error =
             match self.apply_candidate(selection.clone(), authorization.as_ref(), state_update) {
@@ -447,7 +438,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 Err(CandidateFailure::Candidate(error)) => error,
             };
         if self.active.is_none() {
-            if let CandidateSelection::Path(path) = selection {
+            if let ConfigSelection::Path(path) = selection {
                 let selected_path = absolute_lexical(&path)?;
                 let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
                 if let Some(authorization) = authorization.as_ref() {
@@ -472,7 +463,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Err(candidate_error)
     }
 
-    fn startup_candidate(&mut self, selection: CandidateSelection) -> Result<()> {
+    fn startup_candidate(&mut self, selection: ConfigSelection) -> Result<()> {
         self.apply_candidate(selection, None, SelectionState::Keep)
             .map_err(|failure| match failure {
                 CandidateFailure::Candidate(error) | CandidateFailure::Authorization(error) => {
@@ -483,12 +474,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn apply_candidate(
         &mut self,
-        selection: CandidateSelection,
+        selection: ConfigSelection,
         authorization: Option<&ApplyAuthorization>,
         state_update: SelectionState,
     ) -> std::result::Result<(), CandidateFailure> {
         let source = match selection {
-            CandidateSelection::Path(requested_path) => {
+            ConfigSelection::Path(requested_path) => {
                 let selected_path = absolute_lexical(&requested_path)?;
                 let metadata = std::fs::metadata(&selected_path).with_context(|| {
                     format!("reading config metadata for {}", selected_path.display())
@@ -502,7 +493,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 }
                 LuaSource::file(selected_path)
             }
-            CandidateSelection::Default => self.default_source.clone(),
+            ConfigSelection::Default => self.default_source.clone(),
         };
 
         self.poll_hardware(Duration::ZERO)?;
@@ -1394,7 +1385,7 @@ impl PendingRequest {
         })
     }
 
-    fn try_request(&mut self) -> Result<Option<ApplyRequest>> {
+    fn try_request(&mut self) -> Result<Option<ConfigSelection>> {
         while self.header_len < self.header.len() {
             match self.stream.read(&mut self.header[self.header_len..]) {
                 Ok(0) => bail!("apply request ended before its length header"),
@@ -1566,7 +1557,7 @@ fn accept_requests<L: Logind>(
 fn authorize_request<L: Logind>(
     authorizer: &SessionAuthorizer<L>,
     peer: PeerCredentials,
-    request: ApplyRequest,
+    request: ConfigSelection,
 ) -> Result<AuthorizedRequest> {
     let grant = authorizer.authorize(peer)?;
     Ok(AuthorizedRequest {

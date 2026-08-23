@@ -1,5 +1,6 @@
 mod apply_ipc;
 mod authorization;
+mod config_selection;
 mod default_source;
 mod drm_out;
 mod frame_canvas;
