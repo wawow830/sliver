@@ -309,6 +309,9 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     last_presented_time: Option<f64>,
 }
 
+type RecoveryTouchDispatch = fn(&mut RecoverySession, TouchEvent) -> RecoveryTouchResult;
+type ActiveTouchDispatch<H, L> = fn(&mut Supervisor<H, L>, TouchEvent);
+
 impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
     #[cfg(test)]
     pub(crate) fn new(hardware: H, state_file: PathBuf) -> Result<Self> {
@@ -436,14 +439,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn startup_candidate(&mut self, path: &Path, persist_path: bool) -> Result<()> {
-        let result =
-            self.apply_candidate(path, None, persist_path)
-                .map_err(|failure| match failure {
-                    CandidateFailure::Candidate(error) | CandidateFailure::Authorization(error) => {
-                        error
-                    }
-                });
-        result
+        self.apply_candidate(path, None, persist_path)
+            .map_err(|failure| match failure {
+                CandidateFailure::Candidate(error) | CandidateFailure::Authorization(error) => {
+                    error
+                }
+            })
     }
 
     fn apply_candidate(
@@ -678,8 +679,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn route_touch(&mut self, event: TouchEvent) -> Result<()> {
         let (recovery_dispatch, active_dispatch): (
-            fn(&mut RecoverySession, TouchEvent) -> RecoveryTouchResult,
-            fn(&mut Self, TouchEvent),
+            RecoveryTouchDispatch,
+            ActiveTouchDispatch<H, L>,
         ) = match event.phase {
             TouchPhase::Down => {
                 if self.down_contacts.insert(event.id, event).is_some()
