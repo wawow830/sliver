@@ -70,7 +70,7 @@ impl LuaSource {
     fn chunk_name(&self) -> String {
         match self {
             Self::File(path) => format!("@{}", path.display()),
-            Self::Embedded(_) => "=sliver embedded default".to_owned(),
+            Self::Embedded(_) => "=sliver".to_owned(),
         }
     }
 }

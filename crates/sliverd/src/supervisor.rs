@@ -6200,14 +6200,7 @@ mod tests {
         )?;
 
         let metadata = std::fs::read_to_string(marker)?;
-        assert!(
-            metadata.starts_with("=sliver embedded default|"),
-            "{metadata}"
-        );
-        assert!(
-            metadata.contains("|nil|nil|function|function"),
-            "{metadata}"
-        );
+        assert_eq!(metadata, "=sliver|nil|nil|function|function");
         supervisor.shutdown()?;
         Ok(())
     }
