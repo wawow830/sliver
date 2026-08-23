@@ -724,12 +724,15 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     ) -> std::result::Result<(), CandidateFailure> {
         let mut error = error;
         if restore_frame {
-            if let Some(frame) = old_frame {
-                if let Err(restore_error) = self.hardware.present(frame) {
-                    error = error.context(format!(
-                        "restoring the previous frame after candidate failure also failed: {restore_error:#}"
-                    ));
-                }
+            let restore_result = match old_frame {
+                Some(frame) => self.hardware.present(frame),
+                None if self.recovery.is_some() => self.present_recovery(),
+                None => Ok(()),
+            };
+            if let Err(restore_error) = restore_result {
+                error = error.context(format!(
+                    "restoring the previous frame after candidate failure also failed: {restore_error:#}"
+                ));
             }
         }
         if restore_backlight {
@@ -6406,6 +6409,67 @@ mod tests {
         );
         assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         assert!(!supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_default_reset_after_saved_startup_failure_restores_recovery_frame() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let missing = directory.path().join("missing.lua");
+        PreparedPathState::prepare(&state_file, &missing)?.commit()?;
+        let (logind, uid) = active_local_logind("saved-startup-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            SessionSwitchingHardware::new(logind.clone(), uid),
+            state_file.clone(),
+            logind,
+            Some(LuaSource::embedded(default_source::bytes().to_vec())),
+        )?;
+        assert!(supervisor.active.is_none());
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        let recovery_frame = supervisor
+            .hardware()
+            .inner
+            .presented_frames()
+            .last()
+            .cloned()
+            .expect("saved startup failure did not present recovery");
+        supervisor.hardware_mut().switch_on_present = true;
+
+        let client_socket = socket.clone();
+        let client = thread::spawn(move || crate::apply_ipc::request_default_at(&client_socket));
+        let (mut stream, _) = listener.accept()?;
+        serve_connection(&mut stream, &mut supervisor)?;
+
+        let error = client
+            .join()
+            .expect("default client panicked")
+            .expect_err("session-changed default reset was accepted");
+        assert!(format!("{error:#}").contains("not the active session"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            missing.as_os_str().as_encoded_bytes()
+        );
+        assert!(supervisor.active.is_none());
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert_eq!(
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .expect("recovery frame disappeared after rejected reset"),
+            &recovery_frame
+        );
         supervisor.shutdown()?;
         Ok(())
     }
