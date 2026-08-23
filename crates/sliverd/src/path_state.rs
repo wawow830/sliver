@@ -53,10 +53,14 @@ impl PathStateSnapshot {
     }
 }
 
+enum PendingPathState {
+    Write { temp_file: PathBuf },
+    Remove,
+}
+
 pub(crate) struct PreparedPathState {
     state_file: PathBuf,
-    temp_file: Option<PathBuf>,
-    remove_on_commit: bool,
+    pending: PendingPathState,
 }
 
 impl PreparedPathState {
@@ -85,8 +89,7 @@ impl PreparedPathState {
         })?;
         Ok(Self {
             state_file: state_file.to_path_buf(),
-            temp_file: None,
-            remove_on_commit: true,
+            pending: PendingPathState::Remove,
         })
     }
 
@@ -122,45 +125,40 @@ impl PreparedPathState {
 
         Ok(Self {
             state_file: state_file.to_path_buf(),
-            temp_file: Some(temp_file),
-            remove_on_commit: false,
+            pending: PendingPathState::Write { temp_file },
         })
     }
 
-    pub(crate) fn commit(mut self) -> Result<()> {
-        if self.remove_on_commit {
-            match fs::remove_file(&self.state_file) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!(
-                            "committing removal of selected-path state {}",
-                            self.state_file.display()
-                        )
-                    });
+    pub(crate) fn commit(self) -> Result<()> {
+        match &self.pending {
+            PendingPathState::Remove => {
+                match fs::remove_file(&self.state_file) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!(
+                                "committing removal of selected-path state {}",
+                                self.state_file.display()
+                            )
+                        });
+                    }
+                }
+                sync_directory(state_directory(&self.state_file))?;
+            }
+            PendingPathState::Write { temp_file } => {
+                fs::rename(temp_file, &self.state_file).with_context(|| {
+                    format!(
+                        "committing selected-path state {} as {}",
+                        temp_file.display(),
+                        self.state_file.display()
+                    )
+                })?;
+
+                if let Err(error) = sync_directory(state_directory(&self.state_file)) {
+                    eprintln!("selected-path directory sync failed after commit: {error:#}");
                 }
             }
-            self.remove_on_commit = false;
-            sync_directory(state_directory(&self.state_file))?;
-            return Ok(());
-        }
-        let temp_file = self
-            .temp_file
-            .as_ref()
-            .context("selected-path state was already committed")?
-            .clone();
-        fs::rename(&temp_file, &self.state_file).with_context(|| {
-            format!(
-                "committing selected-path state {} as {}",
-                temp_file.display(),
-                self.state_file.display()
-            )
-        })?;
-        self.temp_file.take();
-
-        if let Err(error) = sync_directory(state_directory(&self.state_file)) {
-            eprintln!("selected-path directory sync failed after commit: {error:#}");
         }
         Ok(())
     }
@@ -168,7 +166,7 @@ impl PreparedPathState {
 
 impl Drop for PreparedPathState {
     fn drop(&mut self) {
-        if let Some(temp_file) = self.temp_file.take() {
+        if let PendingPathState::Write { temp_file } = &self.pending {
             let _ = fs::remove_file(temp_file);
         }
     }
