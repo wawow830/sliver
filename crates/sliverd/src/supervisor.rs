@@ -573,8 +573,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             backlight: candidate_backlight,
             contacts: BTreeMap::new(),
         });
+        if self.recovery_due(now) {
+            self.enter_recovery()?;
+        }
         if let Some(replaced) = replaced {
-            if !deferred_transitions.is_empty() || !deferred_touches.is_empty() {
+            if self.recovery.is_none()
+                && (!deferred_transitions.is_empty() || !deferred_touches.is_empty())
+            {
                 if let Err(error) = replaced.worker.drive(DriveRequest::new(
                     now,
                     self.input_state,
