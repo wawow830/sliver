@@ -681,6 +681,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 {
                     return Ok(());
                 }
+                self.route_touch_down(event)
             }
             TouchPhase::Move => {
                 let Some(contact) = self.down_contacts.get_mut(&event.id) else {
@@ -690,58 +691,132 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 if self.ignored_contacts.contains(&event.id) {
                     return Ok(());
                 }
+                self.route_touch_move(event)
             }
-            TouchPhase::Up | TouchPhase::Cancel => {
+            TouchPhase::Up => {
                 self.down_contacts.remove(&event.id);
                 if self.ignored_contacts.remove(&event.id) {
                     return Ok(());
                 }
+                self.route_touch_up(event)
+            }
+            TouchPhase::Cancel => {
+                self.down_contacts.remove(&event.id);
+                if self.ignored_contacts.remove(&event.id) {
+                    return Ok(());
+                }
+                self.route_touch_cancel(event)
             }
         }
+    }
 
+    fn route_touch_down(&mut self, event: TouchEvent) -> Result<()> {
         if self.recovery.is_some() {
-            let result = self
-                .recovery
-                .as_mut()
-                .expect("recovery state disappeared")
-                .route_touch(event);
-            match result {
-                RecoveryTouchResult::Ignored => {}
-                RecoveryTouchResult::RowPressChanged => self.present_recovery()?,
-                RecoveryTouchResult::Activate(key) => {
-                    self.present_recovery()?;
-                    self.activate_recovery_key(key)?;
-                }
-            }
-            return Ok(());
+            self.route_recovery_down(event)
+        } else {
+            self.route_active_down(event);
+            Ok(())
         }
+    }
 
-        match event.phase {
-            TouchPhase::Down => {
-                if let Some(active) = self.active.as_mut() {
-                    active.contacts.insert(event.id, event);
-                    self.touch_queue.push(event);
-                }
-            }
-            TouchPhase::Move => {
-                if let Some(active) = self.active.as_mut() {
-                    if let std::collections::btree_map::Entry::Occupied(mut contact) =
-                        active.contacts.entry(event.id)
-                    {
-                        contact.insert(event);
-                        self.touch_queue.push(event);
-                    }
-                }
-            }
-            TouchPhase::Up | TouchPhase::Cancel => {
-                if let Some(active) = self.active.as_mut() {
-                    if active.contacts.remove(&event.id).is_some() {
-                        self.touch_queue.push(event);
-                    }
-                }
+    fn route_touch_move(&mut self, event: TouchEvent) -> Result<()> {
+        if self.recovery.is_some() {
+            self.route_recovery_move(event)
+        } else {
+            self.route_active_move(event);
+            Ok(())
+        }
+    }
+
+    fn route_touch_up(&mut self, event: TouchEvent) -> Result<()> {
+        if self.recovery.is_some() {
+            self.route_recovery_up(event)
+        } else {
+            self.route_active_end(event);
+            Ok(())
+        }
+    }
+
+    fn route_touch_cancel(&mut self, event: TouchEvent) -> Result<()> {
+        if self.recovery.is_some() {
+            self.route_recovery_cancel(event)
+        } else {
+            self.route_active_end(event);
+            Ok(())
+        }
+    }
+
+    fn route_recovery_down(&mut self, event: TouchEvent) -> Result<()> {
+        let result = self
+            .recovery
+            .as_mut()
+            .expect("recovery session disappeared")
+            .touch_down(event);
+        self.apply_recovery_touch(result)
+    }
+
+    fn route_recovery_move(&mut self, event: TouchEvent) -> Result<()> {
+        let result = self
+            .recovery
+            .as_mut()
+            .expect("recovery session disappeared")
+            .touch_move(event);
+        self.apply_recovery_touch(result)
+    }
+
+    fn route_recovery_up(&mut self, event: TouchEvent) -> Result<()> {
+        let result = self
+            .recovery
+            .as_mut()
+            .expect("recovery session disappeared")
+            .touch_up(event);
+        self.apply_recovery_touch(result)
+    }
+
+    fn route_recovery_cancel(&mut self, event: TouchEvent) -> Result<()> {
+        let result = self
+            .recovery
+            .as_mut()
+            .expect("recovery session disappeared")
+            .touch_cancel(event);
+        self.apply_recovery_touch(result)
+    }
+
+    fn apply_recovery_touch(&mut self, result: RecoveryTouchResult) -> Result<()> {
+        match result {
+            RecoveryTouchResult::Ignored => Ok(()),
+            RecoveryTouchResult::RowPressChanged => self.present_recovery(),
+            RecoveryTouchResult::Activate(key) => {
+                self.present_recovery()?;
+                self.activate_recovery_key(key)
             }
         }
-        Ok(())
+    }
+
+    fn route_active_down(&mut self, event: TouchEvent) {
+        if let Some(active) = self.active.as_mut() {
+            active.contacts.insert(event.id, event);
+            self.touch_queue.push(event);
+        }
+    }
+
+    fn route_active_move(&mut self, event: TouchEvent) {
+        if let Some(active) = self.active.as_mut() {
+            if let std::collections::btree_map::Entry::Occupied(mut contact) =
+                active.contacts.entry(event.id)
+            {
+                contact.insert(event);
+                self.touch_queue.push(event);
+            }
+        }
+    }
+
+    fn route_active_end(&mut self, event: TouchEvent) {
+        if let Some(active) = self.active.as_mut() {
+            if active.contacts.remove(&event.id).is_some() {
+                self.touch_queue.push(event);
+            }
+        }
     }
 
     fn activate_recovery_key(&mut self, key: OutputKey) -> Result<()> {
