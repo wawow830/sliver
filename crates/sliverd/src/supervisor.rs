@@ -599,6 +599,28 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         if let Some(path_state) = path_state {
+            if let Some(authorization) = authorization {
+                if let Err(error) = self
+                    .authorizer
+                    .recheck(authorization.peer, &authorization.grant)
+                {
+                    return self
+                        .rollback_candidate(
+                            previous_path_state.as_ref(),
+                            old_frame.as_ref(),
+                            old_backlight,
+                            !preserve_recovery,
+                            brightness_changed,
+                            error,
+                        )
+                        .map_err(|failure| match failure {
+                            CandidateFailure::Candidate(error)
+                            | CandidateFailure::Authorization(error) => {
+                                CandidateFailure::Authorization(error)
+                            }
+                        });
+                }
+            }
             if let Err(error) = path_state.commit() {
                 return self.rollback_candidate(
                     previous_path_state.as_ref(),
@@ -1755,6 +1777,73 @@ mod tests {
                 self.fail_next_backlight = false;
                 bail!("injected backlight failure");
             }
+            self.inner.set_backlight(level)
+        }
+
+        fn release(&mut self) -> Result<()> {
+            self.inner.release()
+        }
+    }
+
+    struct SessionSwitchingHardware {
+        inner: FakeTouchBar,
+        logind: FakeLogind,
+        uid: libc::uid_t,
+        switch_on_present: bool,
+    }
+
+    impl SessionSwitchingHardware {
+        fn new(logind: FakeLogind, uid: libc::uid_t) -> Self {
+            Self {
+                inner: FakeTouchBar::new(),
+                logind,
+                uid,
+                switch_on_present: false,
+            }
+        }
+    }
+
+    impl TouchBarHardware for SessionSwitchingHardware {
+        fn claim(&mut self) -> Result<()> {
+            self.inner.claim()
+        }
+
+        fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+            self.inner.poll(timeout)
+        }
+
+        fn input_state(&self) -> InputState {
+            self.inner.input_state()
+        }
+
+        fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
+            self.inner.present(frame)?;
+            if self.switch_on_present {
+                self.switch_on_present = false;
+                self.logind.set_active(
+                    "seat0",
+                    Some(ActiveSession {
+                        id: "new-session".into(),
+                        uid: self.uid,
+                    }),
+                );
+            }
+            Ok(())
+        }
+
+        fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
+            self.inner.emit_key_events(events)
+        }
+
+        fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
+            self.inner.tap_function_key(index, modifiers)
+        }
+
+        fn get_backlight(&mut self) -> Result<f64> {
+            self.inner.get_backlight()
+        }
+
+        fn set_backlight(&mut self, level: f64) -> Result<()> {
             self.inner.set_backlight(level)
         }
 
@@ -5094,6 +5183,79 @@ mod tests {
         assert!(format!("{error:#}").contains("session changed while checking authorization"));
         assert!(!state_file.exists());
         assert!(supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn session_change_after_candidate_presentation_rolls_back_selected_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let old_source = directory.path().join("old.lua");
+        let new_source = directory.path().join("new.lua");
+        std::fs::write(
+            &old_source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        std::fs::write(
+            &new_source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                start = function()
+                    sliver.backlight.set(0.75)
+                end,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, uid) = active_local_logind("old-session");
+        let mut supervisor = Supervisor::new_with_logind(
+            SessionSwitchingHardware::new(logind.clone(), uid),
+            state_file.clone(),
+            logind,
+        )?;
+        supervisor.apply(&old_source)?;
+        supervisor.hardware_mut().switch_on_present = true;
+
+        let client_socket = socket.clone();
+        let client_source = new_source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&client_socket, &client_source)
+        });
+        let (mut stream, _) = listener.accept()?;
+        serve_connection(&mut stream, &mut supervisor)?;
+
+        let error = client
+            .join()
+            .expect("apply client panicked")
+            .expect_err("session changed after presentation but apply succeeded");
+        assert!(format!("{error:#}").contains("not the active session"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(supervisor.hardware().inner.backlight_level(), 0.0);
+        assert_eq!(supervisor.hardware().inner.presented_frames().len(), 3);
+        assert_eq!(
+            supervisor.hardware().inner.presented_frames()[1].rgba_at(10, 10),
+            [0, 0, 255, 255]
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .expect("previous frame was not restored")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
         supervisor.shutdown()?;
         Ok(())
     }
