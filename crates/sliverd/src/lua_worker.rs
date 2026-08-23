@@ -760,6 +760,22 @@ impl Runtime {
         result
     }
 
+    fn invoke_callback(
+        &self,
+        callback: &Function,
+        stage: &'static str,
+        now_seconds: f64,
+        started: Instant,
+        table: Table,
+    ) -> std::result::Result<(), String> {
+        self.controls
+            .now_seconds
+            .set(Some(sample_now(now_seconds, started)));
+        callback
+            .call::<()>(table)
+            .map_err(|error| diagnostic(stage, &self.source, error.to_string()))
+    }
+
     fn dispatch_keys(
         &self,
         now_seconds: f64,
@@ -771,13 +787,9 @@ impl Runtime {
         };
         for transition in transitions {
             self.controls.input_state.set(transition.state);
-            self.controls
-                .now_seconds
-                .set(Some(sample_now(now_seconds, started)));
             let table = key_event_table(&self._lua, &transition)
                 .map_err(|error| diagnostic("key", &self.source, error.to_string()))?;
-            key.call::<()>(table)
-                .map_err(|error| diagnostic("key", &self.source, error.to_string()))?;
+            self.invoke_callback(key, "key", now_seconds, started, table)?;
         }
         Ok(())
     }
@@ -792,9 +804,6 @@ impl Runtime {
         let Some(visibility) = &self.visibility else {
             return Ok(());
         };
-        self.controls
-            .now_seconds
-            .set(Some(sample_now(now_seconds, started)));
         let table = self
             ._lua
             .create_table()
@@ -805,9 +814,7 @@ impl Runtime {
         table
             .set("reason", reason.as_lua_str())
             .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
-        visibility
-            .call::<()>(table)
-            .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))
+        self.invoke_callback(visibility, "visibility", now_seconds, started, table)
     }
 
     fn dispatch_touch(
@@ -820,14 +827,9 @@ impl Runtime {
             return Ok(());
         };
         for event in events {
-            self.controls
-                .now_seconds
-                .set(Some(sample_now(now_seconds, started)));
             let table = touch_event_table(&self._lua, &event)
                 .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
-            touch
-                .call::<()>(table)
-                .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
+            self.invoke_callback(touch, "touch", now_seconds, started, table)?;
         }
         Ok(())
     }
