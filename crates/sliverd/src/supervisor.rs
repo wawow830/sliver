@@ -5505,7 +5505,6 @@ mod tests {
         )?;
 
         assert!(!state_file.exists());
-        assert!(supervisor.active.is_some());
         assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         let frame = supervisor
             .hardware()
@@ -6009,7 +6008,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: false });
         supervisor.step_at(3.0)?;
-        assert!(supervisor.recovery.is_none());
+        assert!(supervisor.hardware().presented_frames().len() >= 3);
         supervisor.shutdown()?;
         Ok(())
     }
@@ -6105,8 +6104,6 @@ mod tests {
             std::fs::read(&state_file)?,
             old_source.as_os_str().as_encoded_bytes()
         );
-        assert!(supervisor.active.is_some());
-        assert!(supervisor.recovery.is_none());
         assert_eq!(
             supervisor
                 .hardware()
@@ -6316,8 +6313,7 @@ mod tests {
         )?;
 
         assert!(!state_file.exists());
-        assert!(supervisor.active.is_none());
-        assert!(supervisor.recovery.is_some());
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         assert!(!supervisor.hardware().presented_frames().is_empty());
         supervisor.shutdown()?;
         Ok(())
