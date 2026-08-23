@@ -5892,7 +5892,7 @@ mod tests {
             .clone();
         let committed = supervisor.now_seconds();
         supervisor.step_at(committed + 0.5)?;
-        assert_eq!(supervisor.hardware().presented_frames().len(), 1);
+        assert_eq!(supervisor.hardware().presented_frames().len(), 2);
         supervisor.step_at(committed + 1.1)?;
         let after = supervisor
             .hardware()
@@ -5906,6 +5906,74 @@ mod tests {
             (6.0 * width) as usize..(7.0 * width) as usize,
             0..60,
         ));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn default_clock_refreshes_after_staging_crosses_a_minute_before_commit() -> Result<()> {
+        let prefix = r#"
+            local real_date = os.date
+            local minute_crossed = false
+            os.date = function(format)
+                if format == "%S" then
+                    return minute_crossed and "00" or "59"
+                end
+                if format == "%H:%M" then
+                    return minute_crossed and "00:01" or "00:00"
+                end
+                return real_date(format)
+            end
+        "#;
+        let original_start = "    start = function()\n        sliver.backlight.set(0.75)\n    end,";
+        let delayed_start = r#"    start = function()
+        local deadline = os.clock() + 0.05
+        while os.clock() < deadline do end
+        minute_crossed = true
+        sliver.backlight.set(0.75)
+    end,"#;
+        let mut source = format!(
+            "{}{}",
+            prefix,
+            String::from_utf8(default_source::bytes().to_vec())?
+        );
+        assert!(source.contains(original_start));
+        source = source.replacen(original_start, delayed_start, 1);
+
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("clock-staging-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(source.into_bytes())),
+        )?;
+        let before = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("clock default did not present")
+            .clone();
+        let committed = supervisor.now_seconds();
+
+        supervisor.step_at(committed)?;
+
+        let after = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("clock refresh did not present");
+        let width = 2008.0 / 11.0;
+        assert!(
+            region_changed(
+                &before,
+                after,
+                (6.0 * width) as usize..(7.0 * width) as usize,
+                0..60,
+            ),
+            "clock stayed on the staging-time minute after commit"
+        );
         supervisor.shutdown()?;
         Ok(())
     }

@@ -376,16 +376,24 @@ sliver.timer.every(30, function()
     refresh_battery()
     sliver.redraw()
 end)
+local function refresh_clock()
+    clock_text = os.date("%H:%M") or "--:--"
+    clock_control.label = clock_text
+    sliver.redraw()
+end
+
 local function schedule_clock()
     local seconds = tonumber(os.date("%S")) or 0
     sliver.timer.after(math.max(0.01, 60 - seconds), function()
-        clock_text = os.date("%H:%M") or "--:--"
-        clock_control.label = clock_text
-        sliver.redraw()
+        refresh_clock()
         schedule_clock()
     end)
 end
-schedule_clock()
+
+sliver.timer.after(0, function()
+    refresh_clock()
+    schedule_clock()
+end)
 clock_control.label = clock_text
 
 return {
