@@ -63,7 +63,7 @@ fn encode_request(request: &ApplyRequest) -> Result<Vec<u8>> {
         ApplyRequest::Path(path) => {
             let bytes = path.as_os_str().as_bytes();
             ensure!(
-                bytes.len() + 1 <= MAX_MESSAGE_BYTES,
+                bytes.len() < MAX_MESSAGE_BYTES,
                 "config path is too long to send to the supervisor"
             );
             let mut payload = Vec::with_capacity(bytes.len() + 1);

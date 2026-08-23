@@ -450,7 +450,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             if let CandidateSelection::Path(path) = selection {
                 let selected_path = absolute_lexical(&path)?;
                 let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
-                if let Some(authorization) = authorization {
+                if let Some(authorization) = authorization.as_ref() {
                     self.authorizer
                         .recheck(authorization.peer, &authorization.grant)?;
                 }
@@ -459,6 +459,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                         "preserving failed selected path also failed: {state_error:#}"
                     )));
                 }
+            }
+            if let Some(authorization) = authorization.as_ref() {
+                self.authorizer
+                    .recheck(authorization.peer, &authorization.grant)?;
             }
             if let Err(recovery_error) = self.enter_recovery() {
                 return Err(candidate_error
@@ -6048,6 +6052,36 @@ mod tests {
     }
 
     #[test]
+    fn explicit_source_exposes_its_path_and_directory_metadata() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("config.lua");
+        let marker = directory.path().join("source-metadata");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local file = assert(io.open({marker:?}, "w"))
+                file:write(sliver.source.path, "|", sliver.source.directory)
+                file:close()
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                marker = marker.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+
+        assert_eq!(
+            std::fs::read_to_string(marker)?,
+            format!("{}|{}", source.display(), directory.path().display())
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn failed_default_reset_keeps_the_previous_worker_and_selected_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
@@ -6271,13 +6305,14 @@ mod tests {
     fn injected_default_failure_enters_recovery_without_selecting_a_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
-        let default = directory.path().join("missing-default.lua");
         let (logind, _) = active_local_logind("failed-default-session");
         let supervisor = Supervisor::new_with_startup_candidate(
             FakeTouchBar::new(),
             state_file.clone(),
             logind,
-            Some(LuaSource::file(default)),
+            Some(LuaSource::embedded(
+                b"require('sliver.v1'); error('embedded default failed')".to_vec(),
+            )),
         )?;
 
         assert!(!state_file.exists());
