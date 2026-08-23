@@ -125,7 +125,7 @@ end
 
 local function activate(contact)
     if contact.row == function_layer then
-        sliver.input.key.tap(contact.control.key)
+        sliver.input.key.tap(contact.row[contact.control].key)
     elseif contact.row[contact.control].key then
         sliver.input.key.tap(contact.row[contact.control].key)
     end

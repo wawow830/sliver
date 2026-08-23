@@ -5482,6 +5482,359 @@ mod tests {
     }
 
     #[test]
+    fn default_first_frame_style_and_normal_controls_cross_the_fake_touchbar() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("default-controls-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(default_source::bytes().to_vec())),
+        )?;
+        let first = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("default did not present its first frame");
+        assert_eq!(first.rgba_at(0, 0), [0, 0, 0, 255]);
+        assert!(frame_contains_rgb(first, 0..2008, 0..60, [255, 255, 255]));
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 0.0,
+                x: 91.0,
+                y: 30.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(1.0)?;
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("pressed default frame was not presented")
+                .rgba_at(91, 30),
+            [56, 56, 56, 255]
+        );
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Up,
+                id: 1,
+                time: 1.0,
+                x: 91.0,
+                y: 30.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(2.0)?;
+
+        let touch = |id: u32, phase: TouchPhase, x: f64| TouchEvent {
+            phase,
+            id,
+            time: 2.0,
+            x,
+            y: 30.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        for index in 0..11 {
+            let x = (f64::from(index) + 0.5) * 2008.0 / 11.0;
+            supervisor.hardware_mut().inject(HardwareEvent::Touch(touch(
+                index as u32 + 2,
+                TouchPhase::Down,
+                x,
+            )));
+            supervisor.hardware_mut().inject(HardwareEvent::Touch(touch(
+                index as u32 + 2,
+                TouchPhase::Up,
+                x,
+            )));
+        }
+        supervisor.step_at(3.0)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::BrightnessDown),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::BrightnessDown),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::BrightnessUp),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::BrightnessUp),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::Previous),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::Previous),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::PlayPause),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::PlayPause),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::Next),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::Next),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::Mute),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::Mute),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::VolumeDown),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::VolumeDown),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::VolumeUp),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::VolumeUp),
+                    active: false
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn default_touch_contacts_highlight_cancel_activate_and_remain_independent() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("default-touch-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(default_source::bytes().to_vec())),
+        )?;
+        let event = |id, phase, x| TouchEvent {
+            phase,
+            id,
+            time: 0.0,
+            x,
+            y: 30.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(1, TouchPhase::Down, 91.0)));
+        supervisor.step_at(1.0)?;
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("down did not present highlight")
+                .rgba_at(91, 30),
+            [56, 56, 56, 255]
+        );
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(1, TouchPhase::Move, 300.0)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(1, TouchPhase::Up, 300.0)));
+        supervisor.step_at(2.0)?;
+        assert!(supervisor.hardware().synthetic_keys().is_empty());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("cancel did not repaint")
+                .rgba_at(91, 30),
+            [0, 0, 0, 255]
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(1, TouchPhase::Down, 91.0)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(2, TouchPhase::Down, 273.0)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(1, TouchPhase::Up, 91.0)));
+        supervisor.step_at(3.0)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: false
+                },
+            ]
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("second contact highlight was lost")
+                .rgba_at(273, 50),
+            [56, 56, 56, 255]
+        );
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(event(2, TouchPhase::Up, 273.0)));
+        supervisor.step_at(4.0)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_keys().len(),
+            4,
+            "the second same-contact up did not activate its control"
+        );
+        assert_eq!(
+            &supervisor.hardware().synthetic_keys()[2..],
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::BrightnessDown),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Consumer(ConsumerKey::BrightnessDown),
+                    active: false
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn default_fn_down_immediately_selects_the_lua_function_layer() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("default-fn-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(default_source::bytes().to_vec())),
+        )?;
+        let before = supervisor.hardware().presented_frames().len();
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            before + 1,
+            "Fn down did not repaint the Lua layer immediately"
+        );
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 1.0,
+                x: 83.0,
+                y: 30.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Up,
+                id: 1,
+                time: 1.0,
+                x: 83.0,
+                y: 30.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(2.0)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false
+                },
+            ]
+        );
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(3.0)?;
+        assert!(supervisor.recovery.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn embedded_source_has_the_ordinary_runtime_without_source_metadata() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let marker = directory.path().join("embedded-metadata");
