@@ -1,6 +1,7 @@
 mod apply_ipc;
 mod authorization;
 mod drm_out;
+mod frame_canvas;
 mod frame_slots;
 mod hardware;
 mod logind;
@@ -10,6 +11,7 @@ mod lua_worker;
 mod m2_hardware;
 mod path_state;
 mod peer_credentials;
+mod recovery;
 mod supervisor;
 
 use std::io::{Read, Write};
@@ -61,7 +63,12 @@ pub fn supervisor_main() -> Result<()> {
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
 
     let state_file = selected_path_state_file()?;
-    let mut supervisor = supervisor::Supervisor::new(m2_hardware::M2TouchBar::new(), state_file)?;
+    let mut supervisor = supervisor::Supervisor::new_with_startup_candidate(
+        m2_hardware::M2TouchBar::new(),
+        state_file,
+        crate::logind::RealLogind::default(),
+        None,
+    )?;
     let serve_result = supervisor::serve(listener, &mut supervisor);
     let shutdown_result = supervisor.shutdown();
     let _ = std::fs::remove_file(&socket);

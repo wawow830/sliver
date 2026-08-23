@@ -31,9 +31,9 @@ impl PathStateSnapshot {
         }
     }
 
-    pub(crate) fn restore(self, state_file: &Path) -> Result<()> {
-        match self.contents {
-            Some(contents) => PreparedPathState::prepare_contents(state_file, &contents)?.commit(),
+    pub(crate) fn restore(&self, state_file: &Path) -> Result<()> {
+        match &self.contents {
+            Some(contents) => PreparedPathState::prepare_contents(state_file, contents)?.commit(),
             None => {
                 match fs::remove_file(state_file) {
                     Ok(()) => {}

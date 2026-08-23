@@ -20,12 +20,15 @@ use crate::hardware::{
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
-    KeyOperation, KeyRequest, LuaWorker, ModifierMode, StagedLuaWorker, StopReason, WorkerEffects,
+    earliest_deadline, DriveRequest, KeyOperation, KeyRequest, LuaWorker, ModifierMode,
+    StagedLuaWorker, StopReason, VisibilityReason, WorkerEffects,
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
+use crate::recovery::{RecoverySession, RecoveryTouchResult};
 
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
+const RECOVERY_HOLD_SECONDS: f64 = 3.0;
 const REQUEST_QUEUE_CAPACITY: usize = 16;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
@@ -37,10 +40,25 @@ struct ActiveConfig {
     contacts: BTreeMap<ContactId, TouchEvent>,
 }
 
-struct AuthorizedRequest {
-    path: PathBuf,
+struct ApplyAuthorization {
     peer: PeerCredentials,
     grant: AuthorizationGrant,
+}
+
+struct AuthorizedRequest {
+    path: PathBuf,
+    authorization: ApplyAuthorization,
+}
+
+enum CandidateFailure {
+    Candidate(anyhow::Error),
+    Authorization(anyhow::Error),
+}
+
+impl From<anyhow::Error> for CandidateFailure {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Candidate(error)
+    }
 }
 
 struct TouchQueue {
@@ -57,6 +75,23 @@ struct SyntheticState {
 struct HeldSyntheticKey {
     key: OutputKey,
     modifiers: Vec<OutputKey>,
+}
+
+fn cancel_contacts(
+    worker: &LuaWorker,
+    contacts: &BTreeMap<ContactId, TouchEvent>,
+    now: f64,
+    request: DriveRequest,
+) -> Result<WorkerEffects> {
+    let events = contacts
+        .values()
+        .map(|event| TouchEvent {
+            phase: TouchPhase::Cancel,
+            time: now,
+            ..*event
+        })
+        .collect();
+    worker.drive(request.with_events(events))
 }
 
 impl TouchQueue {
@@ -251,6 +286,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
     active: Option<ActiveConfig>,
+    recovery: Option<RecoverySession>,
     claimed: bool,
     origin: Instant,
     backlight: f64,
@@ -259,13 +295,20 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     ignored_contacts: BTreeSet<ContactId>,
     touch_queue: TouchQueue,
     input_transitions: Vec<InputTransition>,
-    next_timer_deadline: Option<f64>,
+    next_worker_deadline: Option<f64>,
+    fn_hold_started: Option<f64>,
+    #[cfg(test)]
+    worker_failure: Option<String>,
     synthetic: SyntheticState,
     authorizer: SessionAuthorizer<L>,
     last_presented_time: Option<f64>,
 }
 
+type RecoveryTouchDispatch = fn(&mut RecoverySession, TouchEvent) -> RecoveryTouchResult;
+type ActiveTouchDispatch<H, L> = fn(&mut Supervisor<H, L>, TouchEvent);
+
 impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
+    #[cfg(test)]
     pub(crate) fn new(hardware: H, state_file: PathBuf) -> Result<Self> {
         Self::new_with_logind(hardware, state_file, RealLogind::default())
     }
@@ -274,6 +317,7 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
 impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     pub(crate) fn new_with_logind(mut hardware: H, state_file: PathBuf, logind: L) -> Result<Self> {
         hardware.claim()?;
+        let input_state = hardware.input_state();
         let backlight = match hardware.get_backlight() {
             Ok(level) => level,
             Err(error) => {
@@ -285,19 +329,50 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             hardware,
             state_file,
             active: None,
+            recovery: None,
             claimed: true,
             origin: Instant::now(),
             backlight,
-            input_state: InputState::default(),
+            input_state,
             down_contacts: BTreeMap::new(),
             ignored_contacts: BTreeSet::new(),
             touch_queue: TouchQueue::new(),
             input_transitions: Vec::new(),
-            next_timer_deadline: None,
+            next_worker_deadline: None,
+            fn_hold_started: None,
+            #[cfg(test)]
+            worker_failure: None,
             synthetic: SyntheticState::default(),
             authorizer: SessionAuthorizer::new(logind),
             last_presented_time: None,
         })
+    }
+
+    /// Build the running supervisor and make one startup attempt. A saved path
+    /// is tried once. `default_path` is supplied by the embedded-default owner
+    /// when no path is saved; it is never persisted by this module.
+    pub(crate) fn new_with_startup_candidate(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+        default_path: Option<PathBuf>,
+    ) -> Result<Self> {
+        let mut supervisor = Self::new_with_logind(hardware, state_file.clone(), logind)?;
+        let saved = read_selected_path(&state_file)?;
+        let (candidate, persist_path) = match saved {
+            Some(path) => (Some(path), true),
+            None => (default_path, false),
+        };
+        match candidate {
+            Some(path) => {
+                if let Err(error) = supervisor.startup_candidate(&path, persist_path) {
+                    eprintln!("selected Lua worker entered recovery: {error:#}");
+                    supervisor.enter_recovery()?;
+                }
+            }
+            None => supervisor.enter_recovery()?,
+        }
+        Ok(supervisor)
     }
 
     fn now_seconds(&self) -> f64 {
@@ -306,27 +381,83 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     #[cfg(test)]
     pub(crate) fn apply(&mut self, requested_path: &Path) -> Result<()> {
-        self.apply_candidate(requested_path, None)
+        self.apply_request(requested_path, None)
     }
 
     fn apply_authorized(&mut self, request: AuthorizedRequest) -> Result<()> {
-        self.authorizer.recheck(request.peer, &request.grant)?;
-        self.apply_candidate(&request.path, Some((request.peer, request.grant)))
+        let AuthorizedRequest {
+            path,
+            authorization,
+        } = request;
+        self.authorizer
+            .recheck(authorization.peer, &authorization.grant)?;
+        self.apply_request(&path, Some(authorization))
+    }
+
+    fn apply_request(
+        &mut self,
+        requested_path: &Path,
+        authorization: Option<ApplyAuthorization>,
+    ) -> Result<()> {
+        let candidate_error =
+            match self.apply_candidate(requested_path, authorization.as_ref(), true) {
+                Ok(()) => return Ok(()),
+                Err(CandidateFailure::Authorization(error)) => return Err(error),
+                Err(CandidateFailure::Candidate(error)) => error,
+            };
+        if self.active.is_none() {
+            if let Ok(path) = absolute_lexical(requested_path) {
+                let path_state = match PreparedPathState::prepare(&self.state_file, &path) {
+                    Ok(path_state) => path_state,
+                    Err(state_error) => {
+                        return Err(candidate_error.context(format!(
+                            "preserving failed selected path also failed: {state_error:#}"
+                        )))
+                    }
+                };
+                if let Some(authorization) = authorization {
+                    self.authorizer
+                        .recheck(authorization.peer, &authorization.grant)?;
+                }
+                if let Err(state_error) = path_state.commit() {
+                    return Err(candidate_error.context(format!(
+                        "preserving failed selected path also failed: {state_error:#}"
+                    )));
+                }
+                if let Err(recovery_error) = self.enter_recovery() {
+                    return Err(candidate_error
+                        .context(format!("entering recovery also failed: {recovery_error:#}")));
+                }
+            }
+        }
+        Err(candidate_error)
+    }
+
+    fn startup_candidate(&mut self, path: &Path, persist_path: bool) -> Result<()> {
+        self.apply_candidate(path, None, persist_path)
+            .map_err(|failure| match failure {
+                CandidateFailure::Candidate(error) | CandidateFailure::Authorization(error) => {
+                    error
+                }
+            })
     }
 
     fn apply_candidate(
         &mut self,
         requested_path: &Path,
-        authorization: Option<(PeerCredentials, AuthorizationGrant)>,
-    ) -> Result<()> {
+        authorization: Option<&ApplyAuthorization>,
+        persist_path: bool,
+    ) -> std::result::Result<(), CandidateFailure> {
         let selected_path = absolute_lexical(requested_path)?;
         let metadata = std::fs::metadata(&selected_path)
             .with_context(|| format!("reading config metadata for {}", selected_path.display()))?;
-        ensure!(
-            metadata.is_file(),
-            "config is not a regular file: {}",
-            selected_path.display()
-        );
+        if !metadata.is_file() {
+            return Err(anyhow::anyhow!(
+                "config is not a regular file: {}",
+                selected_path.display()
+            )
+            .into());
+        }
 
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
@@ -346,12 +477,20 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let frame = staged_frame.frame;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
-        let previous_path_state = PathStateSnapshot::capture(&self.state_file)?;
-        let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
-        if let Some((peer, grant)) = authorization {
-            self.authorizer.recheck(peer, &grant)?;
+        let previous_path_state = persist_path
+            .then(|| PathStateSnapshot::capture(&self.state_file))
+            .transpose()?;
+        let path_state = persist_path
+            .then(|| PreparedPathState::prepare(&self.state_file, &selected_path))
+            .transpose()?;
+        if let Some(authorization) = authorization {
+            self.authorizer
+                .recheck(authorization.peer, &authorization.grant)
+                .map_err(CandidateFailure::Authorization)?;
         }
-        path_state.commit()?;
+        if let Some(path_state) = path_state {
+            path_state.commit()?;
+        }
 
         let old_frame = self.active.as_ref().map(|active| active.frame.clone());
         let old_backlight = latest_backlight;
@@ -361,7 +500,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if let Some(level) = pending_backlight {
             if let Err(error) = self.hardware.set_backlight(level) {
                 return self.rollback_candidate(
-                    previous_path_state,
+                    previous_path_state.as_ref(),
                     old_frame.as_ref(),
                     old_backlight,
                     false,
@@ -374,7 +513,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         if let Err(error) = self.hardware.present(&frame) {
             return self.rollback_candidate(
-                previous_path_state,
+                previous_path_state.as_ref(),
                 old_frame.as_ref(),
                 old_backlight,
                 true,
@@ -386,7 +525,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let now = self.now_seconds();
         if let Err(error) = worker.commit(now, self.input_state) {
             return self.rollback_candidate(
-                previous_path_state,
+                previous_path_state.as_ref(),
                 old_frame.as_ref(),
                 old_backlight,
                 true,
@@ -397,7 +536,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         if let Err(error) = self.release_synthetic_keys() {
             return self.rollback_candidate(
-                previous_path_state,
+                previous_path_state.as_ref(),
                 old_frame.as_ref(),
                 old_backlight,
                 true,
@@ -408,11 +547,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         self.backlight = candidate_backlight;
         self.last_presented_time = Some(now);
+        if self.input_state.fn_active {
+            if self.fn_hold_started.is_none() {
+                self.fn_hold_started = Some(now);
+            }
+        } else {
+            self.fn_hold_started = None;
+        }
+        self.recovery = None;
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         let deferred_touches = self.touch_queue.drain();
         let deferred_transitions = std::mem::take(&mut self.input_transitions);
-        self.next_timer_deadline = Some(now);
+        self.next_worker_deadline = Some(now);
         let replaced = self.active.replace(ActiveConfig {
             worker,
             _selected_path: selected_path,
@@ -420,33 +567,30 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             backlight: candidate_backlight,
             contacts: BTreeMap::new(),
         });
+        if self.recovery_due(now) {
+            self.enter_recovery()?;
+        }
         if let Some(replaced) = replaced {
-            if !deferred_transitions.is_empty() || !deferred_touches.is_empty() {
-                if let Err(error) = replaced.worker.drive(
+            if self.recovery.is_none()
+                && (!deferred_transitions.is_empty() || !deferred_touches.is_empty())
+            {
+                if let Err(error) = replaced.worker.drive(DriveRequest::new(
                     now,
                     self.input_state,
                     deferred_transitions,
                     0.0,
                     deferred_touches,
-                ) {
+                )) {
                     eprintln!("replaced Lua worker did not receive deferred input: {error:#}");
                 }
             }
-            let cancels: Vec<_> = replaced
-                .contacts
-                .values()
-                .map(|event| TouchEvent {
-                    phase: TouchPhase::Cancel,
-                    time: now,
-                    ..*event
-                })
-                .collect();
-            if !cancels.is_empty() {
-                if let Err(error) =
-                    replaced
-                        .worker
-                        .drive(now, self.input_state, Vec::new(), 0.0, cancels)
-                {
+            if !replaced.contacts.is_empty() {
+                if let Err(error) = cancel_contacts(
+                    &replaced.worker,
+                    &replaced.contacts,
+                    now,
+                    DriveRequest::without_input(now, self.input_state),
+                ) {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
                     );
@@ -470,13 +614,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn rollback_candidate(
         &mut self,
-        previous_path_state: PathStateSnapshot,
+        previous_path_state: Option<&PathStateSnapshot>,
         old_frame: Option<&LogicalFrame>,
         old_backlight: f64,
         restore_frame: bool,
         restore_backlight: bool,
         error: anyhow::Error,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), CandidateFailure> {
         let mut error = error;
         if restore_frame {
             if let Some(frame) = old_frame {
@@ -494,16 +638,32 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 ));
             }
         }
-        if let Err(restore_error) = previous_path_state.restore(&self.state_file) {
-            error = error.context(format!(
-                "restoring selected path after candidate failure also failed: {restore_error:#}"
-            ));
+        if let Some(previous_path_state) = previous_path_state {
+            if let Err(restore_error) = previous_path_state.restore(&self.state_file) {
+                error = error.context(format!(
+                    "restoring selected path after candidate failure also failed: {restore_error:#}"
+                ));
+            }
         }
-        Err(error)
+        Err(CandidateFailure::Candidate(error))
     }
 
-    fn route_input(&mut self, key: ObservedKey, active: bool) {
-        if self.input_state.apply(key, active) && self.active.is_some() {
+    fn route_input(&mut self, key: ObservedKey, active: bool, now: f64) {
+        if !self.input_state.apply(key, active) {
+            return;
+        }
+        if key == ObservedKey::Fn {
+            self.fn_hold_started = active.then_some(now);
+        }
+        if self.recovery.is_some() {
+            if key == ObservedKey::Fn && !active && self.active.is_some() {
+                self.input_transitions.push(InputTransition {
+                    key,
+                    active,
+                    state: self.input_state,
+                });
+            }
+        } else if self.active.is_some() {
             self.input_transitions.push(InputTransition {
                 key,
                 active,
@@ -512,49 +672,199 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
-    fn route_touch(&mut self, event: TouchEvent) {
-        match event.phase {
+    fn route_touch(&mut self, event: TouchEvent) -> Result<()> {
+        let (recovery_dispatch, active_dispatch): (
+            RecoveryTouchDispatch,
+            ActiveTouchDispatch<H, L>,
+        ) = match event.phase {
             TouchPhase::Down => {
-                if self.down_contacts.insert(event.id, event).is_some() {
-                    return;
+                if self.down_contacts.insert(event.id, event).is_some()
+                    || self.ignored_contacts.contains(&event.id)
+                {
+                    return Ok(());
                 }
-                if self.ignored_contacts.contains(&event.id) {
-                    return;
-                }
-                if let Some(active) = self.active.as_mut() {
-                    active.contacts.insert(event.id, event);
-                    self.touch_queue.push(event);
-                }
+                (RecoverySession::touch_down, Self::route_active_down)
             }
             TouchPhase::Move => {
                 let Some(contact) = self.down_contacts.get_mut(&event.id) else {
-                    return;
+                    return Ok(());
                 };
                 *contact = event;
                 if self.ignored_contacts.contains(&event.id) {
-                    return;
+                    return Ok(());
                 }
-                if let Some(active) = self.active.as_mut() {
-                    if let std::collections::btree_map::Entry::Occupied(mut contact) =
-                        active.contacts.entry(event.id)
-                    {
-                        contact.insert(event);
-                        self.touch_queue.push(event);
-                    }
-                }
+                (RecoverySession::touch_move, Self::route_active_move)
             }
-            TouchPhase::Up | TouchPhase::Cancel => {
+            TouchPhase::Up => {
                 self.down_contacts.remove(&event.id);
                 if self.ignored_contacts.remove(&event.id) {
-                    return;
+                    return Ok(());
                 }
-                if let Some(active) = self.active.as_mut() {
-                    if active.contacts.remove(&event.id).is_some() {
-                        self.touch_queue.push(event);
-                    }
+                (RecoverySession::touch_up, Self::route_active_end)
+            }
+            TouchPhase::Cancel => {
+                self.down_contacts.remove(&event.id);
+                if self.ignored_contacts.remove(&event.id) {
+                    return Ok(());
                 }
+                (RecoverySession::touch_cancel, Self::route_active_end)
+            }
+        };
+        if self.recovery.is_some() {
+            self.route_recovery_phase(event, recovery_dispatch)
+        } else {
+            active_dispatch(self, event);
+            Ok(())
+        }
+    }
+
+    fn route_recovery_phase(
+        &mut self,
+        event: TouchEvent,
+        dispatch: fn(&mut RecoverySession, TouchEvent) -> RecoveryTouchResult,
+    ) -> Result<()> {
+        let result = {
+            let recovery = self
+                .recovery
+                .as_mut()
+                .expect("recovery session disappeared");
+            dispatch(recovery, event)
+        };
+        self.apply_recovery_touch(result)
+    }
+
+    fn apply_recovery_touch(&mut self, result: RecoveryTouchResult) -> Result<()> {
+        match result {
+            RecoveryTouchResult::Ignored => Ok(()),
+            RecoveryTouchResult::RowPressChanged => self.present_recovery(),
+            RecoveryTouchResult::Activate(key) => {
+                self.present_recovery()?;
+                self.activate_recovery_key(key)
             }
         }
+    }
+
+    fn route_active_down(&mut self, event: TouchEvent) {
+        if let Some(active) = self.active.as_mut() {
+            active.contacts.insert(event.id, event);
+            self.touch_queue.push(event);
+        }
+    }
+
+    fn route_active_move(&mut self, event: TouchEvent) {
+        if let Some(active) = self.active.as_mut() {
+            if let std::collections::btree_map::Entry::Occupied(mut contact) =
+                active.contacts.entry(event.id)
+            {
+                contact.insert(event);
+                self.touch_queue.push(event);
+            }
+        }
+    }
+
+    fn route_active_end(&mut self, event: TouchEvent) {
+        if let Some(active) = self.active.as_mut() {
+            if active.contacts.remove(&event.id).is_some() {
+                self.touch_queue.push(event);
+            }
+        }
+    }
+
+    fn activate_recovery_key(&mut self, key: OutputKey) -> Result<()> {
+        let events = tap_key_events(key, &modifier_output_keys(self.input_state.modifiers));
+        self.hardware
+            .emit_key_events(&events)
+            .context("emitting recovery function key")
+    }
+
+    fn present_recovery(&mut self) -> Result<()> {
+        let frame = self
+            .recovery
+            .as_ref()
+            .context("recovery session disappeared while rendering")?
+            .render()?;
+        self.hardware.present(&frame)
+    }
+
+    fn enter_recovery(&mut self) -> Result<()> {
+        if self.recovery.is_some() {
+            return Ok(());
+        }
+        let now = self.now_seconds();
+        let mut owner_is_healthy = false;
+        let hide_result = self.active.as_mut().map(|active| {
+            owner_is_healthy = true;
+            let hide_effects = cancel_contacts(
+                &active.worker,
+                &active.contacts,
+                now,
+                DriveRequest::without_input(now, self.input_state).with_visibility(
+                    false,
+                    VisibilityReason::Recovery,
+                    false,
+                ),
+            );
+            active.contacts.clear();
+            hide_effects
+        });
+        let next_worker_deadline = match hide_result {
+            Some(Ok(effects)) => {
+                if !self.apply_key_effects(&effects.key_requests)? {
+                    return Ok(());
+                }
+                effects.next_worker_deadline
+            }
+            Some(Err(error)) => {
+                self.fail_active_worker(error)?;
+                return Ok(());
+            }
+            None => None,
+        };
+        self.ignored_contacts
+            .extend(self.down_contacts.keys().copied());
+        self.touch_queue.drain();
+        self.input_transitions.clear();
+        self.next_worker_deadline = next_worker_deadline;
+        self.fn_hold_started = None;
+        self.recovery = Some(RecoverySession::new(owner_is_healthy));
+        self.hardware
+            .set_backlight(0.75)
+            .context("setting recovery backlight")?;
+        self.backlight = 0.75;
+        self.present_recovery()
+    }
+
+    fn exit_recovery(&mut self, now: f64) -> Result<()> {
+        let Some(recovery) = self.recovery.take() else {
+            return Ok(());
+        };
+        if !recovery.owner_is_healthy() || self.active.is_none() {
+            self.recovery = Some(recovery);
+            return Ok(());
+        }
+        self.ignored_contacts
+            .extend(self.down_contacts.keys().copied());
+        let transitions = std::mem::take(&mut self.input_transitions);
+        let Some(active) = self.active.as_ref() else {
+            return Ok(());
+        };
+        self.hardware
+            .set_backlight(active.backlight)
+            .context("restoring worker backlight after recovery")?;
+        self.backlight = active.backlight;
+        let delta = self
+            .last_presented_time
+            .map(|previous| (now - previous).max(0.0))
+            .unwrap_or(0.0);
+        let Some(effects) = self.drive_active_worker(
+            DriveRequest::new(now, self.input_state, transitions, delta, Vec::new())
+                .with_visibility(true, VisibilityReason::Recovery, true),
+        )?
+        else {
+            return Ok(());
+        };
+        self.schedule_effects(now, &effects);
+        self.apply_effects(effects)
     }
 
     fn poll_hardware(&mut self, timeout: Duration) -> Result<()> {
@@ -564,41 +874,124 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn poll_hardware_deferred(&mut self, timeout: Duration) -> Result<()> {
+        let now = self.now_seconds();
         for event in self.hardware.poll(timeout)? {
-            match event {
-                HardwareEvent::Touch(touch) => self.route_touch(touch),
-                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active),
-                HardwareEvent::Modifier { modifier, active } => {
-                    self.route_input(ObservedKey::Modifier(modifier), active)
+            self.route_hardware_event(event, now)?;
+        }
+        Ok(())
+    }
+
+    fn recovery_deadline(&self) -> Option<f64> {
+        if self.recovery.is_some() || self.active.is_none() {
+            return None;
+        }
+        self.fn_hold_started
+            .map(|started| started + RECOVERY_HOLD_SECONDS)
+    }
+
+    fn recovery_due(&self, now: f64) -> bool {
+        self.recovery_deadline()
+            .is_some_and(|deadline| deadline <= now)
+    }
+
+    fn has_healthy_recovery(&self) -> bool {
+        self.recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.owner_is_healthy())
+    }
+
+    fn route_hardware_event(&mut self, event: HardwareEvent, now: f64) -> Result<()> {
+        match event {
+            HardwareEvent::Touch(touch) => self.route_touch(touch),
+            HardwareEvent::Fn { active } => {
+                self.route_input(ObservedKey::Fn, active, now);
+                if !active && self.has_healthy_recovery() {
+                    self.exit_recovery(now)?;
                 }
-                HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
+                Ok(())
+            }
+            HardwareEvent::Modifier { modifier, active } => {
+                self.route_input(ObservedKey::Modifier(modifier), active, now);
+                Ok(())
+            }
+            HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => Ok(()),
+        }
+    }
+
+    fn check_worker_liveness(&mut self) -> Result<()> {
+        let exited = self
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.worker.is_alive());
+        if exited {
+            self.fail_active_worker(anyhow::anyhow!("Lua owner thread exited"))?;
+            #[cfg(test)]
+            {
+                self.worker_failure = None;
             }
         }
         Ok(())
     }
 
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
-        for event in events {
-            match event {
-                HardwareEvent::Touch(touch) => self.route_touch(touch),
-                HardwareEvent::Fn { active } => self.route_input(ObservedKey::Fn, active),
-                HardwareEvent::Modifier { modifier, active } => {
-                    self.route_input(ObservedKey::Modifier(modifier), active)
-                }
-                HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => {}
-            }
+        self.check_worker_liveness()?;
+        if self.recovery_due(now) {
+            self.enter_recovery()?;
         }
-        let timer_due = self
-            .next_timer_deadline
+        for event in events {
+            self.route_hardware_event(event, now)?;
+        }
+        if self.recovery.is_some() && !self.input_state.fn_active {
+            self.exit_recovery(now)?;
+        }
+        let worker_due = self
+            .next_worker_deadline
             .is_some_and(|deadline| deadline <= now);
-        if self.active.is_some()
+        if self.recovery.is_some() {
+            if self.active.is_some() && self.has_healthy_recovery() && worker_due {
+                self.drive_hidden(now)?;
+            }
+        } else if self.active.is_some()
             && (!self.input_transitions.is_empty()
                 || !self.touch_queue.events.is_empty()
-                || timer_due)
+                || worker_due)
         {
             let transitions = std::mem::take(&mut self.input_transitions);
             let touches = self.touch_queue.drain();
             self.drive_active(now, transitions, touches)?;
+        }
+        Ok(())
+    }
+
+    fn drive_active_worker(&mut self, request: DriveRequest) -> Result<Option<WorkerEffects>> {
+        let Some(result) = self
+            .active
+            .as_ref()
+            .map(|active| active.worker.drive(request))
+        else {
+            return Ok(None);
+        };
+        match result {
+            Ok(effects) => Ok(Some(effects)),
+            Err(error) => {
+                self.fail_active_worker(error)?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn drive_hidden(&mut self, now: f64) -> Result<()> {
+        if !self.has_healthy_recovery() {
+            return Ok(());
+        }
+        let Some(effects) =
+            self.drive_active_worker(DriveRequest::without_input(now, self.input_state))?
+        else {
+            return Ok(());
+        };
+        self.next_worker_deadline = effects.next_worker_deadline;
+        if !self.apply_key_effects(&effects.key_requests)? {
+            return Ok(());
         }
         Ok(())
     }
@@ -609,53 +1002,90 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         transitions: Vec<InputTransition>,
         touches: Vec<TouchEvent>,
     ) -> Result<()> {
-        let Some(active) = self.active.as_ref() else {
-            return Ok(());
-        };
         let delta = self
             .last_presented_time
             .map(|previous| (now - previous).max(0.0))
             .unwrap_or(0.0);
-        let effects = match active
-            .worker
-            .drive(now, self.input_state, transitions, delta, touches)
-        {
-            Ok(effects) => effects,
-            Err(error) => return self.fail_active_worker(error),
+        let Some(effects) = self.drive_active_worker(DriveRequest::new(
+            now,
+            self.input_state,
+            transitions,
+            delta,
+            touches,
+        ))?
+        else {
+            return Ok(());
         };
-        self.next_timer_deadline = if effects.redraw_pending {
+        self.schedule_effects(now, &effects);
+        self.apply_effects(effects)
+    }
+
+    fn schedule_effects(&mut self, now: f64, effects: &WorkerEffects) {
+        self.next_worker_deadline = if effects.redraw_pending {
             Some(now)
         } else {
             effects
-                .next_timer_deadline
+                .next_worker_deadline
                 .or_else(|| effects.frame.as_ref().map(|_| now))
         };
-        if let Err(error) = self.apply_effects(effects) {
-            return self.fail_active_worker(error);
-        }
-        Ok(())
     }
 
     fn fail_active_worker(&mut self, error: anyhow::Error) -> Result<()> {
-        if let Err(cleanup_error) = self.release_synthetic_keys() {
-            return Err(error.context(format!(
-                "releasing synthetic keys after worker failure also failed: {cleanup_error:#}"
-            )));
+        eprintln!("Lua worker entered recovery: {error:#}");
+        #[cfg(test)]
+        {
+            self.worker_failure = Some(format!("{error:#}"));
         }
-        Err(error)
+        let now = self.now_seconds();
+        if let Some(active) = self.active.take() {
+            if !active.contacts.is_empty() {
+                if let Err(cancel_error) = cancel_contacts(
+                    &active.worker,
+                    &active.contacts,
+                    now,
+                    DriveRequest::without_input(now, self.input_state),
+                ) {
+                    eprintln!(
+                        "failed Lua worker did not receive contact cancellation: {cancel_error:#}"
+                    );
+                }
+            }
+        }
+        if let Err(cleanup_error) = self.release_synthetic_keys() {
+            eprintln!("releasing synthetic keys after worker failure failed: {cleanup_error:#}");
+        }
+        self.next_worker_deadline = None;
+        if let Some(recovery) = self.recovery.as_mut() {
+            recovery.mark_unhealthy();
+            Ok(())
+        } else {
+            self.enter_recovery()
+        }
     }
 
-    fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
-        let Some(active) = self.active.as_ref() else {
-            return Ok(());
+    fn apply_key_effects(&mut self, requests: &[KeyRequest]) -> Result<bool> {
+        let (next_synthetic, key_events) = match self.synthetic.plan(requests, self.input_state) {
+            Ok(effects) => effects,
+            Err(error) => {
+                self.fail_active_worker(error)?;
+                return Ok(false);
+            }
         };
-        let (next_synthetic, key_events) = self
-            .synthetic
-            .plan(&effects.key_requests, self.input_state)?;
         if !key_events.is_empty() {
             self.hardware.emit_key_events(&key_events)?;
         }
         self.synthetic = next_synthetic;
+        Ok(true)
+    }
+
+    fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
+        if self.active.is_none() {
+            return Ok(());
+        }
+        if !self.apply_key_effects(&effects.key_requests)? {
+            return Ok(());
+        }
+        let active = self.active.as_ref().expect("active worker disappeared");
         let old_frame = active.frame.clone();
         let old_backlight = active.backlight;
         let frame = effects.frame;
@@ -717,7 +1147,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn poll_wait(&self, now: f64) -> Duration {
-        let Some(deadline) = self.next_timer_deadline else {
+        let deadline = earliest_deadline(self.next_worker_deadline, self.recovery_deadline());
+        let Some(deadline) = deadline else {
             return MAX_POLL_WAIT;
         };
         if deadline <= now {
@@ -732,20 +1163,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let Some(active) = self.active.take() else {
             return Ok(());
         };
-        let cancels: Vec<_> = active
-            .contacts
-            .values()
-            .map(|event| TouchEvent {
-                phase: TouchPhase::Cancel,
-                time: now,
-                ..*event
-            })
-            .collect();
-        if !cancels.is_empty() {
-            if let Err(error) = active
-                .worker
-                .drive(now, self.input_state, Vec::new(), 0.0, cancels)
-            {
+        if !active.contacts.is_empty() {
+            if let Err(error) = cancel_contacts(
+                &active.worker,
+                &active.contacts,
+                now,
+                DriveRequest::without_input(now, self.input_state),
+            ) {
                 eprintln!("active Lua worker did not receive contact cancellation: {error:#}");
             }
         }
@@ -758,7 +1182,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.ignored_contacts.clear();
         self.touch_queue.drain();
         self.input_transitions.clear();
-        self.next_timer_deadline = None;
+        self.next_worker_deadline = None;
         self.input_state = input_state;
     }
 
@@ -778,7 +1202,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     #[cfg(test)]
     fn step_at(&mut self, now: f64) -> Result<()> {
         let events = self.hardware.poll(Duration::ZERO)?;
-        self.process_events_at(now, events)
+        self.process_events_at(now, events)?;
+        #[cfg(test)]
+        if let Some(error) = self.worker_failure.take() {
+            return Err(anyhow::anyhow!(error));
+        }
+        Ok(())
     }
 
     pub(crate) fn shutdown(mut self) -> Result<()> {
@@ -806,6 +1235,21 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     pub(crate) fn hardware_mut(&mut self) -> &mut H {
         &mut self.hardware
     }
+}
+
+fn read_selected_path(state_file: &Path) -> Result<Option<PathBuf>> {
+    let contents = match std::fs::read(state_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("reading selected-path state {}", state_file.display()))
+        }
+    };
+    ensure!(!contents.is_empty(), "selected-path state is empty");
+    let path = PathBuf::from(std::ffi::OsString::from_vec(contents));
+    ensure!(path.is_absolute(), "selected-path state is not absolute");
+    Ok(Some(path))
 }
 
 struct PendingRequest {
@@ -1009,7 +1453,10 @@ fn authorize_path<L: Logind>(
     path: PathBuf,
 ) -> Result<AuthorizedRequest> {
     let grant = authorizer.authorize(peer)?;
-    Ok(AuthorizedRequest { path, peer, grant })
+    Ok(AuthorizedRequest {
+        path,
+        authorization: ApplyAuthorization { peer, grant },
+    })
 }
 
 #[cfg(test)]
@@ -1076,7 +1523,7 @@ mod tests {
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
-    use super::{serve_connection, serve_for_test, Supervisor};
+    use super::{serve_connection, serve_for_test, PreparedPathState, Supervisor};
 
     fn active_local_logind(session_id: &str) -> (FakeLogind, libc::uid_t) {
         let uid = unsafe { libc::getuid() };
@@ -1537,6 +1984,317 @@ mod tests {
     }
 
     #[test]
+    fn held_fn_at_worker_commit_starts_recovery_clock() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let input_state = InputState {
+            fn_active: true,
+            ..InputState::default()
+        };
+        let mut supervisor =
+            Supervisor::new(FakeTouchBar::with_input_state(input_state), state_file)?;
+        supervisor.apply(&source)?;
+
+        supervisor.step_at(2.9)?;
+        assert!(supervisor.recovery.is_none());
+        supervisor.step_at(3.1)?;
+        assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn reapplying_during_fn_hold_keeps_original_recovery_deadline() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+
+        supervisor.origin = Instant::now() - Duration::from_secs(2);
+        supervisor.apply(&source)?;
+
+        supervisor.step_at(3.9)?;
+        assert!(supervisor.recovery.is_none());
+        supervisor.step_at(4.0)?;
+        assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn deadline_takes_recovery_before_due_worker_drive() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timed.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                sliver.timer.after(3.0, function()
+                    record("timer")
+                    sliver.redraw()
+                end)
+                return {{
+                    api_version = 1,
+                    visibility = function(event)
+                        record("visibility:" .. tostring(event.visible))
+                    end,
+                    render = function() record("render") end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+
+        assert_eq!(
+            std::fs::read_to_string(&log)?,
+            "render\nvisibility:false\ntimer\n"
+        );
+        assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_runs_timers_without_presenting_hidden_lua_frames() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timed.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                sliver.timer.every(1.0, function()
+                    record("timer")
+                    sliver.redraw()
+                    sliver.redraw()
+                end)
+                return {{
+                    api_version = 1,
+                    render = function() record("render") end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+        assert!(supervisor.recovery.is_some());
+        let frames_after_entry = supervisor.hardware().presented_frames().len();
+        let count = |name: &str| -> Result<usize> {
+            Ok(std::fs::read_to_string(&log)?
+                .lines()
+                .filter(|line| *line == name)
+                .count())
+        };
+        let renders_before_hidden = count("render")?;
+        let timers_before_hidden = count("timer")?;
+
+        supervisor.step_at(6.0)?;
+
+        assert!(count("timer")? > timers_before_hidden);
+        assert_eq!(count("render")?, renders_before_hidden);
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frames_after_entry
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(7.0)?;
+        assert!(supervisor.recovery.is_none());
+        assert_eq!(count("render")?, renders_before_hidden + 1);
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frames_after_entry + 1
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_cancels_touch_and_releases_lua_held_key() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("keys.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f1
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(key)
+                    elseif event.phase == "cancel" then
+                        sliver.input.key.up(key)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(2.0)?;
+        supervisor.step_at(5.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn healthy_recovery_exits_before_later_same_batch_touch_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+        assert!(supervisor.recovery.is_some());
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(4.1)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
+        supervisor.step_at(5.0)?;
+
+        assert!(supervisor.recovery.is_none());
+        assert!(supervisor.hardware().synthetic_keys().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn later_render_failure_cancels_contacts_before_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("failing-render.lua");
+        let events = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {events:?}
+                local renders = 0
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        record(event.phase)
+                        if event.phase == "down" then sliver.redraw() end
+                    end,
+                    render = function()
+                        renders = renders + 1
+                        if renders > 1 then error("later render failed") end
+                    end,
+                }}
+                "#,
+                events = events.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("later render failure was not reported");
+        assert!(format!("{error:#}").contains("later render failed"));
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        assert!(supervisor.hardware().presented_frames().len() >= 2);
+        assert_eq!(std::fs::read_to_string(&events)?, "down\ncancel\n");
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn shutdown_and_drop_release_tracked_synthetic_keys() -> Result<()> {
         let exercise = |shutdown: bool| -> Result<Vec<FakeKeyEvent>> {
             let directory = tempfile::tempdir()?;
@@ -1909,6 +2667,102 @@ mod tests {
                 active: false,
             }]
         );
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        let frames_after_failure = supervisor.hardware().presented_frames().len();
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(touch(3, 1.0)));
+        supervisor.step_at(3.0)?;
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frames_after_failure + 1
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_key_request_from_active_callback_enters_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalid-active-key.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f1
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then sliver.input.key.up(key) end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("invalid active key request was accepted");
+        assert!(format!("{error:#}").contains("synthetic key is not held"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        assert!(supervisor.active.is_none());
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert!(supervisor.next_worker_deadline.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_key_request_from_hidden_timer_enters_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalid-hidden-key.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f1
+            sliver.timer.after(5.0, function() sliver.input.key.up(key) end)
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.owner_is_healthy()));
+
+        let error = supervisor
+            .step_at(6.0)
+            .expect_err("invalid hidden key request was accepted");
+        assert!(format!("{error:#}").contains("synthetic key is not held"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        assert!(supervisor.active.is_none());
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert!(supervisor.next_worker_deadline.is_none());
         supervisor.shutdown()?;
         Ok(())
     }
@@ -2681,6 +3535,126 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(candidate_log)?,
             "fn:up\nleft_ctrl:up\n"
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn due_fn_hold_during_staging_enters_fixed_recovery_before_deferred_input() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old.lua");
+        let candidate_source = directory.path().join("candidate.lua");
+        let old_log = directory.path().join("old-events");
+        let candidate_log = directory.path().join("candidate-events");
+        let marker = directory.path().join("staging");
+        let gate = directory.path().join("release");
+        std::fs::write(
+            &old_source,
+            format!(
+                "require('sliver.v1'); return {{ api_version = 1, touch = function(event) local file = assert(io.open({old_log:?}, 'a')); file:write(event.phase, '\\n'); file:close() end, render = function() end }}",
+                old_log = old_log.to_string_lossy(),
+            ),
+        )?;
+        std::fs::write(
+            &candidate_source,
+            format!(
+                r#"
+                local marker = assert(io.open({marker:?}, "w"))
+                marker:close()
+                while true do
+                    local file = io.open({gate:?})
+                    if file then file:close(); break end
+                end
+                local sliver = require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        local file = assert(io.open({candidate_log:?}, "a"))
+                        file:write(event.phase, "\n")
+                        file:close()
+                    end,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }}
+                "#,
+                marker = marker.to_string_lossy(),
+                gate = gate.to_string_lossy(),
+                candidate_log = candidate_log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.origin = Instant::now() - Duration::from_secs_f64(3.7);
+        supervisor
+            .hardware_mut()
+            .inject_on_poll(5, HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+
+        let marker_seen = marker.clone();
+        let gate_to_open = gate.clone();
+        let releaser = thread::spawn(move || -> Result<bool> {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !marker_seen.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let staged = marker_seen.exists();
+            thread::sleep(Duration::from_millis(700));
+            std::fs::write(gate_to_open, "go")?;
+            Ok(staged)
+        });
+        let apply_result = supervisor.apply(&candidate_source);
+        let staged = releaser.join().expect("staging releaser panicked")?;
+        anyhow::ensure!(staged, "candidate never entered staging");
+        apply_result?;
+
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            candidate_source.as_os_str().as_encoded_bytes()
+        );
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.owner_is_healthy()));
+        assert_eq!(std::fs::read_to_string(&old_log)?, "cancel\n");
+        assert!(!candidate_log.exists());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .unwrap()
+                .rgba_at(10, 30),
+            [0, 0, 0, 255]
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(2, TouchPhase::Down)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(2, TouchPhase::Up)));
+        supervisor.step_at(5.0)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false
+                },
+            ]
         );
         supervisor.shutdown()?;
         Ok(())
@@ -3899,6 +4873,146 @@ mod tests {
     }
 
     #[test]
+    fn final_authorization_failure_does_not_select_failed_path_without_worker() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let started = directory.path().join("started");
+        let release = directory.path().join("release");
+        let source = directory.path().join("config.lua");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local marker = assert(io.open({started:?}, "w"))
+                marker:close()
+                while true do
+                    local gate = io.open({release:?})
+                    if gate then gate:close(); break end
+                end
+                require("sliver.v1")
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                started = started.to_string_lossy(),
+                release = release.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, uid) = active_local_logind("old-session");
+        let mut supervisor =
+            Supervisor::new_with_logind(FakeTouchBar::new(), state_file.clone(), logind.clone())?;
+        let client_socket = socket.clone();
+        let client_source = source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&client_socket, &client_source)
+        });
+
+        let (mut stream, _) = listener.accept()?;
+        let request = super::read_authorized_request(&mut stream, &supervisor.authorizer)?;
+        let flip_logind = logind.clone();
+        let flip_started = started.clone();
+        let flip_release = release.clone();
+        let flip = thread::spawn(move || {
+            while !flip_started.exists() {
+                thread::sleep(Duration::from_millis(1));
+            }
+            flip_logind.set_session(
+                std::process::id() as libc::pid_t,
+                Some(Session {
+                    id: "old-session".into(),
+                    uid,
+                    seat: Some("seat0".into()),
+                    remote: false,
+                    active: false,
+                }),
+            );
+            std::fs::write(flip_release, "continue").expect("release candidate staging");
+        });
+        let result = supervisor.apply_authorized(request);
+        flip.join().expect("authorization flip panicked");
+        crate::apply_ipc::write_reply(&mut stream, &result)?;
+        let error = client
+            .join()
+            .expect("apply client panicked")
+            .expect_err("inactive final authorization check was accepted");
+        assert!(format!("{error:#}").contains("session is inactive"));
+        assert!(!state_file.exists());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_candidate_rechecks_authorization_before_preserving_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let started = directory.path().join("started");
+        let release = directory.path().join("release");
+        let source = directory.path().join("config.lua");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local started = {started:?}
+                local release = {release:?}
+                return {{
+                    api_version = 1,
+                    render = function()
+                        local marker = assert(io.open(started, "w"))
+                        marker:close()
+                        while true do
+                            local gate = io.open(release)
+                            if gate then gate:close(); break end
+                        end
+                        error("candidate failed during staging")
+                    end,
+                }}
+                "#,
+                started = started.to_string_lossy(),
+                release = release.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("old-session");
+        let mut supervisor =
+            Supervisor::new_with_logind(FakeTouchBar::new(), state_file.clone(), logind.clone())?;
+        let client_socket = socket.clone();
+        let client_source = source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&client_socket, &client_source)
+        });
+
+        let (mut stream, _) = listener.accept()?;
+        let request = super::read_authorized_request(&mut stream, &supervisor.authorizer)?;
+        let flip_logind = logind.clone();
+        let flip_started = started.clone();
+        let flip_release = release.clone();
+        let flip = thread::spawn(move || {
+            while !flip_started.exists() {
+                thread::sleep(Duration::from_millis(1));
+            }
+            flip_logind.bump_generation();
+            std::fs::write(flip_release, "continue").expect("release candidate staging");
+        });
+        let result = supervisor.apply_authorized(request);
+        flip.join().expect("authorization flip panicked");
+        crate::apply_ipc::write_reply(&mut stream, &result)?;
+        let error = client
+            .join()
+            .expect("apply client panicked")
+            .expect_err("failed candidate was accepted after its session changed");
+        assert!(format!("{error:#}").contains("changed during config apply"));
+        assert!(!state_file.exists());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn session_change_during_staging_cancels_candidate_before_commit() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("supervisor.sock");
@@ -4148,6 +5262,639 @@ mod tests {
             new_source.as_os_str().as_encoded_bytes()
         );
         assert_eq!(supervisor.hardware().presented_frames().len(), 2);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn saved_startup_failure_keeps_path_and_enters_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let missing = directory.path().join("missing.lua");
+        PreparedPathState::prepare(&state_file, &missing)?.commit()?;
+        let (logind, _) = active_local_logind("startup-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            None,
+        )?;
+
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            missing.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        assert!(!supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn all_startup_worker_failures_use_the_same_recovery_row() -> Result<()> {
+        let cases = [
+            ("missing", None),
+            ("invalid", Some("return {}")),
+            (
+                "start",
+                Some("require('sliver.v1'); return { api_version = 1, start = function() error('start failed') end, render = function() end }"),
+            ),
+            (
+                "render",
+                Some("require('sliver.v1'); return { api_version = 1, render = function() error('render failed') end }"),
+            ),
+        ];
+        for (name, contents) in cases {
+            let directory = tempfile::tempdir()?;
+            let state_file = directory.path().join("state/sliver/config-path");
+            let source = directory.path().join(format!("{name}.lua"));
+            if let Some(contents) = contents {
+                std::fs::write(&source, contents)?;
+            }
+            PreparedPathState::prepare(&state_file, &source)?.commit()?;
+            let (logind, _) = active_local_logind(name);
+            let supervisor = Supervisor::new_with_startup_candidate(
+                FakeTouchBar::new(),
+                state_file.clone(),
+                logind,
+                None,
+            )?;
+            assert_eq!(
+                std::fs::read(&state_file)?,
+                source.as_os_str().as_encoded_bytes()
+            );
+            assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+            assert!(!supervisor.hardware().presented_frames().is_empty());
+            supervisor.shutdown()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn absent_path_uses_one_injected_default_without_persisting_it() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let default = directory.path().join("default.lua");
+        std::fs::write(
+            &default,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }",
+        )?;
+        let (logind, _) = active_local_logind("default-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(default),
+        )?;
+
+        assert!(!state_file.exists());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("default was not presented")
+                .rgba_at(10, 10),
+            [0, 255, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn injected_default_failure_enters_recovery_without_selecting_a_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let default = directory.path().join("missing-default.lua");
+        let (logind, _) = active_local_logind("failed-default-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(default),
+        )?;
+
+        assert!(!state_file.exists());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        assert!(!supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn saved_path_wins_over_an_injected_default() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let saved = directory.path().join("saved.lua");
+        let default = directory.path().join("default.lua");
+        std::fs::write(
+            &saved,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        std::fs::write(
+            &default,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1) end }",
+        )?;
+        PreparedPathState::prepare(&state_file, &saved)?.commit()?;
+        let (logind, _) = active_local_logind("saved-over-default-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(default),
+        )?;
+
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            saved.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("saved source was not presented")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn successful_live_apply_exits_failed_worker_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let missing = directory.path().join("missing.lua");
+        let healthy = directory.path().join("healthy.lua");
+        std::fs::write(
+            &healthy,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        assert!(supervisor.apply(&missing).is_err());
+        assert!(supervisor.recovery.is_some());
+
+        supervisor.apply(&healthy)?;
+
+        assert!(supervisor.active.is_some());
+        assert!(supervisor.recovery.is_none());
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            healthy.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn service_restart_retries_the_saved_source_once() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let saved = directory.path().join("saved.lua");
+        PreparedPathState::prepare(&state_file, &saved)?.commit()?;
+        let (first_logind, _) = active_local_logind("first-restart-session");
+        let first = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            first_logind,
+            None,
+        )?;
+        assert!(first.active.is_none());
+        assert!(first.recovery.is_some());
+        first.shutdown()?;
+
+        std::fs::write(
+            &saved,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let (second_logind, _) = active_local_logind("second-restart-session");
+        let second = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            second_logind,
+            None,
+        )?;
+
+        assert!(second.active.is_some());
+        assert!(second.recovery.is_none());
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            saved.as_os_str().as_encoded_bytes()
+        );
+        second.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn repeating_timer_keeps_rendering_after_recovery_return() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timed.lua");
+        let log = directory.path().join("renders");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                sliver.timer.every(1.0, function() sliver.redraw() end)
+                return {{
+                    api_version = 1,
+                    render = function() record("render") end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+        assert!(supervisor.recovery.is_some());
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(5.0)?;
+        assert!(supervisor.recovery.is_none());
+        let renders_after_return = std::fs::read_to_string(&log)?.lines().count();
+
+        supervisor.step_at(6.0)?;
+
+        assert_eq!(
+            std::fs::read_to_string(&log)?.lines().count(),
+            renders_after_return + 1
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn healthy_worker_enters_recovery_at_three_seconds_and_returns_after_fn_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                local sliver = require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    visibility = function(event)
+                        record("visibility:" .. tostring(event.visible))
+                        if event.visible then sliver.redraw() end
+                    end,
+                    touch = function(event) record("touch:" .. event.phase) end,
+                    key = function(event) record("key:" .. event.key .. ":" .. event.phase) end,
+                    render = function() record("render") end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(2.0)?;
+        supervisor.step_at(4.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(4.1)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(5.0)?;
+
+        let events = std::fs::read_to_string(&log)?;
+        assert!(events.contains("touch:down"));
+        assert!(events.contains("touch:cancel"));
+        assert!(events.contains("visibility:false"));
+        assert!(events.contains("key:fn:up"));
+        assert!(events.contains("visibility:true"));
+        assert_eq!(
+            events.lines().filter(|line| *line == "touch:down").count(),
+            1
+        );
+        let lines: Vec<_> = events.lines().collect();
+        let fn_up = lines
+            .iter()
+            .position(|line| *line == "key:fn:up")
+            .expect("Fn-up was not delivered");
+        let visible = lines
+            .iter()
+            .position(|line| *line == "visibility:true")
+            .expect("visibility restoration was not delivered");
+        let render = lines
+            .iter()
+            .rposition(|line| *line == "render")
+            .expect("return render was not requested");
+        assert!(fn_up < visible && visible < render);
+        supervisor.step_at(6.0)?;
+        assert_eq!(
+            std::fs::read_to_string(&log)?
+                .lines()
+                .filter(|line| *line == "render")
+                .count(),
+            2
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn late_batch_claims_recovery_before_fn_up_and_restores_for_later_touch() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                return {{
+                    api_version = 1,
+                    visibility = function(event)
+                        record("visibility:" .. tostring(event.visible))
+                    end,
+                    key = function(event)
+                        record("key:" .. event.key .. ":" .. event.phase)
+                    end,
+                    touch = function(event)
+                        record("touch:" .. event.phase)
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(4.0)?;
+
+        let log_contents = std::fs::read_to_string(&log)?;
+        let events: Vec<_> = log_contents.lines().collect();
+        let hidden = events
+            .iter()
+            .position(|line| *line == "visibility:false")
+            .expect("late batch did not claim recovery");
+        let fn_up = events
+            .iter()
+            .position(|line| *line == "key:fn:up")
+            .expect("Fn-up was not delivered");
+        let visible = events
+            .iter()
+            .position(|line| *line == "visibility:true")
+            .expect("healthy recovery did not exit");
+        let touch = events
+            .iter()
+            .position(|line| *line == "touch:down")
+            .expect("later batch touch was not routed");
+        assert!(hidden < fn_up && fn_up < visible && visible < touch);
+        assert!(supervisor.recovery.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn an_idle_worker_exit_enters_recovery_on_the_next_poll() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor.next_worker_deadline = None;
+        supervisor
+            .active
+            .as_mut()
+            .expect("candidate was not made active")
+            .worker
+            .exit_owner_for_test()?;
+
+        supervisor.step_at(1.0)?;
+
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn deadline_poll_takes_recovery_ownership_before_routing_touch() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local log = {log:?}
+                local sliver = require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        local file = assert(io.open(log, "a"))
+                        file:write(event.phase, "\n")
+                        file:close()
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(4.0)?;
+
+        assert!(!log.exists() || !std::fs::read_to_string(&log)?.contains("down"));
+        assert_eq!(supervisor.recovery.as_ref().map(|_| true), Some(true));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn startup_recovery_bridges_modifiers_from_the_claim_snapshot() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut input_state = InputState::default();
+        input_state.modifiers.set(Modifier::LeftCtrl, true);
+        let (logind, _) = active_local_logind("startup-recovery-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::with_input_state(input_state),
+            state_file,
+            logind,
+            None,
+        )?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
+        supervisor.step_at(2.0)?;
+
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false,
+                },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_key_waits_for_finger_up_and_bridges_physical_modifiers() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("recovery-session");
+        let mut supervisor =
+            Supervisor::new_with_startup_candidate(FakeTouchBar::new(), state_file, logind, None)?;
+        supervisor.hardware_mut().inject(HardwareEvent::Modifier {
+            modifier: Modifier::LeftCtrl,
+            active: true,
+        });
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 1.0,
+                x: 10.0,
+                y: 30.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(2.0)?;
+        assert!(supervisor.hardware().synthetic_keys().is_empty());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("pressed recovery frame was not presented")
+                .rgba_at(10, 30),
+            [56, 56, 56, 255]
+        );
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Up,
+                id: 1,
+                time: 2.0,
+                x: 10.0,
+                y: 30.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+        supervisor.step_at(3.0)?;
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("released recovery frame was not presented")
+                .rgba_at(10, 30),
+            [0, 0, 0, 255]
+        );
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::LeftCtrl),
+                    active: false
+                },
+            ]
+        );
         supervisor.shutdown()?;
         Ok(())
     }

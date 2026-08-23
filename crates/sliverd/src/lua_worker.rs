@@ -11,6 +11,7 @@ use mlua::{
     Function, HookTriggers, Lua, MultiValue, Table, UserData, UserDataMethods, Value, VmState,
 };
 
+use crate::frame_canvas::FrameCanvas;
 #[cfg(test)]
 use crate::frame_slots::FrameWriter;
 use crate::frame_slots::{FrameBroker, FrameProducer, FrameSlots, FrameTiming};
@@ -34,7 +35,7 @@ pub(crate) struct WorkerEffects {
     pub(crate) frame: Option<TimedFrame>,
     pub(crate) backlight: Option<f64>,
     pub(crate) key_requests: Vec<KeyRequest>,
-    pub(crate) next_timer_deadline: Option<f64>,
+    pub(crate) next_worker_deadline: Option<f64>,
     pub(crate) redraw_pending: bool,
 }
 
@@ -59,11 +60,88 @@ pub(crate) struct KeyRequest {
     pub(crate) modifiers: ModifierMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VisibilityReason {
+    Recovery,
+}
+
+impl VisibilityReason {
+    fn as_lua_str(self) -> &'static str {
+        match self {
+            Self::Recovery => "recovery",
+        }
+    }
+}
+
+pub(crate) fn earliest_deadline(first: Option<f64>, second: Option<f64>) -> Option<f64> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    }
+}
+
+#[derive(Default)]
+struct DriveOptions {
+    visibility: Option<(bool, VisibilityReason)>,
+    force_render: bool,
+}
+
+pub(crate) struct DriveRequest {
+    now_seconds: f64,
+    input_state: InputState,
+    transitions: Vec<InputTransition>,
+    delta: f64,
+    events: Vec<TouchEvent>,
+    options: DriveOptions,
+}
+
+impl DriveRequest {
+    pub(crate) fn new(
+        now_seconds: f64,
+        input_state: InputState,
+        transitions: Vec<InputTransition>,
+        delta: f64,
+        events: Vec<TouchEvent>,
+    ) -> Self {
+        Self {
+            now_seconds,
+            input_state,
+            transitions,
+            delta,
+            events,
+            options: DriveOptions::default(),
+        }
+    }
+
+    pub(crate) fn without_input(now_seconds: f64, input_state: InputState) -> Self {
+        Self::new(now_seconds, input_state, Vec::new(), 0.0, Vec::new())
+    }
+
+    pub(crate) fn with_visibility(
+        mut self,
+        visible: bool,
+        reason: VisibilityReason,
+        force_render: bool,
+    ) -> Self {
+        self.options = DriveOptions {
+            visibility: Some((visible, reason)),
+            force_render,
+        };
+        self
+    }
+
+    pub(crate) fn with_events(mut self, events: Vec<TouchEvent>) -> Self {
+        self.events = events;
+        self
+    }
+}
+
 struct RuntimeEffects {
     frame: Option<FrameTiming>,
     backlight: Option<f64>,
     key_requests: Vec<KeyRequest>,
-    next_timer_deadline: Option<f64>,
+    next_worker_deadline: Option<f64>,
     redraw_pending: bool,
 }
 
@@ -116,11 +194,7 @@ enum WorkerCommand {
     RetryPending(f64, mpsc::SyncSender<std::result::Result<bool, String>>),
     PendingBacklight(mpsc::SyncSender<std::result::Result<Option<f64>, String>>),
     Drive(
-        f64,
-        InputState,
-        Vec<InputTransition>,
-        f64,
-        Vec<TouchEvent>,
+        DriveRequest,
         mpsc::SyncSender<std::result::Result<RuntimeEffects, String>>,
     ),
     RestoreBacklight(f64, mpsc::SyncSender<std::result::Result<(), String>>),
@@ -135,11 +209,12 @@ struct Runtime {
     _lua: Lua,
     render: Function,
     stop: Option<Function>,
-    _visibility: Option<Function>,
+    visibility: Option<Function>,
     touch: Option<Function>,
     key: Option<Function>,
     source: PathBuf,
     controls: RuntimeControls,
+    visible: bool,
     producer: FrameProducer,
     pending_frame: Option<PendingFrame>,
     pending_retry_deadline: Option<f64>,
@@ -389,28 +464,14 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))
     }
 
-    pub(crate) fn drive(
-        &self,
-        now_seconds: f64,
-        input_state: InputState,
-        transitions: Vec<InputTransition>,
-        delta: f64,
-        events: Vec<TouchEvent>,
-    ) -> Result<WorkerEffects> {
+    pub(crate) fn drive(&self, request: DriveRequest) -> Result<WorkerEffects> {
         let commands = self
             .commands
             .as_ref()
             .context("Lua worker command channel is closed")?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         commands
-            .send(WorkerCommand::Drive(
-                now_seconds,
-                input_state,
-                transitions,
-                delta,
-                events,
-                reply_tx,
-            ))
+            .send(WorkerCommand::Drive(request, reply_tx))
             .context("driving Lua worker")?;
         let effects = reply_rx
             .recv()
@@ -427,7 +488,7 @@ impl LuaWorker {
             frame,
             backlight: effects.backlight,
             key_requests: effects.key_requests,
-            next_timer_deadline: effects.next_timer_deadline,
+            next_worker_deadline: effects.next_worker_deadline,
             redraw_pending: effects.redraw_pending,
         })
     }
@@ -477,6 +538,22 @@ impl LuaWorker {
             let _ = commands.send(WorkerCommand::Abandon);
         }
         let _ = self.join_owner();
+    }
+
+    pub(crate) fn is_alive(&self) -> bool {
+        self.owner
+            .as_ref()
+            .is_some_and(|owner| !owner.is_finished())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn exit_owner_for_test(&mut self) -> Result<()> {
+        if let Some(commands) = self.commands.take() {
+            commands
+                .send(WorkerCommand::Abandon)
+                .context("stopping Lua owner for test")?;
+        }
+        self.join_owner()
     }
 
     fn join_owner(&mut self) -> Result<()> {
@@ -536,16 +613,8 @@ fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
             Ok(WorkerCommand::PendingBacklight(reply)) => {
                 let _ = reply.send(Ok(runtime.pending_backlight()));
             }
-            Ok(WorkerCommand::Drive(
-                now_seconds,
-                input_state,
-                transitions,
-                delta,
-                events,
-                reply,
-            )) => {
-                let _ =
-                    reply.send(runtime.drive(now_seconds, input_state, transitions, delta, events));
+            Ok(WorkerCommand::Drive(request, reply)) => {
+                let _ = reply.send(runtime.drive(request));
             }
             Ok(WorkerCommand::RestoreBacklight(level, reply)) => {
                 let _ = reply.send(runtime.restore_backlight(level));
@@ -597,16 +666,12 @@ impl Runtime {
         }
     }
 
-    fn next_deadline(&self) -> Option<f64> {
-        match (
-            self.controls.timers.borrow().next_deadline(),
-            self.pending_retry_deadline,
-        ) {
-            (Some(timer), Some(retry)) => Some(timer.min(retry)),
-            (Some(timer), None) => Some(timer),
-            (None, Some(retry)) => Some(retry),
-            (None, None) => None,
-        }
+    fn next_worker_deadline(&self) -> Option<f64> {
+        let pending_retry = self
+            .visible
+            .then_some(self.pending_retry_deadline)
+            .flatten();
+        earliest_deadline(self.controls.timers.borrow().next_deadline(), pending_retry)
     }
 
     fn restore_backlight(&mut self, level: f64) -> std::result::Result<(), String> {
@@ -632,14 +697,15 @@ impl Runtime {
         Ok(())
     }
 
-    fn drive(
-        &mut self,
-        now_seconds: f64,
-        input_state: InputState,
-        transitions: Vec<InputTransition>,
-        delta: f64,
-        events: Vec<TouchEvent>,
-    ) -> std::result::Result<RuntimeEffects, String> {
+    fn drive(&mut self, request: DriveRequest) -> std::result::Result<RuntimeEffects, String> {
+        let DriveRequest {
+            now_seconds,
+            input_state,
+            transitions,
+            delta,
+            events,
+            options,
+        } = request;
         let timing = FrameTiming::new(now_seconds, delta).map_err(|error| error.to_string())?;
         if !self.controls.committed.get() {
             return Err("Lua worker has not been committed".into());
@@ -651,27 +717,39 @@ impl Runtime {
         let result = (|| {
             self.dispatch_keys(now_seconds, started, transitions)?;
             self.dispatch_touch(now_seconds, started, events)?;
+            if let Some((visible, reason)) = options.visibility {
+                self.visible = visible;
+                self.dispatch_visibility(visible, reason, now_seconds, started)?;
+            }
             self.run_due_timers(now_seconds, started)?;
             self.controls
                 .now_seconds
                 .set(Some(sample_now(now_seconds, started)));
-            if self.controls.redraw_pending.replace(false) {
-                let frame = self.render_frame(now_seconds, delta)?;
-                self.pending_frame = Some(PendingFrame { frame, timing });
+            let redraw_requested = self.controls.redraw_pending.get();
+            if self.visible {
+                self.controls.redraw_pending.set(false);
+                if options.force_render || redraw_requested {
+                    let frame = self.render_frame(now_seconds, delta)?;
+                    self.pending_frame = Some(PendingFrame { frame, timing });
+                }
             }
-            let frame = self.try_publish_pending(now_seconds)?;
+            let frame = if self.visible {
+                self.try_publish_pending(now_seconds)?
+            } else {
+                None
+            };
             self.controls
                 .now_seconds
                 .set(Some(sample_now(now_seconds, started)));
             let redraw_pending = self.controls.redraw_pending.get();
             let backlight = self.controls.pending_backlight.take();
             let key_requests = self.controls.key_requests.borrow_mut().drain(..).collect();
-            let next_timer_deadline = self.next_deadline();
+            let next_worker_deadline = self.next_worker_deadline();
             Ok(RuntimeEffects {
                 frame,
                 backlight,
                 key_requests,
-                next_timer_deadline,
+                next_worker_deadline,
                 redraw_pending,
             })
         })();
@@ -680,6 +758,22 @@ impl Runtime {
         }
         self.controls.now_seconds.set(None);
         result
+    }
+
+    fn invoke_callback(
+        &self,
+        callback: &Function,
+        stage: &'static str,
+        now_seconds: f64,
+        started: Instant,
+        table: Table,
+    ) -> std::result::Result<(), String> {
+        self.controls
+            .now_seconds
+            .set(Some(sample_now(now_seconds, started)));
+        callback
+            .call::<()>(table)
+            .map_err(|error| diagnostic(stage, &self.source, error.to_string()))
     }
 
     fn dispatch_keys(
@@ -693,15 +787,34 @@ impl Runtime {
         };
         for transition in transitions {
             self.controls.input_state.set(transition.state);
-            self.controls
-                .now_seconds
-                .set(Some(sample_now(now_seconds, started)));
             let table = key_event_table(&self._lua, &transition)
                 .map_err(|error| diagnostic("key", &self.source, error.to_string()))?;
-            key.call::<()>(table)
-                .map_err(|error| diagnostic("key", &self.source, error.to_string()))?;
+            self.invoke_callback(key, "key", now_seconds, started, table)?;
         }
         Ok(())
+    }
+
+    fn dispatch_visibility(
+        &self,
+        visible: bool,
+        reason: VisibilityReason,
+        now_seconds: f64,
+        started: Instant,
+    ) -> std::result::Result<(), String> {
+        let Some(visibility) = &self.visibility else {
+            return Ok(());
+        };
+        let table = self
+            ._lua
+            .create_table()
+            .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
+        table
+            .set("visible", visible)
+            .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
+        table
+            .set("reason", reason.as_lua_str())
+            .map_err(|error| diagnostic("visibility", &self.source, error.to_string()))?;
+        self.invoke_callback(visibility, "visibility", now_seconds, started, table)
     }
 
     fn dispatch_touch(
@@ -714,14 +827,9 @@ impl Runtime {
             return Ok(());
         };
         for event in events {
-            self.controls
-                .now_seconds
-                .set(Some(sample_now(now_seconds, started)));
             let table = touch_event_table(&self._lua, &event)
                 .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
-            touch
-                .call::<()>(table)
-                .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
+            self.invoke_callback(touch, "touch", now_seconds, started, table)?;
         }
         Ok(())
     }
@@ -852,11 +960,12 @@ impl Runtime {
             _lua: lua,
             render,
             stop,
-            _visibility: visibility,
+            visibility,
             touch,
             key,
             source: source.to_path_buf(),
             controls,
+            visible: true,
             producer,
             pending_frame: None,
             pending_retry_deadline: None,
@@ -888,23 +997,12 @@ impl Runtime {
         delta: f64,
     ) -> std::result::Result<LogicalFrame, String> {
         self.controls.redraw_pending.set(false);
-        let surface = cairo::ImageSurface::create(
-            cairo::Format::ARgb32,
-            sliver_core::STRIP_W as i32,
-            sliver_core::STRIP_H as i32,
-        )
-        .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        let context = cairo::Context::new(&surface)
-            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        context.set_operator(cairo::Operator::Source);
-        context.set_source_rgb(0.0, 0.0, 0.0);
-        context
-            .paint()
-            .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        context.set_operator(cairo::Operator::Over);
+        let frame = FrameCanvas::new()
+            .map_err(|error| diagnostic("render", &self.source, format!("{error:#}")))?;
+        let context = frame.context();
         let canvas = self
             ._lua
-            .create_userdata(Canvas::new(&context))
+            .create_userdata(Canvas::new(context))
             .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
         let render_result = self
             .render
@@ -914,8 +1012,8 @@ impl Runtime {
             .map_err(|error| diagnostic("render", &self.source, error.to_string()))?
             .invalidate();
         render_result.map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
-        surface.flush();
-        LogicalFrame::from_surface(&surface)
+        frame
+            .finish()
             .map_err(|error| diagnostic("render", &self.source, format!("{error:#}")))
     }
 

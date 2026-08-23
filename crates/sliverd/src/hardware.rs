@@ -480,6 +480,13 @@ mod fake {
             Self::default()
         }
 
+        pub(crate) fn with_input_state(input_state: InputState) -> Self {
+            Self {
+                input_state,
+                ..Self::default()
+            }
+        }
+
         pub(crate) fn inject(&mut self, event: HardwareEvent) {
             self.events.push(event);
         }

@@ -862,7 +862,7 @@ mod tests {
         worker.commit(0.0, InputState::default())?;
         let mut held = worker.hold_slots_for_test();
         let started = Instant::now();
-        let effects = worker.drive(
+        let effects = worker.drive(crate::lua_worker::DriveRequest::new(
             1.0,
             InputState::default(),
             Vec::new(),
@@ -878,12 +878,18 @@ mod tests {
                 width: None,
                 height: None,
             }],
-        )?;
+        ))?;
         assert!(started.elapsed() < Duration::from_millis(20));
         assert_eq!(std::fs::read_to_string(&log)?, "touch\ntimer\nrender\n");
         assert!(effects.frame.is_none());
         drop(held.pop());
-        let effects = worker.drive(2.0, InputState::default(), Vec::new(), 0.0, Vec::new())?;
+        let effects = worker.drive(crate::lua_worker::DriveRequest::new(
+            2.0,
+            InputState::default(),
+            Vec::new(),
+            0.0,
+            Vec::new(),
+        ))?;
         let frame = effects.frame.expect("pending frame was not retried");
         assert_eq!(std::fs::read_to_string(log)?, "touch\ntimer\nrender\n");
         let mut hardware = FakeTouchBar::new();
