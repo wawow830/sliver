@@ -583,7 +583,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 ),
             )? {
                 self.next_worker_deadline = effects.next_worker_deadline;
-                let _ = self.apply_key_effects(&effects.key_requests)?;
+                let _ = self.apply_hidden_effects(&effects)?;
             }
         } else if self.recovery_due(now) {
             self.enter_recovery()?;
@@ -827,7 +827,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         });
         let next_worker_deadline = match hide_result {
             Some(Ok(effects)) => {
-                if !self.apply_key_effects(&effects.key_requests)? {
+                if !self.apply_hidden_effects(&effects)? {
                     return Ok(());
                 }
                 effects.next_worker_deadline
@@ -1008,7 +1008,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             return Ok(());
         };
         self.next_worker_deadline = effects.next_worker_deadline;
-        if !self.apply_key_effects(&effects.key_requests)? {
+        if !self.apply_hidden_effects(&effects)? {
             return Ok(());
         }
         Ok(())
@@ -1093,6 +1093,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             self.hardware.emit_key_events(&key_events)?;
         }
         self.synthetic = next_synthetic;
+        Ok(true)
+    }
+
+    fn apply_hidden_effects(&mut self, effects: &WorkerEffects) -> Result<bool> {
+        if !self.apply_key_effects(&effects.key_requests)? {
+            return Ok(false);
+        }
+        if let Some(level) = effects.backlight {
+            self.active
+                .as_mut()
+                .expect("active worker disappeared")
+                .backlight = level;
+        }
         Ok(true)
     }
 
@@ -2169,6 +2182,56 @@ mod tests {
             supervisor.hardware().presented_frames().len(),
             frames_after_entry + 1
         );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_timer_brightness_is_restored_after_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timed-backlight.lua");
+        let log = directory.path().join("timer-events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                sliver.timer.after(5.0, function()
+                    local file = assert(io.open(log, "w"))
+                    file:write("timer")
+                    file:close()
+                    sliver.backlight.set(0.25)
+                end)
+                return {{
+                    api_version = 1,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+
+        supervisor.step_at(6.0)?;
+        assert_eq!(std::fs::read_to_string(&log)?, "timer");
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(7.0)?;
+
+        assert_eq!(supervisor.hardware().backlight_level(), 0.25);
         supervisor.shutdown()?;
         Ok(())
     }
