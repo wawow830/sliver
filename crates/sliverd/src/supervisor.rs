@@ -329,6 +329,7 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
 }
 
 impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
+    #[cfg(test)]
     pub(crate) fn new_with_logind(hardware: H, state_file: PathBuf, logind: L) -> Result<Self> {
         Self::new_with_logind_and_default(hardware, state_file, logind, default_source::source())
     }

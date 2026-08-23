@@ -82,9 +82,7 @@ pub(crate) fn read_request(stream: &mut UnixStream) -> Result<ApplyRequest> {
 }
 
 pub(crate) fn decode_request(bytes: &[u8]) -> Result<ApplyRequest> {
-    let (tag, payload) = bytes
-        .split_first()
-        .context("apply request is empty")?;
+    let (tag, payload) = bytes.split_first().context("apply request is empty")?;
     match *tag {
         PATH_REQUEST => {
             ensure!(!payload.is_empty(), "config path is empty");
@@ -93,7 +91,10 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<ApplyRequest> {
             ))))
         }
         DEFAULT_REQUEST => {
-            ensure!(payload.is_empty(), "default request has an unexpected payload");
+            ensure!(
+                payload.is_empty(),
+                "default request has an unexpected payload"
+            );
             Ok(ApplyRequest::Default)
         }
         other => bail!("unknown apply request tag {other}"),
