@@ -756,40 +756,35 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
-    fn route_recovery_down(&mut self, event: TouchEvent) -> Result<()> {
-        let result = self
-            .recovery
-            .as_mut()
-            .expect("recovery session disappeared")
-            .touch_down(event);
+    fn route_recovery_phase(
+        &mut self,
+        event: TouchEvent,
+        dispatch: fn(&mut RecoverySession, TouchEvent) -> RecoveryTouchResult,
+    ) -> Result<()> {
+        let result = {
+            let recovery = self
+                .recovery
+                .as_mut()
+                .expect("recovery session disappeared");
+            dispatch(recovery, event)
+        };
         self.apply_recovery_touch(result)
+    }
+
+    fn route_recovery_down(&mut self, event: TouchEvent) -> Result<()> {
+        self.route_recovery_phase(event, RecoverySession::touch_down)
     }
 
     fn route_recovery_move(&mut self, event: TouchEvent) -> Result<()> {
-        let result = self
-            .recovery
-            .as_mut()
-            .expect("recovery session disappeared")
-            .touch_move(event);
-        self.apply_recovery_touch(result)
+        self.route_recovery_phase(event, RecoverySession::touch_move)
     }
 
     fn route_recovery_up(&mut self, event: TouchEvent) -> Result<()> {
-        let result = self
-            .recovery
-            .as_mut()
-            .expect("recovery session disappeared")
-            .touch_up(event);
-        self.apply_recovery_touch(result)
+        self.route_recovery_phase(event, RecoverySession::touch_up)
     }
 
     fn route_recovery_cancel(&mut self, event: TouchEvent) -> Result<()> {
-        let result = self
-            .recovery
-            .as_mut()
-            .expect("recovery session disappeared")
-            .touch_cancel(event);
-        self.apply_recovery_touch(result)
+        self.route_recovery_phase(event, RecoverySession::touch_cancel)
     }
 
     fn apply_recovery_touch(&mut self, result: RecoveryTouchResult) -> Result<()> {
