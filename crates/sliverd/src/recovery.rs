@@ -4,50 +4,25 @@ use anyhow::{Context, Result};
 use cairo::{FontSlant, FontWeight};
 
 use crate::frame_canvas::FrameCanvas;
-use crate::hardware::{ContactId, KeyboardKey, LogicalFrame, OutputKey, TouchEvent};
+use crate::hardware::{function_key_output, ContactId, LogicalFrame, OutputKey, TouchEvent};
 
 const KEY_COUNT: usize = 12;
 const PRESSED_RGB: (f64, f64, f64) = (0.22, 0.22, 0.22);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(usize)]
-enum RecoveryKey {
-    F1,
-    F2,
-    F3,
-    F4,
-    F5,
-    F6,
-    F7,
-    F8,
-    F9,
-    F10,
-    F11,
-    F12,
-}
+struct RecoveryKey(usize);
 
 impl RecoveryKey {
-    const ALL: [Self; KEY_COUNT] = [
-        Self::F1,
-        Self::F2,
-        Self::F3,
-        Self::F4,
-        Self::F5,
-        Self::F6,
-        Self::F7,
-        Self::F8,
-        Self::F9,
-        Self::F10,
-        Self::F11,
-        Self::F12,
-    ];
+    fn all() -> impl Iterator<Item = Self> {
+        (0..KEY_COUNT).filter_map(Self::from_index)
+    }
 
     fn from_index(index: usize) -> Option<Self> {
-        Self::ALL.get(index).copied()
+        (index < KEY_COUNT).then_some(Self(index))
     }
 
     fn index(self) -> usize {
-        self as usize
+        self.0
     }
 
     fn hit_test(x: f64, y: f64) -> Option<Self> {
@@ -63,20 +38,7 @@ impl RecoveryKey {
     }
 
     fn output(self) -> OutputKey {
-        OutputKey::Keyboard(match self {
-            Self::F1 => KeyboardKey::F1,
-            Self::F2 => KeyboardKey::F2,
-            Self::F3 => KeyboardKey::F3,
-            Self::F4 => KeyboardKey::F4,
-            Self::F5 => KeyboardKey::F5,
-            Self::F6 => KeyboardKey::F6,
-            Self::F7 => KeyboardKey::F7,
-            Self::F8 => KeyboardKey::F8,
-            Self::F9 => KeyboardKey::F9,
-            Self::F10 => KeyboardKey::F10,
-            Self::F11 => KeyboardKey::F11,
-            Self::F12 => KeyboardKey::F12,
-        })
+        function_key_output(self.index()).expect("validated recovery key has an output")
     }
 }
 
@@ -214,7 +176,7 @@ impl RecoveryRow {
         context.set_font_size(24.0);
 
         let key_width = sliver_core::STRIP_W / KEY_COUNT as f64;
-        for key in RecoveryKey::ALL {
+        for key in RecoveryKey::all() {
             let left = key.index() as f64 * key_width;
             if self.is_pressed(key) {
                 context.set_source_rgb(PRESSED_RGB.0, PRESSED_RGB.1, PRESSED_RGB.2);
@@ -249,8 +211,11 @@ mod tests {
         assert_eq!(frame.width(), 2008);
         assert_eq!(frame.height(), 60);
         assert_eq!(frame.pixels()[3], 255);
-        assert_eq!(RecoveryKey::hit_test(0.0, 30.0), Some(RecoveryKey::F1));
-        assert_eq!(RecoveryKey::hit_test(2007.0, 30.0), Some(RecoveryKey::F12));
+        assert_eq!(RecoveryKey::hit_test(0.0, 30.0), RecoveryKey::from_index(0));
+        assert_eq!(
+            RecoveryKey::hit_test(2007.0, 30.0),
+            RecoveryKey::from_index(KEY_COUNT - 1)
+        );
         assert_eq!(RecoveryKey::hit_test(2008.0, 30.0), None);
         assert!(RecoveryKey::from_index(KEY_COUNT).is_none());
     }
