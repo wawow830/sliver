@@ -31,6 +31,24 @@ pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
 }
 
+struct SourceMetadata {
+    path: String,
+    directory: String,
+}
+
+impl SourceMetadata {
+    fn from_path(path: &Path) -> Self {
+        Self {
+            path: path.to_string_lossy().into_owned(),
+            directory: path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum LuaSource {
     File(PathBuf),
@@ -935,15 +953,7 @@ impl Runtime {
                 .map_err(|error| diagnostic("load", source, error.to_string()))?;
         }
         let controls = RuntimeControls::new(initial_backlight, initial_input);
-        let source_metadata = source.path().map(|path| {
-            (
-                path.to_string_lossy().into_owned(),
-                path.parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-        });
+        let source_metadata = source.path().map(SourceMetadata::from_path);
         let loaded_v1 = install_v1_module(&lua, &controls, source_metadata)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let source_name = source.chunk_name();
@@ -1353,7 +1363,7 @@ fn parse_modifier_mode(options: Option<Table>) -> mlua::Result<ModifierMode> {
 fn install_v1_module(
     lua: &Lua,
     controls: &RuntimeControls,
-    source_metadata: Option<(String, String)>,
+    source_metadata: Option<SourceMetadata>,
 ) -> mlua::Result<Rc<Cell<bool>>> {
     let loaded = Rc::new(Cell::new(false));
     let loaded_by_require = loaded.clone();
@@ -1363,10 +1373,10 @@ fn install_v1_module(
         loaded_by_require.set(true);
         let module = lua.create_table()?;
         module.set("api_version", 1)?;
-        if let Some((path, directory)) = &loader_source_metadata {
+        if let Some(metadata) = &loader_source_metadata {
             let source = lua.create_table()?;
-            source.set("path", path.as_str())?;
-            source.set("directory", directory.as_str())?;
+            source.set("path", metadata.path.as_str())?;
+            source.set("directory", metadata.directory.as_str())?;
             module.set("source", source)?;
         }
         let path = lua.create_function(create_path)?;
