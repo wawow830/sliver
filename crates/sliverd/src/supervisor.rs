@@ -3510,6 +3510,112 @@ mod tests {
     }
 
     #[test]
+    fn due_fn_hold_during_staging_enters_fixed_recovery_before_deferred_input() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let old_source = directory.path().join("old.lua");
+        let candidate_source = directory.path().join("candidate.lua");
+        let old_log = directory.path().join("old-events");
+        let candidate_log = directory.path().join("candidate-events");
+        let marker = directory.path().join("staging");
+        let gate = directory.path().join("release");
+        std::fs::write(
+            &old_source,
+            format!(
+                "require('sliver.v1'); return {{ api_version = 1, touch = function(event) local file = assert(io.open({old_log:?}, 'a')); file:write(event.phase, '\\n'); file:close() end, render = function() end }}",
+                old_log = old_log.to_string_lossy(),
+            ),
+        )?;
+        std::fs::write(
+            &candidate_source,
+            format!(
+                r#"
+                local marker = assert(io.open({marker:?}, "w"))
+                marker:close()
+                while true do
+                    local file = io.open({gate:?})
+                    if file then file:close(); break end
+                end
+                local sliver = require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    touch = function(event)
+                        local file = assert(io.open({candidate_log:?}, "a"))
+                        file:write(event.phase, "\n")
+                        file:close()
+                    end,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }}
+                "#,
+                marker = marker.to_string_lossy(),
+                gate = gate.to_string_lossy(),
+                candidate_log = candidate_log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.origin = Instant::now() - Duration::from_secs_f64(3.7);
+        supervisor
+            .hardware_mut()
+            .inject_on_poll(5, HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+
+        let marker_seen = marker.clone();
+        let gate_to_open = gate.clone();
+        let releaser = thread::spawn(move || -> Result<bool> {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !marker_seen.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let staged = marker_seen.exists();
+            thread::sleep(Duration::from_millis(700));
+            std::fs::write(gate_to_open, "go")?;
+            Ok(staged)
+        });
+        let apply_result = supervisor.apply(&candidate_source);
+        let staged = releaser.join().expect("staging releaser panicked")?;
+        anyhow::ensure!(staged, "candidate never entered staging");
+        apply_result?;
+
+        assert_eq!(std::fs::read(&state_file)?, candidate_source.as_os_str().as_encoded_bytes());
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.owner_is_healthy()));
+        assert_eq!(std::fs::read_to_string(&old_log)?, "cancel\n");
+        assert!(!candidate_log.exists());
+        assert_eq!(
+            supervisor.hardware().presented_frames().last().unwrap().rgba_at(10, 30),
+            [0, 0, 0, 255]
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(2, TouchPhase::Down)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(2, TouchPhase::Up)));
+        supervisor.step_at(5.0)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent { key: FakeKey::Keyboard(KeyboardKey::F1), active: true },
+                FakeKeyEvent { key: FakeKey::Keyboard(KeyboardKey::F1), active: false },
+            ]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn deferred_input_survives_a_failed_candidate_until_the_old_worker_drives() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let old_source = directory.path().join("old-input.lua");
