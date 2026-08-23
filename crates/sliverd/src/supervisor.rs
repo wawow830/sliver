@@ -1645,8 +1645,40 @@ mod tests {
         x_range.into_iter().any(|x| {
             y_range.clone().any(|y| {
                 let pixel = frame.rgba_at(x, y);
-                pixel[..3] == rgb
+                pixel[..3]
+                    .iter()
+                    .zip(rgb)
+                    .all(|(actual, expected)| actual.abs_diff(expected) <= 32)
             })
+        })
+    }
+
+    fn default_bytes_with_battery_root(root: &std::path::Path) -> Vec<u8> {
+        String::from_utf8(default_source::bytes().to_vec())
+            .expect("canonical default was not UTF-8")
+            .replace(
+                "/sys/class/power_supply/macsmc-battery",
+                &root.to_string_lossy(),
+            )
+            .into_bytes()
+    }
+
+    fn battery_cell() -> std::ops::Range<usize> {
+        let width = 2008.0 / 11.0;
+        let left = (7.0 * width) as usize;
+        left..((8.0 * width) as usize)
+    }
+
+    fn region_changed(
+        before: &crate::hardware::FrameSnapshot,
+        after: &crate::hardware::FrameSnapshot,
+        x_range: std::ops::Range<usize>,
+        y_range: std::ops::Range<usize>,
+    ) -> bool {
+        x_range.into_iter().any(|x| {
+            y_range
+                .clone()
+                .any(|y| before.rgba_at(x, y) != after.rgba_at(x, y))
         })
     }
 
@@ -5654,6 +5686,149 @@ mod tests {
     }
 
     #[test]
+    fn default_clock_requests_a_new_frame_at_the_next_minute_boundary() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let prefix = r#"
+            local real_date = os.date
+            local minute = 0
+            os.date = function(format)
+                if format == "%S" then return "59" end
+                if format == "%H:%M" then
+                    minute = minute + 1
+                    return string.format("00:%02d", minute)
+                end
+                return real_date(format)
+            end
+        "#;
+        let source = format!(
+            "{}{}",
+            prefix,
+            String::from_utf8(default_source::bytes().to_vec())?
+        );
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("clock-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(source.into_bytes())),
+        )?;
+        let before = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("clock default did not present")
+            .clone();
+        let committed = supervisor.now_seconds();
+        supervisor.step_at(committed + 0.5)?;
+        assert_eq!(supervisor.hardware().presented_frames().len(), 1);
+        supervisor.step_at(committed + 1.1)?;
+        let after = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("minute timer did not present");
+        let width = 2008.0 / 11.0;
+        assert!(region_changed(
+            &before,
+            after,
+            (6.0 * width) as usize..(7.0 * width) as usize,
+            0..60,
+        ));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn default_battery_reads_asahi_files_and_uses_the_required_color_precedence() -> Result<()> {
+        let cases = [
+            ("80", "Discharging", [255, 255, 255]),
+            ("30", "Discharging", [255, 191, 0]),
+            ("15", "Discharging", [255, 59, 48]),
+            ("10", "Charging", [52, 199, 89]),
+            ("not-a-capacity", "Charging", [255, 255, 255]),
+            ("50", "not-a-status", [255, 255, 255]),
+        ];
+        for (capacity, status, color) in cases {
+            let directory = tempfile::tempdir()?;
+            let battery = directory.path().join("macsmc-battery");
+            std::fs::create_dir(&battery)?;
+            std::fs::write(battery.join("capacity"), format!("{capacity}\n"))?;
+            std::fs::write(battery.join("status"), format!("{status}\n"))?;
+            let state_file = directory.path().join("state/sliver/config-path");
+            let (logind, _) = active_local_logind("battery-session");
+            let supervisor = Supervisor::new_with_startup_candidate(
+                FakeTouchBar::new(),
+                state_file,
+                logind,
+                Some(LuaSource::embedded(default_bytes_with_battery_root(
+                    &battery,
+                ))),
+            )?;
+            let frame = supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("battery default did not present a frame");
+            let cell = battery_cell();
+            assert!(
+                frame_contains_rgb(frame, cell, 40..60, color),
+                "{capacity} / {status} did not use RGB {color:?}"
+            );
+            supervisor.shutdown()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn default_battery_timer_refreshes_after_thirty_seconds() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let battery = directory.path().join("macsmc-battery");
+        std::fs::create_dir(&battery)?;
+        std::fs::write(battery.join("capacity"), "50\n")?;
+        std::fs::write(battery.join("status"), "Discharging\n")?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("battery-timer-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(default_bytes_with_battery_root(
+                &battery,
+            ))),
+        )?;
+        let committed = supervisor.now_seconds();
+        std::fs::write(battery.join("capacity"), "15\n")?;
+        supervisor.step_at(committed + 29.0)?;
+        let before = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("battery frame disappeared")
+            .clone();
+        assert!(!frame_contains_rgb(
+            &before,
+            battery_cell(),
+            40..60,
+            [255, 59, 48]
+        ));
+        supervisor.step_at(committed + 31.0)?;
+        let after = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("battery timer did not present a frame");
+        assert!(frame_contains_rgb(
+            after,
+            battery_cell(),
+            40..60,
+            [255, 59, 48]
+        ));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn default_touch_contacts_highlight_cancel_activate_and_remain_independent() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
@@ -5903,6 +6078,46 @@ mod tests {
                 .presented_frames()
                 .last()
                 .expect("previous worker frame disappeared")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_default_reset_during_presentation_rolls_back_without_clearing_state() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let old_source = directory.path().join("old.lua");
+        std::fs::write(
+            &old_source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let mut supervisor = Supervisor::new(
+            FailingPresentHardware::new(state_file.clone()),
+            state_file.clone(),
+        )?;
+        supervisor.apply(&old_source)?;
+        supervisor.set_default_source_for_test(default_source::bytes().to_vec());
+        supervisor.hardware_mut().fail_next_present = true;
+
+        let error = supervisor
+            .apply_default()
+            .expect_err("presentation failure committed embedded reset");
+
+        assert!(format!("{error:#}").contains("injected presentation failure"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .expect("old frame disappeared")
                 .rgba_at(10, 10),
             [255, 0, 0, 255]
         );

@@ -935,7 +935,16 @@ impl Runtime {
                 .map_err(|error| diagnostic("load", source, error.to_string()))?;
         }
         let controls = RuntimeControls::new(initial_backlight, initial_input);
-        let loaded_v1 = install_v1_module(&lua, &controls)
+        let source_metadata = source.path().map(|path| {
+            (
+                path.to_string_lossy().into_owned(),
+                path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        });
+        let loaded_v1 = install_v1_module(&lua, &controls, source_metadata)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let source_name = source.chunk_name();
         let entry = lua
@@ -1341,14 +1350,25 @@ fn parse_modifier_mode(options: Option<Table>) -> mlua::Result<ModifierMode> {
     }
 }
 
-fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<Cell<bool>>> {
+fn install_v1_module(
+    lua: &Lua,
+    controls: &RuntimeControls,
+    source_metadata: Option<(String, String)>,
+) -> mlua::Result<Rc<Cell<bool>>> {
     let loaded = Rc::new(Cell::new(false));
     let loaded_by_require = loaded.clone();
     let loader_controls = controls.clone();
+    let loader_source_metadata = source_metadata;
     let loader = lua.create_function(move |lua, _: MultiValue| {
         loaded_by_require.set(true);
         let module = lua.create_table()?;
         module.set("api_version", 1)?;
+        if let Some((path, directory)) = &loader_source_metadata {
+            let source = lua.create_table()?;
+            source.set("path", path.as_str())?;
+            source.set("directory", directory.as_str())?;
+            module.set("source", source)?;
+        }
         let path = lua.create_function(create_path)?;
         module.set("path", path)?;
         let image = lua.create_table()?;
