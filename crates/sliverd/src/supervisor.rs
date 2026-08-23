@@ -290,7 +290,6 @@ fn is_modifier_key(key: OutputKey) -> bool {
 pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
-    selected_path: Option<PathBuf>,
     active: Option<ActiveConfig>,
     recovery: Option<RecoverySession>,
     claimed: bool,
@@ -331,7 +330,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(Self {
             hardware,
             state_file,
-            selected_path: None,
             active: None,
             recovery: None,
             claimed: true,
@@ -363,13 +361,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     ) -> Result<Self> {
         let mut supervisor = Self::new_with_logind(hardware, state_file.clone(), logind)?;
         let saved = read_selected_path(&state_file)?;
-        let candidate = saved.clone().or(default_path);
-        supervisor.selected_path = saved;
+        let (candidate, persist_path) = match saved {
+            Some(path) => (Some(path), true),
+            None => (default_path, false),
+        };
         match candidate {
             Some(path) => {
-                if let Err(error) =
-                    supervisor.startup_candidate(&path, supervisor.selected_path.is_some())
-                {
+                if let Err(error) = supervisor.startup_candidate(&path, persist_path) {
                     eprintln!("selected Lua worker entered recovery: {error:#}");
                     supervisor.enter_recovery()?;
                 }
@@ -428,7 +426,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                         "preserving failed selected path also failed: {state_error:#}"
                     )));
                 }
-                self.selected_path = Some(path);
                 if let Err(recovery_error) = self.enter_recovery() {
                     return Err(candidate_error
                         .context(format!("entering recovery also failed: {recovery_error:#}")));
@@ -446,9 +443,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                         error
                     }
                 });
-        if result.is_ok() && !persist_path {
-            self.selected_path = None;
-        }
         result
     }
 
@@ -564,7 +558,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         } else {
             self.fn_hold_started = None;
         }
-        self.selected_path = Some(selected_path.clone());
         self.recovery = None;
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
