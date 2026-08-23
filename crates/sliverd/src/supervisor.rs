@@ -272,6 +272,29 @@ impl SyntheticState {
         }
         (Self::default(), events)
     }
+
+    fn restore_events(&self) -> Vec<SyntheticKeyEvent> {
+        let mut restored = Self::default();
+        let mut events = Vec::new();
+        for held in &self.held {
+            for modifier in &held.modifiers {
+                if restored.modifier_count(*modifier) == 0 {
+                    events.push(SyntheticKeyEvent {
+                        key: *modifier,
+                        active: true,
+                    });
+                }
+            }
+            if !is_modifier_key(held.key) || restored.modifier_count(held.key) == 0 {
+                events.push(SyntheticKeyEvent {
+                    key: held.key,
+                    active: true,
+                });
+            }
+            restored.held.push(held.clone());
+        }
+        events
+    }
 }
 
 fn is_modifier_key(key: OutputKey) -> bool {
@@ -532,6 +555,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         let old_frame = self.active.as_ref().map(|active| active.frame.clone());
+        let old_synthetic = self.synthetic.clone();
         let preserve_recovery = self.has_healthy_recovery();
         let old_backlight = latest_backlight;
         let candidate_backlight = pending_backlight.unwrap_or(old_backlight);
@@ -546,6 +570,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                         old_backlight,
                         false,
                         brightness_attempted,
+                        None,
                         error,
                     );
                 }
@@ -561,6 +586,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     old_backlight,
                     true,
                     brightness_changed,
+                    None,
                     error,
                 );
             }
@@ -574,6 +600,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 old_backlight,
                 !preserve_recovery,
                 brightness_changed,
+                None,
                 error,
             );
         }
@@ -585,6 +612,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 old_backlight,
                 !preserve_recovery,
                 brightness_changed,
+                None,
                 error,
             );
         }
@@ -602,6 +630,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                             old_backlight,
                             !preserve_recovery,
                             brightness_changed,
+                            Some(&old_synthetic),
                             error,
                         )
                         .map_err(|failure| match failure {
@@ -619,6 +648,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     old_backlight,
                     !preserve_recovery,
                     brightness_changed,
+                    Some(&old_synthetic),
                     error,
                 );
             }
@@ -704,6 +734,15 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
+    fn restore_synthetic_state(&mut self, state: &SyntheticState) -> Result<()> {
+        let events = state.restore_events();
+        if !events.is_empty() {
+            self.hardware.emit_key_events(&events)?;
+        }
+        self.synthetic = state.clone();
+        Ok(())
+    }
+
     fn rollback_candidate(
         &mut self,
         previous_path_state: Option<&PathStateSnapshot>,
@@ -711,6 +750,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         old_backlight: f64,
         restore_frame: bool,
         restore_backlight: bool,
+        old_synthetic: Option<&SyntheticState>,
         error: anyhow::Error,
     ) -> std::result::Result<(), CandidateFailure> {
         let mut error = error;
@@ -737,6 +777,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             if let Err(restore_error) = previous_path_state.restore(&self.state_file) {
                 error = error.context(format!(
                     "restoring selected path after candidate failure also failed: {restore_error:#}"
+                ));
+            }
+        }
+        if let Some(old_synthetic) = old_synthetic {
+            if let Err(restore_error) = self.restore_synthetic_state(old_synthetic) {
+                error = error.context(format!(
+                    "restoring synthetic keys after candidate failure also failed: {restore_error:#}"
                 ));
             }
         }
@@ -5262,6 +5309,148 @@ mod tests {
                 .expect("previous frame was not restored")
                 .rgba_at(10, 10),
             [255, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn session_change_after_key_release_restores_the_old_worker_state() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let old_source = directory.path().join("old.lua");
+        let new_source = directory.path().join("new.lua");
+        std::fs::write(
+            &old_source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f2
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(key)
+                    elseif event.phase == "up" then
+                        sliver.input.key.up(key)
+                    end
+                end,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                end,
+            }
+            "#,
+        )?;
+        std::fs::write(
+            &new_source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                start = function()
+                    sliver.backlight.set(0.75)
+                end,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, uid) = active_local_logind("old-session");
+        let mut supervisor = Supervisor::new_with_logind(
+            SessionSwitchingHardware::new(logind.clone(), uid),
+            state_file.clone(),
+            logind,
+        )?;
+        supervisor.apply(&old_source)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+        supervisor.hardware_mut().switch_on_present = true;
+
+        let client_socket = socket.clone();
+        let client_source = new_source.clone();
+        let client = thread::spawn(move || {
+            crate::apply_ipc::request_apply_at(&client_socket, &client_source)
+        });
+        let (mut stream, _) = listener.accept()?;
+        serve_connection(&mut stream, &mut supervisor)?;
+        let error = client
+            .join()
+            .expect("apply client panicked")
+            .expect_err("session changed after key release but apply succeeded");
+        assert!(format!("{error:#}").contains("not the active session"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .inner
+                .presented_frames()
+                .last()
+                .expect("old frame was not restored")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
+        supervisor.step_at(2.0)?;
+
+        assert_eq!(
+            supervisor.hardware().inner.synthetic_transactions(),
+            &[
+                vec![FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                }],
+                vec![FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                }],
+                vec![FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                }],
+                vec![FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                }],
+            ]
+        );
+        assert_eq!(
+            supervisor.hardware().inner.actions(),
+            &[
+                FakeAction::Grab,
+                FakeAction::Present,
+                FakeAction::SyntheticKey(FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                }),
+                FakeAction::Backlight(0.75),
+                FakeAction::Present,
+                FakeAction::SyntheticKey(FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                }),
+                FakeAction::Present,
+                FakeAction::Backlight(0.0),
+                FakeAction::SyntheticKey(FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                }),
+                FakeAction::SyntheticKey(FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                }),
+            ]
         );
         supervisor.shutdown()?;
         Ok(())
