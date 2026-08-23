@@ -10,35 +10,15 @@ local AMBER = "#ffbf00"
 local RED = "#ff3b30"
 local BATTERY_ROOT = "/sys/class/power_supply/macsmc-battery"
 
-local clock_control = { name = "clock", label = "--:--" }
-local battery_control = { name = "battery", label = "--%" }
-
-local normal = {
-    { name = "escape", label = "Esc", key = sliver.input.keys.keyboard.escape },
-    { name = "brightness_down", label = "", key = sliver.input.keys.consumer.brightness_down },
-    { name = "brightness_up", label = "", key = sliver.input.keys.consumer.brightness_up },
-    { name = "previous", label = "", key = sliver.input.keys.consumer.previous },
-    { name = "play_pause", label = "", key = sliver.input.keys.consumer.play_pause },
-    { name = "next", label = "", key = sliver.input.keys.consumer.next },
-    clock_control,
-    battery_control,
-    { name = "mute", label = "", key = sliver.input.keys.consumer.mute },
-    { name = "volume_down", label = "", key = sliver.input.keys.consumer.volume_down },
-    { name = "volume_up", label = "", key = sliver.input.keys.consumer.volume_up },
-}
+local clock_control
+local battery_control
+local normal
+local function_layer
 
 local function_key_names = {
     "f1", "f2", "f3", "f4", "f5", "f6",
     "f7", "f8", "f9", "f10", "f11", "f12",
 }
-local function_layer = {}
-for index, name in ipairs(function_key_names) do
-    function_layer[index] = {
-        name = name,
-        label = "F" .. tostring(index),
-        key = sliver.input.keys.keyboard[name],
-    }
-end
 
 local contacts = {}
 local pressed = {}
@@ -287,6 +267,81 @@ local function draw_battery(canvas, center_x, center_y)
     canvas:rectangle(center_x + 14, center_y - 4, 3, 8, WHITE)
 end
 
+clock_control = { label = "--:--" }
+battery_control = {
+    label = "--%",
+    draw = function(canvas, center_x, center_y)
+        draw_battery(canvas, center_x - 35, center_y - 5)
+    end,
+    draw_label = function(canvas, left)
+        canvas:text(left + 30, 42, battery_control.label, 14, battery_color())
+    end,
+}
+
+normal = {
+    { label = "Esc", key = sliver.input.keys.keyboard.escape },
+    {
+        label = "",
+        key = sliver.input.keys.consumer.brightness_down,
+        draw = function(canvas, center_x, center_y)
+            draw_sun(canvas, center_x, center_y, -1)
+        end,
+    },
+    {
+        label = "",
+        key = sliver.input.keys.consumer.brightness_up,
+        draw = function(canvas, center_x, center_y)
+            draw_sun(canvas, center_x, center_y, 1)
+        end,
+    },
+    {
+        label = "",
+        key = sliver.input.keys.consumer.previous,
+        draw = draw_previous,
+    },
+    {
+        label = "",
+        key = sliver.input.keys.consumer.play_pause,
+        draw = draw_play_pause,
+    },
+    {
+        label = "",
+        key = sliver.input.keys.consumer.next,
+        draw = draw_next,
+    },
+    clock_control,
+    battery_control,
+    {
+        label = "",
+        key = sliver.input.keys.consumer.mute,
+        draw = function(canvas, center_x, center_y)
+            draw_mute(canvas, center_x - 15, center_y - 4)
+        end,
+    },
+    {
+        label = "",
+        key = sliver.input.keys.consumer.volume_down,
+        draw = function(canvas, center_x, center_y)
+            draw_speaker(canvas, center_x - 5, center_y - 4, -1)
+        end,
+    },
+    {
+        label = "",
+        key = sliver.input.keys.consumer.volume_up,
+        draw = function(canvas, center_x, center_y)
+            draw_speaker(canvas, center_x - 5, center_y - 4, 1)
+        end,
+    },
+}
+
+function_layer = {}
+for index, name in ipairs(function_key_names) do
+    function_layer[index] = {
+        label = "F" .. tostring(index),
+        key = sliver.input.keys.keyboard[name],
+    }
+end
+
 local function draw_control(canvas, control, index, left, width)
     if pressed[index] then
         canvas:rectangle(left + 3, 3, width - 6, HEIGHT - 6, PRESSED)
@@ -294,32 +349,15 @@ local function draw_control(canvas, control, index, left, width)
 
     local center_x = left + width / 2
     local center_y = 24
-    if control.name == "brightness_down" then
-        draw_sun(canvas, center_x, center_y, -1)
-    elseif control.name == "brightness_up" then
-        draw_sun(canvas, center_x, center_y, 1)
-    elseif control.name == "previous" then
-        draw_previous(canvas, center_x, center_y)
-    elseif control.name == "play_pause" then
-        draw_play_pause(canvas, center_x, center_y)
-    elseif control.name == "next" then
-        draw_next(canvas, center_x, center_y)
-    elseif control.name == "battery" then
-        draw_battery(canvas, center_x - 35, center_y - 5)
-    elseif control.name == "mute" then
-        draw_mute(canvas, center_x - 15, center_y - 4)
-    elseif control.name == "volume_down" then
-        draw_speaker(canvas, center_x - 5, center_y - 4, -1)
-    elseif control.name == "volume_up" then
-        draw_speaker(canvas, center_x - 5, center_y - 4, 1)
+    if control.draw then
+        control.draw(canvas, center_x, center_y)
     end
 
-    local label = control.label
-    if control.name == "battery" then
-        canvas:text(left + 30, 42, label, 14, battery_color())
-    elseif label ~= "" then
-        local text_width = canvas:measure_text(label, 18)
-        canvas:text(center_x - text_width / 2, 18, label, 18, WHITE)
+    if control.draw_label then
+        control.draw_label(canvas, left)
+    elseif control.label ~= "" then
+        local text_width = canvas:measure_text(control.label, 18)
+        canvas:text(center_x - text_width / 2, 18, control.label, 18, WHITE)
     end
 end
 
