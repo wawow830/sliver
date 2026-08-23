@@ -493,33 +493,38 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         let old_frame = self.active.as_ref().map(|active| active.frame.clone());
+        let preserve_recovery = self.has_healthy_recovery();
         let old_backlight = latest_backlight;
         let candidate_backlight = pending_backlight.unwrap_or(old_backlight);
         let brightness_attempted = pending_backlight.is_some();
         let mut brightness_changed = false;
         if let Some(level) = pending_backlight {
-            if let Err(error) = self.hardware.set_backlight(level) {
+            if !preserve_recovery {
+                if let Err(error) = self.hardware.set_backlight(level) {
+                    return self.rollback_candidate(
+                        previous_path_state.as_ref(),
+                        old_frame.as_ref(),
+                        old_backlight,
+                        false,
+                        brightness_attempted,
+                        error,
+                    );
+                }
+                brightness_changed = true;
+            }
+        }
+
+        if !preserve_recovery {
+            if let Err(error) = self.hardware.present(&frame) {
                 return self.rollback_candidate(
                     previous_path_state.as_ref(),
                     old_frame.as_ref(),
                     old_backlight,
-                    false,
-                    brightness_attempted,
+                    true,
+                    brightness_changed,
                     error,
                 );
             }
-            brightness_changed = true;
-        }
-
-        if let Err(error) = self.hardware.present(&frame) {
-            return self.rollback_candidate(
-                previous_path_state.as_ref(),
-                old_frame.as_ref(),
-                old_backlight,
-                true,
-                brightness_changed,
-                error,
-            );
         }
 
         let now = self.now_seconds();
@@ -528,7 +533,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 previous_path_state.as_ref(),
                 old_frame.as_ref(),
                 old_backlight,
-                true,
+                !preserve_recovery,
                 brightness_changed,
                 error,
             );
@@ -539,24 +544,26 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 previous_path_state.as_ref(),
                 old_frame.as_ref(),
                 old_backlight,
-                true,
+                !preserve_recovery,
                 brightness_changed,
                 error,
             );
         }
 
-        self.backlight = candidate_backlight;
-        self.last_presented_time = Some(now);
-        if self.input_state.fn_active {
-            if self.fn_hold_started.is_none() {
-                self.fn_hold_started = Some(now);
+        if !preserve_recovery {
+            self.backlight = candidate_backlight;
+            self.last_presented_time = Some(now);
+            if self.input_state.fn_active {
+                if self.fn_hold_started.is_none() {
+                    self.fn_hold_started = Some(now);
+                }
+            } else {
+                self.fn_hold_started = None;
             }
-        } else {
-            self.fn_hold_started = None;
+            self.recovery = None;
+            self.ignored_contacts
+                .extend(self.down_contacts.keys().copied());
         }
-        self.recovery = None;
-        self.ignored_contacts
-            .extend(self.down_contacts.keys().copied());
         let deferred_touches = self.touch_queue.drain();
         let deferred_transitions = std::mem::take(&mut self.input_transitions);
         self.next_worker_deadline = Some(now);
@@ -567,7 +574,18 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             backlight: candidate_backlight,
             contacts: BTreeMap::new(),
         });
-        if self.recovery_due(now) {
+        if preserve_recovery {
+            if let Some(effects) = self.drive_active_worker(
+                DriveRequest::without_input(now, self.input_state).with_visibility(
+                    false,
+                    VisibilityReason::Recovery,
+                    false,
+                ),
+            )? {
+                self.next_worker_deadline = effects.next_worker_deadline;
+                let _ = self.apply_key_effects(&effects.key_requests)?;
+            }
+        } else if self.recovery_due(now) {
             self.enter_recovery()?;
         }
         if let Some(replaced) = replaced {
@@ -5620,6 +5638,117 @@ mod tests {
                 .filter(|line| *line == "render")
                 .count(),
             2
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn applying_during_healthy_recovery_keeps_fixed_row_until_fn_up() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let initial_source = directory.path().join("initial.lua");
+        let candidate_source = directory.path().join("candidate.lua");
+        let candidate_log = directory.path().join("candidate-events");
+        std::fs::write(
+            &initial_source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        std::fs::write(
+            &candidate_source,
+            format!(
+                r#"
+                local log = {log:?}
+                local sliver = require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    visibility = function(event)
+                        local file = assert(io.open(log, "a"))
+                        file:write("visibility:", tostring(event.visible), "\n")
+                        file:close()
+                    end,
+                    touch = function(event)
+                        local file = assert(io.open(log, "a"))
+                        file:write("touch:", event.phase, "\n")
+                        file:close()
+                    end,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1)
+                    end,
+                }}
+                "#,
+                log = candidate_log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&initial_source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+
+        supervisor.apply(&candidate_source)?;
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("recovery row was not presented")
+                .rgba_at(10, 10),
+            [0, 0, 0, 255]
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
+        supervisor.step_at(4.1)?;
+        assert_eq!(
+            supervisor.hardware().synthetic_keys(),
+            &[
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true,
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false,
+                },
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&candidate_log)?,
+            "visibility:false\n"
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor.step_at(5.0)?;
+        assert_eq!(
+            std::fs::read_to_string(&candidate_log)?,
+            "visibility:false\nvisibility:true\n"
+        );
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("candidate frame was not presented after Fn-up")
+                .rgba_at(10, 10),
+            [0, 255, 0, 255]
+        );
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(2, TouchPhase::Down)));
+        supervisor.step_at(6.0)?;
+        assert_eq!(
+            std::fs::read_to_string(&candidate_log)?,
+            "visibility:false\nvisibility:true\ntouch:down\n"
         );
         supervisor.shutdown()?;
         Ok(())
