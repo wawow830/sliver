@@ -684,14 +684,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn route_touch(&mut self, event: TouchEvent) -> Result<()> {
-        match event.phase {
+        let (recovery_dispatch, active_dispatch): (
+            fn(&mut RecoverySession, TouchEvent) -> RecoveryTouchResult,
+            fn(&mut Self, TouchEvent),
+        ) = match event.phase {
             TouchPhase::Down => {
                 if self.down_contacts.insert(event.id, event).is_some()
                     || self.ignored_contacts.contains(&event.id)
                 {
                     return Ok(());
                 }
-                self.route_touch_down(event)
+                (RecoverySession::touch_down, Self::route_active_down)
             }
             TouchPhase::Move => {
                 let Some(contact) = self.down_contacts.get_mut(&event.id) else {
@@ -701,57 +704,27 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 if self.ignored_contacts.contains(&event.id) {
                     return Ok(());
                 }
-                self.route_touch_move(event)
+                (RecoverySession::touch_move, Self::route_active_move)
             }
             TouchPhase::Up => {
                 self.down_contacts.remove(&event.id);
                 if self.ignored_contacts.remove(&event.id) {
                     return Ok(());
                 }
-                self.route_touch_up(event)
+                (RecoverySession::touch_up, Self::route_active_end)
             }
             TouchPhase::Cancel => {
                 self.down_contacts.remove(&event.id);
                 if self.ignored_contacts.remove(&event.id) {
                     return Ok(());
                 }
-                self.route_touch_cancel(event)
+                (RecoverySession::touch_cancel, Self::route_active_end)
             }
-        }
-    }
-
-    fn route_touch_down(&mut self, event: TouchEvent) -> Result<()> {
+        };
         if self.recovery.is_some() {
-            self.route_recovery_down(event)
+            self.route_recovery_phase(event, recovery_dispatch)
         } else {
-            self.route_active_down(event);
-            Ok(())
-        }
-    }
-
-    fn route_touch_move(&mut self, event: TouchEvent) -> Result<()> {
-        if self.recovery.is_some() {
-            self.route_recovery_move(event)
-        } else {
-            self.route_active_move(event);
-            Ok(())
-        }
-    }
-
-    fn route_touch_up(&mut self, event: TouchEvent) -> Result<()> {
-        if self.recovery.is_some() {
-            self.route_recovery_up(event)
-        } else {
-            self.route_active_end(event);
-            Ok(())
-        }
-    }
-
-    fn route_touch_cancel(&mut self, event: TouchEvent) -> Result<()> {
-        if self.recovery.is_some() {
-            self.route_recovery_cancel(event)
-        } else {
-            self.route_active_end(event);
+            active_dispatch(self, event);
             Ok(())
         }
     }
@@ -769,22 +742,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             dispatch(recovery, event)
         };
         self.apply_recovery_touch(result)
-    }
-
-    fn route_recovery_down(&mut self, event: TouchEvent) -> Result<()> {
-        self.route_recovery_phase(event, RecoverySession::touch_down)
-    }
-
-    fn route_recovery_move(&mut self, event: TouchEvent) -> Result<()> {
-        self.route_recovery_phase(event, RecoverySession::touch_move)
-    }
-
-    fn route_recovery_up(&mut self, event: TouchEvent) -> Result<()> {
-        self.route_recovery_phase(event, RecoverySession::touch_up)
-    }
-
-    fn route_recovery_cancel(&mut self, event: TouchEvent) -> Result<()> {
-        self.route_recovery_phase(event, RecoverySession::touch_cancel)
     }
 
     fn apply_recovery_touch(&mut self, result: RecoveryTouchResult) -> Result<()> {
