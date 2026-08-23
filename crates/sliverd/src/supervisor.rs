@@ -910,12 +910,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .last_presented_time
             .map(|previous| (now - previous).max(0.0))
             .unwrap_or(0.0);
-        let effects = match active.worker.drive(
+        let Some(effects) = self.drive_active_worker(
             DriveRequest::new(now, self.input_state, transitions, delta, Vec::new())
                 .with_visibility(true, VisibilityReason::Recovery, true),
-        ) {
-            Ok(effects) => effects,
-            Err(error) => return self.fail_active_worker(error),
+        )?
+        else {
+            return Ok(());
         };
         self.schedule_effects(now, &effects);
         self.apply_effects(effects)
@@ -1025,6 +1025,23 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
+    fn drive_active_worker(&mut self, request: DriveRequest) -> Result<Option<WorkerEffects>> {
+        let Some(result) = self
+            .active
+            .as_ref()
+            .map(|active| active.worker.drive(request))
+        else {
+            return Ok(None);
+        };
+        match result {
+            Ok(effects) => Ok(Some(effects)),
+            Err(error) => {
+                self.fail_active_worker(error)?;
+                Ok(None)
+            }
+        }
+    }
+
     fn drive_hidden(&mut self, now: f64) -> Result<()> {
         if !self
             .recovery
@@ -1033,17 +1050,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         {
             return Ok(());
         }
-        let effects = {
-            let Some(active) = self.active.as_ref() else {
-                return Ok(());
-            };
-            active
-                .worker
-                .drive(DriveRequest::without_input(now, self.input_state))
-        };
-        let effects = match effects {
-            Ok(effects) => effects,
-            Err(error) => return self.fail_active_worker(error),
+        let Some(effects) =
+            self.drive_active_worker(DriveRequest::without_input(now, self.input_state))?
+        else {
+            return Ok(());
         };
         self.next_timer_deadline = effects.next_timer_deadline;
         self.apply_key_effects(&effects.key_requests)
@@ -1055,22 +1065,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         transitions: Vec<InputTransition>,
         touches: Vec<TouchEvent>,
     ) -> Result<()> {
-        let Some(active) = self.active.as_ref() else {
-            return Ok(());
-        };
         let delta = self
             .last_presented_time
             .map(|previous| (now - previous).max(0.0))
             .unwrap_or(0.0);
-        let effects = match active.worker.drive(DriveRequest::new(
+        let Some(effects) = self.drive_active_worker(DriveRequest::new(
             now,
             self.input_state,
             transitions,
             delta,
             touches,
-        )) {
-            Ok(effects) => effects,
-            Err(error) => return self.fail_active_worker(error),
+        ))?
+        else {
+            return Ok(());
         };
         self.schedule_effects(now, &effects);
         self.apply_effects(effects)
