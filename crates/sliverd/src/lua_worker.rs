@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,6 +29,84 @@ pub(crate) struct TimedFrame {
 
 pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
+}
+
+struct SourceMetadata {
+    path: String,
+    directory: String,
+}
+
+impl SourceMetadata {
+    fn from_path(path: &Path) -> Self {
+        Self {
+            path: path.to_string_lossy().into_owned(),
+            directory: path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+}
+
+struct LuaSourceDescription<'a> {
+    content: SourceContent<'a>,
+    path: Option<&'a Path>,
+    metadata: Option<SourceMetadata>,
+    label: String,
+    chunk_name: String,
+}
+
+enum SourceContent<'a> {
+    File(&'a Path),
+    Embedded(&'a [u8]),
+}
+
+impl LuaSourceDescription<'_> {
+    fn read_bytes(&self) -> std::io::Result<Vec<u8>> {
+        match &self.content {
+            SourceContent::File(path) => std::fs::read(path),
+            SourceContent::Embedded(bytes) => Ok(bytes.to_vec()),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum LuaSource {
+    File(PathBuf),
+    Embedded(Arc<[u8]>),
+}
+
+impl LuaSource {
+    pub(crate) fn file(path: PathBuf) -> Self {
+        Self::File(path)
+    }
+
+    pub(crate) fn embedded(bytes: Vec<u8>) -> Self {
+        Self::Embedded(Arc::<[u8]>::from(bytes))
+    }
+
+    fn describe(&self) -> LuaSourceDescription<'_> {
+        match self {
+            Self::File(path) => {
+                let label = path.display().to_string();
+                LuaSourceDescription {
+                    content: SourceContent::File(path),
+                    path: Some(path),
+                    metadata: Some(SourceMetadata::from_path(path)),
+                    chunk_name: format!("@{label}"),
+                    label,
+                }
+            }
+            Self::Embedded(bytes) => LuaSourceDescription {
+                content: SourceContent::Embedded(bytes),
+                path: None,
+                metadata: None,
+                label: "<embedded default>".to_owned(),
+                chunk_name: "=sliver".to_owned(),
+            },
+        }
+    }
 }
 
 pub(crate) struct WorkerEffects {
@@ -212,7 +290,7 @@ struct Runtime {
     visibility: Option<Function>,
     touch: Option<Function>,
     key: Option<Function>,
-    source: PathBuf,
+    source: LuaSource,
     controls: RuntimeControls,
     visible: bool,
     producer: FrameProducer,
@@ -286,8 +364,19 @@ impl LuaWorker {
         initial_backlight: f64,
         initial_input: InputState,
     ) -> Result<StagedLuaWorker> {
+        Self::stage_source_with_backlight_and_input(
+            LuaSource::file(source.to_path_buf()),
+            initial_backlight,
+            initial_input,
+        )
+    }
+
+    pub(crate) fn stage_source_with_backlight_and_input(
+        source: LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+    ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
-        let source = source.to_path_buf();
         let slots = FrameSlots::new(
             sliver_core::STRIP_W as usize,
             sliver_core::STRIP_H as usize,
@@ -573,7 +662,7 @@ impl Drop for LuaWorker {
 }
 
 fn owner_main(
-    source: PathBuf,
+    source: LuaSource,
     initial_backlight: f64,
     initial_input: InputState,
     producer: FrameProducer,
@@ -866,20 +955,24 @@ impl Runtime {
     }
 
     fn load(
-        source: &Path,
+        source: &LuaSource,
         initial_backlight: f64,
         initial_input: InputState,
         producer: FrameProducer,
     ) -> std::result::Result<Self, String> {
-        let bytes =
-            std::fs::read(source).map_err(|error| diagnostic("load", source, error.to_string()))?;
+        let description = source.describe();
+        let bytes = description
+            .read_bytes()
+            .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let lua = unsafe { Lua::unsafe_new() };
-        configure_lua_path(&lua, source)
-            .map_err(|error| diagnostic("load", source, error.to_string()))?;
+        if let Some(path) = description.path {
+            configure_lua_path(&lua, path)
+                .map_err(|error| diagnostic("load", source, error.to_string()))?;
+        }
         let controls = RuntimeControls::new(initial_backlight, initial_input);
-        let loaded_v1 = install_v1_module(&lua, &controls)
+        let loaded_v1 = install_v1_module(&lua, &controls, description.metadata)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
-        let source_name = format!("@{}", source.display());
+        let source_name = description.chunk_name;
         let entry = lua
             .load(&bytes)
             .set_name(source_name.clone())
@@ -963,7 +1056,7 @@ impl Runtime {
             visibility,
             touch,
             key,
-            source: source.to_path_buf(),
+            source: source.clone(),
             controls,
             visible: true,
             producer,
@@ -1283,14 +1376,25 @@ fn parse_modifier_mode(options: Option<Table>) -> mlua::Result<ModifierMode> {
     }
 }
 
-fn install_v1_module(lua: &Lua, controls: &RuntimeControls) -> mlua::Result<Rc<Cell<bool>>> {
+fn install_v1_module(
+    lua: &Lua,
+    controls: &RuntimeControls,
+    source_metadata: Option<SourceMetadata>,
+) -> mlua::Result<Rc<Cell<bool>>> {
     let loaded = Rc::new(Cell::new(false));
     let loaded_by_require = loaded.clone();
     let loader_controls = controls.clone();
+    let loader_source_metadata = source_metadata;
     let loader = lua.create_function(move |lua, _: MultiValue| {
         loaded_by_require.set(true);
         let module = lua.create_table()?;
         module.set("api_version", 1)?;
+        if let Some(metadata) = &loader_source_metadata {
+            let source = lua.create_table()?;
+            source.set("path", metadata.path.as_str())?;
+            source.set("directory", metadata.directory.as_str())?;
+            module.set("source", source)?;
+        }
         let path = lua.create_function(create_path)?;
         module.set("path", path)?;
         let image = lua.create_table()?;
@@ -1558,15 +1662,17 @@ fn traceback_suffix(detail: &str) -> &'static str {
     }
 }
 
-fn diagnostic(stage: &str, source: &Path, detail: String) -> String {
+fn diagnostic(stage: &str, source: &LuaSource, detail: String) -> String {
     let traceback = traceback_suffix(&detail);
-    format!("lua {} [{stage}]: {detail}{traceback}", source.display())
+    let label = source.describe().label;
+    format!("lua {label} [{stage}]: {detail}{traceback}")
 }
 
-fn validation_diagnostic(source: &Path, line: Option<usize>, detail: String) -> String {
+fn validation_diagnostic(source: &LuaSource, line: Option<usize>, detail: String) -> String {
+    let label = source.describe().label;
     let location = line.map_or_else(
-        || format!("{} (line unavailable)", source.display()),
-        |line| format!("{}:{line}", source.display()),
+        || format!("{label} (line unavailable)"),
+        |line| format!("{label}:{line}"),
     );
     format!(
         "lua {location} [validation]: {detail}{}",

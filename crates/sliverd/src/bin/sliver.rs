@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: sliver FILE";
+const USAGE: &str = "usage: sliver [FILE]";
 
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -14,6 +14,13 @@ fn main() -> ExitCode {
             println!("sliver {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        [] => match sliverd::apply_default() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{error:#}");
+                ExitCode::FAILURE
+            }
+        },
         [path] => match sliverd::apply_config(std::path::Path::new(path)) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

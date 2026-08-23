@@ -6,15 +6,51 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[test]
-fn missing_config_path_is_a_usage_error() {
+fn no_argument_requests_the_embedded_default_and_is_silent() {
+    let directory = tempfile::tempdir().expect("failed to create temporary directory");
+    let runtime = directory.path().join("runtime");
+    let socket_directory = runtime.join("sliver");
+    std::fs::create_dir_all(&socket_directory).expect("failed to create socket directory");
+    let socket = socket_directory.join("supervisor.sock");
+    let listener = UnixListener::bind(&socket).expect("failed to bind supervisor stub");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("failed to accept default request");
+        let mut length = [0u8; 4];
+        stream
+            .read_exact(&mut length)
+            .expect("failed to read request length");
+        let mut payload = vec![0; u32::from_be_bytes(length) as usize];
+        stream
+            .read_exact(&mut payload)
+            .expect("failed to read request payload");
+        assert_eq!(payload, [1], "default request did not use its protocol tag");
+        stream
+            .write_all(&[0, 0, 0, 0, 0])
+            .expect("failed to send success reply");
+    });
+
     let output = Command::new(env!("CARGO_BIN_EXE_sliver"))
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .output()
+        .expect("failed to run sliver");
+
+    server.join().expect("supervisor stub panicked");
+    assert!(output.status.success(), "{:?}", output.status);
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn extra_arguments_are_a_usage_error() {
+    let output = Command::new(env!("CARGO_BIN_EXE_sliver"))
+        .args(["one.lua", "two.lua"])
         .output()
         .expect("failed to run sliver");
 
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("stderr was not UTF-8");
-    assert!(stderr.contains("usage: sliver FILE"), "{stderr}");
+    assert!(stderr.contains("usage: sliver"), "{stderr}");
 }
 
 #[test]
@@ -42,7 +78,7 @@ fn invalid_usage_and_supervisor_failures_use_distinct_statuses() {
         .expect("failed to run sliver with invalid usage");
     assert_eq!(usage.status.code(), Some(2));
     assert!(usage.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&usage.stderr).contains("usage: sliver FILE"));
+    assert!(String::from_utf8_lossy(&usage.stderr).contains("usage: sliver [FILE]"));
 
     let runtime = directory.path().join("missing-runtime");
     std::fs::create_dir(&runtime).expect("failed to create runtime directory");
@@ -139,7 +175,8 @@ fn successful_apply_is_silent_and_sends_absolute_path() {
         stream
             .write_all(&[0, 0, 0, 0, 0])
             .expect("failed to send success reply");
-        path
+        assert_eq!(path.first().copied(), Some(0));
+        path[1..].to_vec()
     });
     let source = directory.path().join("config.lua");
     std::fs::write(&source, "return {}").expect("failed to create config");
