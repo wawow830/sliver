@@ -71,11 +71,6 @@ struct SyntheticState {
     held: Vec<HeldSyntheticKey>,
 }
 
-enum KeyEffectsError {
-    WorkerRequest(anyhow::Error),
-    Hardware(anyhow::Error),
-}
-
 #[derive(Clone)]
 struct HeldSyntheticKey {
     key: OutputKey,
@@ -813,14 +808,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             hide_effects
         });
         let next_worker_deadline = match hide_result {
-            Some(Ok(effects)) => match self.apply_key_effects(&effects.key_requests) {
-                Ok(()) => effects.next_worker_deadline,
-                Err(KeyEffectsError::WorkerRequest(error)) => {
-                    self.fail_active_worker(error)?;
+            Some(Ok(effects)) => {
+                if !self.apply_key_effects(&effects.key_requests)? {
                     return Ok(());
                 }
-                Err(KeyEffectsError::Hardware(error)) => return Err(error),
-            },
+                effects.next_worker_deadline
+            }
             Some(Err(error)) => {
                 self.fail_active_worker(error)?;
                 return Ok(());
@@ -1006,11 +999,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             return Ok(());
         };
         self.next_worker_deadline = effects.next_worker_deadline;
-        match self.apply_key_effects(&effects.key_requests) {
-            Ok(()) => Ok(()),
-            Err(KeyEffectsError::WorkerRequest(error)) => self.fail_active_worker(error),
-            Err(KeyEffectsError::Hardware(error)) => Err(error),
+        if !self.apply_key_effects(&effects.key_requests)? {
+            return Ok(());
         }
+        Ok(())
     }
 
     fn drive_active(
@@ -1080,31 +1072,27 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
-    fn apply_key_effects(
-        &mut self,
-        requests: &[KeyRequest],
-    ) -> std::result::Result<(), KeyEffectsError> {
-        let (next_synthetic, key_events) = self
-            .synthetic
-            .plan(requests, self.input_state)
-            .map_err(KeyEffectsError::WorkerRequest)?;
+    fn apply_key_effects(&mut self, requests: &[KeyRequest]) -> Result<bool> {
+        let (next_synthetic, key_events) = match self.synthetic.plan(requests, self.input_state) {
+            Ok(effects) => effects,
+            Err(error) => {
+                self.fail_active_worker(error)?;
+                return Ok(false);
+            }
+        };
         if !key_events.is_empty() {
-            self.hardware
-                .emit_key_events(&key_events)
-                .map_err(KeyEffectsError::Hardware)?;
+            self.hardware.emit_key_events(&key_events)?;
         }
         self.synthetic = next_synthetic;
-        Ok(())
+        Ok(true)
     }
 
     fn apply_effects(&mut self, effects: WorkerEffects) -> Result<()> {
         if self.active.is_none() {
             return Ok(());
         }
-        match self.apply_key_effects(&effects.key_requests) {
-            Ok(()) => {}
-            Err(KeyEffectsError::WorkerRequest(error)) => return self.fail_active_worker(error),
-            Err(KeyEffectsError::Hardware(error)) => return Err(error),
+        if !self.apply_key_effects(&effects.key_requests)? {
+            return Ok(());
         }
         let active = self.active.as_ref().expect("active worker disappeared");
         let old_frame = active.frame.clone();
