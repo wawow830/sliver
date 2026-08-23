@@ -2737,6 +2737,86 @@ mod tests {
     }
 
     #[test]
+    fn invalid_key_request_from_active_callback_enters_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalid-active-key.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f1
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then sliver.input.key.up(key) end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("invalid active key request was accepted");
+        assert!(format!("{error:#}").contains("synthetic key is not held"));
+        assert_eq!(std::fs::read(&state_file)?, source.as_os_str().as_encoded_bytes());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert!(supervisor.next_worker_deadline.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_key_request_from_hidden_timer_enters_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("invalid-hidden-key.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            local key = sliver.input.keys.keyboard.f1
+            sliver.timer.after(5.0, function() sliver.input.key.up(key) end)
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+        supervisor.step_at(4.0)?;
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.owner_is_healthy()));
+
+        let error = supervisor
+            .step_at(6.0)
+            .expect_err("invalid hidden key request was accepted");
+        assert!(format!("{error:#}").contains("synthetic key is not held"));
+        assert_eq!(std::fs::read(&state_file)?, source.as_os_str().as_encoded_bytes());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert!(supervisor.next_worker_deadline.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn synthetic_key_requests_are_rejected_during_staging() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("staged-key.lua");
