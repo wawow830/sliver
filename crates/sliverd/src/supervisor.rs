@@ -2782,7 +2782,10 @@ mod tests {
             .step_at(1.0)
             .expect_err("invalid active key request was accepted");
         assert!(format!("{error:#}").contains("synthetic key is not held"));
-        assert_eq!(std::fs::read(&state_file)?, source.as_os_str().as_encoded_bytes());
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
         assert!(supervisor.active.is_none());
         assert!(supervisor
             .recovery
@@ -2823,7 +2826,10 @@ mod tests {
             .step_at(6.0)
             .expect_err("invalid hidden key request was accepted");
         assert!(format!("{error:#}").contains("synthetic key is not held"));
-        assert_eq!(std::fs::read(&state_file)?, source.as_os_str().as_encoded_bytes());
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
         assert!(supervisor.active.is_none());
         assert!(supervisor
             .recovery
@@ -3680,7 +3686,10 @@ mod tests {
         anyhow::ensure!(staged, "candidate never entered staging");
         apply_result?;
 
-        assert_eq!(std::fs::read(&state_file)?, candidate_source.as_os_str().as_encoded_bytes());
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            candidate_source.as_os_str().as_encoded_bytes()
+        );
         assert!(supervisor
             .recovery
             .as_ref()
@@ -3688,7 +3697,12 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&old_log)?, "cancel\n");
         assert!(!candidate_log.exists());
         assert_eq!(
-            supervisor.hardware().presented_frames().last().unwrap().rgba_at(10, 30),
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .unwrap()
+                .rgba_at(10, 30),
             [0, 0, 0, 255]
         );
 
@@ -3705,8 +3719,14 @@ mod tests {
         assert_eq!(
             supervisor.hardware().synthetic_keys(),
             &[
-                FakeKeyEvent { key: FakeKey::Keyboard(KeyboardKey::F1), active: true },
-                FakeKeyEvent { key: FakeKey::Keyboard(KeyboardKey::F1), active: false },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    active: false
+                },
             ]
         );
         supervisor.shutdown()?;
