@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use cairo::{FontSlant, FontWeight};
 
 use crate::frame_canvas::FrameCanvas;
-use crate::hardware::{ContactId, KeyboardKey, LogicalFrame, OutputKey, TouchEvent, TouchPhase};
+use crate::hardware::{ContactId, KeyboardKey, LogicalFrame, OutputKey, TouchEvent};
 
 const KEY_COUNT: usize = 12;
 const PRESSED_RGB: (f64, f64, f64) = (0.22, 0.22, 0.22);
@@ -126,50 +126,55 @@ impl RecoverySession {
         }
     }
 
-    pub(crate) fn route_touch(&mut self, event: TouchEvent) -> RecoveryTouchResult {
-        match event.phase {
-            TouchPhase::Down => {
-                let Some(key) = RecoveryKey::hit_test(event.x, event.y) else {
-                    return RecoveryTouchResult::Ignored;
-                };
-                self.contacts
-                    .insert(event.id, RecoveryContact { key, pressed: true });
-                if self.row.is_pressed(key) {
-                    RecoveryTouchResult::Ignored
-                } else {
-                    self.row.press(key);
-                    RecoveryTouchResult::RowPressChanged
-                }
-            }
-            TouchPhase::Move => {
-                let key = {
-                    let Some(contact) = self.contacts.get_mut(&event.id) else {
-                        return RecoveryTouchResult::Ignored;
-                    };
-                    let inside = RecoveryKey::hit_test(event.x, event.y) == Some(contact.key);
-                    if inside == contact.pressed {
-                        return RecoveryTouchResult::Ignored;
-                    }
-                    contact.pressed = inside;
-                    contact.key
-                };
-                self.update_row_press(key);
-                RecoveryTouchResult::RowPressChanged
-            }
-            TouchPhase::Up | TouchPhase::Cancel => {
-                let Some(contact) = self.contacts.remove(&event.id) else {
-                    return RecoveryTouchResult::Ignored;
-                };
-                let activate = event.phase == TouchPhase::Up
-                    && RecoveryKey::hit_test(event.x, event.y) == Some(contact.key);
-                self.update_row_press(contact.key);
-                if activate {
-                    RecoveryTouchResult::Activate(contact.key.output())
-                } else {
-                    RecoveryTouchResult::RowPressChanged
-                }
-            }
+    pub(crate) fn touch_down(&mut self, event: TouchEvent) -> RecoveryTouchResult {
+        let Some(key) = RecoveryKey::hit_test(event.x, event.y) else {
+            return RecoveryTouchResult::Ignored;
+        };
+        self.contacts
+            .insert(event.id, RecoveryContact { key, pressed: true });
+        if self.row.is_pressed(key) {
+            RecoveryTouchResult::Ignored
+        } else {
+            self.row.press(key);
+            RecoveryTouchResult::RowPressChanged
         }
+    }
+
+    pub(crate) fn touch_move(&mut self, event: TouchEvent) -> RecoveryTouchResult {
+        let key = {
+            let Some(contact) = self.contacts.get_mut(&event.id) else {
+                return RecoveryTouchResult::Ignored;
+            };
+            let inside = RecoveryKey::hit_test(event.x, event.y) == Some(contact.key);
+            if inside == contact.pressed {
+                return RecoveryTouchResult::Ignored;
+            }
+            contact.pressed = inside;
+            contact.key
+        };
+        self.update_row_press(key);
+        RecoveryTouchResult::RowPressChanged
+    }
+
+    pub(crate) fn touch_up(&mut self, event: TouchEvent) -> RecoveryTouchResult {
+        let Some(contact) = self.contacts.remove(&event.id) else {
+            return RecoveryTouchResult::Ignored;
+        };
+        let activate = RecoveryKey::hit_test(event.x, event.y) == Some(contact.key);
+        self.update_row_press(contact.key);
+        if activate {
+            RecoveryTouchResult::Activate(contact.key.output())
+        } else {
+            RecoveryTouchResult::RowPressChanged
+        }
+    }
+
+    pub(crate) fn touch_cancel(&mut self, event: TouchEvent) -> RecoveryTouchResult {
+        let Some(contact) = self.contacts.remove(&event.id) else {
+            return RecoveryTouchResult::Ignored;
+        };
+        self.update_row_press(contact.key);
+        RecoveryTouchResult::RowPressChanged
     }
 
     pub(crate) fn render(&self) -> Result<LogicalFrame> {
