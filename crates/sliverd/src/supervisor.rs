@@ -411,6 +411,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.apply_request(CandidateSelection::Default, None)
     }
 
+    #[cfg(test)]
+    fn set_default_source_for_test(&mut self, bytes: Vec<u8>) {
+        self.default_source = LuaSource::embedded(bytes);
+    }
+
     fn apply_authorized(&mut self, request: AuthorizedRequest) -> Result<()> {
         let AuthorizedRequest {
             request,
@@ -1597,6 +1602,7 @@ mod tests {
 
     use anyhow::{bail, Context, Result};
 
+    use crate::default_source;
     use crate::hardware::{
         ConsumerKey, FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, InputState,
         KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent,
@@ -1628,6 +1634,20 @@ mod tests {
             }),
         );
         (logind, uid)
+    }
+
+    fn frame_contains_rgb(
+        frame: &crate::hardware::FrameSnapshot,
+        x_range: std::ops::Range<usize>,
+        y_range: std::ops::Range<usize>,
+        rgb: [u8; 3],
+    ) -> bool {
+        x_range.into_iter().any(|x| {
+            y_range.clone().any(|y| {
+                let pixel = frame.rgba_at(x, y);
+                pixel[..3] == rgb
+            })
+        })
     }
 
     struct FailingPresentHardware {
@@ -5393,6 +5413,154 @@ mod tests {
             new_source.as_os_str().as_encoded_bytes()
         );
         assert_eq!(supervisor.hardware().presented_frames().len(), 2);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn absent_state_starts_the_canonical_embedded_default_without_selecting_a_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("canonical-default-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(LuaSource::embedded(default_source::bytes().to_vec())),
+        )?;
+
+        assert!(!state_file.exists());
+        assert!(supervisor.active.is_some());
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        let frame = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("canonical default did not present a frame");
+        assert_eq!(frame.dimensions(), (2008, 60));
+        assert!(frame_contains_rgb(frame, 0..2008, 0..60, [255, 255, 255]));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_source_has_the_ordinary_runtime_without_source_metadata() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let marker = directory.path().join("embedded-metadata");
+        let source = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            local info = debug.getinfo(1, "S")
+            local file = assert(io.open({marker:?}, "w"))
+            file:write(info.source, "|", tostring(sliver.source), "|", tostring(sliver.is_default), "|", type(io.open), "|", type(os.date))
+            file:close()
+            return {{ api_version = 1, render = function() end }}
+            "#,
+            marker = marker.to_string_lossy(),
+        );
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("embedded-metadata-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(source.into_bytes())),
+        )?;
+
+        let metadata = std::fs::read_to_string(marker)?;
+        assert!(
+            metadata.starts_with("=sliver embedded default|"),
+            "{metadata}"
+        );
+        assert!(
+            metadata.contains("|nil|nil|function|function"),
+            "{metadata}"
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_default_reset_keeps_the_previous_worker_and_selected_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let old_source = directory.path().join("old.lua");
+        std::fs::write(
+            &old_source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file.clone())?;
+        supervisor.apply(&old_source)?;
+        supervisor.set_default_source_for_test(
+            b"require('sliver.v1'); error('embedded reset failed')".to_vec(),
+        );
+
+        let error = supervisor
+            .apply_default()
+            .expect_err("failed embedded reset was committed");
+
+        assert!(format!("{error:#}").contains("embedded reset failed"));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            old_source.as_os_str().as_encoded_bytes()
+        );
+        assert!(supervisor.active.is_some());
+        assert!(supervisor.recovery.is_none());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("previous worker frame disappeared")
+                .rgba_at(10, 10),
+            [255, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn changed_embedded_bytes_wait_for_the_next_default_worker_start() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("default-upgrade-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(LuaSource::embedded(default_source::bytes().to_vec())),
+        )?;
+        let original = supervisor
+            .hardware()
+            .presented_frames()
+            .last()
+            .expect("old default did not present")
+            .rgba_at(0, 0);
+        let changed = String::from_utf8(default_source::bytes().to_vec())?
+            .replacen("#000000", "#010203", 1)
+            .into_bytes();
+        supervisor.set_default_source_for_test(changed);
+
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("running default disappeared")
+                .rgba_at(0, 0),
+            original
+        );
+        supervisor.apply_default()?;
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("new default did not present")
+                .rgba_at(0, 0),
+            [1, 2, 3, 255]
+        );
+        assert!(!state_file.exists());
         supervisor.shutdown()?;
         Ok(())
     }

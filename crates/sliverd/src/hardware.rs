@@ -383,7 +383,7 @@ pub(crate) trait TouchBarHardware {
 }
 
 #[cfg(test)]
-pub(crate) use fake::{FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar};
+pub(crate) use fake::{FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, FrameSnapshot};
 
 #[cfg(test)]
 mod fake {
