@@ -14,9 +14,9 @@ use anyhow::{bail, ensure, Context, Result};
 use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::hardware::{
-    function_key_output, modifier_output_keys, tap_key_events, ContactId, HardwareEvent,
-    InputState, InputTransition, KeyboardKey, LogicalFrame, ObservedKey, OutputKey,
-    SyntheticKeyEvent, TouchBarHardware, TouchEvent, TouchPhase,
+    modifier_output_keys, tap_key_events, ContactId, HardwareEvent, InputState, InputTransition,
+    KeyboardKey, LogicalFrame, ObservedKey, OutputKey, SyntheticKeyEvent, TouchBarHardware,
+    TouchEvent, TouchPhase,
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
@@ -708,9 +708,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             match result {
                 RecoveryTouchResult::Ignored => {}
                 RecoveryTouchResult::RowPressChanged => self.present_recovery()?,
-                RecoveryTouchResult::Activate(index) => {
+                RecoveryTouchResult::Activate(key) => {
                     self.present_recovery()?;
-                    self.activate_recovery_key(index)?;
+                    self.activate_recovery_key(key)?;
                 }
             }
             return Ok(());
@@ -744,10 +744,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
-    fn activate_recovery_key(&mut self, index: usize) -> Result<()> {
-        let Some(key) = function_key_output(index) else {
-            return Ok(());
-        };
+    fn activate_recovery_key(&mut self, key: OutputKey) -> Result<()> {
         let events = tap_key_events(key, &modifier_output_keys(self.input_state.modifiers));
         self.hardware
             .emit_key_events(&events)
