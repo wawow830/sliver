@@ -10,6 +10,9 @@ local AMBER = "#ffbf00"
 local RED = "#ff3b30"
 local BATTERY_ROOT = "/sys/class/power_supply/macsmc-battery"
 
+local clock_control = { name = "clock", label = "--:--" }
+local battery_control = { name = "battery", label = "--%" }
+
 local normal = {
     { name = "escape", label = "Esc", key = sliver.input.keys.keyboard.escape },
     { name = "brightness_down", label = "", key = sliver.input.keys.consumer.brightness_down },
@@ -17,8 +20,8 @@ local normal = {
     { name = "previous", label = "", key = sliver.input.keys.consumer.previous },
     { name = "play_pause", label = "", key = sliver.input.keys.consumer.play_pause },
     { name = "next", label = "", key = sliver.input.keys.consumer.next },
-    { name = "clock", label = "--:--" },
-    { name = "battery", label = "--%" },
+    clock_control,
+    battery_control,
     { name = "mute", label = "", key = sliver.input.keys.consumer.mute },
     { name = "volume_down", label = "", key = sliver.input.keys.consumer.volume_down },
     { name = "volume_up", label = "", key = sliver.input.keys.consumer.volume_up },
@@ -78,7 +81,7 @@ local function refresh_battery()
     battery_capacity = parse_capacity(read_file(BATTERY_ROOT .. "/capacity"))
     local status = parse_status(read_file(BATTERY_ROOT .. "/status"))
     battery_charging = status == "Charging"
-    normal[8].label = battery_capacity and (tostring(battery_capacity) .. "%") or "--%"
+    battery_control.label = battery_capacity and (tostring(battery_capacity) .. "%") or "--%"
 end
 
 local function battery_color()
@@ -339,13 +342,13 @@ local function schedule_clock()
     local seconds = tonumber(os.date("%S")) or 0
     sliver.timer.after(math.max(0.01, 60 - seconds), function()
         clock_text = os.date("%H:%M") or "--:--"
-        normal[7].label = clock_text
+        clock_control.label = clock_text
         sliver.redraw()
         schedule_clock()
     end)
 end
 schedule_clock()
-normal[7].label = clock_text
+clock_control.label = clock_text
 
 return {
     api_version = 1,
