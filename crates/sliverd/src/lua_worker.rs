@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,6 +29,50 @@ pub(crate) struct TimedFrame {
 
 pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
+}
+
+#[derive(Clone)]
+pub(crate) enum LuaSource {
+    File(PathBuf),
+    Embedded(Arc<[u8]>),
+}
+
+impl LuaSource {
+    pub(crate) fn file(path: PathBuf) -> Self {
+        Self::File(path)
+    }
+
+    pub(crate) fn embedded(bytes: Vec<u8>) -> Self {
+        Self::Embedded(Arc::<[u8]>::from(bytes))
+    }
+
+    fn read_bytes(&self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::File(path) => std::fs::read(path),
+            Self::Embedded(bytes) => Ok(bytes.to_vec()),
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        match self {
+            Self::File(path) => Some(path),
+            Self::Embedded(_) => None,
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::File(path) => path.display().to_string(),
+            Self::Embedded(_) => "<embedded default>".to_owned(),
+        }
+    }
+
+    fn chunk_name(&self) -> String {
+        match self {
+            Self::File(path) => format!("@{}", path.display()),
+            Self::Embedded(_) => "=sliver embedded default".to_owned(),
+        }
+    }
 }
 
 pub(crate) struct WorkerEffects {
@@ -212,7 +256,7 @@ struct Runtime {
     visibility: Option<Function>,
     touch: Option<Function>,
     key: Option<Function>,
-    source: PathBuf,
+    source: LuaSource,
     controls: RuntimeControls,
     visible: bool,
     producer: FrameProducer,
@@ -286,8 +330,19 @@ impl LuaWorker {
         initial_backlight: f64,
         initial_input: InputState,
     ) -> Result<StagedLuaWorker> {
+        Self::stage_source_with_backlight_and_input(
+            LuaSource::file(source.to_path_buf()),
+            initial_backlight,
+            initial_input,
+        )
+    }
+
+    pub(crate) fn stage_source_with_backlight_and_input(
+        source: LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+    ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
-        let source = source.to_path_buf();
         let slots = FrameSlots::new(
             sliver_core::STRIP_W as usize,
             sliver_core::STRIP_H as usize,
@@ -573,7 +628,7 @@ impl Drop for LuaWorker {
 }
 
 fn owner_main(
-    source: PathBuf,
+    source: LuaSource,
     initial_backlight: f64,
     initial_input: InputState,
     producer: FrameProducer,
@@ -866,20 +921,23 @@ impl Runtime {
     }
 
     fn load(
-        source: &Path,
+        source: &LuaSource,
         initial_backlight: f64,
         initial_input: InputState,
         producer: FrameProducer,
     ) -> std::result::Result<Self, String> {
-        let bytes =
-            std::fs::read(source).map_err(|error| diagnostic("load", source, error.to_string()))?;
-        let lua = unsafe { Lua::unsafe_new() };
-        configure_lua_path(&lua, source)
+        let bytes = source
+            .read_bytes()
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
+        let lua = unsafe { Lua::unsafe_new() };
+        if let Some(path) = source.path() {
+            configure_lua_path(&lua, path)
+                .map_err(|error| diagnostic("load", source, error.to_string()))?;
+        }
         let controls = RuntimeControls::new(initial_backlight, initial_input);
         let loaded_v1 = install_v1_module(&lua, &controls)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
-        let source_name = format!("@{}", source.display());
+        let source_name = source.chunk_name();
         let entry = lua
             .load(&bytes)
             .set_name(source_name.clone())
@@ -963,7 +1021,7 @@ impl Runtime {
             visibility,
             touch,
             key,
-            source: source.to_path_buf(),
+            source: source.clone(),
             controls,
             visible: true,
             producer,
@@ -1558,15 +1616,15 @@ fn traceback_suffix(detail: &str) -> &'static str {
     }
 }
 
-fn diagnostic(stage: &str, source: &Path, detail: String) -> String {
+fn diagnostic(stage: &str, source: &LuaSource, detail: String) -> String {
     let traceback = traceback_suffix(&detail);
-    format!("lua {} [{stage}]: {detail}{traceback}", source.display())
+    format!("lua {} [{stage}]: {detail}{traceback}", source.label())
 }
 
-fn validation_diagnostic(source: &Path, line: Option<usize>, detail: String) -> String {
+fn validation_diagnostic(source: &LuaSource, line: Option<usize>, detail: String) -> String {
     let location = line.map_or_else(
-        || format!("{} (line unavailable)", source.display()),
-        |line| format!("{}:{line}", source.display()),
+        || format!("{} (line unavailable)", source.label()),
+        |line| format!("{}:{line}", source.label()),
     );
     format!(
         "lua {location} [validation]: {detail}{}",

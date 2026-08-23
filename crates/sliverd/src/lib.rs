@@ -1,5 +1,6 @@
 mod apply_ipc;
 mod authorization;
+mod default_source;
 mod drm_out;
 mod frame_canvas;
 mod frame_slots;
@@ -73,7 +74,7 @@ pub fn supervisor_main() -> Result<()> {
         m2_hardware::M2TouchBar::new(),
         state_file,
         crate::logind::RealLogind::default(),
-        None,
+        Some(default_source::source()),
     )?;
     let serve_result = supervisor::serve(listener, &mut supervisor);
     let shutdown_result = supervisor.shutdown();

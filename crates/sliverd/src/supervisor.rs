@@ -13,6 +13,7 @@ use anyhow::{bail, ensure, Context, Result};
 
 use crate::apply_ipc::{absolute_lexical, ApplyRequest};
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
+use crate::default_source;
 use crate::hardware::{
     modifier_output_keys, tap_key_events, ContactId, HardwareEvent, InputState, InputTransition,
     KeyboardKey, LogicalFrame, ObservedKey, OutputKey, SyntheticKeyEvent, TouchBarHardware,
@@ -20,7 +21,7 @@ use crate::hardware::{
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
-    earliest_deadline, DriveRequest, KeyOperation, KeyRequest, LuaWorker, ModifierMode,
+    earliest_deadline, DriveRequest, KeyOperation, KeyRequest, LuaSource, LuaWorker, ModifierMode,
     StagedLuaWorker, StopReason, VisibilityReason, WorkerEffects,
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
@@ -34,7 +35,7 @@ const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 struct ActiveConfig {
     worker: LuaWorker,
-    _selected_path: PathBuf,
+    _source: LuaSource,
     frame: LogicalFrame,
     backlight: f64,
     contacts: BTreeMap<ContactId, TouchEvent>,
@@ -48,6 +49,18 @@ struct ApplyAuthorization {
 struct AuthorizedRequest {
     request: ApplyRequest,
     authorization: ApplyAuthorization,
+}
+
+#[derive(Clone)]
+enum CandidateSelection {
+    Path(PathBuf),
+    Default,
+}
+
+enum SelectionState {
+    Keep,
+    Set(PathBuf),
+    Clear,
 }
 
 enum CandidateFailure {
@@ -285,6 +298,7 @@ fn is_modifier_key(key: OutputKey) -> bool {
 pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
+    default_source: LuaSource,
     active: Option<ActiveConfig>,
     recovery: Option<RecoverySession>,
     claimed: bool,
@@ -315,7 +329,16 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
 }
 
 impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
-    pub(crate) fn new_with_logind(mut hardware: H, state_file: PathBuf, logind: L) -> Result<Self> {
+    pub(crate) fn new_with_logind(hardware: H, state_file: PathBuf, logind: L) -> Result<Self> {
+        Self::new_with_logind_and_default(hardware, state_file, logind, default_source::source())
+    }
+
+    fn new_with_logind_and_default(
+        mut hardware: H,
+        state_file: PathBuf,
+        logind: L,
+        default_source: LuaSource,
+    ) -> Result<Self> {
         hardware.claim()?;
         let input_state = hardware.input_state();
         let backlight = match hardware.get_backlight() {
@@ -328,6 +351,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(Self {
             hardware,
             state_file,
+            default_source,
             active: None,
             recovery: None,
             claimed: true,
@@ -349,28 +373,26 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     /// Build the running supervisor and make one startup attempt. A saved path
-    /// is tried once. `default_path` is supplied by the embedded-default owner
-    /// when no path is saved; it is never persisted by this module.
+    /// is tried once; absent state selects the embedded source and never writes
+    /// a path to state.
     pub(crate) fn new_with_startup_candidate(
         hardware: H,
         state_file: PathBuf,
         logind: L,
-        default_path: Option<PathBuf>,
+        injected_default: Option<LuaSource>,
     ) -> Result<Self> {
-        let mut supervisor = Self::new_with_logind(hardware, state_file.clone(), logind)?;
+        let default_source = injected_default.unwrap_or_else(default_source::source);
+        let mut supervisor = Self::new_with_logind_and_default(
+            hardware,
+            state_file.clone(),
+            logind,
+            default_source,
+        )?;
         let saved = read_selected_path(&state_file)?;
-        let (candidate, persist_path) = match saved {
-            Some(path) => (Some(path), true),
-            None => (default_path, false),
-        };
-        match candidate {
-            Some(path) => {
-                if let Err(error) = supervisor.startup_candidate(&path, persist_path) {
-                    eprintln!("selected Lua worker entered recovery: {error:#}");
-                    supervisor.enter_recovery()?;
-                }
-            }
-            None => supervisor.enter_recovery()?,
+        let selection = saved.map_or(CandidateSelection::Default, CandidateSelection::Path);
+        if let Err(error) = supervisor.startup_candidate(selection) {
+            eprintln!("selected Lua worker entered recovery: {error:#}");
+            supervisor.enter_recovery()?;
         }
         Ok(supervisor)
     }
@@ -381,7 +403,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     #[cfg(test)]
     pub(crate) fn apply(&mut self, requested_path: &Path) -> Result<()> {
-        self.apply_request(requested_path, None)
+        self.apply_request(CandidateSelection::Path(requested_path.to_path_buf()), None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_default(&mut self) -> Result<()> {
+        self.apply_request(CandidateSelection::Default, None)
     }
 
     fn apply_authorized(&mut self, request: AuthorizedRequest) -> Result<()> {
@@ -391,33 +418,32 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         } = request;
         self.authorizer
             .recheck(authorization.peer, &authorization.grant)?;
-        match request {
-            ApplyRequest::Path(path) => self.apply_request(&path, Some(authorization)),
-            ApplyRequest::Default => bail!("embedded default selection is not yet available"),
-        }
+        let selection = match request {
+            ApplyRequest::Path(path) => CandidateSelection::Path(path),
+            ApplyRequest::Default => CandidateSelection::Default,
+        };
+        self.apply_request(selection, Some(authorization))
     }
 
     fn apply_request(
         &mut self,
-        requested_path: &Path,
+        selection: CandidateSelection,
         authorization: Option<ApplyAuthorization>,
     ) -> Result<()> {
+        let state_update = match &selection {
+            CandidateSelection::Path(path) => SelectionState::Set(absolute_lexical(path)?),
+            CandidateSelection::Default => SelectionState::Clear,
+        };
         let candidate_error =
-            match self.apply_candidate(requested_path, authorization.as_ref(), true) {
+            match self.apply_candidate(selection.clone(), authorization.as_ref(), state_update) {
                 Ok(()) => return Ok(()),
                 Err(CandidateFailure::Authorization(error)) => return Err(error),
                 Err(CandidateFailure::Candidate(error)) => error,
             };
         if self.active.is_none() {
-            if let Ok(path) = absolute_lexical(requested_path) {
-                let path_state = match PreparedPathState::prepare(&self.state_file, &path) {
-                    Ok(path_state) => path_state,
-                    Err(state_error) => {
-                        return Err(candidate_error.context(format!(
-                            "preserving failed selected path also failed: {state_error:#}"
-                        )))
-                    }
-                };
+            if let CandidateSelection::Path(path) = selection {
+                let selected_path = absolute_lexical(&path)?;
+                let path_state = PreparedPathState::prepare(&self.state_file, &selected_path)?;
                 if let Some(authorization) = authorization {
                     self.authorizer
                         .recheck(authorization.peer, &authorization.grant)?;
@@ -427,17 +453,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                         "preserving failed selected path also failed: {state_error:#}"
                     )));
                 }
-                if let Err(recovery_error) = self.enter_recovery() {
-                    return Err(candidate_error
-                        .context(format!("entering recovery also failed: {recovery_error:#}")));
-                }
+            }
+            if let Err(recovery_error) = self.enter_recovery() {
+                return Err(candidate_error
+                    .context(format!("entering recovery also failed: {recovery_error:#}")));
             }
         }
         Err(candidate_error)
     }
 
-    fn startup_candidate(&mut self, path: &Path, persist_path: bool) -> Result<()> {
-        self.apply_candidate(path, None, persist_path)
+    fn startup_candidate(&mut self, selection: CandidateSelection) -> Result<()> {
+        self.apply_candidate(selection, None, SelectionState::Keep)
             .map_err(|failure| match failure {
                 CandidateFailure::Candidate(error) | CandidateFailure::Authorization(error) => {
                     error
@@ -447,26 +473,33 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn apply_candidate(
         &mut self,
-        requested_path: &Path,
+        selection: CandidateSelection,
         authorization: Option<&ApplyAuthorization>,
-        persist_path: bool,
+        state_update: SelectionState,
     ) -> std::result::Result<(), CandidateFailure> {
-        let selected_path = absolute_lexical(requested_path)?;
-        let metadata = std::fs::metadata(&selected_path)
-            .with_context(|| format!("reading config metadata for {}", selected_path.display()))?;
-        if !metadata.is_file() {
-            return Err(anyhow::anyhow!(
-                "config is not a regular file: {}",
-                selected_path.display()
-            )
-            .into());
-        }
+        let source = match selection {
+            CandidateSelection::Path(requested_path) => {
+                let selected_path = absolute_lexical(&requested_path)?;
+                let metadata = std::fs::metadata(&selected_path).with_context(|| {
+                    format!("reading config metadata for {}", selected_path.display())
+                })?;
+                if !metadata.is_file() {
+                    return Err(anyhow::anyhow!(
+                        "config is not a regular file: {}",
+                        selected_path.display()
+                    )
+                    .into());
+                }
+                LuaSource::file(selected_path)
+            }
+            CandidateSelection::Default => self.default_source.clone(),
+        };
 
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
-        let StagedLuaWorker { worker } = LuaWorker::stage_with_backlight_and_input(
-            &selected_path,
+        let StagedLuaWorker { worker } = LuaWorker::stage_source_with_backlight_and_input(
+            source.clone(),
             current_backlight,
             self.input_state,
         )?;
@@ -480,19 +513,21 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let frame = staged_frame.frame;
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
-        let previous_path_state = persist_path
-            .then(|| PathStateSnapshot::capture(&self.state_file))
-            .transpose()?;
-        let path_state = persist_path
-            .then(|| PreparedPathState::prepare(&self.state_file, &selected_path))
-            .transpose()?;
+        let (previous_path_state, path_state) = match state_update {
+            SelectionState::Keep => (None, None),
+            SelectionState::Set(path) => (
+                Some(PathStateSnapshot::capture(&self.state_file)?),
+                Some(PreparedPathState::prepare(&self.state_file, &path)?),
+            ),
+            SelectionState::Clear => (
+                Some(PathStateSnapshot::capture(&self.state_file)?),
+                Some(PreparedPathState::prepare_clear(&self.state_file)?),
+            ),
+        };
         if let Some(authorization) = authorization {
             self.authorizer
                 .recheck(authorization.peer, &authorization.grant)
                 .map_err(CandidateFailure::Authorization)?;
-        }
-        if let Some(path_state) = path_state {
-            path_state.commit()?;
         }
 
         let old_frame = self.active.as_ref().map(|active| active.frame.clone());
@@ -553,6 +588,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             );
         }
 
+        if let Some(path_state) = path_state {
+            if let Err(error) = path_state.commit() {
+                return self.rollback_candidate(
+                    previous_path_state.as_ref(),
+                    old_frame.as_ref(),
+                    old_backlight,
+                    !preserve_recovery,
+                    brightness_changed,
+                    error,
+                );
+            }
+        }
+
         if !preserve_recovery {
             self.backlight = candidate_backlight;
             self.last_presented_time = Some(now);
@@ -572,7 +620,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.next_worker_deadline = Some(now);
         let replaced = self.active.replace(ActiveConfig {
             worker,
-            _selected_path: selected_path,
+            _source: source,
             frame,
             backlight: candidate_backlight,
             contacts: BTreeMap::new(),
@@ -1556,7 +1604,7 @@ mod tests {
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
-    use super::{serve_connection, serve_for_test, PreparedPathState, Supervisor};
+    use super::{serve_connection, serve_for_test, LuaSource, PreparedPathState, Supervisor};
 
     fn active_local_logind(session_id: &str) -> (FakeLogind, libc::uid_t) {
         let uid = unsafe { libc::getuid() };
@@ -2508,7 +2556,7 @@ mod tests {
         assert!(format!("{error:#}").contains("injected synthetic key failure"));
         assert_eq!(
             supervisor.hardware().state_seen_at_key_failure,
-            new_source.as_os_str().as_encoded_bytes()
+            old_source.as_os_str().as_encoded_bytes()
         );
         assert_eq!(
             std::fs::read(&state_file)?,
@@ -2555,7 +2603,7 @@ mod tests {
         assert!(format!("{error:#}").contains("injected presentation failure"));
         assert_eq!(
             supervisor.hardware().state_seen_at_failure,
-            new_source.as_os_str().as_encoded_bytes()
+            old_source.as_os_str().as_encoded_bytes()
         );
         assert_eq!(
             std::fs::read(&state_file)?,
@@ -5427,7 +5475,7 @@ mod tests {
             FakeTouchBar::new(),
             state_file.clone(),
             logind,
-            Some(default),
+            Some(LuaSource::file(default)),
         )?;
 
         assert!(!state_file.exists());
@@ -5454,7 +5502,7 @@ mod tests {
             FakeTouchBar::new(),
             state_file.clone(),
             logind,
-            Some(default),
+            Some(LuaSource::file(default)),
         )?;
 
         assert!(!state_file.exists());
@@ -5485,7 +5533,7 @@ mod tests {
             FakeTouchBar::new(),
             state_file.clone(),
             logind,
-            Some(default),
+            Some(LuaSource::file(default)),
         )?;
 
         assert_eq!(
@@ -5966,6 +6014,8 @@ mod tests {
     fn startup_recovery_bridges_modifiers_from_the_claim_snapshot() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
+        let missing = directory.path().join("missing.lua");
+        PreparedPathState::prepare(&state_file, &missing)?.commit()?;
         let mut input_state = InputState::default();
         input_state.modifiers.set(Modifier::LeftCtrl, true);
         let (logind, _) = active_local_logind("startup-recovery-session");
@@ -6013,6 +6063,8 @@ mod tests {
     fn recovery_key_waits_for_finger_up_and_bridges_physical_modifiers() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
+        let missing = directory.path().join("missing.lua");
+        PreparedPathState::prepare(&state_file, &missing)?.commit()?;
         let (logind, _) = active_local_logind("recovery-session");
         let mut supervisor =
             Supervisor::new_with_startup_candidate(FakeTouchBar::new(), state_file, logind, None)?;
