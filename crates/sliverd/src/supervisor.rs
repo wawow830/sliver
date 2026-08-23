@@ -768,9 +768,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
         let now = self.now_seconds();
         let mut owner_is_healthy = false;
-        let hidden = self.active.as_mut().map(|active| {
+        let hide_result = self.active.as_mut().map(|active| {
             owner_is_healthy = true;
-            let hidden = cancel_contacts(
+            let hide_effects = cancel_contacts(
                 &active.worker,
                 &active.contacts,
                 now,
@@ -778,9 +778,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     .with_visibility(false, VisibilityReason::Recovery, false),
             );
             active.contacts.clear();
-            hidden
+            hide_effects
         });
-        let next_timer_deadline = match hidden {
+        let next_timer_deadline = match hide_result {
             Some(Ok(effects)) => match self.apply_key_effects(&effects.key_requests) {
                 Ok(()) => effects.next_timer_deadline,
                 Err(error) => {
