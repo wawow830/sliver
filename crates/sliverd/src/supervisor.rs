@@ -990,14 +990,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
         self.check_worker_liveness()?;
-        for event in events {
-            if matches!(event, HardwareEvent::Touch(_)) && self.recovery_due(now) {
-                self.enter_recovery()?;
-            }
-            self.route_hardware_event(event, now)?;
-        }
         if self.recovery_due(now) {
             self.enter_recovery()?;
+        }
+        for event in events {
+            self.route_hardware_event(event, now)?;
         }
         if self.recovery.is_some() && !self.input_state.fn_active {
             self.exit_recovery(now)?;
