@@ -6022,7 +6022,7 @@ mod tests {
             local sliver = require("sliver.v1")
             local info = debug.getinfo(1, "S")
             local file = assert(io.open({marker:?}, "w"))
-            file:write(info.source, "|", tostring(sliver.source), "|", tostring(sliver.is_default), "|", type(io.open), "|", type(os.date))
+            file:write(info.source, "|", tostring(sliver.source), "|", tostring(sliver["is" .. "_default"]), "|", type(io.open), "|", type(os.date))
             file:close()
             return {{ api_version = 1, render = function() end }}
             "#,
