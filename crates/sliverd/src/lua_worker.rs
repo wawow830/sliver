@@ -49,6 +49,28 @@ impl SourceMetadata {
     }
 }
 
+struct LuaSourceDescription<'a> {
+    content: SourceContent<'a>,
+    path: Option<&'a Path>,
+    metadata: Option<SourceMetadata>,
+    label: String,
+    chunk_name: String,
+}
+
+enum SourceContent<'a> {
+    File(&'a Path),
+    Embedded(&'a [u8]),
+}
+
+impl LuaSourceDescription<'_> {
+    fn read_bytes(&self) -> std::io::Result<Vec<u8>> {
+        match &self.content {
+            SourceContent::File(path) => std::fs::read(path),
+            SourceContent::Embedded(bytes) => Ok(bytes.to_vec()),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum LuaSource {
     File(PathBuf),
@@ -64,31 +86,25 @@ impl LuaSource {
         Self::Embedded(Arc::<[u8]>::from(bytes))
     }
 
-    fn read_bytes(&self) -> std::io::Result<Vec<u8>> {
+    fn describe(&self) -> LuaSourceDescription<'_> {
         match self {
-            Self::File(path) => std::fs::read(path),
-            Self::Embedded(bytes) => Ok(bytes.to_vec()),
-        }
-    }
-
-    fn path(&self) -> Option<&Path> {
-        match self {
-            Self::File(path) => Some(path),
-            Self::Embedded(_) => None,
-        }
-    }
-
-    fn label(&self) -> String {
-        match self {
-            Self::File(path) => path.display().to_string(),
-            Self::Embedded(_) => "<embedded default>".to_owned(),
-        }
-    }
-
-    fn chunk_name(&self) -> String {
-        match self {
-            Self::File(path) => format!("@{}", path.display()),
-            Self::Embedded(_) => "=sliver".to_owned(),
+            Self::File(path) => {
+                let label = path.display().to_string();
+                LuaSourceDescription {
+                    content: SourceContent::File(path),
+                    path: Some(path),
+                    metadata: Some(SourceMetadata::from_path(path)),
+                    chunk_name: format!("@{label}"),
+                    label,
+                }
+            }
+            Self::Embedded(bytes) => LuaSourceDescription {
+                content: SourceContent::Embedded(bytes),
+                path: None,
+                metadata: None,
+                label: "<embedded default>".to_owned(),
+                chunk_name: "=sliver".to_owned(),
+            },
         }
     }
 }
@@ -944,19 +960,19 @@ impl Runtime {
         initial_input: InputState,
         producer: FrameProducer,
     ) -> std::result::Result<Self, String> {
-        let bytes = source
+        let description = source.describe();
+        let bytes = description
             .read_bytes()
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let lua = unsafe { Lua::unsafe_new() };
-        if let Some(path) = source.path() {
+        if let Some(path) = description.path {
             configure_lua_path(&lua, path)
                 .map_err(|error| diagnostic("load", source, error.to_string()))?;
         }
         let controls = RuntimeControls::new(initial_backlight, initial_input);
-        let source_metadata = source.path().map(SourceMetadata::from_path);
-        let loaded_v1 = install_v1_module(&lua, &controls, source_metadata)
+        let loaded_v1 = install_v1_module(&lua, &controls, description.metadata)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
-        let source_name = source.chunk_name();
+        let source_name = description.chunk_name;
         let entry = lua
             .load(&bytes)
             .set_name(source_name.clone())
@@ -1648,13 +1664,15 @@ fn traceback_suffix(detail: &str) -> &'static str {
 
 fn diagnostic(stage: &str, source: &LuaSource, detail: String) -> String {
     let traceback = traceback_suffix(&detail);
-    format!("lua {} [{stage}]: {detail}{traceback}", source.label())
+    let label = source.describe().label;
+    format!("lua {label} [{stage}]: {detail}{traceback}")
 }
 
 fn validation_diagnostic(source: &LuaSource, line: Option<usize>, detail: String) -> String {
+    let label = source.describe().label;
     let location = line.map_or_else(
-        || format!("{} (line unavailable)", source.label()),
-        |line| format!("{}:{line}", source.label()),
+        || format!("{label} (line unavailable)"),
+        |line| format!("{label}:{line}"),
     );
     format!(
         "lua {location} [validation]: {detail}{}",
