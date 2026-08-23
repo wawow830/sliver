@@ -5699,6 +5699,79 @@ mod tests {
     }
 
     #[test]
+    fn late_batch_claims_recovery_before_fn_up_and_restores_for_later_touch() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                return {{
+                    api_version = 1,
+                    visibility = function(event)
+                        record("visibility:" .. tostring(event.visible))
+                    end,
+                    key = function(event)
+                        record("key:" .. event.key .. ":" .. event.phase)
+                    end,
+                    touch = function(event)
+                        record("touch:" .. event.phase)
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: false });
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(4.0)?;
+
+        let log_contents = std::fs::read_to_string(&log)?;
+        let events: Vec<_> = log_contents.lines().collect();
+        let hidden = events
+            .iter()
+            .position(|line| *line == "visibility:false")
+            .expect("late batch did not claim recovery");
+        let fn_up = events
+            .iter()
+            .position(|line| *line == "key:fn:up")
+            .expect("Fn-up was not delivered");
+        let visible = events
+            .iter()
+            .position(|line| *line == "visibility:true")
+            .expect("healthy recovery did not exit");
+        let touch = events
+            .iter()
+            .position(|line| *line == "touch:down")
+            .expect("later batch touch was not routed");
+        assert!(hidden < fn_up && fn_up < visible && visible < touch);
+        assert!(supervisor.recovery.is_none());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn an_idle_worker_exit_enters_recovery_on_the_next_poll() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("healthy.lua");
