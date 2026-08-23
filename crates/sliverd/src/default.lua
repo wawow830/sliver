@@ -111,8 +111,13 @@ local function set_pressed(index, active)
     end
 end
 
-local function row_for_touch()
+local function current_row()
     return sliver.input.state().fn and function_layer or normal
+end
+
+local function key_for(row, index)
+    local control = row[index]
+    return control and control.key
 end
 
 local function hit(row, x, y)
@@ -124,16 +129,15 @@ local function hit(row, x, y)
 end
 
 local function activate(contact)
-    if contact.row == function_layer then
-        sliver.input.key.tap(contact.row[contact.control].key)
-    elseif contact.row[contact.control].key then
-        sliver.input.key.tap(contact.row[contact.control].key)
+    local key = key_for(contact.row, contact.control)
+    if key then
+        sliver.input.key.tap(key)
     end
 end
 
 local function touch(event)
     if event.phase == "down" then
-        local row = row_for_touch()
+        local row = current_row()
         local control = hit(row, event.x, event.y)
         contacts[event.id] = {
             row = row,
@@ -318,7 +322,7 @@ end
 
 local function render(canvas)
     canvas:rectangle(0, 0, WIDTH, HEIGHT, BLACK)
-    local row = sliver.input.state().fn and function_layer or normal
+    local row = current_row()
     local width = WIDTH / #row
     for index, control in ipairs(row) do
         local left = (index - 1) * width
