@@ -1981,6 +1981,33 @@ mod tests {
     }
 
     #[test]
+    fn reapplying_during_fn_hold_keeps_original_recovery_deadline() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("healthy.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Fn { active: true });
+        supervisor.step_at(1.0)?;
+
+        supervisor.origin = Instant::now() - Duration::from_secs(2);
+        supervisor.apply(&source)?;
+
+        supervisor.step_at(3.9)?;
+        assert!(supervisor.recovery.is_none());
+        supervisor.step_at(4.0)?;
+        assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn deadline_takes_recovery_before_due_worker_drive() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("timed.lua");
