@@ -4925,6 +4925,44 @@ mod tests {
     }
 
     #[test]
+    fn active_local_session_can_reset_to_the_embedded_default_through_the_unix_request_path(
+    ) -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let old_source = directory.path().join("old.lua");
+        std::fs::write(
+            &old_source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("default-request-session");
+        let mut supervisor =
+            Supervisor::new_with_logind(FakeTouchBar::new(), state_file.clone(), logind)?;
+        supervisor.apply(&old_source)?;
+
+        let client_socket = socket.clone();
+        let client = thread::spawn(move || crate::apply_ipc::request_default_at(&client_socket));
+        let (mut stream, _) = listener.accept()?;
+        serve_connection(&mut stream, &mut supervisor)?;
+        client.join().expect("default client panicked")?;
+
+        assert!(!state_file.exists());
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("default frame was not presented")
+                .rgba_at(0, 0),
+            [0, 0, 0, 255]
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn active_local_session_can_apply_through_the_unix_request_path() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("supervisor.sock");
