@@ -554,7 +554,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         self.backlight = candidate_backlight;
         self.last_presented_time = Some(now);
-        self.fn_hold_started = self.input_state.fn_active.then_some(now);
+        if self.input_state.fn_active {
+            if self.fn_hold_started.is_none() {
+                self.fn_hold_started = Some(now);
+            }
+        } else {
+            self.fn_hold_started = None;
+        }
         self.selected_path = Some(selected_path.clone());
         self.recovery = None;
         self.recovery_row.clear();
