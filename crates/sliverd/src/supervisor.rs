@@ -894,17 +894,18 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .is_some_and(|deadline| deadline <= now)
     }
 
+    fn has_healthy_recovery(&self) -> bool {
+        self.recovery
+            .as_ref()
+            .is_some_and(|recovery| recovery.owner_is_healthy())
+    }
+
     fn route_hardware_event(&mut self, event: HardwareEvent, now: f64) -> Result<()> {
         match event {
             HardwareEvent::Touch(touch) => self.route_touch(touch),
             HardwareEvent::Fn { active } => {
                 self.route_input(ObservedKey::Fn, active, now);
-                if !active
-                    && self
-                        .recovery
-                        .as_ref()
-                        .is_some_and(|recovery| recovery.owner_is_healthy())
-                {
+                if !active && self.has_healthy_recovery() {
                     self.exit_recovery(now)?;
                 }
                 Ok(())
@@ -947,13 +948,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .next_worker_deadline
             .is_some_and(|deadline| deadline <= now);
         if self.recovery.is_some() {
-            if self.active.is_some()
-                && self
-                    .recovery
-                    .as_ref()
-                    .is_some_and(|recovery| recovery.owner_is_healthy())
-                && worker_due
-            {
+            if self.active.is_some() && self.has_healthy_recovery() && worker_due {
                 self.drive_hidden(now)?;
             }
         } else if self.active.is_some()
@@ -986,11 +981,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn drive_hidden(&mut self, now: f64) -> Result<()> {
-        if !self
-            .recovery
-            .as_ref()
-            .is_some_and(|recovery| recovery.owner_is_healthy())
-        {
+        if !self.has_healthy_recovery() {
             return Ok(());
         }
         let Some(effects) =
