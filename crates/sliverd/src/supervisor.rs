@@ -6204,6 +6204,34 @@ mod tests {
     }
 
     #[test]
+    fn failed_default_reset_without_a_worker_enters_recovery_without_selecting_a_path() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("failed-default-reset-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(LuaSource::embedded(
+                b"require('sliver.v1'); return { api_version = 1, render = function() error('bad default') end }".to_vec(),
+            )),
+        )?;
+        assert!(!state_file.exists());
+
+        let error = supervisor
+            .apply_default()
+            .expect_err("failed default reset without a worker was accepted");
+
+        assert!(format!("{error:#}").contains("bad default"));
+        assert!(!state_file.exists());
+        assert_eq!(supervisor.hardware().backlight_level(), 0.75);
+        assert!(!supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
     fn saved_startup_failure_keeps_path_and_enters_fixed_recovery() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
