@@ -11,3 +11,7 @@
 ## Tools
 - `herdr` -> agent multiplexer
 - `searxngr`, `w3m` -> web search, web fetch
+
+## Models
+- `gpt-5.6-sol` -> expensive, slow, intelligent
+- `gpt-5.6-luna` -> cheap, fast, competent
