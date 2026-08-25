@@ -1,5 +1,7 @@
 # Linux worker process control research for issue #11
 
+> **Status: historical research.** This note records historical research. Its recommendations are not implementation requirements. A later architecture review superseded them. Implementers should follow the reviewed decision in [issue #11](https://github.com/wawow830/sliver/issues/11) and ADR 0003 once committed.
+
 ## Scope and starting point
 
 Issue #1 makes Lua a full user-code environment. It explicitly permits the standard library, Lua 5.4 C modules, files, processes, networking, D-Bus, and graphical-session access, while requiring the worker to stay away from broker hardware. It also sets the two-second callback deadline, 500 ms graceful-stop deadline, descendant cleanup, 512 MiB memory limit, and 64-process limit. [R1]
@@ -16,7 +18,7 @@ This research starts from commit `ad3725ab42aa542bc13a2ba3e574290e67b58a88`. The
 - Recovery already has the right ownership boundary: `RecoverySession` and the compiled F1-F12 row live outside Lua, and the session records whether its hidden owner is healthy. That boundary should remain. [RR1] [RR2]
 - The existing apply socket has a length-prefixed stream and a 1 MiB message cap; the acceptor has a 16-request synchronous queue. The worker command channel is a different, unbounded in-process channel, and the touch queue has no hard capacity. [RI1] [RS3] [RS4]
 
-The conclusion is blunt: a watchdog thread around the current `LuaWorker` would still share the process with arbitrary C code and a potentially corrupted Lua runtime. Issue #11 needs a process boundary, not a more careful `JoinHandle`.
+The historical conclusion was blunt: a watchdog thread around the current `LuaWorker` would still share the process with arbitrary C code and a potentially corrupted Lua runtime. The research therefore recommended a process boundary rather than a more careful `JoinHandle`; a later architecture review superseded that recommendation.
 
 ## Facts
 
@@ -127,9 +129,9 @@ Linux's futex documentation describes a 32-bit word in shared memory as the proc
 
 The current `Arc`, `Mutex`, `Condvar`, and `MmapMut` wrappers must not be copied into a shared mapping. They contain process-local ownership and waiting state. The mapped ABI should contain fixed-width integers, atomics, and pixels only; each process owns its local map wrapper. This follows from the current code's process-local wrappers and the Linux shared-mapping and futex contracts. [RF1] [M-MMAP] [M-FUTEX]
 
-## Recommendation for Sliver
+## Historical recommendation for Sliver (superseded)
 
-This section is a design recommendation, not a claim that the current branch already implements it.
+This section records a historical design recommendation. It is not an implementation requirement and was superseded by a later architecture review.
 
 ### Make the worker an exec'ed process
 
@@ -232,7 +234,7 @@ The generation field matters even though the memfd is per-worker. It prevents a 
 
 Use the control socket's `FRAME_READY` packet only as a wakeup and metadata hint. The supervisor can rescan the three atomic states after any packet, timer, or hardware poll. This means a lost notification cannot make a complete frame permanently invisible, while a full event socket still becomes a bounded worker transport failure.
 
-### Descriptor and device boundary
+### Historical descriptor and device boundary proposal (superseded)
 
 Create every supervisor descriptor with an atomic close-on-exec flag where the syscall supports it. In the child setup, retain only a bootstrap control fd, close all other descriptors with `close_range`, and exec the worker. Clear close-on-exec only on the intentionally retained bootstrap fd. After the worker receives the frame memfd, the received fd must be close-on-exec. No DRM, evdev, uinput, backlight, broker, or pidfd descriptor crosses the boundary. [M-OPEN] [M-CLOSE] [M-RECV]
 
