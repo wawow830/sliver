@@ -12,5 +12,6 @@
 - `searxngr`, `w3m` -> web search, web fetch
 
 ## Models
+Follow when interacting with other agents or yourself
 - `gpt-5.6-sol` -> expensive, slow, intelligent
 - `gpt-5.6-luna` -> cheap, fast, competent
