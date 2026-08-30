@@ -100,7 +100,8 @@ The real adapter opens this evdev node in nonblocking mode and polls it
 without handing touches to the compositor. It normalizes raw coordinates and
 lifecycle data into logical 2008x60 `TouchEvent` values, then emits them through
 the hardware seam. The supervisor forwards those normalized events without
-adding layout or gesture policy.
+adding layout or gesture policy. The adapter also subscribes to login1
+`PrepareForSleep` and reports precise input and display capability loss.
 
 ## Fn and virtual keyboard path
 
@@ -141,7 +142,8 @@ LeftCtrl up
 
 The hardware seam receives each synthetic sequence as one ordered batch. The
 M2 adapter submits that batch once to `VirtualDevice::emit`. A partial device
-write is handled as device loss by issue #14. This path does not retry,
+write marks synthetic output unavailable, releases the device claim, and waits
+for the full contract to be discovered again. This path does not retry,
 recreate, or roll back a partially written device.
 
 ## Live-apply socket
@@ -163,10 +165,18 @@ one tagged absolute path or the embedded-default tag. The client shuts down its
 write side and reads a status byte followed by an error message when the apply
 fails. The broker protocol is private to the two Sliver services and carries
 normalized events, complete frames, backlight requests, and generic key output.
+A missing display, touch input, Fn observer, synthetic output device, or
+backlight is reported by name; applies are rejected until the complete contract
+is available again. The broker retries discovery without replacing a healthy
+Lua worker.
 
 The supervisor parses and swaps a candidate atomically from its own thread. If
 Fn is held during an apply, the new config is stored immediately and becomes
-visible when Fn is released.
+visible when Fn is released. Suspend sends visibility loss to the current
+worker, cancels contacts, pauses timers and rendering, releases synthetic keys,
+and turns off the backlight. Resume shifts timer deadlines by the suspended
+interval, restores script brightness, and requests one fresh frame without
+replacing a healthy worker.
 
 ## Privileges and ownership
 

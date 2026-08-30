@@ -205,8 +205,18 @@ impl TouchBarHardware for BrokerHardware {
         if *status != OK {
             if *status == WAIT_FOR_HARDWARE {
                 self.hardware_available = false;
-                return Err(anyhow::anyhow!(String::from_utf8_lossy(body).into_owned())
-                    .context(crate::WaitForHardware));
+                self.unavailable_capability = body
+                    .first()
+                    .copied()
+                    .and_then(|value| HardwareCapability::from_wire(value).ok());
+                if let Some(capability) = self.unavailable_capability {
+                    self.missing_capabilities.insert(capability);
+                }
+                let detail = body
+                    .get(1..)
+                    .map(String::from_utf8_lossy)
+                    .unwrap_or_default();
+                return Err(anyhow::anyhow!(detail.into_owned()).context(crate::WaitForHardware));
             }
             let error = anyhow::anyhow!(String::from_utf8_lossy(body).into_owned());
             if *status == WAIT_FOR_SESSION {
