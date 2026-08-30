@@ -311,7 +311,6 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
         "TimeoutStopSec=1s",
         "NoNewPrivileges=yes",
         "PrivateDevices=yes",
-        "PrivateUsers=yes",
         "DevicePolicy=closed",
         "ProtectKernelTunables=yes",
         "StandardInput=null",

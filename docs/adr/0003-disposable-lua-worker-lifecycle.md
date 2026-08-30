@@ -12,7 +12,7 @@ evdev, uinput, backlight, or broker file descriptor.
 Production workers run as unique transient user services. The supervisor starts
 them with `MemoryMax=512M`, `TasksMax=64`, `OOMPolicy=kill`,
 `KillMode=control-group`, `NoNewPrivileges=yes`, `PrivateDevices=yes`,
-`PrivateUsers=yes`, `DevicePolicy=closed`, and journal stdout and stderr. The
+`DevicePolicy=closed`, and journal stdout and stderr. The
 worker drop-in under `systemd/sliver-lua-worker-.service.d/` is the only limit
 configuration surface. The memory limit covers RAM; swap is a separate
 administrator policy. `TasksMax` counts kernel tasks, including threads.
