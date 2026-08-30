@@ -1495,13 +1495,6 @@ mod tests {
                 active: true,
             }),
         );
-        logind.set_active(
-            SEAT,
-            Some(ActiveSession {
-                id: "failed-login-session".into(),
-                uid,
-            }),
-        );
         let shared = ThreadFakeHardware::new();
         let broker_state = directory.path().join("broker-state/config-path");
         let running = Arc::new(AtomicBool::new(true));
@@ -1527,6 +1520,20 @@ mod tests {
                 PeerVerification::Test,
             )
         });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().is_empty())
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!shared.inspect(|hardware| hardware.presented_frames().is_empty()));
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "failed-login-session".into(),
+                uid,
+            }),
+        );
         let mut user = Supervisor::new_with_logind_process(
             BrokerHardware::new_at(socket),
             user_state.clone(),
