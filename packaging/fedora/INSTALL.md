@@ -51,7 +51,6 @@ Build and inspect the RPM with Fedora's normal tools:
 
 ```sh
 spectool -g -R packaging/fedora/sliver.spec
-cp packaging/fedora/sliver.sysusers ~/rpmbuild/SOURCES/
 rpmbuild -ba packaging/fedora/sliver.spec
 rpm -qlp ~/rpmbuild/RPMS/$(uname -m)/sliver-*.rpm
 ```
