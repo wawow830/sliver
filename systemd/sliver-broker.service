@@ -10,9 +10,8 @@ User=sliver
 Group=sliver
 RuntimeDirectory=sliver
 StateDirectory=sliver
-Environment=SLIVER_SUPERVISOR_SOCKET=/run/sliver/supervisor.sock
-Environment=SLIVER_STATE_FILE=/var/lib/sliver/config-path
-ExecStart=/usr/bin/sliver-supervisor
+Environment=SLIVER_BROKER_SOCKET=/run/sliver/broker.sock
+ExecStart=/usr/bin/sliver-broker
 Restart=on-failure
 RestartSec=1s
 

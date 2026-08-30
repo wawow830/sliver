@@ -64,18 +64,21 @@ enum CandidateFailure {
     Authorization(anyhow::Error),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WorkerOwner {
     Fallback,
     User(ActiveSession),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSnapshot {
     active: Option<ActiveSession>,
     generation: u64,
 }
 
+#[allow(dead_code)]
 struct SessionHandoff {
     seat: String,
     snapshot: SessionSnapshot,
@@ -392,8 +395,11 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
     default_source: LuaSource,
+    #[allow(dead_code)]
     session_handoff: Option<SessionHandoff>,
+    #[allow(dead_code)]
     handoff_in_progress: bool,
+    fallback_worker: bool,
     active: Option<ActiveConfig>,
     recovery: Option<RecoverySession>,
     claimed: bool,
@@ -420,6 +426,23 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
     #[cfg(test)]
     pub(crate) fn new(hardware: H, state_file: PathBuf) -> Result<Self> {
         Self::new_with_logind(hardware, state_file, RealLogind::default())
+    }
+
+    pub(crate) fn new_fallback(
+        hardware: H,
+        state_file: PathBuf,
+        injected_default: Option<LuaSource>,
+    ) -> Result<Self> {
+        let default_source = injected_default.unwrap_or_else(default_source::source);
+        let mut supervisor = Self::new_with_logind_and_default(
+            hardware,
+            state_file,
+            RealLogind::default(),
+            default_source,
+        )?;
+        supervisor.fallback_worker = true;
+        supervisor.start_fallback()?;
+        Ok(supervisor)
     }
 }
 
@@ -450,6 +473,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             default_source,
             session_handoff: None,
             handoff_in_progress: false,
+            fallback_worker: false,
             active: None,
             recovery: None,
             claimed: true,
@@ -473,7 +497,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     /// Build the running supervisor and make one startup attempt. A saved path
     /// is tried once; absent state selects the embedded source and never writes
     /// a path to state.
-    #[cfg(test)]
     pub(crate) fn new_with_startup_candidate(
         hardware: H,
         state_file: PathBuf,
@@ -498,6 +521,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     /// Build the hardware broker. It owns the fallback before login and swaps
     /// to the selected source belonging to the active local session.
+    #[cfg(test)]
     pub(crate) fn new_with_session_startup_candidate(
         hardware: H,
         state_file: PathBuf,
@@ -557,6 +581,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(supervisor)
     }
 
+    #[cfg(test)]
     fn session_snapshot(&self, seat: &str) -> Result<SessionSnapshot> {
         let before = self.authorizer.generation()?;
         let active = self.authorizer.active_session(seat)?;
@@ -571,6 +596,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         })
     }
 
+    #[cfg(test)]
     fn recheck_session_snapshot(&self, expected: &SessionSnapshot) -> Result<()> {
         let handoff = self
             .session_handoff
@@ -584,6 +610,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn refresh_session_owner(&mut self) -> Result<()> {
         if self.handoff_in_progress {
             return Ok(());
@@ -602,6 +629,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.switch_session_owner(current)
     }
 
+    #[cfg(test)]
     fn switch_session_owner(&mut self, snapshot: SessionSnapshot) -> Result<()> {
         let target_owner = snapshot
             .active
@@ -637,8 +665,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             None => ConfigSelection::Default,
         };
 
-        // The fallback is allowed to exist only while the seat has no user.
-        // Its last frame stays on the panel while the user's worker stages.
+        // Keep the last frame on the panel while the next owner stages. A
+        // fallback must not remain alive after a user session appears, and a
+        // user's logout cleanup must finish before the fallback starts.
         if matches!(previous_owner, WorkerOwner::Fallback)
             && matches!(target_owner, WorkerOwner::User(_))
         {
@@ -650,6 +679,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             if let Err(cleanup_error) = self.stop_active_worker(StopReason::Replaced) {
                 crate::system_log::broker_error(format!(
                     "stopping the fallback before user handoff failed: {cleanup_error:#}"
+                ));
+            }
+        } else if matches!(previous_owner, WorkerOwner::User(_))
+            && target_owner == WorkerOwner::Fallback
+        {
+            if let Err(cleanup_error) = self.release_synthetic_keys() {
+                crate::system_log::broker_error(format!(
+                    "releasing user keys before logout fallback failed: {cleanup_error:#}"
+                ));
+            }
+            if let Err(cleanup_error) = self.stop_active_worker(StopReason::Logout) {
+                crate::system_log::broker_error(format!(
+                    "stopping the user before logout fallback failed: {cleanup_error:#}"
                 ));
             }
         }
@@ -682,6 +724,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
+    #[cfg(test)]
     fn record_session_owner(&mut self, snapshot: SessionSnapshot, owner: WorkerOwner) {
         let handoff = self
             .session_handoff
@@ -691,6 +734,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         handoff.owner = owner;
     }
 
+    #[cfg(test)]
     fn session_handoff_failed(
         &mut self,
         error: anyhow::Error,
@@ -717,6 +761,38 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn now_seconds(&self) -> f64 {
         self.origin.elapsed().as_secs_f64()
+    }
+
+    pub(crate) fn has_active_worker(&self) -> bool {
+        self.active.is_some()
+    }
+
+    pub(crate) fn poll(&mut self, timeout: Duration) -> Result<()> {
+        self.poll_hardware(timeout)
+    }
+
+    pub(crate) fn start_fallback(&mut self) -> Result<()> {
+        ensure!(self.fallback_worker, "supervisor is not the fallback owner");
+        let state_file = self.state_file.clone();
+        match self.apply_candidate(
+            ConfigSelection::Default,
+            None,
+            SelectionState::Keep,
+            &state_file,
+            StopReason::Replaced,
+            None,
+        ) {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                let error = match failure {
+                    CandidateFailure::Candidate(error) | CandidateFailure::Authorization(error) => {
+                        error
+                    }
+                };
+                eprintln!("fallback Lua worker entered recovery: {error:#}");
+                self.enter_recovery()
+            }
+        }
     }
 
     #[cfg(test)]
@@ -795,7 +871,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Err(candidate_error)
     }
 
-    #[cfg(test)]
     fn startup_candidate(&mut self, selection: ConfigSelection) -> Result<()> {
         let state_file = self.state_file.clone();
         self.apply_candidate(
@@ -841,12 +916,16 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
-        let identity = match expected_session {
-            Some(SessionSnapshot {
-                active: Some(_), ..
-            })
-            | None => WorkerIdentity::User,
-            Some(SessionSnapshot { active: None, .. }) => WorkerIdentity::RestrictedFallback,
+        let identity = if self.fallback_worker {
+            WorkerIdentity::RestrictedFallback
+        } else {
+            match expected_session {
+                Some(SessionSnapshot {
+                    active: Some(_), ..
+                })
+                | None => WorkerIdentity::User,
+                Some(SessionSnapshot { active: None, .. }) => WorkerIdentity::RestrictedFallback,
+            }
         };
         let StagedLuaWorker { worker } = LuaWorker::stage_source_with_identity(
             source.clone(),
@@ -880,6 +959,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .recheck(authorization.peer, &authorization.grant)
                 .map_err(CandidateFailure::Authorization)?;
         }
+        #[cfg(test)]
         if let Some(expected_session) = expected_session {
             self.recheck_session_snapshot(expected_session)
                 .map_err(CandidateFailure::Candidate)?;
@@ -1125,7 +1205,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
         }
         if let Some(previous_path_state) = previous_path_state {
-            if let Err(restore_error) = previous_path_state.restore(&self.state_file) {
+            if let Err(restore_error) = previous_path_state.restore() {
                 error = error.context(format!(
                     "restoring selected path after candidate failure also failed: {restore_error:#}"
                 ));
@@ -1445,6 +1525,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
         self.check_worker_liveness()?;
+        #[cfg(test)]
         self.refresh_session_owner()?;
         if self.recovery_due(now) {
             self.enter_recovery()?;
@@ -1761,7 +1842,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         &self.hardware
     }
 
-    #[cfg(test)]
     pub(crate) fn hardware_mut(&mut self) -> &mut H {
         &mut self.hardware
     }
@@ -8111,7 +8191,7 @@ mod tests {
         std::fs::write(
             &source,
             format!(
-                "require('sliver.v1'); return {{ api_version = 1, stop = function(reason) local file = assert(io.open({stop_log:?}, 'w')); file:write(reason); file:close() end, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }}"
+                "require('sliver.v1'); return {{ api_version = 1, stop = function(reason) local file = assert(io.open({stop_log:?}, 'a')); file:write(reason, '\\n'); file:close() end, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }}"
             ),
         )?;
         PreparedPathState::prepare(&state_file, &source)?.commit()?;
@@ -8135,7 +8215,10 @@ mod tests {
             }),
         );
         let default = LuaSource::embedded(
-            b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
+            format!(
+                "require('sliver.v1'); return {{ api_version = 1, start = function() local file = assert(io.open({stop_log:?}, 'a')); file:write('fallback\\n'); file:close() end, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }}"
+            )
+            .into_bytes(),
         );
         let mut supervisor = Supervisor::new_with_session_startup_candidate(
             FakeTouchBar::new(),
@@ -8157,7 +8240,7 @@ mod tests {
         logind.set_active("seat0", None);
         supervisor.step_at(1.0)?;
 
-        assert_eq!(std::fs::read_to_string(stop_log)?, "logout");
+        assert_eq!(std::fs::read_to_string(stop_log)?, "logout\nfallback\n");
         assert_eq!(
             supervisor
                 .hardware()

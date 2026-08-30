@@ -29,7 +29,7 @@ impl Modifier {
         Self::RightSuper,
     ];
 
-    const fn index(self) -> usize {
+    pub(crate) const fn index(self) -> usize {
         match self {
             Self::LeftCtrl => 0,
             Self::RightCtrl => 1,
@@ -392,6 +392,15 @@ impl LogicalFrame {
 
     pub(crate) fn pixels(&self) -> &[u8] {
         &self.pixels
+    }
+
+    pub(crate) fn from_wire(width: usize, height: usize, stride: usize, pixels: Vec<u8>) -> Self {
+        Self {
+            width,
+            height,
+            stride,
+            pixels,
+        }
     }
 
     pub(crate) fn from_completed(completed: CompletedFrame) -> (Self, FrameTiming) {

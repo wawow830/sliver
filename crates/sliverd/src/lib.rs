@@ -1,5 +1,6 @@
 mod apply_ipc;
 mod authorization;
+mod broker_ipc;
 mod config_selection;
 mod default_source;
 mod drm_out;
@@ -41,6 +42,15 @@ pub fn lua_worker_main() -> Result<()> {
 
 /// Run the per-user supervisor process.
 #[doc(hidden)]
+pub fn broker_main() -> Result<()> {
+    let result = broker_ipc::broker_main();
+    if let Err(error) = &result {
+        system_log::broker_error(format!("broker service failed: {error:#}"));
+    }
+    result
+}
+
+/// Run the per-user supervisor process.
 pub fn supervisor_main() -> Result<()> {
     let result = supervisor_main_inner();
     if let Err(error) = &result {
@@ -86,13 +96,11 @@ fn supervisor_main_inner() -> Result<()> {
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
 
     let state_file = selected_path_state_file()?;
-    let seat = std::env::var("SLIVER_SEAT").unwrap_or_else(|_| "seat0".into());
-    let mut supervisor = supervisor::Supervisor::new_with_session_startup_candidate(
-        m2_hardware::M2TouchBar::new(),
+    let mut supervisor = supervisor::Supervisor::new_with_startup_candidate(
+        broker_ipc::BrokerHardware::new(),
         state_file,
         crate::logind::RealLogind::default(),
         Some(default_source::source()),
-        &seat,
     )?;
     let serve_result = supervisor::serve(listener, &mut supervisor);
     let shutdown_result = supervisor.shutdown();
@@ -108,9 +116,6 @@ fn supervisor_main_inner() -> Result<()> {
 }
 
 fn selected_path_state_file() -> Result<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("SLIVER_STATE_FILE") {
-        return Ok(std::path::PathBuf::from(path));
-    }
     if let Some(state_home) = std::env::var_os("XDG_STATE_HOME") {
         return Ok(std::path::PathBuf::from(state_home).join("sliver/config-path"));
     }

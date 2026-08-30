@@ -10,6 +10,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct PathStateSnapshot {
+    state_file: PathBuf,
     contents: Option<Vec<u8>>,
 }
 
@@ -17,11 +18,13 @@ impl PathStateSnapshot {
     pub(crate) fn capture(state_file: &Path) -> Result<Self> {
         match fs::read(state_file) {
             Ok(contents) => Ok(Self {
+                state_file: state_file.to_path_buf(),
                 contents: Some(contents),
             }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Self { contents: None })
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self {
+                state_file: state_file.to_path_buf(),
+                contents: None,
+            }),
             Err(error) => Err(error).with_context(|| {
                 format!(
                     "reading previous selected-path state {}",
@@ -31,7 +34,8 @@ impl PathStateSnapshot {
         }
     }
 
-    pub(crate) fn restore(&self, state_file: &Path) -> Result<()> {
+    pub(crate) fn restore(&self) -> Result<()> {
+        let state_file = &self.state_file;
         match &self.contents {
             Some(contents) => PreparedPathState::prepare_contents(state_file, contents)?.commit(),
             None => {

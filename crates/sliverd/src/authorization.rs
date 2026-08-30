@@ -27,6 +27,7 @@ impl<L: Logind> SessionAuthorizer<L> {
         Self { logind }
     }
 
+    #[cfg(test)]
     pub(crate) fn generation(&self) -> Result<u64> {
         self.logind
             .generation()
