@@ -2370,6 +2370,163 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn public_cli_crosses_broker_supervisor_worker_and_fake_hardware() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let broker_socket = directory.path().join("broker.sock");
+        let broker_listener = UnixListener::bind(&broker_socket)?;
+        let supervisor_socket = directory.path().join("supervisor.sock");
+        let supervisor_listener = UnixListener::bind(&supervisor_socket)?;
+        let source = directory.path().join("user.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let invalid = directory.path().join("invalid.lua");
+        std::fs::write(
+            &invalid,
+            "require('sliver.v1'); return { api_version = 1, render = function() error('render failed') end }",
+        )?;
+
+        let uid = unsafe { libc::getuid() };
+        let logind = FakeLogind::new();
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "public-cli-broker-session".into(),
+                uid,
+            }),
+        );
+        logind.set_session_for_any_pid(Session {
+            id: "public-cli-broker-session".into(),
+            uid,
+            seat: Some(SEAT.into()),
+            remote: false,
+            active: true,
+        });
+
+        let shared = ThreadFakeHardware::new();
+        let broker_state = directory.path().join("broker-state/config-path");
+        let broker_running = Arc::new(AtomicBool::new(true));
+        let broker_logind = logind.clone();
+        let broker_shared = shared.clone();
+        let broker_stop = broker_running.clone();
+        let broker_server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                broker_shared,
+                broker_state,
+                broker_logind.clone(),
+                Some(LuaSource::embedded(default_source_bytes())),
+            )?;
+            run_broker(
+                broker_listener,
+                fallback,
+                SessionAuthorizer::new(broker_logind),
+                broker_stop,
+                SEAT,
+                PeerVerification::Test,
+            )
+        });
+
+        let user_running = Arc::new(AtomicBool::new(true));
+        let user_logind = logind.clone();
+        let user_stop = user_running.clone();
+        let user_state = directory.path().join("user-state/config-path");
+        let user_server = thread::spawn(move || -> Result<()> {
+            let mut supervisor = Supervisor::new_with_startup_candidate_process(
+                BrokerHardware::new_at(broker_socket),
+                user_state,
+                user_logind,
+                Some(LuaSource::embedded(default_source_bytes())),
+            )?;
+            serve_until(supervisor_listener, &mut supervisor, user_stop)
+        });
+
+        let cli = std::env::current_exe()?
+            .parent()
+            .and_then(|path| path.parent())
+            .map(|path| path.join("sliver"))
+            .context("public CLI binary is required for this test")?;
+        ensure!(cli.exists(), "public CLI binary is required for this test");
+        let result = (|| -> Result<()> {
+            let output = std::process::Command::new(&cli)
+                .arg(&source)
+                .env("SLIVER_SUPERVISOR_SOCKET", &supervisor_socket)
+                .output()?;
+            ensure!(output.status.success(), "CLI apply failed: {:?}", output);
+            ensure!(output.stdout.is_empty(), "CLI apply wrote to stdout");
+            ensure!(output.stderr.is_empty(), "CLI apply wrote to stderr");
+            ensure!(
+                shared.inspect(|hardware| {
+                    hardware
+                        .presented_frames()
+                        .last()
+                        .is_some_and(|frame| frame.rgba_at(10, 10) == [255, 0, 0, 255])
+                }),
+                "broker did not present the explicit config frame"
+            );
+
+            let frames_before_invalid =
+                shared.inspect(|hardware| hardware.presented_frames().len());
+            let output = std::process::Command::new(&cli)
+                .arg(&invalid)
+                .env("SLIVER_SUPERVISOR_SOCKET", &supervisor_socket)
+                .output()?;
+            ensure!(
+                output.status.code() == Some(1),
+                "invalid CLI apply status: {:?}",
+                output
+            );
+            ensure!(
+                output.stdout.is_empty(),
+                "invalid CLI apply wrote to stdout"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            ensure!(
+                stderr.contains(invalid.to_string_lossy().as_ref()),
+                "{stderr}"
+            );
+            ensure!(stderr.contains("[render]"), "{stderr}");
+            ensure!(stderr.contains("stack traceback"), "{stderr}");
+            ensure!(stderr.contains("invalid.lua:1"), "{stderr}");
+            ensure!(
+                shared.inspect(|hardware| hardware.presented_frames().len())
+                    == frames_before_invalid,
+                "invalid CLI apply replaced the active frame"
+            );
+
+            let output = std::process::Command::new(&cli)
+                .env("SLIVER_SUPERVISOR_SOCKET", &supervisor_socket)
+                .output()?;
+            ensure!(
+                output.status.success(),
+                "default CLI reset failed: {:?}",
+                output
+            );
+            ensure!(output.stdout.is_empty(), "default reset wrote to stdout");
+            ensure!(output.stderr.is_empty(), "default reset wrote to stderr");
+            ensure!(
+                shared.inspect(|hardware| {
+                    hardware
+                        .presented_frames()
+                        .last()
+                        .is_some_and(|frame| frame.rgba_at(10, 10) == [0, 255, 0, 255])
+                }),
+                "broker did not present the embedded default frame"
+            );
+            Ok(())
+        })();
+
+        user_running.store(false, Ordering::Release);
+        let user_result = user_server.join().expect("supervisor server panicked");
+        broker_running.store(false, Ordering::Release);
+        let broker_result = broker_server.join().expect("broker server panicked");
+        result?;
+        user_result?;
+        broker_result?;
+        Ok(())
+    }
+
     fn default_source_bytes() -> Vec<u8> {
         b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec()
     }
