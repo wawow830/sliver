@@ -129,6 +129,53 @@ pub(crate) enum ConsumerKey {
     VolumeUp,
 }
 
+impl KeyboardKey {
+    pub(crate) fn from_wire(value: u8) -> Result<Self> {
+        let key = match value {
+            0 => Self::Escape,
+            1 => Self::F1,
+            2 => Self::F2,
+            3 => Self::F3,
+            4 => Self::F4,
+            5 => Self::F5,
+            6 => Self::F6,
+            7 => Self::F7,
+            8 => Self::F8,
+            9 => Self::F9,
+            10 => Self::F10,
+            11 => Self::F11,
+            12 => Self::F12,
+            13 => Self::LeftCtrl,
+            14 => Self::RightCtrl,
+            15 => Self::LeftAlt,
+            16 => Self::RightAlt,
+            17 => Self::LeftShift,
+            18 => Self::RightShift,
+            19 => Self::LeftSuper,
+            20 => Self::RightSuper,
+            _ => anyhow::bail!("unknown Lua worker keyboard key {value}"),
+        };
+        Ok(key)
+    }
+}
+
+impl ConsumerKey {
+    pub(crate) fn from_wire(value: u8) -> Result<Self> {
+        let key = match value {
+            0 => Self::BrightnessDown,
+            1 => Self::BrightnessUp,
+            2 => Self::Previous,
+            3 => Self::PlayPause,
+            4 => Self::Next,
+            5 => Self::Mute,
+            6 => Self::VolumeDown,
+            7 => Self::VolumeUp,
+            _ => anyhow::bail!("unknown Lua worker consumer key {value}"),
+        };
+        Ok(key)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum OutputKey {
     Keyboard(KeyboardKey),
@@ -357,6 +404,15 @@ impl LogicalFrame {
             },
             completed.timing,
         )
+    }
+
+    pub(crate) fn from_parts(width: usize, height: usize, stride: usize, pixels: Vec<u8>) -> Self {
+        Self {
+            width,
+            height,
+            stride,
+            pixels,
+        }
     }
 }
 

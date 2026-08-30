@@ -32,6 +32,12 @@ pub fn apply_default() -> Result<()> {
     apply_ipc::request_default()
 }
 
+/// Run one disposable Lua worker process.
+#[doc(hidden)]
+pub fn lua_worker_main() -> Result<()> {
+    lua_worker::worker_process_main()
+}
+
 /// Run the per-user supervisor process.
 #[doc(hidden)]
 pub fn supervisor_main() -> Result<()> {

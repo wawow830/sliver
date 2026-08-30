@@ -1117,12 +1117,16 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn check_worker_liveness(&mut self) -> Result<()> {
-        let exited = self
-            .active
-            .as_ref()
-            .is_some_and(|active| !active.worker.is_alive());
-        if exited {
-            self.fail_active_worker(anyhow::anyhow!("Lua owner thread exited"))?;
+        let failure = self.active.as_ref().and_then(|active| {
+            (!active.worker.is_alive()).then(|| {
+                active
+                    .worker
+                    .failure_reason()
+                    .unwrap_or_else(|| "Lua worker process exited".into())
+            })
+        });
+        if let Some(failure) = failure {
+            self.fail_active_worker(anyhow::anyhow!(failure))?;
             #[cfg(test)]
             {
                 self.worker_failure = None;
@@ -1236,7 +1240,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
         let now = self.now_seconds();
         if let Some(active) = self.active.take() {
-            if !active.contacts.is_empty() {
+            if !active.contacts.is_empty() && !active.worker.uses_process_backend() {
                 if let Err(cancel_error) = cancel_contacts(
                     &active.worker,
                     &active.contacts,

@@ -22,6 +22,13 @@ use crate::hardware::{
 use crate::lua_canvas::{create_path, Canvas};
 use crate::lua_image::create_image;
 
+#[path = "worker_process.rs"]
+mod worker_process;
+
+pub(crate) fn worker_process_main() -> Result<()> {
+    worker_process::worker_main()
+}
+
 pub(crate) struct TimedFrame {
     pub(crate) frame: LogicalFrame,
     pub(crate) timing: FrameTiming,
@@ -251,11 +258,12 @@ impl StopReason {
 pub(crate) struct LuaWorker {
     commands: Option<mpsc::Sender<WorkerCommand>>,
     owner: Option<thread::JoinHandle<()>>,
+    process: Option<worker_process::ProcessWorker>,
     broker: FrameBroker,
-    #[cfg(test)]
     producer: FrameProducer,
 }
 
+#[allow(dead_code)]
 enum WorkerCommand {
     #[allow(dead_code)]
     Render(
@@ -371,6 +379,7 @@ impl LuaWorker {
         )
     }
 
+    #[allow(clippy::needless_return)]
     pub(crate) fn stage_source_with_backlight_and_input(
         source: LuaSource,
         initial_backlight: f64,
@@ -383,42 +392,59 @@ impl LuaWorker {
             sliver_core::STRIP_W as usize * 4,
         )?;
         let producer = slots.producer();
-        #[cfg(test)]
-        let test_producer = producer.clone();
         let broker = slots.broker();
-        let (command_tx, command_rx) = mpsc::channel();
-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        let owner = thread::Builder::new()
-            .name("sliver-lua".into())
-            .spawn(move || {
-                owner_main(
-                    source,
-                    initial_backlight,
-                    initial_input,
-                    producer,
-                    command_rx,
-                    ready_tx,
-                )
-            })
-            .context("starting Lua owner thread")?;
 
-        let mut worker = Self {
-            commands: Some(command_tx),
-            owner: Some(owner),
-            broker,
-            #[cfg(test)]
-            producer: test_producer,
-        };
-        match ready_rx.recv() {
-            Ok(Ok(())) => Ok(StagedLuaWorker { worker }),
-            Ok(Err(error)) => {
-                worker.abandon();
-                Err(anyhow!(error))
-            }
-            Err(_) => {
-                worker.abandon();
-                Err(anyhow!("Lua owner thread exited before staging completed"))
-            }
+        #[cfg(test)]
+        {
+            let test_producer = producer.clone();
+            let (command_tx, command_rx) = mpsc::channel();
+            let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+            let owner = thread::Builder::new()
+                .name("sliver-lua".into())
+                .spawn(move || {
+                    owner_main(
+                        source,
+                        initial_backlight,
+                        initial_input,
+                        producer,
+                        command_rx,
+                        ready_tx,
+                    )
+                })
+                .context("starting Lua owner thread")?;
+            let mut worker = Self {
+                commands: Some(command_tx),
+                owner: Some(owner),
+                process: None,
+                broker,
+                producer: test_producer,
+            };
+            return match ready_rx.recv() {
+                Ok(Ok(())) => Ok(StagedLuaWorker { worker }),
+                Ok(Err(error)) => {
+                    worker.abandon();
+                    Err(anyhow!(error))
+                }
+                Err(_) => {
+                    worker.abandon();
+                    Err(anyhow!("Lua owner thread exited before staging completed"))
+                }
+            };
+        }
+
+        #[cfg(not(test))]
+        {
+            let process =
+                worker_process::ProcessWorker::stage(&source, initial_backlight, initial_input)?;
+            Ok(StagedLuaWorker {
+                worker: Self {
+                    commands: None,
+                    owner: None,
+                    process: Some(process),
+                    broker,
+                    producer,
+                },
+            })
         }
     }
 
@@ -437,6 +463,10 @@ impl LuaWorker {
         delta: f64,
         input_state: InputState,
     ) -> Result<TimedFrame> {
+        if let Some(process) = &self.process {
+            let frame = process.render(presentation_time, delta, input_state)?;
+            return self.publish_received_frame(frame);
+        }
         let deadline = Instant::now() + Duration::from_millis(50);
         let commands = self
             .commands
@@ -474,6 +504,18 @@ impl LuaWorker {
             thread::sleep(std::cmp::min(backoff, remaining));
             backoff = std::cmp::min(backoff + backoff, Duration::from_millis(10));
         }
+    }
+
+    fn publish_received_frame(&self, frame: TimedFrame) -> Result<TimedFrame> {
+        let published = self.producer.try_publish(
+            frame.frame.width(),
+            frame.frame.height(),
+            frame.frame.stride(),
+            frame.frame.pixels(),
+            frame.timing,
+        )?;
+        ensure!(published, "Lua worker frame slots are full");
+        self.take_frame()?.context("Lua worker published no frame")
     }
 
     fn retry_pending(&self, presentation_time: f64) -> Result<bool> {
@@ -524,6 +566,9 @@ impl LuaWorker {
     }
 
     pub(crate) fn pending_backlight(&self) -> Result<Option<f64>> {
+        if let Some(process) = &self.process {
+            return process.pending_backlight();
+        }
         let commands = self
             .commands
             .as_ref()
@@ -539,6 +584,9 @@ impl LuaWorker {
     }
 
     pub(crate) fn commit(&self, now_seconds: f64, input_state: InputState) -> Result<()> {
+        if let Some(process) = &self.process {
+            return process.commit(now_seconds, input_state);
+        }
         let commands = self
             .commands
             .as_ref()
@@ -554,6 +602,13 @@ impl LuaWorker {
     }
 
     pub(crate) fn drive(&self, request: DriveRequest) -> Result<WorkerEffects> {
+        if let Some(process) = &self.process {
+            let mut effects = process.drive(request)?;
+            if let Some(frame) = effects.frame.take() {
+                effects.frame = Some(self.publish_received_frame(frame)?);
+            }
+            return Ok(effects);
+        }
         let commands = self
             .commands
             .as_ref()
@@ -592,6 +647,9 @@ impl LuaWorker {
 
     pub(crate) fn restore_backlight(&self, level: f64) -> Result<()> {
         validate_backlight_level(level)?;
+        if let Some(process) = &self.process {
+            return process.restore_backlight(level);
+        }
         let commands = self
             .commands
             .as_ref()
@@ -607,6 +665,9 @@ impl LuaWorker {
     }
 
     pub(crate) fn shutdown(mut self, reason: StopReason) -> Result<()> {
+        if let Some(process) = self.process.take() {
+            return process.shutdown(reason);
+        }
         let commands = self
             .commands
             .take()
@@ -623,6 +684,9 @@ impl LuaWorker {
     }
 
     fn abandon(&mut self) {
+        if let Some(process) = self.process.take() {
+            process.terminate();
+        }
         if let Some(commands) = self.commands.take() {
             let _ = commands.send(WorkerCommand::Abandon);
         }
@@ -630,9 +694,22 @@ impl LuaWorker {
     }
 
     pub(crate) fn is_alive(&self) -> bool {
+        if let Some(process) = &self.process {
+            return process.is_alive();
+        }
         self.owner
             .as_ref()
             .is_some_and(|owner| !owner.is_finished())
+    }
+
+    pub(crate) fn failure_reason(&self) -> Option<String> {
+        self.process
+            .as_ref()
+            .and_then(worker_process::ProcessWorker::failure_reason)
+    }
+
+    pub(crate) fn uses_process_backend(&self) -> bool {
+        self.process.is_some()
     }
 
     #[cfg(test)]
@@ -661,6 +738,7 @@ impl Drop for LuaWorker {
     }
 }
 
+#[allow(dead_code)]
 fn owner_main(
     source: LuaSource,
     initial_backlight: f64,
@@ -683,6 +761,7 @@ fn owner_main(
     run_commands(runtime, commands);
 }
 
+#[allow(dead_code)]
 fn run_commands(mut runtime: Runtime, commands: mpsc::Receiver<WorkerCommand>) {
     loop {
         match commands.recv() {
@@ -1110,8 +1189,8 @@ impl Runtime {
             .map_err(|error| diagnostic("render", &self.source, format!("{error:#}")))
     }
 
-    fn stop(self, reason: StopReason) -> std::result::Result<(), String> {
-        if let Some(stop) = self.stop {
+    fn stop(&self, reason: StopReason) -> std::result::Result<(), String> {
+        if let Some(stop) = &self.stop {
             stop.call::<()>(reason.as_str())
                 .map_err(|error| diagnostic("stop", &self.source, error.to_string()))?;
         }
