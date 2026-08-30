@@ -1691,6 +1691,7 @@ mod tests {
             "require('sliver.v1'); error('failed login candidate')",
         )?;
         let user_state = directory.path().join("user-state/config-path");
+        PreparedPathState::prepare(&user_state, &source)?.commit()?;
         let logind = FakeLogind::new();
         let uid = unsafe { libc::getuid() };
         logind.set_session(
@@ -1741,18 +1742,18 @@ mod tests {
                 uid,
             }),
         );
-        let mut user = Supervisor::new_with_logind_process(
+        let user = Supervisor::new_with_startup_candidate_process(
             BrokerHardware::new_at(socket),
             user_state.clone(),
             FakeLogind::new(),
+            None,
         )?;
-        let error = user
-            .apply(&source)
-            .expect_err("failed login candidate was accepted");
-        assert!(format!("{error:#}").contains("failed login candidate"));
         assert!(!user.has_active_worker());
         assert!(user.has_recovery());
-        assert!(user_state.exists());
+        assert_eq!(
+            std::fs::read(&user_state)?,
+            source.as_os_str().as_encoded_bytes()
+        );
         let frames = shared.inspect(|hardware| hardware.presented_frames().to_vec());
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].rgba_at(10, 10), [0, 255, 0, 255]);
