@@ -212,3 +212,28 @@ commit. A session switch cancels candidates that are staging or waiting in the
 FIFO request queue. Workers run with the supervisor's systemd user-manager
 environment. The protocol has no TCP listener or token field and carries no
 client environment.
+
+## Lua worker lifecycle
+
+Each production Lua worker runs in the `sliver-lua-worker` executable. The
+supervisor keeps the hardware descriptors in its own process and gives the
+worker one private control socket. The worker receives source and input data
+through bounded packets and returns complete frames and output requests. Frame
+pixels never cross the process boundary until a render has finished.
+
+The supervisor owns the callback deadline. It waits at most two seconds for
+startup, render, commit, and drive requests. The worker sends heartbeats only
+while its command loop is idle, so a loop, native call, or process call cannot
+extend a callback deadline. Replacement, logout, and shutdown send one stop
+reason and allow at most 500 milliseconds. A timed-out or exited worker is
+killed without sending another Lua callback.
+
+The worker starts a new process group, sets `PR_SET_PDEATHSIG`, enables the
+supervisor's child-subreaper mode, and opens a pidfd. The supervisor kills the
+pidfd and process group on failure, then drops the worker. It closes inherited
+descriptors before Lua starts and sets `NoNewPrivileges`; device-node and
+resource policy comes from the systemd worker policy drop-in.
+
+Input transitions and touch events have a fixed application queue. Move events
+coalesce by contact. A full queue rejects the worker instead of allocating an
+unbounded backlog. Synthetic key effects have a fixed per-drive limit too.
