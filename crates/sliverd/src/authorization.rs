@@ -49,12 +49,6 @@ impl<L: Logind> SessionAuthorizer<L> {
         Self { logind }
     }
 
-    pub(crate) fn generation(&self) -> Result<u64> {
-        self.logind
-            .generation()
-            .context("reading the logind session generation")
-    }
-
     pub(crate) fn active_session(
         &self,
         seat: &str,
