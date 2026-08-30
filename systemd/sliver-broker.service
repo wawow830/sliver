@@ -6,6 +6,7 @@ Before=tiny-dfr.service
 
 [Service]
 Type=simple
+KillSignal=SIGINT
 User=sliver
 Group=sliver-supervisors
 SupplementaryGroups=video input

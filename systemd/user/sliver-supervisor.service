@@ -5,6 +5,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
+KillSignal=SIGINT
 ExecStart=/usr/bin/sliver-supervisor
 Restart=on-failure
 RestartSec=1s
