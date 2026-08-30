@@ -1,9 +1,10 @@
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 #[cfg(test)]
 use std::time::{Duration, Instant};
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use memmap2::MmapMut;
 
 const SLOT_COUNT: usize = 3;
@@ -134,16 +135,19 @@ struct SharedSlots {
 #[derive(Clone)]
 pub(crate) struct FrameSlots {
     inner: Arc<SharedSlots>,
+    shared: Option<Arc<SharedFrameMap>>,
 }
 
 #[derive(Clone)]
 pub(crate) struct FrameProducer {
     inner: Arc<SharedSlots>,
+    shared: Option<Arc<SharedFrameMap>>,
 }
 
 #[derive(Clone)]
 pub(crate) struct FrameBroker {
     inner: Arc<SharedSlots>,
+    shared: Option<Arc<SharedFrameMap>>,
 }
 
 pub(crate) struct FrameWriter {
@@ -152,45 +156,387 @@ pub(crate) struct FrameWriter {
     published: bool,
 }
 
-impl FrameSlots {
-    pub(crate) fn new(width: usize, height: usize, stride: usize) -> Result<Self> {
-        ensure!(width > 0, "frame width must be positive");
-        ensure!(height > 0, "frame height must be positive");
-        ensure!(
-            stride >= width.saturating_mul(4),
-            "frame stride is too small"
-        );
+const SHARED_MAGIC: &[u8; 8] = b"SLVRFRM1";
+const SHARED_HEADER_BYTES: usize = 128;
+const SHARED_SLOT_META_BYTES: usize = 32;
+const SHARED_PIXEL_OFFSET: usize = SHARED_HEADER_BYTES + SLOT_COUNT * SHARED_SLOT_META_BYTES;
+
+struct SharedFrameMap {
+    storage: Mutex<MmapMut>,
+    path: Option<PathBuf>,
+    slot_bytes: usize,
+    width: usize,
+    height: usize,
+    stride: usize,
+}
+
+impl SharedFrameMap {
+    fn create(path: &Path, width: usize, height: usize, stride: usize) -> Result<Self> {
         let slot_bytes = stride
             .checked_mul(height)
-            .ok_or_else(|| anyhow::anyhow!("frame slot size overflows usize"))?;
+            .ok_or_else(|| anyhow::anyhow!("shared frame slot size overflows usize"))?;
+        let map_bytes = SHARED_PIXEL_OFFSET
+            .checked_add(
+                slot_bytes
+                    .checked_mul(SLOT_COUNT)
+                    .ok_or_else(|| anyhow::anyhow!("shared frame mapping size overflows usize"))?,
+            )
+            .ok_or_else(|| anyhow::anyhow!("shared frame mapping size overflows usize"))?;
+        let file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(path)?;
+        file.set_len(map_bytes as u64)?;
+        let mut storage = unsafe { MmapMut::map_mut(&file)? };
+        storage[..8].copy_from_slice(SHARED_MAGIC);
+        write_u32(&mut storage, 8, width)?;
+        write_u32(&mut storage, 12, height)?;
+        write_u32(&mut storage, 16, stride)?;
+        write_u32(&mut storage, 20, slot_bytes)?;
+        unsafe {
+            (&*(storage.as_ptr().add(32) as *const AtomicU64)).store(0, Ordering::Relaxed);
+        }
+        for index in 0..SLOT_COUNT {
+            write_slot_state(&storage, index, FREE);
+            write_u64(&mut storage, slot_offset(index) + 8, 0);
+            write_u64(&mut storage, slot_offset(index) + 16, 0);
+            write_u64(&mut storage, slot_offset(index) + 24, 0);
+        }
+        storage.flush()?;
+        Ok(Self {
+            storage: Mutex::new(storage),
+            path: Some(path.to_path_buf()),
+            slot_bytes,
+            width,
+            height,
+            stride,
+        })
+    }
+
+    fn open(path: &Path) -> Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?;
+        let storage = unsafe { MmapMut::map_mut(&file)? };
+        ensure!(
+            storage.len() >= SHARED_PIXEL_OFFSET,
+            "shared frame mapping is truncated"
+        );
+        ensure!(
+            &storage[..8] == SHARED_MAGIC,
+            "shared frame mapping has an invalid magic"
+        );
+        let width = read_u32(&storage, 8)?;
+        let height = read_u32(&storage, 12)?;
+        let stride = read_u32(&storage, 16)?;
+        let slot_bytes = read_u32(&storage, 20)?;
+        ensure!(
+            width > 0 && height > 0,
+            "shared frame dimensions are invalid"
+        );
+        ensure!(
+            stride >= width.saturating_mul(4),
+            "shared frame stride is invalid"
+        );
+        ensure!(
+            slot_bytes == stride.saturating_mul(height),
+            "shared frame slot size is invalid"
+        );
+        ensure!(
+            storage.len()
+                == SHARED_PIXEL_OFFSET
+                    .checked_add(slot_bytes.saturating_mul(SLOT_COUNT))
+                    .context("shared frame mapping size overflows usize")?,
+            "shared frame mapping has an invalid size"
+        );
+        Ok(Self {
+            storage: Mutex::new(storage),
+            path: None,
+            slot_bytes,
+            width,
+            height,
+            stride,
+        })
+    }
+
+    fn try_publish(&self, pixels: &[u8], timing: FrameTiming) -> Result<bool> {
+        ensure!(
+            pixels.len() == self.slot_bytes,
+            "frame pixels do not fill one shared slot"
+        );
+        let Some(index) = self.claim_write()? else {
+            return Ok(false);
+        };
+        {
+            let mut storage = self
+                .storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+            let offset = pixel_offset(index, self.slot_bytes);
+            storage[offset..offset + self.slot_bytes].copy_from_slice(pixels);
+            let sequence = unsafe {
+                (&*(storage.as_ptr().add(32) as *const AtomicU64))
+                    .fetch_add(1, Ordering::Relaxed)
+                    .wrapping_add(1)
+            };
+            write_u64(&mut storage, slot_offset(index) + 8, sequence);
+            write_u64(
+                &mut storage,
+                slot_offset(index) + 16,
+                timing.presentation_time.to_bits(),
+            );
+            write_u64(
+                &mut storage,
+                slot_offset(index) + 24,
+                timing.delta.to_bits(),
+            );
+            write_slot_state(&storage, index, READY);
+        }
+        Ok(true)
+    }
+
+    fn claim_write(&self) -> Result<Option<usize>> {
+        for state in [FREE, READY] {
+            let candidate = if state == READY {
+                let storage = self
+                    .storage
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+                (0..SLOT_COUNT)
+                    .filter(|index| read_slot_state(&storage, *index) == READY)
+                    .min_by_key(|index| read_u64(&storage, slot_offset(*index) + 8).unwrap_or(0))
+            } else {
+                None
+            };
+            let indexes = candidate
+                .map(|candidate| {
+                    std::iter::once(candidate)
+                        .chain((0..SLOT_COUNT).filter(move |index| *index != candidate))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| (0..SLOT_COUNT).collect());
+            for index in indexes {
+                let storage = self
+                    .storage
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+                if read_slot_state(&storage, index) != state {
+                    continue;
+                }
+                if compare_slot_state(&storage, index, state, WRITING) {
+                    return Ok(Some(index));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn take_newest(&self) -> Result<Option<CompletedFrame>> {
+        let newest = {
+            let storage = self
+                .storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+            (0..SLOT_COUNT)
+                .filter(|index| read_slot_state(&storage, *index) == READY)
+                .max_by_key(|index| read_u64(&storage, slot_offset(*index) + 8).unwrap_or(0))
+        };
+        let Some(index) = newest else {
+            return Ok(None);
+        };
+        {
+            let storage = self
+                .storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+            if !compare_slot_state(&storage, index, READY, READING) {
+                return Ok(None);
+            }
+        }
+        let (pixels, timing) = {
+            let storage = self
+                .storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+            let offset = pixel_offset(index, self.slot_bytes);
+            let pixels = storage[offset..offset + self.slot_bytes].to_vec();
+            let timing = FrameTiming::new(
+                f64::from_bits(read_u64(&storage, slot_offset(index) + 16)?),
+                f64::from_bits(read_u64(&storage, slot_offset(index) + 24)?),
+            )?;
+            (pixels, timing)
+        };
+        {
+            let storage = self
+                .storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+            write_slot_state(&storage, index, FREE);
+            for older in 0..SLOT_COUNT {
+                if older != index
+                    && read_slot_state(&storage, older) == READY
+                    && read_u64(&storage, slot_offset(older) + 8)?
+                        < read_u64(&storage, slot_offset(index) + 8)?
+                {
+                    write_slot_state(&storage, older, FREE);
+                }
+            }
+        }
+        Ok(Some(CompletedFrame {
+            width: self.width,
+            height: self.height,
+            stride: self.stride,
+            pixels,
+            timing,
+        }))
+    }
+}
+
+impl Drop for SharedFrameMap {
+    fn drop(&mut self) {
+        if let Some(path) = &self.path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn slot_offset(index: usize) -> usize {
+    SHARED_HEADER_BYTES + index * SHARED_SLOT_META_BYTES
+}
+
+fn pixel_offset(index: usize, slot_bytes: usize) -> usize {
+    SHARED_PIXEL_OFFSET + index * slot_bytes
+}
+
+fn read_slot_state(storage: &[u8], index: usize) -> u8 {
+    unsafe {
+        (&*(storage.as_ptr().add(slot_offset(index)) as *const AtomicU8)).load(Ordering::Acquire)
+    }
+}
+
+fn write_slot_state(storage: &[u8], index: usize, state: u8) {
+    unsafe {
+        (&*(storage.as_ptr().add(slot_offset(index)) as *const AtomicU8))
+            .store(state, Ordering::Release)
+    }
+}
+
+fn compare_slot_state(storage: &[u8], index: usize, old: u8, new: u8) -> bool {
+    unsafe {
+        (&*(storage.as_ptr().add(slot_offset(index)) as *const AtomicU8))
+            .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+}
+
+fn read_u32(storage: &[u8], offset: usize) -> Result<usize> {
+    Ok(u32::from_ne_bytes(storage[offset..offset + 4].try_into()?) as usize)
+}
+
+fn write_u32(storage: &mut [u8], offset: usize, value: usize) -> Result<()> {
+    storage[offset..offset + 4].copy_from_slice(&u32::try_from(value)?.to_ne_bytes());
+    Ok(())
+}
+
+fn read_u64(storage: &[u8], offset: usize) -> Result<u64> {
+    Ok(u64::from_ne_bytes(storage[offset..offset + 8].try_into()?))
+}
+
+fn write_u64(storage: &mut [u8], offset: usize, value: u64) {
+    storage[offset..offset + 8].copy_from_slice(&value.to_ne_bytes());
+}
+
+fn validate_dimensions(width: usize, height: usize, stride: usize) -> Result<usize> {
+    ensure!(width > 0, "frame width must be positive");
+    ensure!(height > 0, "frame height must be positive");
+    ensure!(
+        stride >= width.saturating_mul(4),
+        "frame stride is too small"
+    );
+    stride
+        .checked_mul(height)
+        .ok_or_else(|| anyhow::anyhow!("frame slot size overflows usize"))
+}
+
+fn make_inner(
+    width: usize,
+    height: usize,
+    stride: usize,
+    slot_bytes: usize,
+    storage: MmapMut,
+) -> Arc<SharedSlots> {
+    let slots = std::array::from_fn(|_| Slot {
+        state: AtomicU8::new(FREE),
+        sequence: AtomicU64::new(0),
+        timing: Mutex::new(None),
+    });
+    Arc::new(SharedSlots {
+        storage: Mutex::new(storage),
+        slot_bytes,
+        width,
+        height,
+        stride,
+        next_sequence: AtomicU64::new(0),
+        #[cfg(test)]
+        state_wait: Mutex::new(()),
+        state_changed: Condvar::new(),
+        slots,
+        #[cfg(test)]
+        drop_gate: None,
+        #[cfg(test)]
+        selection_gate: None,
+        #[cfg(test)]
+        acquisition_gate: None,
+    })
+}
+
+impl FrameSlots {
+    #[cfg(test)]
+    pub(crate) fn new(width: usize, height: usize, stride: usize) -> Result<Self> {
+        let slot_bytes = validate_dimensions(width, height, stride)?;
         let map_bytes = slot_bytes
             .checked_mul(SLOT_COUNT)
             .ok_or_else(|| anyhow::anyhow!("frame slot mapping size overflows usize"))?;
-        let storage = MmapMut::map_anon(map_bytes)?;
-        let slots = std::array::from_fn(|_| Slot {
-            state: AtomicU8::new(FREE),
-            sequence: AtomicU64::new(0),
-            timing: Mutex::new(None),
-        });
         Ok(Self {
-            inner: Arc::new(SharedSlots {
-                storage: Mutex::new(storage),
-                slot_bytes,
+            inner: make_inner(
                 width,
                 height,
                 stride,
-                next_sequence: AtomicU64::new(0),
-                #[cfg(test)]
-                state_wait: Mutex::new(()),
-                state_changed: Condvar::new(),
-                slots,
-                #[cfg(test)]
-                drop_gate: None,
-                #[cfg(test)]
-                selection_gate: None,
-                #[cfg(test)]
-                acquisition_gate: None,
-            }),
+                slot_bytes,
+                MmapMut::map_anon(map_bytes)?,
+            ),
+            shared: None,
+        })
+    }
+
+    pub(crate) fn new_shared(
+        path: &Path,
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) -> Result<Self> {
+        let slot_bytes = validate_dimensions(width, height, stride)?;
+        let shared = SharedFrameMap::create(path, width, height, stride)?;
+        Ok(Self {
+            inner: make_inner(width, height, stride, slot_bytes, MmapMut::map_anon(1)?),
+            shared: Some(Arc::new(shared)),
+        })
+    }
+
+    pub(crate) fn open_shared(path: &Path) -> Result<Self> {
+        let shared = SharedFrameMap::open(path)?;
+        let slot_bytes = validate_dimensions(shared.width, shared.height, shared.stride)?;
+        Ok(Self {
+            inner: make_inner(
+                shared.width,
+                shared.height,
+                shared.stride,
+                slot_bytes,
+                MmapMut::map_anon(1)?,
+            ),
+            shared: Some(Arc::new(shared)),
         })
     }
 
@@ -240,12 +586,14 @@ impl FrameSlots {
     pub(crate) fn producer(&self) -> FrameProducer {
         FrameProducer {
             inner: self.inner.clone(),
+            shared: self.shared.clone(),
         }
     }
 
     pub(crate) fn broker(&self) -> FrameBroker {
         FrameBroker {
             inner: self.inner.clone(),
+            shared: self.shared.clone(),
         }
     }
 }
@@ -265,6 +613,9 @@ impl FrameProducer {
         timing: FrameTiming,
     ) -> Result<bool> {
         self.validate_frame(width, height, stride, pixels)?;
+        if let Some(shared) = &self.shared {
+            return shared.try_publish(pixels, timing);
+        }
         self.publish_once(pixels, timing)
     }
 
@@ -437,6 +788,9 @@ impl Drop for FrameWriter {
 
 impl FrameBroker {
     pub(crate) fn take_newest(&self) -> Result<Option<CompletedFrame>> {
+        if let Some(shared) = &self.shared {
+            return shared.take_newest();
+        }
         let newest = self
             .inner
             .slots
@@ -531,6 +885,22 @@ mod tests {
 
     fn frame(value: u8) -> Vec<u8> {
         vec![value; 8]
+    }
+
+    #[test]
+    fn shared_mappings_exchange_complete_frames_between_broker_instances() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("frames.bin");
+        let slots = FrameSlots::new_shared(&path, 2, 1, 8)?;
+        let producer = slots.producer();
+        let reader = FrameSlots::open_shared(&path)?.broker();
+        assert!(producer.try_publish(2, 1, 8, &frame(7), FrameTiming::new(3.0, 0.5)?)?);
+        let completed = reader
+            .take_newest()?
+            .context("shared frame was not visible")?;
+        assert_eq!(completed.pixels, frame(7));
+        assert_eq!(completed.timing.presentation_time, 3.0);
+        Ok(())
     }
 
     #[test]

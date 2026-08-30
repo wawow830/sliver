@@ -1254,7 +1254,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
         }
         if let Err(cleanup_error) = self.release_synthetic_keys() {
-            eprintln!("releasing synthetic keys after worker failure failed: {cleanup_error:#}");
+            crate::system_log::broker_error(format!(
+                "releasing synthetic keys after worker failure failed: {cleanup_error:#}"
+            ));
         }
         self.next_worker_deadline = None;
         if let Some(recovery) = self.recovery.as_mut() {
@@ -1432,7 +1434,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.claimed = false;
         match (stop_result.and(synthetic_result), release_result) {
             (Err(error), Err(release_error)) => {
-                eprintln!("hardware release failed after Lua stop error: {release_error:#}");
+                crate::system_log::broker_error(format!(
+                    "hardware release failed after Lua stop error: {release_error:#}"
+                ));
                 Err(error)
             }
             (Err(error), Ok(())) => Err(error),
@@ -1707,7 +1711,9 @@ impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
     fn drop(&mut self) {
         if self.claimed {
             if let Err(error) = self.release_synthetic_keys() {
-                eprintln!("synthetic key cleanup failed during supervisor drop: {error:#}");
+                crate::system_log::broker_error(format!(
+                    "synthetic key cleanup failed during supervisor drop: {error:#}"
+                ));
             }
             self.active.take();
             let _ = self.hardware.release();
@@ -4805,6 +4811,86 @@ mod tests {
             .step_at(1.0)
             .expect_err("non-droppable input overflow was accepted");
         assert!(format!("{error:#}").contains("input queue overflow"));
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn non_droppable_input_transition_overflow_enters_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("transition-queue.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        for index in 0..=super::TOUCH_QUEUE_CAPACITY {
+            supervisor.hardware_mut().inject(HardwareEvent::Fn {
+                active: index % 2 == 0,
+            });
+        }
+
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("input transition overflow was accepted");
+        assert!(format!("{error:#}").contains("transition queue overflow"));
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_full_touch_queue_coalesces_the_latest_move_without_growing() -> Result<()> {
+        let mut queue = super::TouchQueue::new();
+        for id in 0..super::TOUCH_QUEUE_CAPACITY as u32 {
+            queue.push(overlap_touch(id, TouchPhase::Move))?;
+        }
+        let mut latest = overlap_touch(0, TouchPhase::Move);
+        latest.x = 999.0;
+        queue.push(latest)?;
+        let events = queue.drain();
+        assert_eq!(events.len(), super::TOUCH_QUEUE_CAPACITY);
+        assert_eq!(events.iter().find(|event| event.id == 0).unwrap().x, 999.0);
+        Ok(())
+    }
+
+    #[test]
+    fn excessive_synthetic_key_output_enters_fixed_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("key-queue.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        for _ = 1, 5000 do
+                            sliver.input.key.tap(sliver.input.keys.keyboard.f1)
+                        end
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("unbounded synthetic key output was accepted");
+        assert!(format!("{error:#}").contains("key request limit exceeded"));
         assert!(supervisor.active.is_none());
         assert!(supervisor.recovery.is_some());
         supervisor.shutdown()?;

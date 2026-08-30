@@ -405,15 +405,6 @@ impl LogicalFrame {
             completed.timing,
         )
     }
-
-    pub(crate) fn from_parts(width: usize, height: usize, stride: usize, pixels: Vec<u8>) -> Self {
-        Self {
-            width,
-            height,
-            stride,
-            pixels,
-        }
-    }
 }
 
 pub(crate) fn validate_backlight(level: f64) -> Result<()> {

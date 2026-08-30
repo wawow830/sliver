@@ -1,9 +1,12 @@
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(not(test))]
+use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
@@ -15,10 +18,12 @@ use super::{
     DriveRequest, InputState, InputTransition, KeyOperation, KeyRequest, LuaSource, ModifierMode,
     Runtime, StopReason, TimedFrame, TouchEvent, TouchPhase, VisibilityReason, WorkerEffects,
 };
-use crate::frame_slots::FrameTiming;
+use crate::frame_slots::{FrameBroker, FrameSlots, FrameTiming};
 use crate::hardware::{LogicalFrame, Modifier, ObservedKey, OutputKey};
 
+#[cfg(test)]
 const WORKER_FD: RawFd = 0;
+#[cfg(test)]
 const FIRST_INHERITED_FD: RawFd = 3;
 const MAX_PACKET_BYTES: usize = 2 * 1024 * 1024;
 const CALLBACK_DEADLINE: Duration = Duration::from_secs(2);
@@ -28,6 +33,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 const WRITE_RETRY: Duration = Duration::from_millis(2);
 
 const BOOTSTRAP: u8 = 10;
+const HELLO: u8 = 6;
 const COMMAND: u8 = 2;
 const REPLY: u8 = 3;
 const READY: u8 = 4;
@@ -43,6 +49,23 @@ const SHUTDOWN: u8 = 6;
 const STATUS_OK: u8 = 0;
 const STATUS_ERROR: u8 = 1;
 
+static NEXT_UNIT_ID: AtomicU64 = AtomicU64::new(1);
+
+struct SpawnedWorker {
+    child: Child,
+    stream: UnixStream,
+    process_group: libc::pid_t,
+    unit: Option<String>,
+}
+
+struct ProcessEffects {
+    frame: Option<FrameTiming>,
+    backlight: Option<f64>,
+    key_requests: Vec<KeyRequest>,
+    next_worker_deadline: Option<f64>,
+    redraw_pending: bool,
+}
+
 pub(crate) struct ProcessWorker {
     child: Mutex<Child>,
     pidfd: std::fs::File,
@@ -53,93 +76,281 @@ pub(crate) struct ProcessWorker {
     terminated: AtomicBool,
     pid: libc::pid_t,
     process_group: libc::pid_t,
+    unit: Option<String>,
+    broker: FrameBroker,
 }
 
 impl ProcessWorker {
+    #[cfg(test)]
     pub(crate) fn stage(
         source: &LuaSource,
         initial_backlight: f64,
         initial_input: InputState,
     ) -> Result<Self> {
-        let (parent_fd, child_fd) = socket_pair()?;
-        let parent_pid = unsafe { libc::getpid() };
+        let path = frame_path()?;
+        let slots = FrameSlots::new_shared(
+            &path,
+            sliver_core::STRIP_W as usize,
+            sliver_core::STRIP_H as usize,
+            sliver_core::STRIP_W as usize * 4,
+        )?;
+        Self::stage_with_frames(
+            source,
+            initial_backlight,
+            initial_input,
+            &path,
+            slots.broker(),
+        )
+    }
+
+    pub(crate) fn stage_with_frames(
+        source: &LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        frame_path: &Path,
+        broker: FrameBroker,
+    ) -> Result<Self> {
         if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) } < 0 {
             return Err(std::io::Error::last_os_error())
                 .context("enabling Lua worker child reaping");
         }
-        let mut command = worker_command()?;
-        command.stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(child_fd)) });
         #[cfg(test)]
-        {
-            command.stdout(Stdio::null()).stderr(Stdio::null());
+        let mut spawned = spawn_direct()?;
+        #[cfg(not(test))]
+        let mut spawned = spawn_systemd()?;
+        let mut stream = spawned.stream;
+        if let Err(error) = stream.set_nonblocking(true) {
+            if let Some(unit) = spawned.unit.as_deref() {
+                kill_systemd_unit(unit);
+            }
+            let _ = terminate_child(&mut spawned.child);
+            return Err(error).context("configuring Lua worker control socket");
         }
-        unsafe {
-            use std::os::unix::process::CommandExt;
-            command.pre_exec(move || {
-                if libc::setpgid(0, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
+        let worker_pid = match receive_hello(&mut stream, &mut Vec::new()) {
+            Ok(pid) => pid,
+            Err(error) => {
+                if let Some(unit) = spawned.unit.as_deref() {
+                    kill_systemd_unit(unit);
                 }
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::getppid() != parent_pid {
-                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
-                }
-                close_inherited_descriptors();
-                Ok(())
-            });
-        }
-        command.env("SLIVER_LUA_WORKER_FD", WORKER_FD.to_string());
-        let mut child = command.spawn().context("starting the Lua worker process")?;
-        let pid = child.id() as libc::pid_t;
-        let pidfd = match open_pidfd(pid) {
+                let _ = terminate_child(&mut spawned.child);
+                return Err(error);
+            }
+        };
+        let pidfd = match open_pidfd(worker_pid) {
             Ok(pidfd) => pidfd,
             Err(error) => {
-                unsafe {
-                    libc::close(parent_fd);
+                if let Some(unit) = spawned.unit.as_deref() {
+                    kill_systemd_unit(unit);
                 }
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = terminate_child(&mut spawned.child);
                 return Err(error).context("opening the Lua worker pidfd");
             }
         };
-        let process_group = pid;
-        let stream = unsafe { UnixStream::from_raw_fd(parent_fd) };
-        stream
-            .set_nonblocking(true)
-            .context("configuring Lua worker control socket")?;
         let worker = Self {
-            child: Mutex::new(child),
+            child: Mutex::new(spawned.child),
             pidfd,
             stream: Mutex::new(stream),
             input: Mutex::new(Vec::new()),
             last_heartbeat: Mutex::new(Instant::now()),
             failure: Mutex::new(None),
             terminated: AtomicBool::new(false),
-            pid,
-            process_group,
+            pid: worker_pid,
+            process_group: if spawned.process_group == 0 {
+                worker_pid
+            } else {
+                spawned.process_group
+            },
+            unit: spawned.unit,
+            broker,
         };
-        worker.request_bootstrap(source, initial_backlight, initial_input)?;
+        worker.request_bootstrap(source, initial_backlight, initial_input, frame_path)?;
         Ok(worker)
     }
+}
 
+#[cfg(test)]
+fn spawn_direct() -> Result<SpawnedWorker> {
+    let (parent_fd, child_fd) = socket_pair()?;
+    let parent_pid = unsafe { libc::getpid() };
+    let mut command = worker_command()?;
+    command.stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(child_fd)) });
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(move || {
+            if libc::setpgid(0, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent_pid {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            close_inherited_descriptors();
+            Ok(())
+        });
+    }
+    command.env("SLIVER_LUA_WORKER_FD", WORKER_FD.to_string());
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            unsafe {
+                libc::close(parent_fd);
+            }
+            return Err(error).context("starting the Lua worker process");
+        }
+    };
+    let pid = child.id() as libc::pid_t;
+    let stream = unsafe { UnixStream::from_raw_fd(parent_fd) };
+    Ok(SpawnedWorker {
+        child,
+        stream,
+        process_group: pid,
+        unit: None,
+    })
+}
+
+#[cfg(not(test))]
+fn spawn_systemd() -> Result<SpawnedWorker> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let directory = runtime.join("sliver");
+    std::fs::create_dir_all(&directory)
+        .with_context(|| format!("creating worker socket directory {}", directory.display()))?;
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
+    let id = NEXT_UNIT_ID.fetch_add(1, Ordering::Relaxed);
+    let socket_path = directory.join(format!("worker-{}-{id}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListener::bind(&socket_path)
+        .with_context(|| format!("binding worker socket {}", socket_path.display()))?;
+    listener.set_nonblocking(true)?;
+    let unit = format!("sliver-lua-worker-{}-{id}.service", std::process::id());
+    let mut launcher = Command::new("systemd-run");
+    launcher.args([
+        "--user",
+        "--unit",
+        unit.as_str(),
+        "--collect",
+        "--wait",
+        "--quiet",
+        "--service-type=exec",
+    ]);
+    for property in [
+        "MemoryAccounting=yes",
+        "MemoryMax=512M",
+        "TasksAccounting=yes",
+        "TasksMax=64",
+        "OOMPolicy=kill",
+        "KillMode=control-group",
+        "TimeoutStopSec=1s",
+        "NoNewPrivileges=yes",
+        "PrivateDevices=yes",
+        "PrivateUsers=yes",
+        "DevicePolicy=closed",
+        "ProtectKernelTunables=yes",
+        "StandardInput=null",
+        "StandardOutput=journal",
+        "StandardError=journal",
+        "SyslogIdentifier=sliver-lua",
+        "Restart=no",
+        "WatchdogSec=0",
+    ] {
+        launcher.arg("--property").arg(property);
+    }
+    launcher
+        .arg(worker_path()?)
+        .arg("--connect")
+        .arg(&socket_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = launcher
+        .spawn()
+        .context("starting the systemd Lua worker service")?;
+    let deadline = Instant::now() + CALLBACK_DEADLINE;
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    kill_systemd_unit(&unit);
+                    let _ = terminate_child(&mut child);
+                    let _ = std::fs::remove_file(&socket_path);
+                    bail!("Lua worker service did not connect within two seconds")
+                }
+                thread::sleep(WRITE_RETRY);
+            }
+            Err(error) => {
+                kill_systemd_unit(&unit);
+                let _ = terminate_child(&mut child);
+                let _ = std::fs::remove_file(&socket_path);
+                return Err(error).context("accepting the Lua worker connection");
+            }
+        }
+    };
+    let _ = std::fs::remove_file(&socket_path);
+    stream.set_nonblocking(true)?;
+    Ok(SpawnedWorker {
+        child,
+        stream,
+        process_group: 0,
+        unit: Some(unit),
+    })
+}
+
+fn terminate_child(child: &mut Child) -> Result<()> {
+    child.kill().ok();
+    let deadline = Instant::now() + KILL_REAP_DEADLINE;
+    loop {
+        if child.try_wait()?.is_some() || Instant::now() >= deadline {
+            return Ok(());
+        }
+        thread::sleep(WRITE_RETRY);
+    }
+}
+
+fn receive_hello(stream: &mut UnixStream, input: &mut Vec<u8>) -> Result<libc::pid_t> {
+    let deadline = Instant::now() + CALLBACK_DEADLINE;
+    loop {
+        if let Some((kind, payload)) = read_packets(stream, input)?.into_iter().next() {
+            ensure!(
+                kind == HELLO,
+                "Lua worker sent an unexpected startup packet"
+            );
+            ensure!(payload.len() == 4, "Lua worker hello packet is malformed");
+            return Ok(u32::from_be_bytes(payload.as_slice().try_into()?) as libc::pid_t);
+        }
+        if Instant::now() >= deadline {
+            bail!("Lua worker did not identify itself within two seconds")
+        }
+        thread::sleep(WRITE_RETRY);
+    }
+}
+
+impl ProcessWorker {
     fn request_bootstrap(
         &self,
         source: &LuaSource,
         initial_backlight: f64,
         initial_input: InputState,
+        frame_path: &Path,
     ) -> Result<()> {
         let mut payload = Vec::new();
         encode_source(&mut payload, source)?;
+        put_bytes(&mut payload, frame_path.as_os_str().as_bytes())?;
         put_f64(&mut payload, initial_backlight);
         encode_input_state(&mut payload, initial_input);
         let response = self.request(BOOTSTRAP, payload, CALLBACK_DEADLINE)?;
         match response.as_slice() {
             [STATUS_OK] => Ok(()),
-            _ => Err(response_error("loading Lua worker", &response)),
+            _ => Err(self.protocol_failure(response_error("loading Lua worker", &response))),
         }
     }
 
@@ -154,7 +365,15 @@ impl ProcessWorker {
         put_f64(&mut payload, delta);
         encode_input_state(&mut payload, input_state);
         let response = self.request(RENDER, payload, CALLBACK_DEADLINE)?;
-        parse_frame_response(&response)?.context("Lua worker published no frame")
+        let timing = self
+            .terminal_response(parse_frame_response(&response))?
+            .context("Lua worker published no frame")?;
+        let completed = self
+            .broker
+            .take_newest()?
+            .context("Lua worker published no shared frame")?;
+        let (frame, _) = LogicalFrame::from_completed(completed);
+        Ok(TimedFrame { frame, timing })
     }
 
     pub(crate) fn commit(&self, now_seconds: f64, input_state: InputState) -> Result<()> {
@@ -162,26 +381,50 @@ impl ProcessWorker {
         put_f64(&mut payload, now_seconds);
         encode_input_state(&mut payload, input_state);
         let response = self.request(COMMIT, payload, CALLBACK_DEADLINE)?;
-        parse_status_response("committing Lua worker", &response)
+        self.terminal_response(parse_status_response("committing Lua worker", &response))
     }
 
     pub(crate) fn drive(&self, request: DriveRequest) -> Result<WorkerEffects> {
         let mut payload = Vec::new();
         encode_drive_request(&mut payload, request)?;
         let response = self.request(DRIVE, payload, CALLBACK_DEADLINE)?;
-        parse_effects_response(&response)
+        let effects = self.terminal_response(parse_effects_response(&response))?;
+        let frame = match effects.frame {
+            Some(timing) => {
+                let completed = self
+                    .broker
+                    .take_newest()?
+                    .context("Lua worker published no shared frame")?;
+                let (frame, _) = LogicalFrame::from_completed(completed);
+                Some(TimedFrame { frame, timing })
+            }
+            None => None,
+        };
+        Ok(WorkerEffects {
+            frame,
+            backlight: effects.backlight,
+            key_requests: effects.key_requests,
+            next_worker_deadline: effects.next_worker_deadline,
+            redraw_pending: effects.redraw_pending,
+        })
     }
 
     pub(crate) fn pending_backlight(&self) -> Result<Option<f64>> {
         let response = self.request(PENDING_BACKLIGHT, Vec::new(), CALLBACK_DEADLINE)?;
-        parse_optional_f64_response("reading staged Lua backlight", &response)
+        self.terminal_response(parse_optional_f64_response(
+            "reading staged Lua backlight",
+            &response,
+        ))
     }
 
     pub(crate) fn restore_backlight(&self, level: f64) -> Result<()> {
         let mut payload = Vec::new();
         put_f64(&mut payload, level);
         let response = self.request(RESTORE_BACKLIGHT, payload, CALLBACK_DEADLINE)?;
-        parse_status_response("restoring Lua backlight state", &response)
+        self.terminal_response(parse_status_response(
+            "restoring Lua backlight state",
+            &response,
+        ))
     }
 
     pub(crate) fn shutdown(self, reason: StopReason) -> Result<()> {
@@ -190,7 +433,8 @@ impl ProcessWorker {
         let response = self.request_until(SHUTDOWN, payload, deadline);
         match response {
             Ok(response) => {
-                let result = parse_status_response("stopping Lua worker", &response);
+                let result =
+                    self.terminal_response(parse_status_response("stopping Lua worker", &response));
                 self.wait_for_exit_until(deadline)?;
                 self.kill_process_group();
                 result
@@ -242,6 +486,9 @@ impl ProcessWorker {
     }
 
     fn kill_process_group(&self) {
+        if let Some(unit) = self.unit.as_deref() {
+            kill_systemd_unit(unit);
+        }
         for descendant in descendants_of(self.pid) {
             unsafe {
                 libc::kill(descendant, libc::SIGKILL);
@@ -318,16 +565,28 @@ impl ProcessWorker {
                 match kind {
                     HEARTBEAT => self.note_heartbeat(),
                     REPLY => {
-                        let (response_command, response) = split_reply(&payload)?;
+                        let (response_command, response) = match split_reply(&payload) {
+                            Ok(reply) => reply,
+                            Err(error) => return Err(self.protocol_failure(error)),
+                        };
                         if response_command != command {
-                            bail!(
+                            return Err(self.protocol_failure(anyhow!(
                                 "Lua worker replied to command {response_command} while waiting for {command}"
-                            );
+                            )));
                         }
                         return Ok(response);
                     }
-                    READY => return Ok(payload),
-                    other => bail!("unexpected Lua worker packet {other}"),
+                    READY if command == BOOTSTRAP => return Ok(payload),
+                    READY => {
+                        return Err(self.protocol_failure(anyhow!(
+                            "Lua worker sent a startup packet outside bootstrap"
+                        )))
+                    }
+                    other => {
+                        return Err(
+                            self.protocol_failure(anyhow!("unexpected Lua worker packet {other}"))
+                        )
+                    }
                 }
             }
             if Instant::now() >= deadline {
@@ -342,6 +601,16 @@ impl ProcessWorker {
             }
             thread::sleep(WRITE_RETRY);
         }
+    }
+
+    fn protocol_failure(&self, error: anyhow::Error) -> anyhow::Error {
+        self.mark_failed(format!("Lua worker protocol failure: {error:#}"));
+        self.terminate();
+        error.context("Lua worker protocol failure")
+    }
+
+    fn terminal_response<T>(&self, result: Result<T>) -> Result<T> {
+        result.map_err(|error| self.protocol_failure(error))
     }
 
     fn drain_packets(&self) -> Result<Vec<(u8, Vec<u8>)>> {
@@ -391,21 +660,31 @@ impl Drop for ProcessWorker {
 }
 
 pub(crate) fn worker_main() -> Result<()> {
-    let fd = std::env::var("SLIVER_LUA_WORKER_FD")
-        .context("SLIVER_LUA_WORKER_FD is not set")?
-        .parse::<RawFd>()
-        .context("SLIVER_LUA_WORKER_FD is invalid")?;
-    let control_fd = unsafe { libc::dup(fd) };
-    if control_fd < 0 {
-        return Err(std::io::Error::last_os_error()).context("duplicating Lua worker control fd");
-    }
-    unsafe {
-        libc::close(fd);
-    }
-    let mut stream = unsafe { UnixStream::from_raw_fd(control_fd) };
+    let mut args = std::env::args_os().skip(1);
+    let mut stream = if let Some(flag) = args.next() {
+        ensure!(flag == "--connect", "unknown Lua worker argument");
+        let path = args.next().context("--connect requires a socket path")?;
+        ensure!(args.next().is_none(), "too many Lua worker arguments");
+        UnixStream::connect(path).context("connecting to the Lua worker supervisor")?
+    } else {
+        let fd = std::env::var("SLIVER_LUA_WORKER_FD")
+            .context("SLIVER_LUA_WORKER_FD is not set")?
+            .parse::<RawFd>()
+            .context("SLIVER_LUA_WORKER_FD is invalid")?;
+        let control_fd = unsafe { libc::dup(fd) };
+        if control_fd < 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("duplicating Lua worker control fd");
+        }
+        unsafe {
+            libc::close(fd);
+        }
+        unsafe { UnixStream::from_raw_fd(control_fd) }
+    };
     stream.set_nonblocking(true)?;
+    send_hello(&mut stream)?;
     let mut input = Vec::new();
-    let (source, initial_backlight, initial_input) = loop {
+    let (source, frame_path, initial_backlight, initial_input) = loop {
         let packets = read_packets(&mut stream, &mut input)?;
         if let Some((kind, payload)) = packets.into_iter().next() {
             ensure!(kind == BOOTSTRAP, "Lua worker expected bootstrap packet");
@@ -419,13 +698,8 @@ pub(crate) fn worker_main() -> Result<()> {
         std::env::set_current_dir(directory)
             .with_context(|| format!("changing Lua worker directory to {}", directory.display()))?;
     }
-    let slots = crate::frame_slots::FrameSlots::new(
-        sliver_core::STRIP_W as usize,
-        sliver_core::STRIP_H as usize,
-        sliver_core::STRIP_W as usize * 4,
-    )?;
+    let slots = FrameSlots::open_shared(&frame_path)?;
     let producer = slots.producer();
-    let broker = slots.broker();
     let runtime = match Runtime::load(&source, initial_backlight, initial_input, producer) {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -435,12 +709,15 @@ pub(crate) fn worker_main() -> Result<()> {
         }
     };
     send_ready(&mut stream, STATUS_OK, String::new())?;
-    run_worker_loop(runtime, broker, &mut stream, input)
+    run_worker_loop(runtime, &mut stream, input)
+}
+
+fn send_hello(stream: &mut UnixStream) -> Result<()> {
+    write_packet_blocking(stream, HELLO, &std::process::id().to_be_bytes())
 }
 
 fn run_worker_loop(
     mut runtime: Runtime,
-    broker: crate::frame_slots::FrameBroker,
     stream: &mut UnixStream,
     mut input: Vec<u8>,
 ) -> Result<()> {
@@ -453,7 +730,7 @@ fn run_worker_loop(
             let (command, payload) = payload
                 .split_first()
                 .context("Lua worker command is empty")?;
-            let result = handle_command(*command, payload, &mut runtime, &broker);
+            let result = handle_command(*command, payload, &mut runtime);
             let (status, body) = match result {
                 Ok(body) => (STATUS_OK, body),
                 Err(error) => {
@@ -478,12 +755,7 @@ fn run_worker_loop(
     }
 }
 
-fn handle_command(
-    command: u8,
-    payload: &[u8],
-    runtime: &mut Runtime,
-    broker: &crate::frame_slots::FrameBroker,
-) -> Result<Vec<u8>> {
+fn handle_command(command: u8, payload: &[u8], runtime: &mut Runtime) -> Result<Vec<u8>> {
     match command {
         RENDER => {
             let mut reader = Reader::new(payload);
@@ -494,11 +766,11 @@ fn handle_command(
             runtime
                 .render_and_queue(presentation_time, delta, input_state)
                 .map_err(anyhow::Error::msg)?;
-            let frame = broker.take_newest()?.map(|frame| {
-                let (frame, timing) = LogicalFrame::from_completed(frame);
-                TimedFrame { frame, timing }
-            });
-            encode_frame_response(frame.as_ref())
+            let frame = runtime
+                .pending_frame
+                .is_none()
+                .then_some(FrameTiming::new(presentation_time, delta)?);
+            encode_frame_response(frame)
         }
         COMMIT => {
             let mut reader = Reader::new(payload);
@@ -513,22 +785,7 @@ fn handle_command(
         DRIVE => {
             let request = decode_drive_request(payload)?;
             let effects = runtime.drive(request).map_err(anyhow::Error::msg)?;
-            let frame = if let Some(timing) = effects.frame {
-                let completed = broker
-                    .take_newest()?
-                    .context("Lua worker published no frame")?;
-                let (frame, _) = LogicalFrame::from_completed(completed);
-                Some(TimedFrame { frame, timing })
-            } else {
-                None
-            };
-            encode_effects_response(WorkerEffects {
-                frame,
-                backlight: effects.backlight,
-                key_requests: effects.key_requests,
-                next_worker_deadline: effects.next_worker_deadline,
-                redraw_pending: effects.redraw_pending,
-            })
+            encode_effects_response(effects)
         }
         PENDING_BACKLIGHT => {
             ensure!(
@@ -563,6 +820,7 @@ fn handle_command(
     }
 }
 
+#[cfg(test)]
 fn socket_pair() -> Result<(RawFd, RawFd)> {
     let mut fds = [0; 2];
     let result = unsafe {
@@ -603,9 +861,22 @@ fn descendants_of(pid: libc::pid_t) -> Vec<libc::pid_t> {
     descendants
 }
 
-fn worker_command() -> Result<Command> {
+pub(super) fn frame_path() -> Result<PathBuf> {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let directory = runtime.join("sliver");
+    std::fs::create_dir_all(&directory)
+        .with_context(|| format!("creating frame directory {}", directory.display()))?;
+    let id = NEXT_UNIT_ID.fetch_add(1, Ordering::Relaxed);
+    let path = directory.join(format!("frame-{}-{id}.bin", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    Ok(path)
+}
+
+fn worker_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("SLIVER_LUA_WORKER") {
-        return Ok(Command::new(path));
+        return Ok(PathBuf::from(path));
     }
     let current = std::env::current_exe().context("finding the Sliver supervisor executable")?;
     let parent = current
@@ -613,9 +884,9 @@ fn worker_command() -> Result<Command> {
         .context("Sliver supervisor executable has no parent")?;
     let worker = parent.join("sliver-lua-worker");
     if worker.exists() {
-        return Ok(Command::new(worker));
+        return Ok(worker);
     }
-    let test_worker = parent
+    parent
         .file_name()
         .is_some_and(|name| name == "deps")
         .then(|| {
@@ -624,10 +895,24 @@ fn worker_command() -> Result<Command> {
                 .map(|parent| parent.join("sliver-lua-worker"))
         })
         .flatten()
-        .context("Sliver Lua worker executable was not found")?;
-    Ok(Command::new(test_worker))
+        .context("Sliver Lua worker executable was not found")
 }
 
+#[cfg(test)]
+fn worker_command() -> Result<Command> {
+    Ok(Command::new(worker_path()?))
+}
+
+fn kill_systemd_unit(unit: &str) {
+    let _ = Command::new("systemctl")
+        .args(["--user", "kill", "--kill-who=all", "--signal=SIGKILL", unit])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
+#[cfg(test)]
 unsafe fn close_inherited_descriptors() {
     #[allow(clippy::useless_conversion)]
     let result = libc::syscall(
@@ -685,9 +970,13 @@ fn write_packet(
 
 fn read_packets(stream: &mut UnixStream, input: &mut Vec<u8>) -> Result<Vec<(u8, Vec<u8>)>> {
     let mut bytes = [0u8; 8192];
+    let mut closed = false;
     loop {
         match stream.read(&mut bytes) {
-            Ok(0) => break,
+            Ok(0) => {
+                closed = true;
+                break;
+            }
             Ok(count) => {
                 ensure!(
                     input.len().saturating_add(count) <= MAX_PACKET_BYTES + 4,
@@ -714,6 +1003,9 @@ fn read_packets(stream: &mut UnixStream, input: &mut Vec<u8>) -> Result<Vec<(u8,
         }
         let packet: Vec<_> = input.drain(..4 + length).collect();
         packets.push((packet[4], packet[5..].to_vec()));
+    }
+    if closed && !input.is_empty() {
+        bail!("Lua worker control socket closed in the middle of a packet");
     }
     Ok(packets)
 }
@@ -768,7 +1060,7 @@ fn parse_optional_f64_response(context: &str, response: &[u8]) -> Result<Option<
     bail!("{context}: malformed Lua worker response")
 }
 
-fn parse_frame_response(response: &[u8]) -> Result<Option<TimedFrame>> {
+fn parse_frame_response(response: &[u8]) -> Result<Option<FrameTiming>> {
     match response {
         [STATUS_OK, rest @ ..] => decode_frame_response(rest),
         [STATUS_ERROR, rest @ ..] => bail!("{}", decode_error(rest)),
@@ -776,7 +1068,7 @@ fn parse_frame_response(response: &[u8]) -> Result<Option<TimedFrame>> {
     }
 }
 
-fn parse_effects_response(response: &[u8]) -> Result<WorkerEffects> {
+fn parse_effects_response(response: &[u8]) -> Result<ProcessEffects> {
     match response {
         [STATUS_OK, rest @ ..] => decode_effects(rest),
         [STATUS_ERROR, rest @ ..] => bail!("{}", decode_error(rest)),
@@ -799,7 +1091,7 @@ fn encode_source(output: &mut Vec<u8>, source: &LuaSource) -> Result<()> {
     Ok(())
 }
 
-fn decode_bootstrap(payload: &[u8]) -> Result<(LuaSource, f64, InputState)> {
+fn decode_bootstrap(payload: &[u8]) -> Result<(LuaSource, PathBuf, f64, InputState)> {
     let mut reader = Reader::new(payload);
     let kind = reader.u8()?;
     let bytes = reader.bytes()?;
@@ -808,10 +1100,11 @@ fn decode_bootstrap(payload: &[u8]) -> Result<(LuaSource, f64, InputState)> {
         1 => LuaSource::embedded(bytes),
         other => bail!("unknown Lua worker source kind {other}"),
     };
+    let frame_path = PathBuf::from(std::ffi::OsString::from_vec(reader.bytes()?));
     let backlight = reader.f64()?;
     let input = decode_input_state(&mut reader)?;
     reader.finish()?;
-    Ok((source, backlight, input))
+    Ok((source, frame_path, backlight, input))
 }
 
 fn encode_input_state(output: &mut Vec<u8>, state: InputState) {
@@ -981,24 +1274,24 @@ fn decode_touch(reader: &mut Reader<'_>) -> Result<TouchEvent> {
     })
 }
 
-fn encode_frame_response(frame: Option<&TimedFrame>) -> Result<Vec<u8>> {
+fn encode_frame_response(frame: Option<FrameTiming>) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     match frame {
-        Some(frame) => {
+        Some(timing) => {
             body.push(1);
-            encode_frame(&mut body, frame)?;
+            encode_timing(&mut body, timing);
         }
         None => body.push(0),
     }
     Ok(body)
 }
 
-fn encode_effects_response(effects: WorkerEffects) -> Result<Vec<u8>> {
+fn encode_effects_response(effects: super::RuntimeEffects) -> Result<Vec<u8>> {
     let mut body = Vec::new();
-    match effects.frame.as_ref() {
-        Some(frame) => {
+    match effects.frame {
+        Some(timing) => {
             body.push(1);
-            encode_frame(&mut body, frame)?;
+            encode_timing(&mut body, timing);
         }
         None => body.push(0),
     }
@@ -1040,10 +1333,10 @@ fn encode_effects_response(effects: WorkerEffects) -> Result<Vec<u8>> {
     Ok(body)
 }
 
-fn decode_effects(payload: &[u8]) -> Result<WorkerEffects> {
+fn decode_effects(payload: &[u8]) -> Result<ProcessEffects> {
     let mut reader = Reader::new(payload);
     let frame = if reader.bool()? {
-        Some(decode_frame(&mut reader)?)
+        Some(decode_timing(&mut reader)?)
     } else {
         None
     };
@@ -1088,7 +1381,7 @@ fn decode_effects(payload: &[u8]) -> Result<WorkerEffects> {
     };
     let redraw_pending = reader.bool()?;
     reader.finish()?;
-    Ok(WorkerEffects {
+    Ok(ProcessEffects {
         frame,
         backlight,
         key_requests,
@@ -1097,19 +1390,15 @@ fn decode_effects(payload: &[u8]) -> Result<WorkerEffects> {
     })
 }
 
-fn encode_frame(output: &mut Vec<u8>, frame: &TimedFrame) -> Result<()> {
-    put_f64(output, frame.timing.presentation_time);
-    put_f64(output, frame.timing.delta);
-    put_u32(output, frame.frame.width())?;
-    put_u32(output, frame.frame.height())?;
-    put_u32(output, frame.frame.stride())?;
-    put_bytes(output, frame.frame.pixels())
+fn encode_timing(output: &mut Vec<u8>, timing: FrameTiming) {
+    put_f64(output, timing.presentation_time);
+    put_f64(output, timing.delta);
 }
 
-fn decode_frame_response(payload: &[u8]) -> Result<Option<TimedFrame>> {
+fn decode_frame_response(payload: &[u8]) -> Result<Option<FrameTiming>> {
     let mut reader = Reader::new(payload);
     let frame = if reader.bool()? {
-        Some(decode_frame(&mut reader)?)
+        Some(decode_timing(&mut reader)?)
     } else {
         None
     };
@@ -1117,28 +1406,8 @@ fn decode_frame_response(payload: &[u8]) -> Result<Option<TimedFrame>> {
     Ok(frame)
 }
 
-fn decode_frame(reader: &mut Reader<'_>) -> Result<TimedFrame> {
-    let timing = FrameTiming::new(reader.f64()?, reader.f64()?)?;
-    let width = reader.usize()?;
-    let height = reader.usize()?;
-    let stride = reader.usize()?;
-    let pixels = reader.bytes()?;
-    ensure!(
-        width > 0 && height > 0,
-        "Lua worker frame dimensions are invalid"
-    );
-    ensure!(
-        stride >= width.saturating_mul(4),
-        "Lua worker frame stride is invalid"
-    );
-    ensure!(
-        pixels.len() == stride.saturating_mul(height),
-        "Lua worker frame pixel size is invalid"
-    );
-    Ok(TimedFrame {
-        frame: LogicalFrame::from_parts(width, height, stride, pixels),
-        timing,
-    })
+fn decode_timing(reader: &mut Reader<'_>) -> Result<FrameTiming> {
+    FrameTiming::new(reader.f64()?, reader.f64()?)
 }
 
 fn encode_key(output: &mut Vec<u8>, key: OutputKey) {
@@ -1291,10 +1560,6 @@ impl<'a> Reader<'a> {
         Ok(count)
     }
 
-    fn usize(&mut self) -> Result<usize> {
-        usize::try_from(self.u32()?).context("Lua worker integer is invalid")
-    }
-
     fn finish(self) -> Result<()> {
         ensure!(
             self.offset == self.bytes.len(),
@@ -1312,6 +1577,21 @@ mod tests {
 
     fn embedded(source: &str) -> LuaSource {
         LuaSource::embedded(source.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn truncated_worker_packet_is_rejected() -> Result<()> {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+
+        let (mut sender, mut receiver) = UnixStream::pair()?;
+        sender.write_all(&100u32.to_be_bytes())?;
+        sender.write_all(&[HELLO])?;
+        sender.shutdown(std::net::Shutdown::Write)?;
+        let error = read_packets(&mut receiver, &mut Vec::new())
+            .expect_err("truncated worker packet was accepted");
+        assert!(error.to_string().contains("middle of a packet"));
+        Ok(())
     }
 
     #[test]
@@ -1333,7 +1613,95 @@ mod tests {
         )?;
         let frame = worker.render(1.0, 0.0, InputState::default())?;
         assert_eq!((frame.frame.width(), frame.frame.height()), (2008, 60));
+        assert_eq!(
+            &frame.frame.pixels()[10 * frame.frame.stride() + 10 * 4..][..4],
+            &[0, 0, 255, 255]
+        );
         worker.shutdown(StopReason::Replaced)
+    }
+
+    #[test]
+    fn graceful_stop_delivers_each_allowed_reason() -> Result<()> {
+        for (reason, expected) in [
+            (StopReason::Replaced, "replaced"),
+            (StopReason::Logout, "logout"),
+            (StopReason::Shutdown, "shutdown"),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let marker = directory.path().join("stop-reason");
+            let source = format!(
+                r#"
+                local sliver = require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    stop = function(reason)
+                        local file = assert(io.open({marker:?}, "w"))
+                        file:write(reason)
+                        file:close()
+                    end,
+                    render = function() end,
+                }}
+                "#,
+                marker = marker.to_string_lossy(),
+            );
+            let worker = ProcessWorker::stage(&embedded(&source), 0.0, InputState::default())?;
+            worker.shutdown(reason)?;
+            assert_eq!(std::fs::read_to_string(marker)?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_vendored_lua_c_module_runs_inside_the_worker_process() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let c_source = directory.path().join("native_probe.c");
+        let module = directory.path().join("native_probe.so");
+        std::fs::write(
+            &c_source,
+            r#"
+            #include <stddef.h>
+            typedef struct lua_State lua_State;
+            typedef long long lua_Integer;
+            typedef double lua_Number;
+            extern void luaL_checkversion_(lua_State *, lua_Number, size_t);
+            extern lua_Number lua_version(lua_State *);
+            extern void lua_pushinteger(lua_State *, lua_Integer);
+            int luaopen_native_probe(lua_State *state) {
+                luaL_checkversion_(state, 504.0, sizeof(lua_Integer) * 16 + sizeof(lua_Number));
+                lua_pushinteger(state, (lua_Integer)lua_version(state));
+                return 1;
+            }
+            "#,
+        )?;
+        let compile = std::process::Command::new("cc")
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&module)
+            .arg(&c_source)
+            .status()
+            .context("compiling Lua C-module probe")?;
+        anyhow::ensure!(compile.success(), "C-module probe did not compile");
+        let source = directory.path().join("native.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local probe = require("native_probe")
+            require("sliver.v1")
+            assert(probe == 504)
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1)
+                end,
+            }
+            "#,
+        )?;
+        let worker = ProcessWorker::stage(&LuaSource::file(source), 0.0, InputState::default())?;
+        let frame = worker.render(1.0, 0.0, InputState::default())?;
+        assert_eq!(
+            &frame.frame.pixels()[10 * frame.frame.stride() + 10 * 4..][..4],
+            &[255, 0, 0, 255]
+        );
+        worker.shutdown(StopReason::Shutdown)
     }
 
     #[test]

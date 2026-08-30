@@ -240,7 +240,9 @@ fn run_with_hardware<H: TouchBarHardware>(cfg: sliver_core::Config, mut hardware
     let release_result = hardware.release();
     match (run_result, release_result) {
         (Err(error), Err(release_error)) => {
-            eprintln!("hardware release failed after daemon error: {release_error:#}");
+            crate::system_log::broker_error(format!(
+                "hardware release failed after daemon error: {release_error:#}"
+            ));
             Err(error)
         }
         (Err(error), Ok(())) => Err(error),
@@ -264,7 +266,9 @@ fn present_lua_once<H: TouchBarHardware>(source: &std::path::Path, hardware: &mu
     let release_result = hardware.release();
     match (run_result, release_result) {
         (Err(error), Err(release_error)) => {
-            eprintln!("hardware release failed after Lua worker error: {release_error:#}");
+            crate::system_log::broker_error(format!(
+                "hardware release failed after Lua worker error: {release_error:#}"
+            ));
             Err(error)
         }
         (Err(error), Ok(())) => Err(error),

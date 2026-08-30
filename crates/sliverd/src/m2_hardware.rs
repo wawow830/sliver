@@ -225,7 +225,7 @@ where
 impl Drop for CardClaim {
     fn drop(&mut self) {
         if let Err(error) = self.release(None, None) {
-            eprintln!("DRM release failed: {error:#}");
+            crate::system_log::broker_error(format!("DRM release failed: {error:#}"));
         }
     }
 }
@@ -488,7 +488,7 @@ impl TouchInput {
         let grabbed = match device.grab() {
             Ok(()) => true,
             Err(e) => {
-                eprintln!("touch: grab failed: {e} (sharing, then)");
+                crate::system_log::broker_error(format!("touch: grab failed: {e} (sharing, then)"));
                 false
             }
         };
@@ -584,7 +584,7 @@ impl TouchInput {
 impl Drop for TouchInput {
     fn drop(&mut self) {
         if let Err(error) = self.ungrab() {
-            eprintln!("touch: ungrab failed: {error}");
+            crate::system_log::broker_error(format!("touch: ungrab failed: {error}"));
         }
     }
 }
@@ -968,7 +968,9 @@ impl M2TouchBar {
             Ok(surface) => surface,
             Err(error) => {
                 if let Err(release_error) = claim.release(framebuffer, dumb_buffer) {
-                    eprintln!("DRM release failed after claim error: {release_error:#}");
+                    crate::system_log::broker_error(format!(
+                        "DRM release failed after claim error: {release_error:#}"
+                    ));
                 }
                 return Err(error);
             }
@@ -983,7 +985,9 @@ impl M2TouchBar {
             self.touch = match TouchInput::open() {
                 Ok(touch) => Some(touch),
                 Err(e) => {
-                    eprintln!("touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)");
+                    crate::system_log::broker_error(format!(
+                        "touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)"
+                    ));
                     None
                 }
             };
@@ -1054,12 +1058,14 @@ impl M2TouchBar {
             self.remember_keyboard_events(&output[keyboard_start..]);
             if let Some(error) = keyboard_error {
                 if let Some(keyboard) = self.keyboard.as_ref() {
-                    eprintln!(
+                    crate::system_log::broker_error(format!(
                         "fn: keyboard reader stopped at {}: {error}",
                         keyboard.path.display()
-                    );
+                    ));
                 } else {
-                    eprintln!("fn: keyboard reader stopped: {error}");
+                    crate::system_log::broker_error(format!(
+                        "fn: keyboard reader stopped: {error}"
+                    ));
                 }
                 self.reset_keyboard_state(&mut output);
                 self.keyboard = None;
@@ -1076,7 +1082,7 @@ impl M2TouchBar {
                 None => None,
             };
             if let Some(error) = touch_error {
-                eprintln!("touch: reader stopped: {error}");
+                crate::system_log::broker_error(format!("touch: reader stopped: {error}"));
                 if let Some(touch) = self.touch.as_mut() {
                     touch.cancel(&mut output, self.modifiers);
                 }
@@ -1128,7 +1134,7 @@ impl M2TouchBar {
             framebuffer,
             &[control::ClipRect::new(0, 0, PANEL_W as u16, height as u16)],
         ) {
-            eprintln!("dirty flush failed: {e}");
+            crate::system_log::broker_error(format!("dirty flush failed: {e}"));
         }
 
         if !self.shown {
@@ -1170,7 +1176,7 @@ impl Default for M2TouchBar {
 impl Drop for M2TouchBar {
     fn drop(&mut self) {
         if let Err(error) = self.release_inner() {
-            eprintln!("Touch Bar release failed: {error:#}");
+            crate::system_log::broker_error(format!("Touch Bar release failed: {error:#}"));
         }
     }
 }
@@ -1209,7 +1215,10 @@ impl TouchBarHardware for M2TouchBar {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
         if let Some(emitter) = self.keyboard_emitter.as_mut() {
             if let Err(error) = emitter.tap(index, modifiers) {
-                eprintln!("fn: failed to emit F{}: {error}", index + 1);
+                crate::system_log::broker_error(format!(
+                    "fn: failed to emit F{}: {error}",
+                    index + 1
+                ));
             }
         }
         Ok(())
@@ -1273,7 +1282,9 @@ pub(crate) fn probe() -> Result<()> {
             Ok(dumb_buffer) => dumb_buffer,
             Err(error) => {
                 if let Err(release_error) = claim.release(None, None) {
-                    eprintln!("DRM release failed after probe error: {release_error:#}");
+                    crate::system_log::broker_error(format!(
+                        "DRM release failed after probe error: {release_error:#}"
+                    ));
                 }
                 return Err(error.into());
             }
@@ -1282,7 +1293,9 @@ pub(crate) fn probe() -> Result<()> {
         Ok(framebuffer) => framebuffer,
         Err(error) => {
             if let Err(release_error) = claim.release(None, Some(dumb_buffer)) {
-                eprintln!("DRM release failed after probe error: {release_error:#}");
+                crate::system_log::broker_error(format!(
+                    "DRM release failed after probe error: {release_error:#}"
+                ));
             }
             return Err(error.into());
         }
@@ -1329,7 +1342,9 @@ pub(crate) fn probe() -> Result<()> {
     let release_result = claim.release(Some(framebuffer), Some(dumb_buffer));
     match (result, release_result) {
         (Err(error), Err(release_error)) => {
-            eprintln!("DRM release failed after probe error: {release_error:#}");
+            crate::system_log::broker_error(format!(
+                "DRM release failed after probe error: {release_error:#}"
+            ));
             Err(error)
         }
         (Err(error), Ok(())) => Err(error),

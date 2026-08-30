@@ -15,6 +15,7 @@ mod path_state;
 mod peer_credentials;
 mod recovery;
 mod supervisor;
+mod system_log;
 
 use std::io::{Read, Write};
 
@@ -88,7 +89,9 @@ pub fn supervisor_main() -> Result<()> {
     let _ = std::fs::remove_file(&socket);
     match (serve_result, shutdown_result) {
         (Err(error), Err(shutdown_error)) => {
-            eprintln!("supervisor shutdown failed after service error: {shutdown_error:#}");
+            system_log::broker_error(format!(
+                "supervisor shutdown failed after service error: {shutdown_error:#}"
+            ));
             Err(error)
         }
         (Err(error), Ok(())) => Err(error),

@@ -261,6 +261,7 @@ pub(crate) struct LuaWorker {
     owner: Option<thread::JoinHandle<()>>,
     process: Option<worker_process::ProcessWorker>,
     broker: FrameBroker,
+    #[cfg(test)]
     producer: FrameProducer,
 }
 
@@ -387,11 +388,22 @@ impl LuaWorker {
         initial_input: InputState,
     ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
+        #[cfg(test)]
         let slots = FrameSlots::new(
             sliver_core::STRIP_W as usize,
             sliver_core::STRIP_H as usize,
             sliver_core::STRIP_W as usize * 4,
         )?;
+        #[cfg(not(test))]
+        let frame_path = worker_process::frame_path()?;
+        #[cfg(not(test))]
+        let slots = FrameSlots::new_shared(
+            &frame_path,
+            sliver_core::STRIP_W as usize,
+            sliver_core::STRIP_H as usize,
+            sliver_core::STRIP_W as usize * 4,
+        )?;
+        #[cfg(test)]
         let producer = slots.producer();
         let broker = slots.broker();
 
@@ -435,14 +447,20 @@ impl LuaWorker {
 
         #[cfg(not(test))]
         {
-            let process =
-                worker_process::ProcessWorker::stage(&source, initial_backlight, initial_input)?;
+            let process = worker_process::ProcessWorker::stage_with_frames(
+                &source,
+                initial_backlight,
+                initial_input,
+                &frame_path,
+                broker.clone(),
+            )?;
             Ok(StagedLuaWorker {
                 worker: Self {
                     commands: None,
                     owner: None,
                     process: Some(process),
                     broker,
+                    #[cfg(test)]
                     producer,
                 },
             })
@@ -465,8 +483,7 @@ impl LuaWorker {
         input_state: InputState,
     ) -> Result<TimedFrame> {
         if let Some(process) = &self.process {
-            let frame = process.render(presentation_time, delta, input_state)?;
-            return self.publish_received_frame(frame);
+            return process.render(presentation_time, delta, input_state);
         }
         let deadline = Instant::now() + Duration::from_millis(50);
         let commands = self
@@ -505,18 +522,6 @@ impl LuaWorker {
             thread::sleep(std::cmp::min(backoff, remaining));
             backoff = std::cmp::min(backoff + backoff, Duration::from_millis(10));
         }
-    }
-
-    fn publish_received_frame(&self, frame: TimedFrame) -> Result<TimedFrame> {
-        let published = self.producer.try_publish(
-            frame.frame.width(),
-            frame.frame.height(),
-            frame.frame.stride(),
-            frame.frame.pixels(),
-            frame.timing,
-        )?;
-        ensure!(published, "Lua worker frame slots are full");
-        self.take_frame()?.context("Lua worker published no frame")
     }
 
     fn retry_pending(&self, presentation_time: f64) -> Result<bool> {
@@ -604,11 +609,7 @@ impl LuaWorker {
 
     pub(crate) fn drive(&self, request: DriveRequest) -> Result<WorkerEffects> {
         if let Some(process) = &self.process {
-            let mut effects = process.drive(request)?;
-            if let Some(frame) = effects.frame.take() {
-                effects.frame = Some(self.publish_received_frame(frame)?);
-            }
-            return Ok(effects);
+            return process.drive(request);
         }
         let commands = self
             .commands
