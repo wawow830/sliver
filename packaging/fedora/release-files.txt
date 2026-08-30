@@ -1,15 +1,12 @@
 /usr/bin/sliver
-/usr/libexec/sliver
 /usr/libexec/sliver/sliver-broker
 /usr/libexec/sliver/sliver-lua-worker
 /usr/libexec/sliver/sliver-supervisor
 /usr/lib/systemd/system/sliver-broker.service
-/usr/lib/systemd/user/sliver-lua-worker-.service.d
 /usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
 /usr/lib/systemd/user/sliver-supervisor.service
 /usr/lib/sysusers.d/sliver.conf
 /usr/lib/udev/rules.d/70-sliver.rules
-/usr/share/doc/sliver
 /usr/share/doc/sliver/architecture.md
 /usr/share/doc/sliver/INSTALL.md
 /usr/share/doc/sliver/lua.md

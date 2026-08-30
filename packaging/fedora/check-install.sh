@@ -37,7 +37,7 @@ for entry in $required; do
     esac
 done
 
-manifest=$(dirname "$0")/release-manifest.txt
+manifest=$(dirname "$0")/release-files.txt
 actual=$(mktemp)
 trap 'rm -f "$actual"' EXIT
 find "$root" -type f -printf '/%P\n' | sort > "$actual"

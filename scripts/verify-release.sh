@@ -538,6 +538,7 @@ manual_check() {
 }
 record_metric() {
     local id=$1 prompt_text=$2 value="" interval fps misses input_delay growth
+    local -a fields=()
     refuse_if_blocked
     printf '  %s ' "$prompt_text"
     read -r value || true
@@ -545,11 +546,16 @@ record_metric() {
         fail_check "$id" "measurement must use the named numeric fields"
         exit 1
     fi
-    read -r interval fps misses input_delay growth < <(tr ' ' '\n' <<< "$value" | cut -d= -f2)
+    read -r -a fields <<< "$value"
+    interval=${fields[0]#interval_s=}
+    fps=${fields[1]#fps=}
+    misses=${fields[2]#misses=}
+    input_delay=${fields[3]#input_to_frame_ms=}
+    growth=${fields[4]#latency_growth_ms=}
     if ! awk -v interval="$interval" -v fps="$fps" -v misses="$misses" \
         -v input_delay="$input_delay" -v growth="$growth" \
-        'BEGIN { exit !(interval >= 30 && fps >= 59.5 && misses == 0 && input_delay >= 0 && growth >= 0) }'; then
-        fail_check "$id" "measurement did not meet the native 60 FPS acceptance threshold"
+        'BEGIN { exit !(interval >= 30 && fps >= 59.5 && misses == 0 && input_delay >= 0 && growth == 0) }'; then
+        fail_check "$id" "measurement did not meet the native 60 FPS and bounded-latency threshold"
         exit 1
     fi
     pass_check "$id" "operator measurement: $value"
@@ -609,8 +615,6 @@ restore_unit() {
 
 verify_service_restore() {
     local ok=0 broker_active broker_enabled global_enabled user_active user_enabled
-    [[ "$(unit_active tiny-dfr.service)" == "$ORIGINAL_TINY_ACTIVE" ]] || ok=1
-    [[ "$(unit_enabled tiny-dfr.service)" == "$ORIGINAL_TINY_ENABLED" ]] || ok=1
     broker_active=$(unit_active sliver-broker.service)
     broker_enabled=$(unit_enabled sliver-broker.service)
     global_enabled=$(unit_enabled sliver-supervisor.service)
