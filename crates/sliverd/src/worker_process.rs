@@ -1745,9 +1745,10 @@ mod tests {
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
             .status();
-        if !available.is_ok_and(|status| status.success()) {
-            return Ok(());
-        }
+        anyhow::ensure!(
+            available.is_ok_and(|status| status.success()),
+            "systemd user manager is required for this worker policy test"
+        );
 
         let _directory = tempfile::tempdir()?;
         let frame_path = frame_path()?;

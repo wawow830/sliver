@@ -1959,18 +1959,18 @@ mod tests {
             .parent()
             .and_then(|path| path.parent())
             .map(|path| path.join("sliver-supervisor"));
-        let Some(supervisor) = supervisor else {
-            return Ok(());
-        };
-        if !supervisor.exists() {
-            return Ok(());
-        }
+        let supervisor = supervisor.context("supervisor binary is required for this test")?;
+        ensure!(
+            supervisor.exists(),
+            "supervisor binary is required for this test"
+        );
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
             .status();
-        if !available.is_ok_and(|status| status.success()) {
-            return Ok(());
-        }
+        ensure!(
+            available.is_ok_and(|status| status.success()),
+            "systemd user manager is required for this test"
+        );
 
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");
