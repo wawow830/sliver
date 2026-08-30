@@ -1,8 +1,10 @@
+#[cfg(test)]
 use std::cell::{RefCell, RefMut};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+#[cfg(test)]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -260,14 +262,17 @@ impl Drop for BrokerHardware {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct SharedHardware<H: TouchBarHardware>(Rc<RefCell<H>>);
 
+#[cfg(test)]
 impl<H: TouchBarHardware> Clone for SharedHardware<H> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
+#[cfg(test)]
 impl<H: TouchBarHardware> SharedHardware<H> {
     fn new(hardware: H) -> Self {
         Self(Rc::new(RefCell::new(hardware)))
@@ -285,6 +290,7 @@ impl<H: TouchBarHardware> SharedHardware<H> {
     }
 }
 
+#[cfg(test)]
 impl<H: TouchBarHardware> TouchBarHardware for SharedHardware<H> {
     fn claim(&mut self) -> Result<()> {
         self.lock()?.claim()
@@ -341,9 +347,8 @@ pub(crate) fn broker_main() -> Result<()> {
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
 
-    let shared = SharedHardware::new(M2TouchBar::new());
     let fallback = Supervisor::new_fallback(
-        shared,
+        M2TouchBar::new(),
         PathBuf::from("/var/lib/sliver/config-path"),
         Some(crate::default_source::source()),
     )?;
