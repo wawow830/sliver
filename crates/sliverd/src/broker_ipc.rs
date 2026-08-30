@@ -2045,7 +2045,19 @@ mod tests {
         {
             thread::sleep(Duration::from_millis(10));
         }
-        let frame_presented = !shared.inspect(|hardware| hardware.presented_frames().is_empty());
+        let frame_presented = shared.inspect(|hardware| {
+            hardware
+                .presented_frames()
+                .last()
+                .is_some_and(|frame| frame.rgba_at(10, 10) == [255, 0, 0, 255])
+        });
+        logind.set_active(SEAT, None);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 2)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "stop", unit])
             .stdout(std::process::Stdio::null())
@@ -2057,6 +2069,15 @@ mod tests {
         assert!(
             frame_presented,
             "real supervisor did not pass broker peer verification"
+        );
+        assert!(
+            shared.inspect(|hardware| {
+                hardware
+                    .presented_frames()
+                    .last()
+                    .is_some_and(|frame| frame.rgba_at(10, 10) == [0, 255, 0, 255])
+            }),
+            "fallback did not return after production logout"
         );
         Ok(())
     }
