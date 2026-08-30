@@ -108,6 +108,9 @@ fn supervisor_main_inner() -> Result<()> {
 }
 
 fn selected_path_state_file() -> Result<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("SLIVER_STATE_FILE") {
+        return Ok(std::path::PathBuf::from(path));
+    }
     if let Some(state_home) = std::env::var_os("XDG_STATE_HOME") {
         return Ok(std::path::PathBuf::from(state_home).join("sliver/config-path"));
     }

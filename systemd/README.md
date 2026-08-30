@@ -1,7 +1,13 @@
-# systemd worker policy
+# systemd services and worker policy
 
-Install the drop-in under `/etc/systemd/user/sliver-lua-worker-.service.d/` and
-run `systemctl --user daemon-reload` after changing it. The dash-truncated unit
+Enable `sliver-supervisor.service` only after the `sliver` account has the
+required DRM, input, and uinput device permissions. The unit owns the hardware
+before login and conflicts with `tiny-dfr.service`; stopping it does not start
+`tiny-dfr` again. Enabling the unit is the administrator's explicit takeover
+step.
+
+Install the worker drop-in under `/etc/systemd/user/sliver-lua-worker-.service.d/`
+and run `systemctl --user daemon-reload` after changing it. The dash-truncated unit
 name applies the policy to generated `sliver-lua-worker-*.service` units.
 
 The worker has no Lua, TOML, or CLI setting for memory or task limits. A host

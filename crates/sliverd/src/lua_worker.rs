@@ -38,6 +38,12 @@ pub(crate) struct StagedLuaWorker {
     pub(crate) worker: LuaWorker,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkerIdentity {
+    User,
+    RestrictedFallback,
+}
+
 struct SourceMetadata {
     path: String,
     directory: String,
@@ -387,6 +393,23 @@ impl LuaWorker {
         initial_backlight: f64,
         initial_input: InputState,
     ) -> Result<StagedLuaWorker> {
+        Self::stage_source_with_identity(
+            source,
+            initial_backlight,
+            initial_input,
+            WorkerIdentity::User,
+        )
+    }
+
+    #[allow(clippy::needless_return)]
+    pub(crate) fn stage_source_with_identity(
+        source: LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        identity: WorkerIdentity,
+    ) -> Result<StagedLuaWorker> {
+        #[cfg(test)]
+        let _ = identity;
         validate_backlight_level(initial_backlight)?;
         #[cfg(test)]
         let slots = FrameSlots::new(
@@ -453,6 +476,7 @@ impl LuaWorker {
                 initial_input,
                 &frame_path,
                 broker.clone(),
+                identity,
             )?;
             Ok(StagedLuaWorker {
                 worker: Self {

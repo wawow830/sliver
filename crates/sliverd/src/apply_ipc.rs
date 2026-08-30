@@ -36,8 +36,22 @@ fn request_at(socket: &Path, request: ConfigSelection) -> Result<()> {
     // other process state out of this protocol; the request is only a tagged
     // selection.
     let payload = encode_request(&request)?;
-    let mut stream = UnixStream::connect(socket)
-        .with_context(|| format!("connecting to Sliver supervisor at {}", socket.display()))?;
+    let mut stream = match UnixStream::connect(socket) {
+        Ok(stream) => stream,
+        Err(primary_error) if socket != Path::new("/run/sliver/supervisor.sock") => {
+            UnixStream::connect("/run/sliver/supervisor.sock").with_context(|| {
+                format!(
+                    "connecting to Sliver supervisor at {} (local supervisor failed: {primary_error})",
+                    socket.display()
+                )
+            })?
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("connecting to Sliver supervisor at {}", socket.display())
+            });
+        }
+    };
     write_bytes(&mut stream, &payload)?;
     stream.shutdown(std::net::Shutdown::Write)?;
 
@@ -111,11 +125,15 @@ pub(crate) fn write_reply(stream: &mut UnixStream, result: &Result<()>) -> Resul
 }
 
 pub(crate) fn supervisor_socket_path() -> Result<PathBuf> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .context("XDG_RUNTIME_DIR is not set; no per-user supervisor is available")?;
-    Ok(PathBuf::from(runtime)
-        .join("sliver")
-        .join("supervisor.sock"))
+    if let Some(path) = std::env::var_os("SLIVER_SUPERVISOR_SOCKET") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return Ok(PathBuf::from(runtime)
+            .join("sliver")
+            .join("supervisor.sock"));
+    }
+    Ok(PathBuf::from("/run/sliver/supervisor.sock"))
 }
 
 pub(crate) fn absolute_lexical(path: &Path) -> Result<PathBuf> {

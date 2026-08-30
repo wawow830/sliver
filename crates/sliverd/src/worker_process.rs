@@ -17,6 +17,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use super::{
     DriveRequest, InputState, InputTransition, KeyOperation, KeyRequest, LuaSource, ModifierMode,
     Runtime, StopReason, TimedFrame, TouchEvent, TouchPhase, VisibilityReason, WorkerEffects,
+    WorkerIdentity,
 };
 use crate::frame_slots::{FrameBroker, FrameSlots, FrameTiming};
 use crate::hardware::{LogicalFrame, Modifier, ObservedKey, OutputKey};
@@ -101,6 +102,7 @@ impl ProcessWorker {
             initial_input,
             &path,
             slots.broker(),
+            WorkerIdentity::User,
         )
     }
 
@@ -110,15 +112,16 @@ impl ProcessWorker {
         initial_input: InputState,
         frame_path: &Path,
         broker: FrameBroker,
+        identity: WorkerIdentity,
     ) -> Result<Self> {
         if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) } < 0 {
             return Err(std::io::Error::last_os_error())
                 .context("enabling Lua worker child reaping");
         }
         #[cfg(test)]
-        let mut spawned = spawn_direct()?;
+        let mut spawned = spawn_direct(identity)?;
         #[cfg(not(test))]
-        let mut spawned = spawn_systemd()?;
+        let mut spawned = spawn_systemd(identity)?;
         let mut stream = spawned.stream;
         if let Err(error) = stream.set_nonblocking(true) {
             if let Some(unit) = spawned.unit.as_deref() {
@@ -170,7 +173,7 @@ impl ProcessWorker {
 }
 
 #[cfg(test)]
-fn spawn_direct() -> Result<SpawnedWorker> {
+fn spawn_direct(_identity: WorkerIdentity) -> Result<SpawnedWorker> {
     let (parent_fd, child_fd) = socket_pair()?;
     let parent_pid = unsafe { libc::getpid() };
     let mut command = worker_command()?;
@@ -216,7 +219,7 @@ fn spawn_direct() -> Result<SpawnedWorker> {
 }
 
 #[cfg(not(test))]
-fn spawn_systemd() -> Result<SpawnedWorker> {
+fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
     use std::os::unix::fs::PermissionsExt;
 
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
@@ -234,6 +237,10 @@ fn spawn_systemd() -> Result<SpawnedWorker> {
     listener.set_nonblocking(true)?;
     let unit = format!("sliver-lua-worker-{}-{id}.service", std::process::id());
     let mut launcher = Command::new("systemd-run");
+    let syslog_identifier = match identity {
+        WorkerIdentity::User => "sliver-lua",
+        WorkerIdentity::RestrictedFallback => "sliver-fallback",
+    };
     launcher.args([
         "--user",
         "--unit",
@@ -259,12 +266,14 @@ fn spawn_systemd() -> Result<SpawnedWorker> {
         "StandardInput=null",
         "StandardOutput=journal",
         "StandardError=journal",
-        "SyslogIdentifier=sliver-lua",
         "Restart=no",
         "WatchdogSec=0",
     ] {
         launcher.arg("--property").arg(property);
     }
+    launcher
+        .arg("--property")
+        .arg(format!("SyslogIdentifier={syslog_identifier}"));
     let worker_path = match worker_path() {
         Ok(path) => path,
         Err(error) => {

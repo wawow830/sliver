@@ -23,7 +23,7 @@ use crate::hardware::{
 use crate::logind::{ActiveSession, Logind, RealLogind};
 use crate::lua_worker::{
     earliest_deadline, DriveRequest, KeyOperation, KeyRequest, LuaSource, LuaWorker, ModifierMode,
-    StagedLuaWorker, StopReason, VisibilityReason, WorkerEffects,
+    StagedLuaWorker, StopReason, VisibilityReason, WorkerEffects, WorkerIdentity,
 };
 use crate::path_state::{PathStateSnapshot, PreparedPathState};
 use crate::peer_credentials::PeerCredentials;
@@ -528,8 +528,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .map(|session| state_file_for_uid(&state_file, session.uid))
             .unwrap_or(state_file);
         let selection = match snapshot.active {
-            Some(_) => read_selected_path(&state_file)?
-                .map_or(ConfigSelection::Default, ConfigSelection::Path),
+            Some(_) => match read_selected_path(&state_file) {
+                Ok(path) => path.map_or(ConfigSelection::Default, ConfigSelection::Path),
+                Err(error) => {
+                    eprintln!("selected Lua worker entered recovery: {error:#}");
+                    supervisor.enter_recovery()?;
+                    return Ok(supervisor);
+                }
+            },
             None => ConfigSelection::Default,
         };
         if let Err(error) = supervisor.apply_candidate(
@@ -838,10 +844,18 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.poll_hardware(Duration::ZERO)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
-        let StagedLuaWorker { worker } = LuaWorker::stage_source_with_backlight_and_input(
+        let identity = match expected_session {
+            Some(SessionSnapshot {
+                active: Some(_), ..
+            })
+            | None => WorkerIdentity::User,
+            Some(SessionSnapshot { active: None, .. }) => WorkerIdentity::RestrictedFallback,
+        };
+        let StagedLuaWorker { worker } = LuaWorker::stage_source_with_identity(
             source.clone(),
             current_backlight,
             self.input_state,
+            identity,
         )?;
         self.poll_hardware_deferred(Duration::ZERO)?;
         let render_now = self.now_seconds();
