@@ -259,19 +259,14 @@ impl ProcessWorker {
         let deadline = Instant::now() + KILL_REAP_DEADLINE;
         loop {
             self.kill_process_group();
-            let result = unsafe {
+            unsafe {
                 libc::syscall(
                     libc::SYS_pidfd_send_signal,
                     self.pidfd.as_raw_fd(),
                     libc::SIGKILL,
                     0,
                     0,
-                )
-            };
-            if result < 0 {
-                unsafe {
-                    libc::kill(self.pid, libc::SIGKILL);
-                }
+                );
             }
             let exited = self
                 .child
@@ -642,7 +637,7 @@ unsafe fn close_inherited_descriptors() {
         0,
     );
     if result < 0 && *libc::__errno_location() == libc::ENOSYS {
-        for fd in (WORKER_FD + 1)..1024 {
+        for fd in FIRST_INHERITED_FD..1024 {
             libc::close(fd);
         }
     }
