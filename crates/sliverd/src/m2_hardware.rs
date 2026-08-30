@@ -783,7 +783,7 @@ fn event_device_is_on_seat(path: &Path, seat: &str) -> bool {
     udev_property(path, "ID_SEAT")
         .ok()
         .flatten()
-        .is_none_or(|device_seat| device_seat == seat)
+        .is_some_and(|device_seat| device_seat == seat)
 }
 
 fn has_touch_capabilities(device: &evdev::Device) -> bool {
@@ -834,7 +834,7 @@ fn matches_event_device(path: &Path, device: &evdev::Device, kind: EventDeviceKi
         && udev_property(path, udev_kind)
             .ok()
             .flatten()
-            .is_none_or(|value| value == "1")
+            .is_some_and(|value| value == "1")
 }
 
 fn open_event_device(kind: EventDeviceKind) -> io::Result<(PathBuf, evdev::Device)> {

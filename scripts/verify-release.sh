@@ -516,6 +516,12 @@ stage "Choose rollback and save the evidence"
 say "The evidence log is $LOG_FILE"
 run_optional journalctl --user -u sliver-supervisor.service -b --no-pager
 run_optional journalctl -u sliver-broker.service -b --no-pager
+if (( BLOCKED )); then
+  warn "A required check failed. Rolling back before reporting an incomplete run."
+  rollback
+  for blocker in "${SKIPPED[@]}"; do note "  - $blocker"; done
+  exit 1
+fi
 if confirm "Roll back takeover now and return ownership to tiny-dfr if it owned the panel before this run?"; then
   rollback
 else
@@ -529,11 +535,4 @@ fi
 if (( PACKAGE_WAS_INSTALLED )); then
   note "The verifier found an existing Sliver installation and did not remove it."
 fi
-if (( BLOCKED )); then
-  warn "Verification is incomplete. The run is not an acceptance pass."
-  warn "Resolve the blockers listed below, then rerun this verifier."
-  for blocker in "${SKIPPED[@]}"; do note "  - $blocker"; done
-  exit 1
-fi
-
 finish
