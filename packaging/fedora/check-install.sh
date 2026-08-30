@@ -78,5 +78,12 @@ grep -F 'ConditionGroup=sliver-supervisors' \
 grep -F 'PrivateDevices=yes' \
     "$root/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf" >/dev/null
 grep -F 'MODE="0660"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null
+grep -F 'ID_SEAT}=="seat-touchbar"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null
+grep -F 'ID_INPUT_TOUCHSCREEN}=="1"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null
+grep -F 'ID_INPUT_KEYBOARD}=="1"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null
+if grep -F 'ATTRS{name}' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null; then
+    printf 'udev rules must not depend on transport-specific input names\n' >&2
+    exit 1
+fi
 
 echo 'Fedora package file layout is valid'
