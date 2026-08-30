@@ -30,9 +30,6 @@ use crate::hardware::{
 const PANEL_W: u32 = 60;
 const FB_PAD: u32 = 4;
 
-const TOUCH_NAME: &str = "Mac14,7 Touch Bar";
-const KEYBOARD_NAME: &str = "Apple MTP keyboard";
-
 /// A small wrapper keeps the Linux polling dependency private to this adapter.
 fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -753,23 +750,114 @@ struct TouchInput {
     grabbed: bool,
 }
 
-fn open_named_event_device(name: &str) -> io::Result<(PathBuf, evdev::Device)> {
+#[derive(Clone, Copy)]
+enum EventDeviceKind {
+    Touch,
+    Keyboard,
+}
+
+fn udev_property_value<'a>(properties: &'a str, key: &str) -> Option<&'a str> {
+    properties.lines().find_map(|line| {
+        let property = line.strip_prefix("E:")?;
+        property.strip_prefix(key)?.strip_prefix('=')
+    })
+}
+
+fn udev_property(path: &Path, key: &str) -> io::Result<Option<String>> {
+    use std::os::unix::fs::MetadataExt;
+
+    let device = std::fs::metadata(path)?;
+    let database_path = format!(
+        "/run/udev/data/c{}:{}",
+        libc::major(device.rdev()),
+        libc::minor(device.rdev())
+    );
+    match std::fs::read_to_string(database_path) {
+        Ok(properties) => Ok(udev_property_value(&properties, key).map(str::to_owned)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn event_device_is_on_seat(path: &Path, seat: &str) -> bool {
+    udev_property(path, "ID_SEAT")
+        .ok()
+        .flatten()
+        .is_none_or(|device_seat| device_seat == seat)
+}
+
+fn has_touch_capabilities(device: &evdev::Device) -> bool {
+    use evdev::AbsoluteAxisType;
+
+    let Some(axes) = device.supported_absolute_axes() else {
+        return false;
+    };
+    let multitouch = axes.contains(AbsoluteAxisType::ABS_MT_SLOT)
+        && axes.contains(AbsoluteAxisType::ABS_MT_POSITION_X)
+        && axes.contains(AbsoluteAxisType::ABS_MT_POSITION_Y);
+    let single_touch = axes.contains(AbsoluteAxisType::ABS_X)
+        && axes.contains(AbsoluteAxisType::ABS_Y)
+        && device
+            .supported_keys()
+            .is_some_and(|keys| keys.contains(Key::BTN_TOUCH));
+    multitouch || single_touch
+}
+
+fn has_keyboard_capabilities(device: &evdev::Device) -> bool {
+    let Some(keys) = device.supported_keys() else {
+        return false;
+    };
+    keys.contains(Key::KEY_FN)
+        && [
+            Key::KEY_LEFTCTRL,
+            Key::KEY_RIGHTCTRL,
+            Key::KEY_LEFTALT,
+            Key::KEY_RIGHTALT,
+            Key::KEY_LEFTSHIFT,
+            Key::KEY_RIGHTSHIFT,
+            Key::KEY_LEFTMETA,
+            Key::KEY_RIGHTMETA,
+        ]
+        .iter()
+        .any(|key| keys.contains(*key))
+}
+
+fn matches_event_device(path: &Path, device: &evdev::Device, kind: EventDeviceKind) -> bool {
+    if !event_device_is_on_seat(path, "seat0") {
+        return false;
+    }
+    let (udev_kind, capabilities) = match kind {
+        EventDeviceKind::Touch => ("ID_INPUT_TOUCHSCREEN", has_touch_capabilities(device)),
+        EventDeviceKind::Keyboard => ("ID_INPUT_KEYBOARD", has_keyboard_capabilities(device)),
+    };
+    capabilities
+        && udev_property(path, udev_kind)
+            .ok()
+            .flatten()
+            .is_none_or(|value| value == "1")
+}
+
+fn open_event_device(kind: EventDeviceKind) -> io::Result<(PathBuf, evdev::Device)> {
     for path in numbered_device_paths("/dev/input", "event")? {
         let Ok(device) = evdev::Device::open(&path) else {
             continue;
         };
-        if device.name() == Some(name) {
+        if matches_event_device(&path, &device, kind) {
             return Ok((path, device));
         }
     }
+    let description = match kind {
+        EventDeviceKind::Touch => "Touch Bar touch input",
+        EventDeviceKind::Keyboard => "internal keyboard",
+    };
     Err(io::Error::new(
         io::ErrorKind::NotFound,
-        format!("input device {name:?} not found"),
+        format!("input device for {description} not found"),
     ))
 }
 
 fn open_touch_device() -> io::Result<(PathBuf, evdev::Device)> {
-    open_named_event_device(TOUCH_NAME)
+    open_event_device(EventDeviceKind::Touch)
 }
 
 impl TouchInput {
@@ -880,10 +968,10 @@ impl Drop for TouchInput {
     }
 }
 
-/// Find the internal keyboard by identity rather than assuming event1 will
-/// remain event1 forever.
+/// Find the internal keyboard by local-seat udev identity and input
+/// capabilities rather than assuming event1 will remain event1 forever.
 fn open_main_keyboard() -> io::Result<(PathBuf, evdev::Device)> {
-    open_named_event_device(KEYBOARD_NAME)
+    open_event_device(EventDeviceKind::Keyboard)
 }
 
 struct KeyboardInput {
@@ -902,7 +990,7 @@ impl KeyboardInput {
         let initial_fn_active = initial_fn_state_from_key_state(&key_state);
         let initial_modifiers = modifier_state_from_key_state(&key_state);
         let pending = initial_keyboard_events(&key_state);
-        eprintln!("fn: watching {} ({KEYBOARD_NAME})", path.display());
+        eprintln!("fn: watching internal keyboard at {}", path.display());
         Ok(Self {
             path,
             device,
@@ -2018,6 +2106,15 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn udev_properties_identify_the_local_seat() {
+        let properties = "E:ID_SEAT=seat0\nE:ID_INPUT=1\n";
+
+        assert_eq!(udev_property_value(properties, "ID_SEAT"), Some("seat0"));
+        assert_eq!(udev_property_value(properties, "ID_INPUT"), Some("1"));
+        assert_eq!(udev_property_value(properties, "ID_INPUT_KEYBOARD"), None);
     }
 
     #[test]

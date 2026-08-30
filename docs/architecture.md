@@ -68,31 +68,21 @@ prove a daemon is still alive.
 
 ## Touch path
 
-The touch digitizer is exposed as:
-
-```text
-Mac14,7 Touch Bar
-/dev/input/eventN
-```
-
-The real adapter finds this evdev node by name, opens it in nonblocking mode,
-and polls it
-without handing touches to the compositor. It normalizes raw coordinates and
-lifecycle data into logical 2008x60 `TouchEvent` values, then emits them through
-the hardware seam. The supervisor forwards those normalized events without
-adding layout or gesture policy. The adapter also subscribes to login1
+The touch digitizer is exposed through a udev-tagged touchscreen event device.
+The real adapter selects the local-seat device from udev properties and its
+absolute-axis capabilities, opens it in nonblocking mode, and polls it without
+handing touches to the compositor. It normalizes raw coordinates and lifecycle
+data into logical 2008x60 `TouchEvent` values, then emits them through the
+hardware seam. The supervisor forwards those normalized events without adding
+layout or gesture policy. The adapter also subscribes to login1
 `PrepareForSleep` and reports precise input and display capability loss.
 
 ## Fn and virtual keyboard path
 
-The internal keyboard is discovered by evdev name:
-
-```text
-Apple MTP keyboard
-```
-
-Sliver observes it without grabbing it. `KEY_FN` press activates the generated
-F1–F12 layout; release restores the custom config.
+The internal keyboard is selected from its local-seat udev identity and
+`KEY_FN` plus modifier capabilities. Sliver observes it without grabbing it.
+`KEY_FN` press activates the generated F1–F12 layout; release restores the
+custom config.
 
 One persistent uinput device named `Sliver Keyboard` advertises:
 
