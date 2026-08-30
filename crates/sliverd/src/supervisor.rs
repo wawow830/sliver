@@ -1328,7 +1328,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 return Ok(());
             }
             self.suspended = true;
-            self.resume_pending = self.active.is_some() && self.recovery.is_none();
+            self.resume_pending = self.active.is_some();
             self.fn_hold_started = None;
             if self.hardware_available {
                 self.hide_active_worker(VisibilityReason::Suspend, now)?;
