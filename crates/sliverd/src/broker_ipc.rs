@@ -1264,8 +1264,7 @@ mod tests {
                 first_broker_state,
                 first_server_logind.clone(),
                 Some(LuaSource::embedded(
-                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
-                        .to_vec(),
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
                 )),
             )?;
             run_broker(
@@ -1309,8 +1308,7 @@ mod tests {
                 second_broker_state,
                 second_server_logind.clone(),
                 Some(LuaSource::embedded(
-                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
-                        .to_vec(),
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
                 )),
             )?;
             run_broker(
@@ -1512,8 +1510,7 @@ mod tests {
                 broker_state,
                 server_logind.clone(),
                 Some(LuaSource::embedded(
-                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
-                        .to_vec(),
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
                 )),
             )?;
             run_broker(
@@ -1551,6 +1548,10 @@ mod tests {
         assert!(!user.has_active_worker());
         assert!(user.has_recovery());
         assert!(user_state.exists());
+        let frames = shared.inspect(|hardware| hardware.presented_frames().to_vec());
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].rgba_at(10, 10), [0, 255, 0, 255]);
+        assert_eq!(frames[1].rgba_at(10, 10), [0, 0, 0, 255]);
         user.shutdown()?;
         running.store(false, Ordering::Release);
         server
@@ -1620,8 +1621,7 @@ mod tests {
                 broker_state,
                 server_logind.clone(),
                 Some(LuaSource::embedded(
-                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
-                        .to_vec(),
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
                 )),
             )?;
             run_broker(
@@ -1720,6 +1720,32 @@ mod tests {
         running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;
         Ok(())
+    }
+
+    #[test]
+    fn service_files_keep_the_broker_and_worker_policy_explicit() {
+        let broker = include_str!("../../../systemd/sliver-broker.service");
+        let supervisor = include_str!("../../../systemd/user/sliver-supervisor.service");
+        let worker = include_str!("../../../systemd/sliver-lua-worker-.service.d/50-defaults.conf");
+
+        for setting in [
+            "User=sliver",
+            "SupplementaryGroups=video input",
+            "Restart=on-failure",
+        ] {
+            assert!(broker.contains(setting), "broker service lacks {setting}");
+        }
+        assert!(supervisor.contains("WantedBy=graphical-session.target"));
+        for setting in [
+            "MemoryMax=512M",
+            "TasksMax=64",
+            "KillMode=control-group",
+            "PrivateDevices=yes",
+            "DevicePolicy=closed",
+            "Restart=no",
+        ] {
+            assert!(worker.contains(setting), "worker policy lacks {setting}");
+        }
     }
 
     #[test]
