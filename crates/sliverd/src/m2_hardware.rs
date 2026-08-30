@@ -779,11 +779,11 @@ fn udev_property(path: &Path, key: &str) -> io::Result<Option<String>> {
     }
 }
 
-fn event_device_is_on_seat(path: &Path, seat: &str) -> bool {
+fn event_device_is_on_seat(path: &Path, seat: &str, require_tag: bool) -> bool {
     udev_property(path, "ID_SEAT")
         .ok()
         .flatten()
-        .is_some_and(|device_seat| device_seat == seat)
+        .map_or(!require_tag, |device_seat| device_seat == seat)
 }
 
 fn has_touch_capabilities(device: &evdev::Device) -> bool {
@@ -823,13 +823,26 @@ fn has_keyboard_capabilities(device: &evdev::Device) -> bool {
 }
 
 fn matches_event_device(path: &Path, device: &evdev::Device, kind: EventDeviceKind) -> bool {
-    if !event_device_is_on_seat(path, "seat0") {
+    let (seat, require_seat_tag, udev_kind, capabilities) = match kind {
+        // Asahi marks the isolated Touch Bar input seat separately from the
+        // physical login seat. The keyboard commonly has no ID_SEAT entry and
+        // therefore uses udev's default seat.
+        EventDeviceKind::Touch => (
+            "seat-touchbar",
+            true,
+            "ID_INPUT_TOUCHSCREEN",
+            has_touch_capabilities(device),
+        ),
+        EventDeviceKind::Keyboard => (
+            "seat0",
+            false,
+            "ID_INPUT_KEYBOARD",
+            has_keyboard_capabilities(device),
+        ),
+    };
+    if !event_device_is_on_seat(path, seat, require_seat_tag) {
         return false;
     }
-    let (udev_kind, capabilities) = match kind {
-        EventDeviceKind::Touch => ("ID_INPUT_TOUCHSCREEN", has_touch_capabilities(device)),
-        EventDeviceKind::Keyboard => ("ID_INPUT_KEYBOARD", has_keyboard_capabilities(device)),
-    };
     capabilities
         && udev_property(path, udev_kind)
             .ok()
