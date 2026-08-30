@@ -180,6 +180,7 @@ pub(crate) fn earliest_deadline(first: Option<f64>, second: Option<f64>) -> Opti
 struct DriveOptions {
     visibility: Option<(bool, VisibilityReason)>,
     force_render: bool,
+    resume_timers: bool,
 }
 
 pub(crate) struct DriveRequest {
@@ -219,15 +220,18 @@ impl DriveRequest {
         reason: VisibilityReason,
         force_render: bool,
     ) -> Self {
-        self.options = DriveOptions {
-            visibility: Some((visible, reason)),
-            force_render,
-        };
+        self.options.visibility = Some((visible, reason));
+        self.options.force_render = force_render;
         self
     }
 
     pub(crate) fn with_events(mut self, events: Vec<TouchEvent>) -> Self {
         self.events = events;
+        self
+    }
+
+    pub(crate) fn with_timer_resume(mut self) -> Self {
+        self.options.resume_timers = true;
         self
     }
 }
@@ -991,6 +995,15 @@ impl Runtime {
         self.controls.now_seconds.set(Some(now_seconds));
         self.controls.input_state.set(input_state);
         let result = (|| {
+            if options.resume_timers && self.timers_paused {
+                if let Some(paused_since) = self.paused_since.take() {
+                    self.controls
+                        .timers
+                        .borrow_mut()
+                        .shift((now_seconds - paused_since).max(0.0));
+                }
+                self.timers_paused = false;
+            }
             self.dispatch_keys(now_seconds, started, transitions)?;
             self.dispatch_touch(now_seconds, started, events)?;
             if let Some((visible, reason)) = options.visibility {

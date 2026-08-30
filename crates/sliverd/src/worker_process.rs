@@ -1279,6 +1279,7 @@ fn encode_drive_request(output: &mut Vec<u8>, request: DriveRequest) -> Result<(
         None => output.push(0),
     }
     output.push(u8::from(options.force_render));
+    output.push(u8::from(options.resume_timers));
     Ok(())
 }
 
@@ -1310,12 +1311,16 @@ fn decode_drive_request(payload: &[u8]) -> Result<DriveRequest> {
         None
     };
     let force_render = reader.bool()?;
+    let resume_timers = reader.bool()?;
     reader.finish()?;
     let mut request = DriveRequest::new(now_seconds, input_state, transitions, delta, events);
     if let Some((visible, reason)) = visibility {
         request = request.with_visibility(visible, reason, force_render);
     } else if force_render {
         request.options.force_render = true;
+    }
+    if resume_timers {
+        request = request.with_timer_resume();
     }
     Ok(request)
 }

@@ -1450,6 +1450,7 @@ impl Drop for M2TouchBar {
 
 impl TouchBarHardware for M2TouchBar {
     fn claim(&mut self) -> Result<()> {
+        self.unavailable_capability = None;
         match self.claim_inner() {
             Ok(()) => {
                 self.available = true;

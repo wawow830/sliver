@@ -61,7 +61,9 @@ systemctl --user enable --now sliver-supervisor.service
 
 The broker paints the embedded default before login. When a user session starts,
 that user's supervisor stages its selected Lua source and hands over the first
-complete frame without clearing the panel.
+complete frame without clearing the panel. Suspend hides the worker, pauses
+its timers, and turns off the backlight; resume restores the same worker and
+requests a fresh frame.
 
 ## Function keys
 

@@ -1261,6 +1261,16 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             return Ok(());
         }
         if self.recovery.is_some() {
+            if self.resume_pending && self.active.is_some() {
+                let effects = self.drive_active_worker(
+                    DriveRequest::without_input(now, self.input_state).with_timer_resume(),
+                )?;
+                if let Some(effects) = effects {
+                    self.next_worker_deadline = effects.next_worker_deadline;
+                    let _ = self.apply_hidden_effects(&effects)?;
+                }
+                self.resume_pending = false;
+            }
             if let Err(error) = self.hardware.set_backlight(0.75) {
                 self.hardware_available = false;
                 self.missing_capabilities
