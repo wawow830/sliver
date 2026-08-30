@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -10,9 +10,9 @@ use anyhow::{bail, ensure, Context, Result};
 
 use crate::authorization::{NoActiveUserSession, SessionAuthorizer, WorkerNotOwnedByActiveUser};
 use crate::hardware::{
-    function_key_output, tap_key_events, ContactId, HardwareEvent, InputState, LogicalFrame,
-    Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware, TouchEvent,
-    TouchPhase,
+    function_key_output, tap_key_events, ContactId, HardwareCapability, HardwareEvent, InputState,
+    LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
+    TouchEvent, TouchPhase,
 };
 use crate::logind::RealLogind;
 use crate::lua_worker::StopReason;
@@ -32,6 +32,8 @@ const OK: u8 = 0;
 const ERROR: u8 = 1;
 const SESSION_REVOKED: u8 = 2;
 const WAIT_FOR_SESSION: u8 = 3;
+const HARDWARE_UNAVAILABLE: u8 = 4;
+const WAIT_FOR_HARDWARE: u8 = 5;
 const REVOKED_REPLACED: u8 = 0;
 const REVOKED_LOGOUT: u8 = 1;
 const LOGOUT_COMPLETE: u8 = 9;
@@ -57,6 +59,9 @@ pub(crate) struct BrokerHardware {
     input_state: InputState,
     claimed: bool,
     session_revoked: bool,
+    hardware_available: bool,
+    missing_capabilities: BTreeSet<HardwareCapability>,
+    unavailable_capability: Option<HardwareCapability>,
     revoked_reason: Option<StopReason>,
     #[cfg(test)]
     test_uid: Option<libc::uid_t>,
@@ -70,6 +75,9 @@ impl BrokerHardware {
             input_state: InputState::default(),
             claimed: false,
             session_revoked: false,
+            hardware_available: true,
+            missing_capabilities: BTreeSet::new(),
+            unavailable_capability: None,
             revoked_reason: None,
             #[cfg(test)]
             test_uid: None,
@@ -84,6 +92,9 @@ impl BrokerHardware {
             input_state: InputState::default(),
             claimed: false,
             session_revoked: false,
+            hardware_available: true,
+            missing_capabilities: BTreeSet::new(),
+            unavailable_capability: None,
             revoked_reason: None,
             test_uid: None,
         }
@@ -104,6 +115,21 @@ impl BrokerHardware {
 
     pub(crate) fn revoked_stop_reason(&self) -> StopReason {
         self.revoked_reason.unwrap_or(StopReason::Shutdown)
+    }
+
+    fn unavailable_error(&self, body: &[u8]) -> anyhow::Error {
+        let capability = self
+            .unavailable_capability
+            .map(HardwareCapability::name)
+            .unwrap_or("hardware contract");
+        if body.is_empty() {
+            anyhow::anyhow!("hardware interface unavailable: {capability}")
+        } else {
+            anyhow::anyhow!(
+                "hardware interface unavailable: {capability}: {}",
+                String::from_utf8_lossy(body)
+            )
+        }
     }
 
     pub(crate) fn logout_complete(&mut self) -> Result<()> {
@@ -140,6 +166,20 @@ impl BrokerHardware {
                 self.record_revocation(body)?;
                 bail!("broker revoked the user session")
             }
+            HARDWARE_UNAVAILABLE => {
+                self.hardware_available = false;
+                self.unavailable_capability = body
+                    .first()
+                    .copied()
+                    .and_then(|value| HardwareCapability::from_wire(value).ok());
+                if let Some(capability) = self.unavailable_capability {
+                    self.missing_capabilities.insert(capability);
+                }
+                bail!(
+                    "{}",
+                    self.unavailable_error(&body[usize::from(!body.is_empty())..])
+                )
+            }
             other => bail!("broker returned unknown status {other}"),
         }
     }
@@ -163,6 +203,11 @@ impl TouchBarHardware for BrokerHardware {
             .split_first()
             .context("broker claim response is empty")?;
         if *status != OK {
+            if *status == WAIT_FOR_HARDWARE {
+                self.hardware_available = false;
+                return Err(anyhow::anyhow!(String::from_utf8_lossy(body).into_owned())
+                    .context(crate::WaitForHardware));
+            }
             let error = anyhow::anyhow!(String::from_utf8_lossy(body).into_owned());
             if *status == WAIT_FOR_SESSION {
                 return Err(error.context(crate::WaitForActiveSession));
@@ -173,8 +218,23 @@ impl TouchBarHardware for BrokerHardware {
         self.stream = Some(stream);
         self.input_state = input_state;
         self.claimed = true;
+        self.hardware_available = true;
+        self.missing_capabilities.clear();
+        self.unavailable_capability = None;
         let _ = backlight;
         Ok(())
+    }
+
+    fn is_available(&self) -> bool {
+        self.hardware_available
+    }
+
+    fn unavailable_capability(&self) -> Option<HardwareCapability> {
+        self.unavailable_capability
+    }
+
+    fn session_revoked(&self) -> bool {
+        self.session_revoked
     }
 
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
@@ -199,7 +259,39 @@ impl TouchBarHardware for BrokerHardware {
                     }
                     HardwareEvent::Touch(_)
                     | HardwareEvent::Device { .. }
-                    | HardwareEvent::Visibility { .. } => {}
+                    | HardwareEvent::Capability { .. }
+                    | HardwareEvent::Visibility { .. } => match *event {
+                        HardwareEvent::Device { present } => {
+                            if present {
+                                self.missing_capabilities.clear();
+                                self.unavailable_capability = None;
+                            } else {
+                                self.missing_capabilities.extend([
+                                    HardwareCapability::Display,
+                                    HardwareCapability::Touch,
+                                    HardwareCapability::Fn,
+                                    HardwareCapability::SyntheticKeys,
+                                    HardwareCapability::Backlight,
+                                ]);
+                            }
+                            self.hardware_available = present;
+                        }
+                        HardwareEvent::Capability {
+                            capability,
+                            present,
+                        } => {
+                            if present {
+                                self.missing_capabilities.remove(&capability);
+                                self.unavailable_capability =
+                                    self.missing_capabilities.iter().next().copied();
+                            } else {
+                                self.missing_capabilities.insert(capability);
+                                self.unavailable_capability = Some(capability);
+                            }
+                            self.hardware_available = self.missing_capabilities.is_empty();
+                        }
+                        _ => {}
+                    },
                 }
             }
         })
@@ -400,8 +492,10 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                 && !fallback_attempted
                 && authorizer.active_session(seat)?.is_none()
             {
+                eprintln!("broker: starting fallback after client");
                 fallback.start_fallback()?;
                 fallback_running = fallback.has_active_worker();
+                eprintln!("broker: fallback started={fallback_running}");
                 fallback_attempted = true;
             }
             continue;
@@ -421,9 +515,13 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
             fallback.start_fallback()?;
             fallback_attempted = true;
         }
-        if fallback_running || fallback.has_recovery() {
+        if fallback_running || fallback.has_recovery() || !fallback.is_hardware_available() {
+            let was_available = fallback.is_hardware_available();
             fallback.poll(Duration::from_millis(50))?;
             fallback_running = fallback.has_active_worker();
+            if !was_available && fallback.is_hardware_available() {
+                fallback_attempted = false;
+            }
         } else {
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -605,7 +703,21 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     }
     let (input_state, backlight) = {
         let hardware = fallback.hardware_mut();
-        (hardware.input_state(), hardware.get_backlight()?)
+        let input_state = hardware.input_state();
+        let backlight = hardware.get_backlight();
+        match backlight {
+            Ok(backlight) => (input_state, backlight),
+            Err(error) if !hardware.is_available() => {
+                let mut body = vec![hardware
+                    .unavailable_capability()
+                    .unwrap_or(HardwareCapability::Backlight)
+                    .to_wire()];
+                body.extend_from_slice(error.to_string().as_bytes());
+                write_message(&mut stream, WAIT_FOR_HARDWARE, &body)?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        }
     };
     let mut body = Vec::new();
     encode_input_state(&mut body, input_state);
@@ -665,13 +777,11 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             eprintln!("broker revoked user session: {error:#}");
             continue;
         }
-        let response = (match *operation {
+        let response = match *operation {
             POLL => {
                 ensure!(payload.len() == 8, "broker poll request is malformed");
                 let timeout = u64::from_be_bytes(payload.try_into()?).min(u64::from(u32::MAX));
-                let events = fallback
-                    .hardware_mut()
-                    .poll(Duration::from_millis(timeout))?;
+                let events = fallback.poll_events(Duration::from_millis(timeout))?;
                 client_state.contacts.observe(&events);
                 encode_events(&events)
             }
@@ -715,7 +825,21 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
                 break;
             }
             other => bail!("unknown broker request {other}"),
-        })?;
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(error) if !fallback.hardware().is_available() => {
+                let mut body = vec![fallback
+                    .hardware()
+                    .unavailable_capability()
+                    .unwrap_or(HardwareCapability::Display)
+                    .to_wire()];
+                body.extend_from_slice(error.to_string().as_bytes());
+                write_message(&mut stream, HARDWARE_UNAVAILABLE, &body)?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         write_message(&mut stream, OK, &response)?;
     }
     Ok(ClientOutcome {
@@ -855,6 +979,14 @@ fn encode_events(events: &[HardwareEvent]) -> Result<Vec<u8>> {
                 output.push(3);
                 output.push(u8::from(*present));
             }
+            HardwareEvent::Capability {
+                capability,
+                present,
+            } => {
+                output.push(5);
+                output.push(capability.to_wire());
+                output.push(u8::from(*present));
+            }
             HardwareEvent::Visibility { visible } => {
                 output.push(4);
                 output.push(u8::from(*visible));
@@ -893,6 +1025,18 @@ fn decode_events(payload: &[u8]) -> Result<Vec<HardwareEvent>> {
             3 => HardwareEvent::Device {
                 present: read_bool(&mut reader)?,
             },
+            5 => {
+                let capability = HardwareCapability::from_wire({
+                    ensure!(!reader.is_empty(), "broker capability event is truncated");
+                    let value = reader[0];
+                    reader = &reader[1..];
+                    value
+                })?;
+                HardwareEvent::Capability {
+                    capability,
+                    present: read_bool(&mut reader)?,
+                }
+            }
             4 => HardwareEvent::Visibility {
                 visible: read_bool(&mut reader)?,
             },

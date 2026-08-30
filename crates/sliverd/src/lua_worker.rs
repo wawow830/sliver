@@ -154,12 +154,16 @@ pub(crate) struct KeyRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum VisibilityReason {
     Recovery,
+    Suspend,
+    Device,
 }
 
 impl VisibilityReason {
     fn as_lua_str(self) -> &'static str {
         match self {
             Self::Recovery => "recovery",
+            Self::Suspend => "suspend",
+            Self::Device => "device",
         }
     }
 }
@@ -309,6 +313,8 @@ struct Runtime {
     source: LuaSource,
     controls: RuntimeControls,
     visible: bool,
+    timers_paused: bool,
+    paused_since: Option<f64>,
     producer: FrameProducer,
     pending_frame: Option<PendingFrame>,
     pending_retry_deadline: Option<f64>,
@@ -938,7 +944,10 @@ impl Runtime {
             .visible
             .then_some(self.pending_retry_deadline)
             .flatten();
-        earliest_deadline(self.controls.timers.borrow().next_deadline(), pending_retry)
+        let timer_deadline = (!self.timers_paused)
+            .then(|| self.controls.timers.borrow().next_deadline())
+            .flatten();
+        earliest_deadline(timer_deadline, pending_retry)
     }
 
     fn restore_backlight(&mut self, level: f64) -> std::result::Result<(), String> {
@@ -985,10 +994,26 @@ impl Runtime {
             self.dispatch_keys(now_seconds, started, transitions)?;
             self.dispatch_touch(now_seconds, started, events)?;
             if let Some((visible, reason)) = options.visibility {
+                if reason == VisibilityReason::Suspend {
+                    if visible {
+                        if let Some(paused_since) = self.paused_since.take() {
+                            self.controls
+                                .timers
+                                .borrow_mut()
+                                .shift((now_seconds - paused_since).max(0.0));
+                        }
+                        self.timers_paused = false;
+                    } else {
+                        self.timers_paused = true;
+                        self.paused_since = Some(now_seconds);
+                    }
+                }
                 self.visible = visible;
                 self.dispatch_visibility(visible, reason, now_seconds, started)?;
             }
-            self.run_due_timers(now_seconds, started)?;
+            if !self.timers_paused {
+                self.run_due_timers(now_seconds, started)?;
+            }
             self.controls
                 .now_seconds
                 .set(Some(sample_now(now_seconds, started)));
@@ -1237,6 +1262,8 @@ impl Runtime {
             source: source.clone(),
             controls,
             visible: true,
+            timers_paused: false,
+            paused_since: None,
             producer,
             pending_frame: None,
             pending_retry_deadline: None,
@@ -1424,6 +1451,17 @@ impl TimerRegistry {
             .iter()
             .filter_map(|entry| entry.next_deadline)
             .min_by(f64::total_cmp)
+    }
+
+    fn shift(&mut self, amount: f64) {
+        if amount <= 0.0 {
+            return;
+        }
+        for entry in &mut self.entries {
+            if let Some(deadline) = entry.next_deadline {
+                entry.next_deadline = Some(deadline + amount);
+            }
+        }
     }
 }
 

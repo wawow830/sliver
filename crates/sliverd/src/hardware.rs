@@ -337,6 +337,48 @@ pub(crate) struct TouchEvent {
     pub(crate) height: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum HardwareCapability {
+    Display,
+    Touch,
+    Fn,
+    SyntheticKeys,
+    Backlight,
+}
+
+impl HardwareCapability {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Display => "display",
+            Self::Touch => "touch input",
+            Self::Fn => "Fn observation",
+            Self::SyntheticKeys => "synthetic key output",
+            Self::Backlight => "backlight",
+        }
+    }
+
+    pub(crate) fn to_wire(self) -> u8 {
+        match self {
+            Self::Display => 0,
+            Self::Touch => 1,
+            Self::Fn => 2,
+            Self::SyntheticKeys => 3,
+            Self::Backlight => 4,
+        }
+    }
+
+    pub(crate) fn from_wire(value: u8) -> Result<Self> {
+        Ok(match value {
+            0 => Self::Display,
+            1 => Self::Touch,
+            2 => Self::Fn,
+            3 => Self::SyntheticKeys,
+            4 => Self::Backlight,
+            _ => anyhow::bail!("unknown hardware capability {value}"),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum HardwareEvent {
     Touch(TouchEvent),
@@ -347,12 +389,14 @@ pub(crate) enum HardwareEvent {
         modifier: Modifier,
         active: bool,
     },
-    // Hardware lifecycle inputs remain generic at this seam.
-    #[allow(dead_code)]
+    // Device means that the complete hardware contract appeared or vanished.
     Device {
         present: bool,
     },
-    #[allow(dead_code)]
+    Capability {
+        capability: HardwareCapability,
+        present: bool,
+    },
     Visibility {
         visible: bool,
     },
@@ -426,6 +470,20 @@ pub(crate) fn validate_backlight(level: f64) -> Result<()> {
 
 pub(crate) trait TouchBarHardware {
     fn claim(&mut self) -> Result<()>;
+    /// Reacquire devices after a transient disappearance. Adapters that keep
+    /// their claim while reporting lifecycle events need no work here.
+    fn reacquire(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn unavailable_capability(&self) -> Option<HardwareCapability> {
+        None
+    }
+    fn session_revoked(&self) -> bool {
+        false
+    }
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>>;
     fn input_state(&self) -> InputState;
     fn present(&mut self, frame: &LogicalFrame) -> Result<()>;
@@ -453,9 +511,9 @@ mod fake {
     use anyhow::{ensure, Result};
 
     use super::{
-        function_key_output, modifier_output_keys, tap_key_events, ConsumerKey, HardwareEvent,
-        InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, ObservedKey, OutputKey,
-        SyntheticKeyEvent, TouchBarHardware,
+        function_key_output, modifier_output_keys, tap_key_events, ConsumerKey, HardwareCapability,
+        HardwareEvent, InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, ObservedKey,
+        OutputKey, SyntheticKeyEvent, TouchBarHardware,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -530,6 +588,8 @@ mod fake {
         frames: Vec<FrameSnapshot>,
         backlight: f64,
         input_state: InputState,
+        available: bool,
+        unavailable_capability: Option<HardwareCapability>,
         virtual_keyboard_name: Option<String>,
         virtual_keyboard_creations: usize,
         synthetic_keys: Vec<FakeKeyEvent>,
@@ -538,12 +598,16 @@ mod fake {
 
     impl FakeTouchBar {
         pub(crate) fn new() -> Self {
-            Self::default()
+            Self {
+                available: true,
+                ..Self::default()
+            }
         }
 
         pub(crate) fn with_input_state(input_state: InputState) -> Self {
             Self {
                 input_state,
+                available: true,
                 ..Self::default()
             }
         }
@@ -589,6 +653,8 @@ mod fake {
         fn claim(&mut self) -> Result<()> {
             ensure!(!self.claimed, "fake Touch Bar is already claimed");
             self.claimed = true;
+            self.available = true;
+            self.unavailable_capability = None;
             if self.virtual_keyboard_name.is_none() {
                 self.virtual_keyboard_name = Some("Sliver Keyboard".into());
                 self.virtual_keyboard_creations += 1;
@@ -616,9 +682,19 @@ mod fake {
                         self.input_state
                             .apply(ObservedKey::Modifier(modifier), active);
                     }
-                    HardwareEvent::Touch(_)
-                    | HardwareEvent::Device { .. }
-                    | HardwareEvent::Visibility { .. } => {}
+                    HardwareEvent::Touch(_) | HardwareEvent::Visibility { .. } => {}
+                    HardwareEvent::Device { present } => {
+                        self.available = present;
+                        self.unavailable_capability =
+                            (!present).then_some(HardwareCapability::Display);
+                    }
+                    HardwareEvent::Capability {
+                        capability,
+                        present,
+                    } => {
+                        self.available = present;
+                        self.unavailable_capability = (!present).then_some(capability);
+                    }
                 }
             }
             Ok(events)
@@ -626,6 +702,14 @@ mod fake {
 
         fn input_state(&self) -> InputState {
             self.input_state
+        }
+
+        fn is_available(&self) -> bool {
+            self.available
+        }
+
+        fn unavailable_capability(&self) -> Option<HardwareCapability> {
+            self.unavailable_capability
         }
 
         fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
@@ -712,6 +796,7 @@ mod fake {
         fn release(&mut self) -> Result<()> {
             if self.claimed {
                 self.claimed = false;
+                self.available = false;
                 self.actions.push(FakeAction::Release);
             }
             Ok(())

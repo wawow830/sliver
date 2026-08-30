@@ -21,8 +21,8 @@ use evdev::{AttributeSet, EventType, InputEvent, Key};
 
 use crate::hardware::{
     function_key_output, modifier_output_keys, output_key_metadata, tap_key_events,
-    validate_backlight, ConsumerKey, HardwareEvent, InputState, KeyboardKey, LogicalFrame,
-    Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
+    validate_backlight, ConsumerKey, HardwareCapability, HardwareEvent, InputState, KeyboardKey,
+    LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
 };
 
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
@@ -271,6 +271,20 @@ fn backlight_value(level: f64, maximum: u32) -> Result<u32> {
     validate_backlight(level)?;
     ensure!(maximum > 0, "backlight maximum must be positive");
     Ok((level * f64::from(maximum)).round() as u32)
+}
+
+fn read_backlight() -> Result<(u32, u32)> {
+    let maximum = std::fs::read_to_string(MAX_BACKLIGHT)
+        .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/max_brightness"))?
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/max_brightness"))?;
+    let current = std::fs::read_to_string(BACKLIGHT)
+        .with_context(|| format!("reading {BACKLIGHT}"))?
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("parsing {BACKLIGHT}"))?;
+    Ok((current, maximum))
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -891,6 +905,8 @@ pub(crate) struct M2TouchBar {
     fn_active: bool,
     modifiers: ModifierState,
     keyboard_emitter: Option<KeyboardEmitter>,
+    available: bool,
+    unavailable_capability: Option<HardwareCapability>,
 }
 
 impl M2TouchBar {
@@ -906,11 +922,18 @@ impl M2TouchBar {
             fn_active: false,
             modifiers: ModifierState::default(),
             keyboard_emitter: None,
+            available: true,
+            unavailable_capability: None,
         }
     }
 
     fn is_claimed(&self) -> bool {
         self.claim.is_some()
+    }
+
+    fn mark_unavailable(&mut self, capability: HardwareCapability) {
+        self.available = false;
+        self.unavailable_capability = Some(capability);
     }
 
     fn finish_claim_setup(&mut self, setup_result: Result<()>) -> Result<()> {
@@ -982,21 +1005,30 @@ impl M2TouchBar {
         self.physical_surface = Some(physical_surface);
 
         let setup_result = (|| -> Result<()> {
-            self.touch = match TouchInput::open() {
-                Ok(touch) => Some(touch),
-                Err(e) => {
-                    crate::system_log::broker_error(format!(
-                        "touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)"
-                    ));
-                    None
+            self.touch = Some(match TouchInput::open() {
+                Ok(touch) => touch,
+                Err(error) => {
+                    self.mark_unavailable(HardwareCapability::Touch);
+                    return Err(error).context("opening Touch Bar touch input");
+                }
+            });
+            let keyboard = match KeyboardInput::open() {
+                Ok(keyboard) => keyboard,
+                Err(error) => {
+                    self.mark_unavailable(HardwareCapability::Fn);
+                    return Err(error).context("opening internal keyboard");
                 }
             };
-            let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);
             if self.keyboard_emitter.is_none() {
-                self.keyboard_emitter =
-                    Some(KeyboardEmitter::new().context("creating Sliver Keyboard")?);
+                self.keyboard_emitter = Some(match KeyboardEmitter::new() {
+                    Ok(emitter) => emitter,
+                    Err(error) => {
+                        self.mark_unavailable(HardwareCapability::SyntheticKeys);
+                        return Err(error).context("creating Sliver Keyboard");
+                    }
+                });
             }
             Ok(())
         })();
@@ -1012,6 +1044,7 @@ impl M2TouchBar {
                 }
                 HardwareEvent::Touch(_)
                 | HardwareEvent::Device { .. }
+                | HardwareEvent::Capability { .. }
                 | HardwareEvent::Visibility { .. } => {}
             }
         }
@@ -1034,9 +1067,20 @@ impl M2TouchBar {
     }
 
     fn poll_inner(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
-        ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        wait_for_input(self.touch.as_ref(), self.keyboard.as_ref(), timeout)
-            .context("polling Touch Bar input")?;
+        if !self.is_claimed() {
+            if self.claim().is_err() {
+                return Ok(Vec::new());
+            }
+            return Ok(vec![HardwareEvent::Device { present: true }]);
+        }
+        if let Err(_error) = wait_for_input(self.touch.as_ref(), self.keyboard.as_ref(), timeout) {
+            self.mark_unavailable(HardwareCapability::Display);
+            let _ = self.release_inner();
+            return Ok(vec![HardwareEvent::Capability {
+                capability: HardwareCapability::Display,
+                present: false,
+            }]);
+        }
 
         let mut output = Vec::new();
         loop {
@@ -1056,6 +1100,7 @@ impl M2TouchBar {
                 None => None,
             };
             self.remember_keyboard_events(&output[keyboard_start..]);
+            let mut lost = Vec::new();
             if let Some(error) = keyboard_error {
                 if let Some(keyboard) = self.keyboard.as_ref() {
                     crate::system_log::broker_error(format!(
@@ -1068,7 +1113,7 @@ impl M2TouchBar {
                     ));
                 }
                 self.reset_keyboard_state(&mut output);
-                self.keyboard = None;
+                lost.push(HardwareCapability::Fn);
             }
 
             let touch_error = match self.touch.as_mut() {
@@ -1086,7 +1131,19 @@ impl M2TouchBar {
                 if let Some(touch) = self.touch.as_mut() {
                     touch.cancel(&mut output, self.modifiers);
                 }
-                self.touch = None;
+                lost.push(HardwareCapability::Touch);
+            }
+
+            if !lost.is_empty() {
+                let _ = self.release_inner();
+                for capability in lost {
+                    self.mark_unavailable(capability);
+                    output.push(HardwareEvent::Capability {
+                        capability,
+                        present: false,
+                    });
+                }
+                break;
             }
 
             if !made_progress {
@@ -1130,12 +1187,13 @@ impl M2TouchBar {
         // Command-mode DSI: nothing reaches the glass until the framebuffer
         // is marked dirty. set_crtc flushes the first frame; heartbeats use
         // the dirty path after that.
-        if let Err(e) = claim.card.dirty_framebuffer(
-            framebuffer,
-            &[control::ClipRect::new(0, 0, PANEL_W as u16, height as u16)],
-        ) {
-            crate::system_log::broker_error(format!("dirty flush failed: {e}"));
-        }
+        claim
+            .card
+            .dirty_framebuffer(
+                framebuffer,
+                &[control::ClipRect::new(0, 0, PANEL_W as u16, height as u16)],
+            )
+            .context("flushing Touch Bar framebuffer")?;
 
         if !self.shown {
             claim.show(framebuffer)?;
@@ -1145,6 +1203,7 @@ impl M2TouchBar {
     }
 
     fn release_inner(&mut self) -> Result<()> {
+        self.available = false;
         // Ungrab before dropping the device. Keep releasing the remaining
         // resources after an error, then report the first failure.
         let mut first_error = None;
@@ -1183,7 +1242,33 @@ impl Drop for M2TouchBar {
 
 impl TouchBarHardware for M2TouchBar {
     fn claim(&mut self) -> Result<()> {
-        self.claim_inner()
+        match self.claim_inner() {
+            Ok(()) => {
+                self.available = true;
+                self.unavailable_capability = None;
+                Ok(())
+            }
+            Err(error) => {
+                if self.unavailable_capability.is_none() {
+                    self.mark_unavailable(HardwareCapability::Display);
+                } else {
+                    self.available = false;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn reacquire(&mut self) -> Result<()> {
+        self.claim()
+    }
+
+    fn is_available(&self) -> bool {
+        self.available && self.is_claimed()
+    }
+
+    fn unavailable_capability(&self) -> Option<HardwareCapability> {
+        self.unavailable_capability
     }
 
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
@@ -1198,61 +1283,87 @@ impl TouchBarHardware for M2TouchBar {
     }
 
     fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
-        self.present_inner(frame)
+        match self.present_inner(frame) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.mark_unavailable(HardwareCapability::Display);
+                let _ = self.release_inner();
+                Err(error)
+            }
+        }
     }
 
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        if let Some(emitter) = self.keyboard_emitter.as_mut() {
-            emitter
-                .emit(events)
-                .context("emitting synthetic keyboard events")?;
+        let Some(emitter) = self.keyboard_emitter.as_mut() else {
+            self.mark_unavailable(HardwareCapability::SyntheticKeys);
+            return Err(anyhow::anyhow!("Sliver Keyboard is unavailable"));
+        };
+        if let Err(error) = emitter.emit(events) {
+            self.mark_unavailable(HardwareCapability::SyntheticKeys);
+            return Err(error).context("emitting synthetic keyboard events");
         }
         Ok(())
     }
 
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        if let Some(emitter) = self.keyboard_emitter.as_mut() {
-            if let Err(error) = emitter.tap(index, modifiers) {
-                crate::system_log::broker_error(format!(
-                    "fn: failed to emit F{}: {error}",
-                    index + 1
-                ));
-            }
-        }
-        Ok(())
+        let Some(emitter) = self.keyboard_emitter.as_mut() else {
+            self.mark_unavailable(HardwareCapability::SyntheticKeys);
+            return Err(anyhow::anyhow!("Sliver Keyboard is unavailable"));
+        };
+        emitter.tap(index, modifiers).map_err(|error| {
+            self.mark_unavailable(HardwareCapability::SyntheticKeys);
+            anyhow::anyhow!(error).context(format!("emitting F{}", index + 1))
+        })
     }
 
     fn get_backlight(&mut self) -> Result<f64> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        let maximum = std::fs::read_to_string(MAX_BACKLIGHT)
-            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/max_brightness"))?
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/max_brightness"))?;
-        let current = std::fs::read_to_string(BACKLIGHT)
-            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/brightness"))?
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/brightness"))?;
-        normalize_backlight_level(current, maximum)
+        let (current, maximum) = match read_backlight() {
+            Ok(values) => values,
+            Err(error) => {
+                self.mark_unavailable(HardwareCapability::Backlight);
+                return Err(error);
+            }
+        };
+        match normalize_backlight_level(current, maximum) {
+            Ok(level) => Ok(level),
+            Err(error) => {
+                self.mark_unavailable(HardwareCapability::Backlight);
+                Err(error)
+            }
+        }
     }
 
     fn set_backlight(&mut self, level: f64) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
 
-        let maximum = std::fs::read_to_string(MAX_BACKLIGHT)
-            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/max_brightness"))?
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/max_brightness"))?;
+        let (_, maximum) = match read_backlight() {
+            Ok(values) => values,
+            Err(error) => {
+                self.mark_unavailable(HardwareCapability::Backlight);
+                return Err(error);
+            }
+        };
         let value = backlight_value(level, maximum)?;
-        let mut brightness = OpenOptions::new()
+        let mut brightness = match OpenOptions::new()
             .write(true)
             .open(BACKLIGHT)
-            .with_context(|| format!("opening {BACKLIGHT}"))?;
-        write!(brightness, "{value}").with_context(|| format!("writing {BACKLIGHT}"))?;
+            .with_context(|| format!("opening {BACKLIGHT}"))
+        {
+            Ok(brightness) => brightness,
+            Err(error) => {
+                self.mark_unavailable(HardwareCapability::Backlight);
+                return Err(error);
+            }
+        };
+        if let Err(error) =
+            write!(brightness, "{value}").with_context(|| format!("writing {BACKLIGHT}"))
+        {
+            self.mark_unavailable(HardwareCapability::Backlight);
+            return Err(error);
+        }
         Ok(())
     }
 

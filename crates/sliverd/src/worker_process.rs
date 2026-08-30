@@ -1267,10 +1267,14 @@ fn encode_drive_request(output: &mut Vec<u8>, request: DriveRequest) -> Result<(
         encode_touch(output, event);
     }
     match options.visibility {
-        Some((visible, VisibilityReason::Recovery)) => {
+        Some((visible, reason)) => {
             output.push(1);
             output.push(u8::from(visible));
-            output.push(0);
+            output.push(match reason {
+                VisibilityReason::Recovery => 0,
+                VisibilityReason::Suspend => 1,
+                VisibilityReason::Device => 2,
+            });
         }
         None => output.push(0),
     }
@@ -1295,9 +1299,13 @@ fn decode_drive_request(payload: &[u8]) -> Result<DriveRequest> {
     }
     let visibility = if reader.bool()? {
         let visible = reader.bool()?;
-        let reason = reader.u8()?;
-        ensure!(reason == 0, "unknown Lua worker visibility reason {reason}");
-        Some((visible, VisibilityReason::Recovery))
+        let reason = match reader.u8()? {
+            0 => VisibilityReason::Recovery,
+            1 => VisibilityReason::Suspend,
+            2 => VisibilityReason::Device,
+            reason => bail!("unknown Lua worker visibility reason {reason}"),
+        };
+        Some((visible, reason))
     } else {
         None
     };

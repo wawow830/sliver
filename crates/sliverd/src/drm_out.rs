@@ -121,6 +121,14 @@ impl Daemon {
                     "hardware device: {}",
                     if present { "available" } else { "unavailable" }
                 ),
+                HardwareEvent::Capability {
+                    capability,
+                    present,
+                } => eprintln!(
+                    "hardware {}: {}",
+                    capability.name(),
+                    if present { "available" } else { "unavailable" }
+                ),
                 HardwareEvent::Visibility { visible } => eprintln!(
                     "hardware visibility: {}",
                     if visible { "visible" } else { "hidden" }

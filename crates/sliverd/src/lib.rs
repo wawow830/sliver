@@ -77,6 +77,17 @@ pub fn supervisor_main() -> Result<()> {
 #[derive(Debug)]
 struct WaitForActiveSession;
 
+#[derive(Debug)]
+struct WaitForHardware;
+
+impl std::fmt::Display for WaitForHardware {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("waiting for Touch Bar hardware")
+    }
+}
+
+impl std::error::Error for WaitForHardware {}
+
 impl std::fmt::Display for WaitForActiveSession {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("waiting for an active local user session")
@@ -87,9 +98,10 @@ impl std::error::Error for WaitForActiveSession {}
 
 fn is_transient_supervisor_error(result: &Result<()>) -> bool {
     result.as_ref().err().is_some_and(|error| {
-        error
-            .chain()
-            .any(|cause| cause.downcast_ref::<WaitForActiveSession>().is_some())
+        error.chain().any(|cause| {
+            cause.downcast_ref::<WaitForActiveSession>().is_some()
+                || cause.downcast_ref::<WaitForHardware>().is_some()
+        })
     })
 }
 

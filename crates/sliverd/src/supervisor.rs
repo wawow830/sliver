@@ -15,10 +15,11 @@ use crate::apply_ipc::absolute_lexical;
 use crate::authorization::{AuthorizationGrant, SessionAuthorizer};
 use crate::config_selection::ConfigSelection;
 use crate::default_source;
+use crate::frame_canvas::FrameCanvas;
 use crate::hardware::{
-    modifier_output_keys, tap_key_events, ContactId, HardwareEvent, InputState, InputTransition,
-    KeyboardKey, LogicalFrame, ObservedKey, OutputKey, SyntheticKeyEvent, TouchBarHardware,
-    TouchEvent, TouchPhase,
+    modifier_output_keys, tap_key_events, ContactId, HardwareCapability, HardwareEvent, InputState,
+    InputTransition, KeyboardKey, LogicalFrame, ObservedKey, OutputKey, SyntheticKeyEvent,
+    TouchBarHardware, TouchEvent, TouchPhase,
 };
 use crate::logind::{Logind, RealLogind};
 use crate::lua_worker::{
@@ -380,6 +381,10 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     active: Option<ActiveConfig>,
     recovery: Option<RecoverySession>,
     claimed: bool,
+    hardware_available: bool,
+    missing_capabilities: BTreeSet<HardwareCapability>,
+    suspended: bool,
+    worker_visible: bool,
     origin: Instant,
     backlight: f64,
     input_state: InputState,
@@ -477,15 +482,31 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         logind: L,
         default_source: LuaSource,
     ) -> Result<Self> {
-        hardware.claim()?;
-        let input_state = hardware.input_state();
-        let backlight = match hardware.get_backlight() {
-            Ok(level) => level,
-            Err(error) => {
-                let _ = hardware.release();
-                return Err(error).context("reading initial Touch Bar backlight");
+        let claimed = match hardware.claim() {
+            Ok(()) => true,
+            Err(error) if !hardware.is_available() => {
+                eprintln!("Touch Bar hardware is unavailable during startup: {error:#}");
+                false
             }
+            Err(error) => return Err(error),
         };
+        let input_state = hardware.input_state();
+        let backlight = if claimed {
+            match hardware.get_backlight() {
+                Ok(level) => level,
+                Err(error) if !hardware.is_available() => {
+                    eprintln!("Touch Bar backlight is unavailable during startup: {error:#}");
+                    0.0
+                }
+                Err(error) => {
+                    let _ = hardware.release();
+                    return Err(error).context("reading initial Touch Bar backlight");
+                }
+            }
+        } else {
+            0.0
+        };
+        let hardware_available = claimed && hardware.is_available();
         Ok(Self {
             hardware,
             state_file,
@@ -495,7 +516,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             worker_process_backend: false,
             active: None,
             recovery: None,
-            claimed: true,
+            claimed,
+            hardware_available,
+            missing_capabilities: BTreeSet::new(),
+            suspended: false,
+            worker_visible: false,
             origin: Instant::now(),
             backlight,
             input_state,
@@ -578,6 +603,31 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.recovery.is_some()
     }
 
+    pub(crate) fn is_hardware_available(&self) -> bool {
+        self.hardware_available && !self.suspended
+    }
+
+    fn hardware_unavailable_error(&self) -> anyhow::Error {
+        let reason = self
+            .missing_capabilities
+            .iter()
+            .next()
+            .copied()
+            .map(HardwareCapability::name)
+            .unwrap_or("hardware contract");
+        anyhow::anyhow!("hardware interface unavailable: {reason}")
+    }
+
+    fn ensure_hardware_available(&self) -> Result<()> {
+        ensure!(!self.suspended, "hardware interface unavailable: suspended");
+        ensure!(
+            self.hardware_available,
+            "{:#}",
+            self.hardware_unavailable_error()
+        );
+        Ok(())
+    }
+
     pub(crate) fn poll(&mut self, timeout: Duration) -> Result<()> {
         self.poll_hardware(timeout)
     }
@@ -601,6 +651,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     pub(crate) fn start_fallback(&mut self) -> Result<()> {
         ensure!(self.fallback_worker, "supervisor is not the fallback owner");
         if self.authorizer.active_session("seat0")?.is_some() {
+            return Ok(());
+        }
+        if !self.hardware_available || self.suspended {
             return Ok(());
         }
         let state_file = self.state_file.clone();
@@ -655,6 +708,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         selection: ConfigSelection,
         authorization: Option<ApplyAuthorization>,
     ) -> Result<()> {
+        self.ensure_hardware_available()?;
         let state_file = authorization
             .as_ref()
             .map(|authorization| state_file_for_uid(&self.state_file, authorization.grant.uid()))
@@ -964,6 +1018,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 self.fn_hold_started = None;
             }
             self.recovery = None;
+            self.worker_visible = true;
             self.ignored_contacts
                 .extend(self.down_contacts.keys().copied());
         }
@@ -1097,6 +1152,173 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
         }
         Err(CandidateFailure::Candidate(error))
+    }
+
+    fn cancel_active_contacts_for_visibility(&mut self, now: f64) -> Vec<TouchEvent> {
+        self.ignored_contacts
+            .extend(self.down_contacts.keys().copied());
+        self.down_contacts.clear();
+        self.touch_queue.drain();
+        self.input_transitions.clear();
+        self.active
+            .as_mut()
+            .map(|active| {
+                let contacts = std::mem::take(&mut active.contacts);
+                contacts
+                    .values()
+                    .map(|event| TouchEvent {
+                        phase: TouchPhase::Cancel,
+                        time: now,
+                        ..*event
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn hide_active_worker(&mut self, reason: VisibilityReason, now: f64) -> Result<()> {
+        let events = self.cancel_active_contacts_for_visibility(now);
+        let should_notify = self.worker_visible;
+        self.worker_visible = false;
+        let mut request = DriveRequest::new(now, self.input_state, Vec::new(), 0.0, events);
+        if should_notify {
+            request = request.with_visibility(false, reason, false);
+        }
+        let Some(effects) = self.drive_active_worker(request)? else {
+            self.next_worker_deadline = None;
+            return Ok(());
+        };
+        self.next_worker_deadline = effects.next_worker_deadline;
+        let _ = self.apply_hidden_effects(&effects)?;
+        Ok(())
+    }
+
+    fn release_physical_synthetic_keys(&mut self) -> Result<()> {
+        let (_, events) = self.synthetic.release();
+        if events.is_empty() {
+            return Ok(());
+        }
+        self.hardware.emit_key_events(&events)
+    }
+
+    fn mark_hardware_unavailable(&mut self, capability: HardwareCapability) -> Result<()> {
+        self.set_hardware_capability(capability, false, self.now_seconds())
+    }
+
+    fn set_hardware_capability(
+        &mut self,
+        capability: HardwareCapability,
+        present: bool,
+        now: f64,
+    ) -> Result<()> {
+        if present {
+            self.missing_capabilities.remove(&capability);
+            if self.missing_capabilities.is_empty() && !self.hardware_available {
+                self.hardware_available = true;
+                if let Err(error) = self.recover_visible_worker(VisibilityReason::Device, now) {
+                    eprintln!("Touch Bar recovery failed: {error:#}");
+                    self.hardware_available = false;
+                    self.missing_capabilities.insert(
+                        self.hardware
+                            .unavailable_capability()
+                            .unwrap_or(HardwareCapability::Display),
+                    );
+                }
+            }
+        } else {
+            let was_available = self.hardware_available;
+            self.missing_capabilities.insert(capability);
+            self.hardware_available = false;
+            if was_available {
+                self.hide_active_worker(VisibilityReason::Device, now)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn recover_visible_worker(&mut self, reason: VisibilityReason, now: f64) -> Result<()> {
+        if self.suspended {
+            return Ok(());
+        }
+        if self.recovery.is_some() {
+            if let Err(error) = self.hardware.set_backlight(0.75) {
+                self.hardware_available = false;
+                self.missing_capabilities
+                    .insert(HardwareCapability::Backlight);
+                return Err(error);
+            }
+            self.backlight = 0.75;
+            return self.present_recovery();
+        }
+        if self.active.is_none() || self.worker_visible {
+            return Ok(());
+        }
+        let desired_backlight = self
+            .active
+            .as_ref()
+            .expect("active worker was checked")
+            .backlight;
+        if let Err(error) = self.hardware.set_backlight(desired_backlight) {
+            self.hardware_available = false;
+            self.missing_capabilities
+                .insert(HardwareCapability::Backlight);
+            return Err(error);
+        }
+        self.backlight = desired_backlight;
+        let active_synthetic = self.synthetic.clone();
+        if let Err(error) = self.restore_synthetic_state(&active_synthetic) {
+            self.hardware_available = false;
+            self.missing_capabilities
+                .insert(HardwareCapability::SyntheticKeys);
+            return Err(error);
+        }
+        let Some(effects) = self.drive_active_worker(
+            DriveRequest::without_input(now, self.input_state).with_visibility(true, reason, true),
+        )?
+        else {
+            return Ok(());
+        };
+        self.schedule_effects(now, &effects);
+        self.apply_effects(effects)?;
+        self.worker_visible = true;
+        Ok(())
+    }
+
+    fn set_visibility(&mut self, visible: bool, now: f64) -> Result<()> {
+        if !visible {
+            if self.suspended {
+                return Ok(());
+            }
+            self.suspended = true;
+            if self.hardware_available {
+                self.hide_active_worker(VisibilityReason::Suspend, now)?;
+                if let Err(error) = self.release_physical_synthetic_keys() {
+                    self.hardware_available = false;
+                    self.missing_capabilities
+                        .insert(HardwareCapability::SyntheticKeys);
+                    eprintln!("synthetic key cleanup during suspend failed: {error:#}");
+                }
+                if let Err(error) = self.hardware.set_backlight(0.0) {
+                    self.hardware_available = false;
+                    self.missing_capabilities
+                        .insert(HardwareCapability::Backlight);
+                    eprintln!("backlight off during suspend failed: {error:#}");
+                }
+            }
+            self.next_worker_deadline = None;
+            return Ok(());
+        }
+        if !self.suspended {
+            return Ok(());
+        }
+        self.suspended = false;
+        self.input_state = self.hardware.input_state();
+        if self.hardware_available {
+            if let Err(error) = self.recover_visible_worker(VisibilityReason::Suspend, now) {
+                eprintln!("hardware resume failed: {error:#}");
+            }
+        }
+        Ok(())
     }
 
     fn route_input(&mut self, key: ObservedKey, active: bool, now: f64) -> Result<()> {
@@ -1291,7 +1513,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.input_transitions.clear();
         self.next_worker_deadline = next_worker_deadline;
         self.fn_hold_started = None;
+        self.worker_visible = false;
         self.recovery = Some(RecoverySession::new(owner_is_healthy));
+        if !self.hardware_available || self.suspended {
+            return Ok(());
+        }
         self.hardware
             .set_backlight(0.75)
             .context("setting recovery backlight")?;
@@ -1329,18 +1555,50 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             return Ok(());
         };
         self.schedule_effects(now, &effects);
-        self.apply_effects(effects)
+        self.apply_effects(effects)?;
+        self.worker_visible = true;
+        Ok(())
+    }
+
+    pub(crate) fn poll_events(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+        let events = match self.hardware.poll(timeout) {
+            Ok(events) => events,
+            Err(error) if !self.hardware.is_available() => {
+                self.mark_hardware_unavailable(
+                    self.hardware
+                        .unavailable_capability()
+                        .unwrap_or(HardwareCapability::Display),
+                )?;
+                eprintln!("Touch Bar hardware poll failed: {error:#}");
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(error),
+        };
+        let now = self.now_seconds();
+        self.process_events_at(now, events.clone())?;
+        Ok(events)
     }
 
     fn poll_hardware(&mut self, timeout: Duration) -> Result<()> {
-        let events = self.hardware.poll(timeout)?;
-        let now = self.now_seconds();
-        self.process_events_at(now, events)
+        self.poll_events(timeout).map(|_| ())
     }
 
     fn poll_hardware_deferred(&mut self, timeout: Duration) -> Result<()> {
         let now = self.now_seconds();
-        for event in self.hardware.poll(timeout)? {
+        let events = match self.hardware.poll(timeout) {
+            Ok(events) => events,
+            Err(error) if !self.hardware.is_available() => {
+                self.mark_hardware_unavailable(
+                    self.hardware
+                        .unavailable_capability()
+                        .unwrap_or(HardwareCapability::Display),
+                )?;
+                eprintln!("Touch Bar hardware poll failed during staging: {error:#}");
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        for event in events {
             self.route_hardware_event(event, now)?;
         }
         Ok(())
@@ -1366,6 +1624,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn route_hardware_event(&mut self, event: HardwareEvent, now: f64) -> Result<()> {
+        if (self.suspended || !self.hardware_available)
+            && matches!(
+                event,
+                HardwareEvent::Touch(_) | HardwareEvent::Fn { .. } | HardwareEvent::Modifier { .. }
+            )
+        {
+            return Ok(());
+        }
         match event {
             HardwareEvent::Touch(touch) => self.route_touch(touch),
             HardwareEvent::Fn { active } => {
@@ -1378,7 +1644,23 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             HardwareEvent::Modifier { modifier, active } => {
                 self.route_input(ObservedKey::Modifier(modifier), active, now)
             }
-            HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => Ok(()),
+            HardwareEvent::Device { present } => {
+                for capability in [
+                    HardwareCapability::Display,
+                    HardwareCapability::Touch,
+                    HardwareCapability::Fn,
+                    HardwareCapability::SyntheticKeys,
+                    HardwareCapability::Backlight,
+                ] {
+                    self.set_hardware_capability(capability, present, now)?;
+                }
+                Ok(())
+            }
+            HardwareEvent::Capability {
+                capability,
+                present,
+            } => self.set_hardware_capability(capability, present, now),
+            HardwareEvent::Visibility { visible } => self.set_visibility(visible, now),
         }
     }
 
@@ -1415,11 +1697,18 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let worker_due = self
             .next_worker_deadline
             .is_some_and(|deadline| deadline <= now);
-        if self.recovery.is_some() {
-            if self.active.is_some() && self.has_healthy_recovery() && worker_due {
-                self.drive_hidden(now)?;
-            }
-        } else if self.active.is_some()
+        if !self.suspended && self.active.is_some() && !self.worker_visible && worker_due {
+            self.drive_hidden(now)?;
+        } else if !self.suspended
+            && self.recovery.is_some()
+            && self.active.is_some()
+            && self.has_healthy_recovery()
+            && worker_due
+        {
+            self.drive_hidden(now)?;
+        } else if !self.suspended
+            && self.recovery.is_none()
+            && self.active.is_some()
             && (!self.input_transitions.is_empty()
                 || !self.touch_queue.events.is_empty()
                 || worker_due)
@@ -1449,7 +1738,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn drive_hidden(&mut self, now: f64) -> Result<()> {
-        if !self.has_healthy_recovery() {
+        if self.suspended || self.active.is_none() || self.worker_visible {
+            return Ok(());
+        }
+        if self.recovery.is_some() && !self.has_healthy_recovery() {
             return Ok(());
         }
         let Some(effects) =
@@ -1541,8 +1833,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 return Ok(false);
             }
         };
-        if !key_events.is_empty() {
-            self.hardware.emit_key_events(&key_events)?;
+        if !key_events.is_empty() && self.hardware_available && !self.suspended {
+            if let Err(error) = self.hardware.emit_key_events(&key_events) {
+                if !self.hardware.is_available() {
+                    self.synthetic = next_synthetic;
+                    self.mark_hardware_unavailable(
+                        self.hardware
+                            .unavailable_capability()
+                            .unwrap_or(HardwareCapability::SyntheticKeys),
+                    )?;
+                    return Ok(false);
+                }
+                return Err(error);
+            }
         }
         self.synthetic = next_synthetic;
         Ok(true)
@@ -1578,6 +1881,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         if let Some(level) = backlight {
             if let Err(error) = self.hardware.set_backlight(level) {
+                if !self.hardware.is_available() {
+                    self.mark_hardware_unavailable(
+                        self.hardware
+                            .unavailable_capability()
+                            .unwrap_or(HardwareCapability::Backlight),
+                    )?;
+                    return Ok(());
+                }
                 let mut error = error.context("applying Lua backlight request");
                 if let Err(restore_error) = self.hardware.set_backlight(old_backlight) {
                     error = error.context(format!(
@@ -1595,6 +1906,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
         if let Some(frame) = frame.as_ref() {
             if let Err(error) = self.hardware.present(&frame.frame) {
+                if !self.hardware.is_available() {
+                    self.mark_hardware_unavailable(
+                        self.hardware
+                            .unavailable_capability()
+                            .unwrap_or(HardwareCapability::Display),
+                    )?;
+                    return Ok(());
+                }
                 let mut error = error.context("presenting Lua frame");
                 if let Err(restore_error) = self.hardware.present(&old_frame) {
                     error = error.context(format!(
@@ -1714,18 +2033,46 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     fn shutdown_with_reason(mut self, reason: StopReason) -> Result<()> {
         let synthetic_result = self.release_synthetic_keys();
         let stop_result = self.stop_active_worker(reason);
+        let blank_result = if self.hardware_available && !self.hardware.session_revoked() {
+            FrameCanvas::new().and_then(|canvas| {
+                canvas
+                    .finish()
+                    .and_then(|frame| self.hardware.present(&frame))
+            })
+        } else {
+            Ok(())
+        };
+        let backlight_result = if self.hardware_available && !self.hardware.session_revoked() {
+            self.hardware.set_backlight(0.0)
+        } else {
+            Ok(())
+        };
         let release_result = self.hardware.release();
         self.claimed = false;
-        match (stop_result.and(synthetic_result), release_result) {
-            (Err(error), Err(release_error)) => {
+
+        let mut hardware_error = None;
+        for (operation, result) in [
+            ("painting the shutdown frame", blank_result),
+            ("turning off the Touch Bar backlight", backlight_result),
+            ("releasing supervisor hardware", release_result),
+        ] {
+            if let Err(error) = result {
+                if hardware_error.is_none() {
+                    hardware_error = Some(error.context(operation));
+                }
+            }
+        }
+        let worker_result = stop_result.and(synthetic_result);
+        match (worker_result, hardware_error) {
+            (Err(error), Some(hardware_error)) => {
                 crate::system_log::broker_error(format!(
-                    "hardware release failed after Lua stop error: {release_error:#}"
+                    "hardware shutdown failed after Lua stop error: {hardware_error:#}"
                 ));
                 Err(error)
             }
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(error)) => Err(error).context("releasing supervisor hardware"),
-            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), None) => Err(error),
+            (Ok(()), Some(error)) => Err(error),
+            (Ok(()), None) => Ok(()),
         }
     }
 
@@ -2039,9 +2386,9 @@ mod tests {
 
     use crate::default_source;
     use crate::hardware::{
-        ConsumerKey, FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareEvent, InputState,
-        KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent,
-        TouchBarHardware, TouchEvent, TouchPhase,
+        ConsumerKey, FakeAction, FakeKey, FakeKeyEvent, FakeTouchBar, HardwareCapability,
+        HardwareEvent, InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey,
+        SyntheticKeyEvent, TouchBarHardware, TouchEvent, TouchPhase,
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
@@ -7981,6 +8328,138 @@ mod tests {
             std::fs::metadata(&state_file)?.permissions().mode() & 0o777,
             0o600
         );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn suspend_pauses_a_healthy_worker_and_resumes_its_frame_and_brightness() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("suspend.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                sliver.backlight.set(0.4)
+                sliver.timer.every(10, function()
+                    record("timer")
+                    sliver.redraw()
+                end)
+                return {{
+                    api_version = 1,
+                    visibility = function(event) record("visibility:" .. tostring(event.visible)) end,
+                    touch = function(event) record("touch:" .. event.phase) end,
+                    render = function() record("render") end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let frames_before_suspend = supervisor.hardware().presented_frames().len();
+        assert_eq!(supervisor.hardware().backlight_level(), 0.4);
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(1.0)?;
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Visibility { visible: false });
+        supervisor.step_at(2.0)?;
+        let events_during_suspend = std::fs::read_to_string(&log)?;
+        assert!(events_during_suspend.contains("touch:cancel"));
+        assert!(events_during_suspend.contains("visibility:false"));
+        assert_eq!(supervisor.hardware().backlight_level(), 0.0);
+
+        supervisor.step_at(100.0)?;
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frames_before_suspend
+        );
+        assert!(!std::fs::read_to_string(&log)?.contains("timer"));
+
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Visibility { visible: true });
+        supervisor.step_at(101.0)?;
+        assert_eq!(supervisor.hardware().backlight_level(), 0.4);
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frames_before_suspend + 1
+        );
+        assert!(std::fs::read_to_string(&log)?.contains("visibility:true"));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn device_loss_hides_without_rendering_and_recovery_accepts_applies_again() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("device.lua");
+        let log = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local sliver = require("sliver.v1")
+                local log = {log:?}
+                local function record(value)
+                    local file = assert(io.open(log, "a"))
+                    file:write(value, "\n")
+                    file:close()
+                end
+                sliver.timer.every(1, function()
+                    record("timer")
+                    sliver.redraw()
+                end)
+                return {{
+                    api_version = 1,
+                    visibility = function(event) record("visibility:" .. tostring(event.visible) .. ":" .. event.reason) end,
+                    render = function() record("render") end,
+                }}
+                "#,
+                log = log.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        let frame_count = supervisor.hardware().presented_frames().len();
+        supervisor.hardware_mut().inject(HardwareEvent::Capability {
+            capability: HardwareCapability::Display,
+            present: false,
+        });
+        supervisor.step_at(1.0)?;
+        assert!(!supervisor.is_hardware_available());
+        assert!(supervisor.apply(&source).is_err());
+        assert!(std::fs::read_to_string(&log)?.contains("visibility:false:device"));
+
+        supervisor.step_at(5.0)?;
+        assert_eq!(supervisor.hardware().presented_frames().len(), frame_count);
+        assert!(std::fs::read_to_string(&log)?.contains("timer"));
+
+        supervisor.hardware_mut().inject(HardwareEvent::Capability {
+            capability: HardwareCapability::Display,
+            present: true,
+        });
+        supervisor.step_at(6.0)?;
+        assert!(supervisor.is_hardware_available());
+        assert_eq!(
+            supervisor.hardware().presented_frames().len(),
+            frame_count + 1
+        );
+        assert!(std::fs::read_to_string(&log)?.contains("visibility:true:device"));
         supervisor.shutdown()?;
         Ok(())
     }
