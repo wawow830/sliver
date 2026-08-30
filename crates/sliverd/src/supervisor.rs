@@ -596,10 +596,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             return Ok(());
         };
         let current = self.session_snapshot(&seat)?;
-        if current.active == previous.active {
-            if let Some(handoff) = self.session_handoff.as_mut() {
-                handoff.snapshot.generation = current.generation;
-            }
+        if current == previous {
             return Ok(());
         }
         self.switch_session_owner(current)

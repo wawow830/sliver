@@ -86,10 +86,10 @@ F1–F12 are emitted as real Linux key events through `/dev/uinput`.
 
 ## Scriptable apply CLI
 
-The per-user supervisor accepts one tagged apply request through its private Unix
-socket. Use `sliver FILE` for an explicit Lua source, or run `sliver` with no
-path to select the embedded default and remove the saved path. Success is
-silent; failures go to stderr.
+The supervisor accepts one tagged apply request through a local Unix socket.
+Use `sliver FILE` for an explicit Lua source, or run `sliver` with no path to
+select the embedded default and remove the saved path. Success is silent;
+failures go to stderr.
 
 The embedded default is one canonical `default.lua` source. It uses the same
 Lua worker, canvas, input, key, timer, and backlight interfaces as an explicit

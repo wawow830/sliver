@@ -23,6 +23,7 @@ Long-running hardware owner. The real adapter polls nonblocking evdev
 descriptors and emits normalized input events through the hardware seam. The
 owner coordinates:
 
+- the embedded fallback before login and session handoff for active users
 - DRM scanout and dirty-framebuffer updates
 - normalized hardware events from the adapter
 - uinput function-key output
@@ -174,15 +175,23 @@ Button/label actions execute with the Sliver user's privileges through
 
 ## Lua apply transaction
 
-`sliver FILE` sends an absolute, lexically normalized path to the per-user
-supervisor. `sliver` with no path sends a tagged embedded-default selection over
-the same socket. The supervisor starts a fresh Lua worker and waits for its
-first complete frame before committing the active frame, brightness, and
-selected-path state. An explicit path writes the state file; the embedded
-selection removes it. After commit, the supervisor asks the replaced worker to
-stop. A rejected candidate leaves the active worker, frame, and selected path
-unchanged. Sliver does not watch the source or imported files. Reapplying the
-same path or selecting the default starts a new worker.
+`sliver FILE` sends an absolute, lexically normalized path to the supervisor.
+`sliver` with no path sends a tagged embedded-default selection over the same
+socket. The supervisor starts a fresh Lua worker and waits for its first
+complete frame before committing the active frame, brightness, and selected
+path state. An explicit path writes the active user's state file; the embedded
+selection removes that user's state file. After commit, the supervisor asks the
+replaced worker to stop. A rejected candidate leaves the active worker, frame,
+and selected path unchanged. Sliver does not watch the source or imported files.
+Reapplying the same path or selecting the default starts a new worker.
+
+The hardware broker starts the embedded worker when no local session owns the
+seat. When logind reports an active local session, it stops that fallback while
+leaving its last frame on the panel, stages the selected source for that user,
+and presents the new frame only after the candidate commits. A failed handoff
+stops the old worker and presents the fixed recovery row. On logout it runs the
+old worker's `logout` cleanup and stages the embedded default. The user's
+selected path remains available for the next login.
 
 The default lives in one `crates/sliverd/src/default.lua` source. The build
 embeds its exact bytes and installs no editable copy. An absent state file
@@ -209,8 +218,9 @@ user-service processes without a qualifying session, and root are rejected.
 
 The supervisor checks the session before staging and again immediately before
 commit. A session switch cancels candidates that are staging or waiting in the
-FIFO request queue. Workers run with the supervisor's systemd user-manager
-environment. The protocol has no TCP listener or token field and carries no
+FIFO request queue. Session handoff checks logind on every broker poll and
+reloads the active user's selected path or the embedded default. Workers run
+with the supervisor's systemd user-manager environment. The protocol has no TCP listener or token field and carries no
 client environment.
 
 ## Lua worker lifecycle

@@ -1,7 +1,8 @@
 # systemd services and worker policy
 
 Enable `sliver-supervisor.service` only after the `sliver` account has the
-required DRM, input, and uinput device permissions. The unit owns the hardware
+required DRM, input, and uinput device permissions. The service starts the
+embedded default before login and performs session handoff through logind. The unit owns the hardware
 before login and conflicts with `tiny-dfr.service`; stopping it does not start
 `tiny-dfr` again. Enabling the unit is the administrator's explicit takeover
 step.
