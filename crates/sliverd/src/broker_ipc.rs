@@ -290,9 +290,6 @@ pub(crate) fn broker_main() -> Result<()> {
     if socket.exists() {
         let _ = std::fs::remove_file(&socket);
     }
-    let listener = UnixListener::bind(&socket)?;
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
-
     let running = Arc::new(AtomicBool::new(true));
     let signal_running = running.clone();
     ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
@@ -314,6 +311,8 @@ pub(crate) fn broker_main() -> Result<()> {
             }
         }
     };
+    let listener = UnixListener::bind(&socket)?;
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
     let authorizer = SessionAuthorizer::new(RealLogind::default());
     let result = run_broker(
         listener,
