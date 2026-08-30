@@ -542,10 +542,10 @@ fn handle_client_inner(
                 write_message(&mut stream, OK, &[])?;
                 continue;
             }
-            ensure!(
-                *operation == LOGOUT_COMPLETE,
-                "broker requires logout cleanup acknowledgement"
-            );
+            if *operation != LOGOUT_COMPLETE {
+                write_message(&mut stream, SESSION_REVOKED, &[])?;
+                continue;
+            }
             ensure!(payload.is_empty(), "logout acknowledgement has a payload");
             write_message(&mut stream, OK, &[])?;
             break;
