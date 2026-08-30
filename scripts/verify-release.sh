@@ -486,10 +486,18 @@ return {
 LUA
     cat > "$CONFIG_DIR/hung.lua" <<'LUA'
 local sliver = require("sliver.v1")
+local timer
 return {
     api_version = 1,
-    render = function()
-        while true do end
+    start = function()
+        timer = sliver.timer.after(0.1, function()
+            sliver.input.key.down(sliver.input.keys.keyboard.escape)
+            os.execute("sleep 30 >/dev/null 2>&1 &")
+            while true do end
+        end)
+    end,
+    render = function(canvas)
+        canvas:rectangle(0, 0, 2008, 60, "#000000")
     end,
 }
 LUA
@@ -529,12 +537,19 @@ manual_check() {
     fi
 }
 record_metric() {
-    local id=$1 prompt_text=$2 value=""
+    local id=$1 prompt_text=$2 value="" interval fps misses input_delay growth
     refuse_if_blocked
     printf '  %s ' "$prompt_text"
     read -r value || true
-    if [[ -z "$value" || "$value" == unknown || "$value" == n/a ]]; then
-        fail_check "$id" "no measured value was entered"
+    if [[ ! "$value" =~ ^interval_s=[0-9]+([.][0-9]+)?\ fps=[0-9]+([.][0-9]+)?\ misses=[0-9]+\ input_to_frame_ms=[0-9]+([.][0-9]+)?\ latency_growth_ms=[0-9]+([.][0-9]+)?$ ]]; then
+        fail_check "$id" "measurement must use the named numeric fields"
+        exit 1
+    fi
+    read -r interval fps misses input_delay growth < <(tr ' ' '\n' <<< "$value" | cut -d= -f2)
+    if ! awk -v interval="$interval" -v fps="$fps" -v misses="$misses" \
+        -v input_delay="$input_delay" -v growth="$growth" \
+        'BEGIN { exit !(interval >= 30 && fps >= 59.5 && misses == 0 && input_delay >= 0 && growth >= 0) }'; then
+        fail_check "$id" "measurement did not meet the native 60 FPS acceptance threshold"
         exit 1
     fi
     pass_check "$id" "operator measurement: $value"
@@ -796,7 +811,7 @@ REQUIRED_CHECKS=(
     lifecycle_fn_recovery lifecycle_modifier_uinput lifecycle_logout_handoff
     lifecycle_watchdog_child_key_cleanup service_restart dirty_framebuffer
     backlight_restore suspend_resume fake_video_workload real_video_workload
-    performance_measurement rollback_verified
+    performance_measurement
 )
 all_required_checks_pass() {
     local id status
@@ -812,7 +827,7 @@ all_required_checks_pass() {
 preflight_stage() {
     stage 1 "Host, session, and pre-install state"
     say "This stage is read-only. It does not install, enable, stop, or trigger anything."
-    for command_name in awk cargo dnf fuser getent id journalctl loginctl pgrep rpm rpm2cpio cpio sudo systemctl udevadm; do
+    for command_name in awk cargo cut dnf fuser getent id journalctl loginctl pgrep rpm rpm2cpio cpio sudo systemctl udevadm; do
         if command -v "$command_name" >/dev/null 2>&1; then
             pass_check "tool_$command_name" "available"
         else
@@ -907,9 +922,8 @@ preflight_stage() {
         fail_check input_identity "no event devices were found"
     fi
     if [[ -r /proc/bus/input/devices ]]; then
-        awk '/^N: Name=/{name=$0}/^H: Handlers=/{print name; print}' \
-            /proc/bus/input/devices > "$VERIFY_DIR/input-capabilities-before.txt"
-        pass_check input_capabilities "saved /proc/bus/input/devices"
+        cat /proc/bus/input/devices > "$VERIFY_DIR/input-capabilities-before.txt"
+        pass_check input_capabilities "saved full evdev capability bitmaps and handlers"
     else
         fail_check input_capabilities "input capability data is unavailable"
     fi
@@ -1298,7 +1312,7 @@ suspend_performance_stage() {
         "Did setting and restoring the Touch Bar backlight survive worker restart and suspend?" \
         "Record the before, changed, and restored normalized levels in the run log."
     record_metric performance_measurement \
-        "Enter the genuine video measurement, including interval, presented FPS, frame misses, input-to-frame delay, and latency growth (for example: 30s, 59.8 FPS, 0 misses, 18ms, bounded):"
+        "Enter metrics as interval_s=30 fps=59.8 misses=0 input_to_frame_ms=18 latency_growth_ms=0 (requires >=30s, >=59.5 FPS, zero misses, and numeric bounded latency):"
     CURRENT_STAGE=11
     save_state
 }
@@ -1322,10 +1336,10 @@ final_stage() {
     if ! restore_and_verify full; then
         exit 1
     fi
-    all_required_checks_pass || {
-        blocker "rollback changed the affirmative evidence ledger unexpectedly"
+    if [[ "$(awk -F '\t' '$2 == "rollback_verified" { result=$3 } END { print result }' "$EVIDENCE_FILE")" != pass ]]; then
+        blocker "full rollback was not recorded as verified"
         exit 1
-    }
+    fi
     CURRENT_STAGE=12
     save_state
     printf '\n%s%sVerification passed and the host was restored.%s\n' "$BOLD" "$GREEN" "$RESET"

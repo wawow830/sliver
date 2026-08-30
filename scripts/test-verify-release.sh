@@ -39,6 +39,8 @@ grep -F 'restore_and_verify' "$script" >/dev/null || fail 'rollback does not ver
 grep -F 'HANDOFF_PENDING' "$script" >/dev/null || fail 'logout handoff is not resumable'
 grep -F 'valid.lua' "$script" >/dev/null || fail 'valid fixture is not named'
 grep -F 'invalid.lua' "$script" >/dev/null || fail 'invalid fixture is not named'
+grep -F 'hung.lua' "$script" >/dev/null || fail 'watchdog fixture is not named'
+grep -F 'video-2008x60.lua' "$script" >/dev/null || fail 'video workload is not named'
 grep -F 'refuse_if_blocked' "$script" >/dev/null || fail 'failure gate is missing'
 
 echo 'verify-release contract tests passed'
