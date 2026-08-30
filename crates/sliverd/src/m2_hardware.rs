@@ -1092,15 +1092,7 @@ impl M2TouchBar {
         self.physical_surface = Some(physical_surface);
 
         let setup_result = (|| -> Result<()> {
-            self.touch = match TouchInput::open() {
-                Ok(touch) => Some(touch),
-                Err(e) => {
-                    crate::system_log::broker_error(format!(
-                        "touch: can't discover {TOUCH_NAME}: {e} (continuing untouchable)"
-                    ));
-                    None
-                }
-            };
+            self.touch = Some(TouchInput::open().context("opening Touch Bar touch input")?);
             let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);
