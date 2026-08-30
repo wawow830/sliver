@@ -879,6 +879,7 @@ fn open_main_keyboard() -> io::Result<(PathBuf, evdev::Device)> {
 struct KeyboardInput {
     path: PathBuf,
     device: evdev::Device,
+    initial_fn_active: bool,
     initial_modifiers: ModifierState,
     pending: Vec<HardwareEvent>,
 }
@@ -888,15 +889,21 @@ impl KeyboardInput {
         let (path, device) = open_main_keyboard()?;
         set_nonblocking(device.as_raw_fd())?;
         let key_state = device.get_key_state()?;
+        let initial_fn_active = initial_fn_state_from_key_state(&key_state);
         let initial_modifiers = modifier_state_from_key_state(&key_state);
         let pending = initial_keyboard_events(&key_state);
         eprintln!("fn: watching {} ({KEYBOARD_NAME})", path.display());
         Ok(Self {
             path,
             device,
+            initial_fn_active,
             initial_modifiers,
             pending,
         })
+    }
+
+    fn initial_fn_active(&self) -> bool {
+        self.initial_fn_active
     }
 
     fn initial_modifiers(&self) -> ModifierState {
@@ -952,6 +959,10 @@ fn modifier_for(code: u16) -> Option<Modifier> {
         let modifier = metadata.modifier?;
         (output_key_code(metadata.key).code() == code).then_some(modifier)
     })
+}
+
+fn initial_fn_state_from_key_state(key_state: &AttributeSet<Key>) -> bool {
+    key_state.contains(Key::KEY_FN)
 }
 
 fn modifier_state_from_key_state(key_state: &AttributeSet<Key>) -> ModifierState {
@@ -1275,6 +1286,7 @@ impl M2TouchBar {
                     return Err(error).context("opening internal keyboard");
                 }
             };
+            self.fn_active = keyboard.initial_fn_active();
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);
             self.sleep_monitor =
@@ -1996,6 +2008,13 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn initial_keyboard_state_includes_fn_for_staging() {
+        let key_state: AttributeSet<Key> = [Key::KEY_FN].into_iter().collect();
+
+        assert!(initial_fn_state_from_key_state(&key_state));
     }
 
     #[test]
