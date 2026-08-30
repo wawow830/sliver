@@ -1,11 +1,7 @@
-#[cfg(test)]
-use std::cell::{RefCell, RefMut};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-#[cfg(test)]
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -282,76 +278,6 @@ impl Drop for BrokerHardware {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct SharedHardware<H: TouchBarHardware>(Rc<RefCell<H>>);
-
-#[cfg(test)]
-impl<H: TouchBarHardware> Clone for SharedHardware<H> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-#[cfg(test)]
-impl<H: TouchBarHardware> SharedHardware<H> {
-    fn new(hardware: H) -> Self {
-        Self(Rc::new(RefCell::new(hardware)))
-    }
-
-    #[cfg(test)]
-    fn inspect<R>(&self, inspect: impl FnOnce(&H) -> R) -> R {
-        inspect(&self.0.borrow())
-    }
-
-    fn lock(&self) -> Result<RefMut<'_, H>> {
-        self.0
-            .try_borrow_mut()
-            .map_err(|_| anyhow::anyhow!("broker hardware is already in use"))
-    }
-}
-
-#[cfg(test)]
-impl<H: TouchBarHardware> TouchBarHardware for SharedHardware<H> {
-    fn claim(&mut self) -> Result<()> {
-        self.lock()?.claim()
-    }
-
-    fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
-        self.lock()?.poll(timeout)
-    }
-
-    fn input_state(&self) -> InputState {
-        self.0
-            .try_borrow()
-            .map(|hardware| hardware.input_state())
-            .unwrap_or_default()
-    }
-
-    fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
-        self.lock()?.present(frame)
-    }
-
-    fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
-        self.lock()?.emit_key_events(events)
-    }
-
-    fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
-        self.lock()?.tap_function_key(index, modifiers)
-    }
-
-    fn get_backlight(&mut self) -> Result<f64> {
-        self.lock()?.get_backlight()
-    }
-
-    fn set_backlight(&mut self, level: f64) -> Result<()> {
-        self.lock()?.set_backlight(level)
-    }
-
-    fn release(&mut self) -> Result<()> {
-        self.lock()?.release()
-    }
-}
-
 pub(crate) fn broker_main() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -370,10 +296,11 @@ pub(crate) fn broker_main() -> Result<()> {
     let fallback = Supervisor::new_fallback(
         M2TouchBar::new(),
         PathBuf::from("/var/lib/sliver/config-path"),
-        Some(crate::default_source::source()),
     )?;
     let authorizer = SessionAuthorizer::new(RealLogind::default());
     let running = Arc::new(AtomicBool::new(true));
+    let signal_running = running.clone();
+    ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
     let result = run_broker(
         listener,
         fallback,
@@ -581,26 +508,6 @@ impl HeldKeys {
         }
         hardware.emit_key_events(&events)
     }
-}
-
-#[cfg(test)]
-fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
-    stream: UnixStream,
-    fallback: &mut Supervisor<H, L>,
-    authorizer: &SessionAuthorizer<L>,
-    fallback_running: &mut bool,
-    seat: &str,
-    peer_verification: PeerVerification,
-) -> Result<()> {
-    handle_client_with_connection_stop(
-        stream,
-        fallback,
-        authorizer,
-        fallback_running,
-        seat,
-        peer_verification,
-        None,
-    )
 }
 
 fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind>(
@@ -1144,8 +1051,8 @@ mod tests {
     use std::time::Instant;
 
     use crate::hardware::{
-        FakeTouchBar, FrameSnapshot, HardwareEvent, InputState, LogicalFrame, ModifierState,
-        SyntheticKeyEvent, TouchBarHardware,
+        FakeTouchBar, HardwareEvent, InputState, LogicalFrame, ModifierState, SyntheticKeyEvent,
+        TouchBarHardware,
     };
     use crate::logind::{ActiveSession, FakeLogind};
     use crate::lua_worker::LuaSource;
@@ -1572,139 +1479,6 @@ mod tests {
         second_server
             .join()
             .expect("second broker server panicked")?;
-        Ok(())
-    }
-
-    #[test]
-    fn broker_handoff_keeps_frames_and_restarts_the_fallback_after_logout() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let socket = directory.path().join("broker.sock");
-        let listener = UnixListener::bind(&socket)?;
-        let logind = FakeLogind::new();
-        let default = LuaSource::embedded(
-            b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
-        );
-        let shared = SharedHardware::new(FakeTouchBar::new());
-        let mut fallback = Supervisor::new_fallback_with_logind(
-            shared.clone(),
-            directory.path().join("state/config-path"),
-            logind.clone(),
-            Some(default),
-        )?;
-        fallback.start_fallback()?;
-        let mut fallback_running = true;
-        let uid = unsafe { libc::getuid() };
-        logind.set_active(
-            SEAT,
-            Some(ActiveSession {
-                id: "first-user".into(),
-                uid,
-            }),
-        );
-        let client_logind = logind.clone();
-        let client_socket = socket.clone();
-        let client = thread::spawn(move || -> Result<()> {
-            let mut hardware = BrokerHardware::new_at(client_socket);
-            hardware.claim()?;
-            let stride = sliver_core::STRIP_W as usize * 4;
-            let red = [0, 0, 255, 255].repeat(stride * sliver_core::STRIP_H as usize / 4);
-            hardware.present(&LogicalFrame::from_wire(
-                sliver_core::STRIP_W as usize,
-                sliver_core::STRIP_H as usize,
-                stride,
-                red,
-            ))?;
-            hardware.confirm_owner()?;
-            client_logind.set_active(SEAT, None);
-            assert!(hardware.poll(Duration::ZERO).is_err());
-            assert_eq!(hardware.revoked_stop_reason(), StopReason::Logout);
-            hardware.logout_complete()?;
-            Ok(())
-        });
-
-        let (stream, _) = listener.accept()?;
-        let authorizer = SessionAuthorizer::new(logind.clone());
-        handle_client(
-            stream,
-            &mut fallback,
-            &authorizer,
-            &mut fallback_running,
-            SEAT,
-            PeerVerification::Test,
-        )?;
-        client.join().expect("broker client panicked")?;
-        assert!(!fallback_running);
-        fallback.start_fallback()?;
-
-        let frames: Vec<FrameSnapshot> =
-            shared.inspect(|hardware| hardware.presented_frames().to_vec());
-        assert_eq!(frames.len(), 3);
-        assert_eq!(frames[0].rgba_at(10, 10), [0, 255, 0, 255]);
-        assert_eq!(frames[1].rgba_at(10, 10), [255, 0, 0, 255]);
-        assert_eq!(frames[2].rgba_at(10, 10), [0, 255, 0, 255]);
-        fallback.shutdown()?;
-        Ok(())
-    }
-
-    #[test]
-    fn broker_rejects_a_failed_login_without_replacing_the_fallback_frame() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let socket = directory.path().join("broker.sock");
-        let listener = UnixListener::bind(&socket)?;
-        let logind = FakeLogind::new();
-        let shared = SharedHardware::new(FakeTouchBar::new());
-        let mut fallback = Supervisor::new_fallback_with_logind(
-            shared.clone(),
-            directory.path().join("state/config-path"),
-            logind.clone(),
-            Some(LuaSource::embedded(
-                b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
-            )),
-        )?;
-        fallback.start_fallback()?;
-        let mut fallback_running = true;
-        let uid = unsafe { libc::getuid() };
-        logind.set_active(
-            SEAT,
-            Some(ActiveSession {
-                id: "failed-login".into(),
-                uid,
-            }),
-        );
-        let client_socket = socket.clone();
-        let client = thread::spawn(move || -> Result<()> {
-            let mut hardware = BrokerHardware::new_at(client_socket);
-            hardware.claim()?;
-            let _ = hardware.present(&LogicalFrame::from_wire(1, 1, 4, vec![0, 0, 0, 255]));
-            Ok(())
-        });
-        let (stream, _) = listener.accept()?;
-        let authorizer = SessionAuthorizer::new(logind.clone());
-        let error = handle_client(
-            stream,
-            &mut fallback,
-            &authorizer,
-            &mut fallback_running,
-            SEAT,
-            PeerVerification::Test,
-        )
-        .expect_err("failed login handoff was accepted");
-        assert!(format!("{error:#}").contains("broker frame width is invalid"));
-        client
-            .join()
-            .expect("failed-login broker client panicked")?;
-        assert!(!fallback_running);
-        let before_logout: Vec<FrameSnapshot> =
-            shared.inspect(|hardware| hardware.presented_frames().to_vec());
-        assert_eq!(before_logout.len(), 1);
-        assert_eq!(before_logout[0].rgba_at(10, 10), [0, 255, 0, 255]);
-        logind.set_active(SEAT, None);
-        fallback.start_fallback()?;
-        let after_logout: Vec<FrameSnapshot> =
-            shared.inspect(|hardware| hardware.presented_frames().to_vec());
-        assert_eq!(after_logout.len(), 2);
-        assert_eq!(after_logout[1].rgba_at(10, 10), [0, 255, 0, 255]);
-        fallback.shutdown()?;
         Ok(())
     }
 

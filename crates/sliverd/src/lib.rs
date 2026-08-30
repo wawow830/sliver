@@ -130,11 +130,18 @@ fn supervisor_main_inner(running: std::sync::Arc<std::sync::atomic::AtomicBool>)
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
 
     let state_file = selected_path_state_file()?;
+    #[cfg(test)]
+    let mut supervisor = supervisor::Supervisor::new_with_startup_candidate(
+        broker_ipc::BrokerHardware::new(),
+        state_file.clone(),
+        crate::logind::RealLogind::default(),
+        Some(default_source::source()),
+    )?;
+    #[cfg(not(test))]
     let mut supervisor = supervisor::Supervisor::new_with_startup_candidate(
         broker_ipc::BrokerHardware::new(),
         state_file,
         crate::logind::RealLogind::default(),
-        Some(default_source::source()),
     )?;
     let serve_result = supervisor::serve_until(listener, &mut supervisor, running);
     let session_revoked = supervisor.hardware().session_revoked();

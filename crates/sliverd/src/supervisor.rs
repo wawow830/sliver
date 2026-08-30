@@ -405,21 +405,20 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
         Self::new_with_logind(hardware, state_file, RealLogind::default())
     }
 
-    pub(crate) fn new_fallback(
-        hardware: H,
-        state_file: PathBuf,
-        injected_default: Option<LuaSource>,
-    ) -> Result<Self> {
-        Self::new_fallback_with_logind(
+    pub(crate) fn new_fallback(hardware: H, state_file: PathBuf) -> Result<Self> {
+        let mut supervisor = Self::new_with_logind_and_default(
             hardware,
             state_file,
             RealLogind::default(),
-            injected_default,
-        )
+            default_source::source(),
+        )?;
+        supervisor.fallback_worker = true;
+        Ok(supervisor)
     }
 }
 
 impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
+    #[cfg(test)]
     pub(crate) fn new_fallback_with_logind(
         hardware: H,
         state_file: PathBuf,
@@ -517,6 +516,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     /// Build the running supervisor and make one startup attempt. A saved path
     /// is tried once; absent state selects the embedded source and never writes
     /// a path to state.
+    #[cfg(test)]
     pub(crate) fn new_with_startup_candidate(
         hardware: H,
         state_file: PathBuf,
@@ -529,6 +529,27 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             state_file.clone(),
             logind,
             default_source,
+        )?;
+        let saved = read_selected_path(&state_file)?;
+        let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
+        if let Err(error) = supervisor.startup_candidate(selection) {
+            eprintln!("selected Lua worker entered recovery: {error:#}");
+            supervisor.enter_recovery()?;
+        }
+        Ok(supervisor)
+    }
+
+    #[cfg(not(test))]
+    pub(crate) fn new_with_startup_candidate(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+    ) -> Result<Self> {
+        let mut supervisor = Self::new_with_logind_and_default(
+            hardware,
+            state_file.clone(),
+            logind,
+            default_source::source(),
         )?;
         let saved = read_selected_path(&state_file)?;
         let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
@@ -745,6 +766,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let staged_frame = worker.render_at_with_input(render_time, 0.0, self.input_state)?;
         let pending_backlight = worker.pending_backlight()?;
         let frame = staged_frame.frame;
+        if let Some(authorization) = authorization {
+            self.authorizer
+                .recheck(authorization.peer, &authorization.grant)
+                .map_err(CandidateFailure::Authorization)?;
+        }
         let latest_backlight = self.hardware.get_backlight()?;
         self.backlight = latest_backlight;
         let (previous_path_state, path_state) = match state_update {
