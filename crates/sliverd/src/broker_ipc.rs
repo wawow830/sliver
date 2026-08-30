@@ -30,6 +30,7 @@ const RELEASE: u8 = 7;
 const OK: u8 = 0;
 const ERROR: u8 = 1;
 const SESSION_REVOKED: u8 = 2;
+const LOGOUT_COMPLETE: u8 = 8;
 const SEAT: &str = "seat0";
 
 pub(crate) fn socket_path() -> Result<PathBuf> {
@@ -58,6 +59,11 @@ impl BrokerHardware {
 
     pub(crate) fn session_revoked(&self) -> bool {
         self.session_revoked
+    }
+
+    pub(crate) fn logout_complete(&mut self) -> Result<()> {
+        ensure!(self.session_revoked, "the broker session was not revoked");
+        self.request(LOGOUT_COMPLETE, &[]).map(|_| ())
     }
 
     fn request(&mut self, operation: u8, payload: &[u8]) -> Result<Vec<u8>> {
@@ -106,6 +112,9 @@ impl TouchBarHardware for BrokerHardware {
 
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
         ensure!(self.claimed, "broker hardware is not claimed");
+        if self.session_revoked {
+            bail!("broker revoked the user session");
+        }
         let millis = timeout.as_millis().min(u64::MAX as u128) as u64;
         let mut payload = Vec::new();
         payload.extend_from_slice(&millis.to_be_bytes());
@@ -451,6 +460,7 @@ fn handle_client_inner(
     contacts: &mut ActiveContacts,
 ) -> Result<()> {
     let peer = crate::peer_credentials::read(&stream)?;
+    ensure_supervisor_peer(peer.pid)?;
     let grant = authorizer.authorize_active_uid(peer.uid, SEAT)?;
     let request = read_message(&mut stream)?;
     let (operation, payload) = request.split_first().context("broker request is empty")?;
@@ -469,6 +479,7 @@ fn handle_client_inner(
     encode_input_state(&mut body, input_state);
     body.extend_from_slice(&backlight.to_bits().to_be_bytes());
     write_message(&mut stream, OK, &body)?;
+    let mut session_revoked = false;
 
     loop {
         let request = match read_message(&mut stream) {
@@ -477,14 +488,28 @@ fn handle_client_inner(
             Err(error) => return Err(error),
         };
         let (operation, payload) = request.split_first().context("broker request is empty")?;
+        if session_revoked {
+            if *operation == EMIT_KEYS {
+                let events = decode_key_events(payload)?;
+                fallback.hardware_mut().emit_key_events(&events)?;
+                held_keys.observe(&events);
+                write_message(&mut stream, OK, &[])?;
+                continue;
+            }
+            ensure!(
+                *operation == LOGOUT_COMPLETE,
+                "broker requires logout cleanup acknowledgement"
+            );
+            ensure!(payload.is_empty(), "logout acknowledgement has a payload");
+            write_message(&mut stream, OK, &[])?;
+            break;
+        }
         if let Err(error) = authorizer.recheck_active_uid(peer.uid, &grant) {
-            let cancellations = if *operation == POLL {
-                encode_events(&contacts.cancel())?
-            } else {
-                Vec::new()
-            };
+            let cancellations = encode_events(&contacts.cancel())?;
             write_message(&mut stream, SESSION_REVOKED, &cancellations)?;
-            return Err(error);
+            session_revoked = true;
+            eprintln!("broker revoked user session: {error:#}");
+            continue;
         }
         let response = (match *operation {
             POLL => {
@@ -532,6 +557,23 @@ fn handle_client_inner(
         })?;
         write_message(&mut stream, OK, &response)?;
     }
+    Ok(())
+}
+
+fn ensure_supervisor_peer(pid: libc::pid_t) -> Result<()> {
+    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .with_context(|| format!("reading the supervisor cgroup for peer {pid}"))?;
+    ensure!(
+        cgroup
+            .lines()
+            .any(|line| line.ends_with("/sliver-supervisor.service")),
+        "broker peer is not the Sliver user supervisor"
+    );
+    let executable = std::fs::read_link(format!("/proc/{pid}/exe"))?;
+    ensure!(
+        executable.file_name() == Some(std::ffi::OsStr::new("sliver-supervisor")),
+        "broker peer executable is not sliver-supervisor"
+    );
     Ok(())
 }
 

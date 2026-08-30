@@ -110,12 +110,21 @@ fn supervisor_main_inner() -> Result<()> {
     let serve_result = supervisor::serve_until(listener, &mut supervisor, running);
     let session_revoked = supervisor.hardware().session_revoked();
     let handoff_result = if session_revoked {
-        supervisor.handoff_owner()
+        let handoff = supervisor.handoff_owner();
+        let acknowledgement = supervisor.hardware_mut().logout_complete();
+        match (handoff, acknowledgement) {
+            (Err(error), Err(acknowledgement_error)) => Err(error).context(format!(
+                "logout acknowledgement also failed: {acknowledgement_error:#}"
+            )),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
     } else {
         Ok(())
     };
     let service_result = if session_revoked {
-        Ok(())
+        Err(anyhow::anyhow!("active user session ended"))
     } else {
         serve_result
     };

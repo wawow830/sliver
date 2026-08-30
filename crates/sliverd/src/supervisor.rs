@@ -64,21 +64,18 @@ enum CandidateFailure {
     Authorization(anyhow::Error),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WorkerOwner {
     Fallback,
     User(ActiveSession),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSnapshot {
     active: Option<ActiveSession>,
     generation: u64,
 }
 
-#[allow(dead_code)]
 struct SessionHandoff {
     seat: String,
     snapshot: SessionSnapshot,
@@ -395,9 +392,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
     state_file: PathBuf,
     default_source: LuaSource,
-    #[allow(dead_code)]
     session_handoff: Option<SessionHandoff>,
-    #[allow(dead_code)]
     handoff_in_progress: bool,
     fallback_worker: bool,
     active: Option<ActiveConfig>,
@@ -440,6 +435,12 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
             RealLogind::default(),
             default_source,
         )?;
+        let snapshot = supervisor.session_snapshot("seat0")?;
+        supervisor.session_handoff = Some(SessionHandoff {
+            seat: "seat0".into(),
+            snapshot,
+            owner: WorkerOwner::Fallback,
+        });
         supervisor.fallback_worker = true;
         Ok(supervisor)
     }
@@ -520,7 +521,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     /// Build the hardware broker. It owns the fallback before login and swaps
     /// to the selected source belonging to the active local session.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn new_with_session_startup_candidate(
         hardware: H,
         state_file: PathBuf,
@@ -580,7 +581,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(supervisor)
     }
 
-    #[cfg(test)]
     fn session_snapshot(&self, seat: &str) -> Result<SessionSnapshot> {
         let before = self.authorizer.generation()?;
         let active = self.authorizer.active_session(seat)?;
@@ -595,7 +595,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         })
     }
 
-    #[cfg(test)]
     fn recheck_session_snapshot(&self, expected: &SessionSnapshot) -> Result<()> {
         let handoff = self
             .session_handoff
@@ -609,9 +608,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
-    #[cfg(test)]
     fn refresh_session_owner(&mut self) -> Result<()> {
-        if self.handoff_in_progress {
+        if self.handoff_in_progress || self.fallback_worker {
             return Ok(());
         }
         let Some((seat, previous)) = self
@@ -628,7 +626,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.switch_session_owner(current)
     }
 
-    #[cfg(test)]
     fn switch_session_owner(&mut self, snapshot: SessionSnapshot) -> Result<()> {
         let target_owner = snapshot
             .active
@@ -723,7 +720,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
-    #[cfg(test)]
     fn record_session_owner(&mut self, snapshot: SessionSnapshot, owner: WorkerOwner) {
         let handoff = self
             .session_handoff
@@ -733,7 +729,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         handoff.owner = owner;
     }
 
-    #[cfg(test)]
     fn session_handoff_failed(
         &mut self,
         error: anyhow::Error,
@@ -776,15 +771,36 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     pub(crate) fn start_fallback(&mut self) -> Result<()> {
         ensure!(self.fallback_worker, "supervisor is not the fallback owner");
+        let seat = self
+            .session_handoff
+            .as_ref()
+            .context("fallback session state is unavailable")?
+            .seat
+            .clone();
+        let snapshot = self.session_snapshot(&seat)?;
+        if snapshot.active.is_some() {
+            self.session_handoff
+                .as_mut()
+                .expect("fallback session state disappeared")
+                .snapshot = snapshot;
+            return Ok(());
+        }
+        self.session_handoff
+            .as_mut()
+            .expect("fallback session state disappeared")
+            .snapshot = snapshot.clone();
         let state_file = self.state_file.clone();
-        match self.apply_candidate(
+        self.handoff_in_progress = true;
+        let result = self.apply_candidate(
             ConfigSelection::Default,
             None,
             SelectionState::Keep,
             &state_file,
             StopReason::Replaced,
-            None,
-        ) {
+            Some(&snapshot),
+        );
+        self.handoff_in_progress = false;
+        match result {
             Ok(()) => Ok(()),
             Err(failure) => {
                 let error = match failure {
@@ -962,7 +978,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .recheck(authorization.peer, &authorization.grant)
                 .map_err(CandidateFailure::Authorization)?;
         }
-        #[cfg(test)]
         if let Some(expected_session) = expected_session {
             self.recheck_session_snapshot(expected_session)
                 .map_err(CandidateFailure::Candidate)?;
@@ -1530,7 +1545,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn process_events_at(&mut self, now: f64, events: Vec<HardwareEvent>) -> Result<()> {
         self.check_worker_liveness()?;
-        #[cfg(test)]
         self.refresh_session_owner()?;
         if self.recovery_due(now) {
             self.enter_recovery()?;
