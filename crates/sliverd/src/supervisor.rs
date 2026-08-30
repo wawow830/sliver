@@ -1883,13 +1883,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     #[allow(dead_code)]
     pub(crate) fn handoff_owner(&mut self) -> Result<()> {
+        self.handoff_owner_with_reason(StopReason::Logout)
+    }
+
+    pub(crate) fn handoff_owner_with_reason(&mut self, reason: StopReason) -> Result<()> {
         if let Err(error) = self.poll_hardware(Duration::ZERO) {
             eprintln!("hardware poll failed during owner handoff: {error:#}");
         }
         if let Err(error) = self.release_synthetic_keys() {
             eprintln!("synthetic key cleanup failed during owner handoff: {error:#}");
         }
-        let stop_result = self.stop_active_worker(StopReason::Logout);
+        let stop_result = self.stop_active_worker(reason);
         let input_state = self.hardware.input_state();
         self.reset_owner_state(input_state);
         if let Err(error) = stop_result {

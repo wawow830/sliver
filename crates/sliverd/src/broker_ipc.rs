@@ -16,6 +16,7 @@ use crate::hardware::{
     TouchPhase,
 };
 use crate::logind::RealLogind;
+use crate::lua_worker::StopReason;
 use crate::m2_hardware::M2TouchBar;
 use crate::supervisor::Supervisor;
 
@@ -32,6 +33,8 @@ const OK: u8 = 0;
 const ERROR: u8 = 1;
 const SESSION_REVOKED: u8 = 2;
 const WAIT_FOR_SESSION: u8 = 3;
+const REVOKED_REPLACED: u8 = 0;
+const REVOKED_LOGOUT: u8 = 1;
 const LOGOUT_COMPLETE: u8 = 9;
 const SEAT: &str = "seat0";
 
@@ -48,6 +51,7 @@ pub(crate) struct BrokerHardware {
     input_state: InputState,
     claimed: bool,
     session_revoked: bool,
+    revoked_reason: Option<StopReason>,
 }
 
 impl BrokerHardware {
@@ -58,6 +62,7 @@ impl BrokerHardware {
             input_state: InputState::default(),
             claimed: false,
             session_revoked: false,
+            revoked_reason: None,
         }
     }
 
@@ -69,6 +74,7 @@ impl BrokerHardware {
             input_state: InputState::default(),
             claimed: false,
             session_revoked: false,
+            revoked_reason: None,
         }
     }
 
@@ -76,9 +82,26 @@ impl BrokerHardware {
         self.session_revoked
     }
 
+    pub(crate) fn revoked_stop_reason(&self) -> StopReason {
+        self.revoked_reason.unwrap_or(StopReason::Shutdown)
+    }
+
     pub(crate) fn logout_complete(&mut self) -> Result<()> {
         ensure!(self.session_revoked, "the broker session was not revoked");
         self.request(LOGOUT_COMPLETE, &[]).map(|_| ())
+    }
+
+    fn record_revocation(&mut self, payload: &[u8]) -> Result<()> {
+        let reason = payload
+            .first()
+            .copied()
+            .context("broker revocation has no reason")?;
+        self.revoked_reason = Some(match reason {
+            REVOKED_REPLACED => StopReason::Replaced,
+            REVOKED_LOGOUT => StopReason::Logout,
+            other => bail!("unknown broker revocation reason {other}"),
+        });
+        Ok(())
     }
 
     fn request(&mut self, operation: u8, payload: &[u8]) -> Result<Vec<u8>> {
@@ -92,12 +115,9 @@ impl BrokerHardware {
         match *status {
             OK => Ok(body.to_vec()),
             ERROR => bail!("{}", String::from_utf8_lossy(body)),
-            SESSION_REVOKED if operation == POLL => {
-                self.session_revoked = true;
-                bail!("broker revoked the user session")
-            }
             SESSION_REVOKED => {
                 self.session_revoked = true;
+                self.record_revocation(body)?;
                 bail!("broker revoked the user session")
             }
             other => bail!("broker returned unknown status {other}"),
@@ -351,7 +371,7 @@ pub(crate) fn broker_main() -> Result<()> {
             last_active = active.clone();
         }
         if active.is_some() && fallback_running {
-            fallback.handoff_owner()?;
+            fallback.handoff_owner_with_reason(StopReason::Replaced)?;
             fallback_attempted = false;
         } else if active.is_none() && !fallback_running && !fallback_attempted {
             fallback.start_fallback()?;
@@ -507,7 +527,7 @@ fn handle_client_inner(
     ensure!(*operation == CLAIM, "broker expected a claim request");
     authorizer.recheck_active_uid(peer.uid, &grant)?;
     if *fallback_running {
-        fallback.handoff_owner()?;
+        fallback.handoff_owner_with_reason(StopReason::Replaced)?;
         *fallback_running = false;
     }
     let (input_state, backlight) = {
@@ -551,8 +571,14 @@ fn handle_client_inner(
             break;
         }
         if let Err(error) = authorizer.recheck_active_uid(peer.uid, &grant) {
-            let cancellations = encode_events(&contacts.cancel())?;
-            write_message(&mut stream, SESSION_REVOKED, &cancellations)?;
+            let reason = if authorizer.active_session(SEAT)?.is_some() {
+                REVOKED_REPLACED
+            } else {
+                REVOKED_LOGOUT
+            };
+            let mut revocation = vec![reason];
+            revocation.extend(encode_events(&contacts.cancel())?);
+            write_message(&mut stream, SESSION_REVOKED, &revocation)?;
             session_revoked = true;
             eprintln!("broker revoked user session: {error:#}");
             continue;
@@ -961,7 +987,9 @@ mod tests {
 
             let request = read_message(&mut stream)?;
             assert_eq!(request[0], POLL);
-            write_message(&mut stream, SESSION_REVOKED, &encode_events(&[])?)?;
+            let mut revocation = vec![REVOKED_LOGOUT];
+            revocation.extend(encode_events(&[])?);
+            write_message(&mut stream, SESSION_REVOKED, &revocation)?;
 
             let request = read_message(&mut stream)?;
             assert_eq!(request, vec![LOGOUT_COMPLETE]);

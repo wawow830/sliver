@@ -139,7 +139,8 @@ fn supervisor_main_inner(running: std::sync::Arc<std::sync::atomic::AtomicBool>)
     let serve_result = supervisor::serve_until(listener, &mut supervisor, running);
     let session_revoked = supervisor.hardware().session_revoked();
     let handoff_result = if session_revoked {
-        let handoff = supervisor.handoff_owner();
+        let reason = supervisor.hardware().revoked_stop_reason();
+        let handoff = supervisor.handoff_owner_with_reason(reason);
         let acknowledgement = supervisor.hardware_mut().logout_complete();
         match (handoff, acknowledgement) {
             (Err(error), Err(acknowledgement_error)) => Err(error).context(format!(
