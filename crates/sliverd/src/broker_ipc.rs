@@ -39,6 +39,13 @@ const REVOKED_LOGOUT: u8 = 1;
 const LOGOUT_COMPLETE: u8 = 9;
 const SEAT: &str = "seat0";
 
+#[derive(Clone, Copy)]
+enum PeerVerification {
+    Production,
+    #[cfg(test)]
+    Test,
+}
+
 pub(crate) fn socket_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("SLIVER_BROKER_SOCKET") {
         return Ok(PathBuf::from(path));
@@ -342,7 +349,14 @@ pub(crate) fn broker_main() -> Result<()> {
     )?;
     let authorizer = SessionAuthorizer::new(RealLogind::default());
     let running = Arc::new(AtomicBool::new(true));
-    let result = run_broker(listener, fallback, authorizer, running, SEAT, true);
+    let result = run_broker(
+        listener,
+        fallback,
+        authorizer,
+        running,
+        SEAT,
+        PeerVerification::Production,
+    );
     let _ = std::fs::remove_file(socket);
     result
 }
@@ -353,7 +367,7 @@ fn run_broker<H: TouchBarHardware, L: crate::logind::Logind>(
     authorizer: SessionAuthorizer<L>,
     running: Arc<AtomicBool>,
     seat: &str,
-    verify_supervisor: bool,
+    peer_verification: PeerVerification,
 ) -> Result<()> {
     let initial_active = authorizer.active_session(seat)?;
     let mut fallback_running = false;
@@ -374,7 +388,7 @@ fn run_broker<H: TouchBarHardware, L: crate::logind::Logind>(
                 &authorizer,
                 &mut fallback_running,
                 seat,
-                verify_supervisor,
+                peer_verification,
             );
             if let Err(error) = result {
                 crate::system_log::broker_error(format!("broker client failed: {error:#}"));
@@ -508,7 +522,7 @@ fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
     authorizer: &SessionAuthorizer<L>,
     fallback_running: &mut bool,
     seat: &str,
-    verify_supervisor: bool,
+    peer_verification: PeerVerification,
 ) -> Result<()> {
     let mut client_state = ClientState::default();
     let result = handle_client_inner(
@@ -518,7 +532,7 @@ fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
         fallback_running,
         &mut client_state,
         seat,
-        verify_supervisor,
+        peer_verification,
     );
     let cleanup = client_state.held_keys.release(fallback.hardware_mut());
     match (result, cleanup) {
@@ -538,10 +552,10 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     fallback_running: &mut bool,
     client_state: &mut ClientState,
     seat: &str,
-    verify_supervisor: bool,
+    peer_verification: PeerVerification,
 ) -> Result<()> {
     let peer = crate::peer_credentials::read(&stream)?;
-    if verify_supervisor {
+    if matches!(peer_verification, PeerVerification::Production) {
         ensure_supervisor_peer(peer.pid)?;
     }
     let grant = match authorizer.authorize_active_uid(peer.uid, seat) {
@@ -1030,6 +1044,13 @@ mod tests {
         fn inspect<R>(&self, inspect: impl FnOnce(&FakeTouchBar) -> R) -> R {
             inspect(&self.0.lock().expect("test hardware mutex poisoned"))
         }
+
+        fn inject(&self, event: HardwareEvent) {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .inject(event);
+        }
     }
 
     impl TouchBarHardware for ThreadFakeHardware {
@@ -1138,7 +1159,7 @@ mod tests {
                 SessionAuthorizer::new(server_logind),
                 server_running,
                 SEAT,
-                false,
+                PeerVerification::Test,
             )
         });
 
@@ -1248,7 +1269,7 @@ mod tests {
                 SessionAuthorizer::new(first_server_logind),
                 first_server_running,
                 SEAT,
-                false,
+                PeerVerification::Test,
             )
         });
         let first = Supervisor::new_with_startup_candidate_process(
@@ -1293,7 +1314,7 @@ mod tests {
                 SessionAuthorizer::new(second_server_logind),
                 second_server_running,
                 SEAT,
-                false,
+                PeerVerification::Test,
             )
         });
         let second = Supervisor::new_with_startup_candidate_process(
@@ -1373,7 +1394,7 @@ mod tests {
             &authorizer,
             &mut fallback_running,
             SEAT,
-            false,
+            PeerVerification::Test,
         )?;
         client.join().expect("broker client panicked")?;
         assert!(!fallback_running);
@@ -1429,7 +1450,7 @@ mod tests {
             &authorizer,
             &mut fallback_running,
             SEAT,
-            false,
+            PeerVerification::Test,
         )
         .expect_err("failed login handoff was accepted");
         assert!(format!("{error:#}").contains("broker frame width is invalid"));
@@ -1503,7 +1524,7 @@ mod tests {
                 SessionAuthorizer::new(server_logind),
                 server_running,
                 SEAT,
-                false,
+                PeerVerification::Test,
             )
         });
         let mut user = Supervisor::new_with_logind_process(
@@ -1535,7 +1556,20 @@ mod tests {
         let source_b = directory.path().join("user-b.lua");
         std::fs::write(
             &source_a,
-            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+            r#"
+            local sliver = require('sliver.v1')
+            local key = sliver.input.keys.keyboard.f2
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == 'down' then sliver.input.key.down(key)
+                    elseif event.phase == 'up' then sliver.input.key.up(key) end
+                end,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                end,
+            }
+            "#,
         )?;
         std::fs::write(
             &source_b,
@@ -1584,7 +1618,7 @@ mod tests {
                 SessionAuthorizer::new(server_logind),
                 server_running,
                 SEAT,
-                false,
+                PeerVerification::Test,
             )
         });
 
@@ -1598,6 +1632,22 @@ mod tests {
             shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
             [255, 0, 0, 255]
         );
+        shared.inject(HardwareEvent::Touch(TouchEvent {
+            phase: TouchPhase::Down,
+            id: 1,
+            time: 0.0,
+            x: 10.0,
+            y: 10.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        }));
+        first.poll(Duration::ZERO)?;
+        assert!(shared.inspect(|hardware| hardware
+            .synthetic_keys()
+            .last()
+            .is_some_and(|event| event.active)));
         logind.set_active(
             SEAT,
             Some(ActiveSession {
@@ -1608,10 +1658,14 @@ mod tests {
         assert!(first.poll(Duration::ZERO).is_err());
         first.handoff_owner_with_reason(StopReason::Replaced)?;
         first.hardware_mut().logout_complete()?;
+        assert!(shared.inspect(|hardware| hardware
+            .synthetic_keys()
+            .last()
+            .is_some_and(|event| !event.active)));
         first.shutdown()?;
 
         let mut second = Supervisor::new_with_logind_process(
-            BrokerHardware::new_at(socket),
+            BrokerHardware::new_at(socket.clone()),
             state_b.clone(),
             FakeLogind::new(),
         )?;
@@ -1628,10 +1682,39 @@ mod tests {
             std::fs::read(&state_b)?,
             source_b.as_os_str().as_encoded_bytes()
         );
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "user-a-again-session".into(),
+                uid,
+            }),
+        );
+        assert!(second.poll(Duration::ZERO).is_err());
+        second.handoff_owner_with_reason(StopReason::Replaced)?;
+        second.hardware_mut().logout_complete()?;
         second.shutdown()?;
+
+        let third = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at(socket),
+            state_a,
+            FakeLogind::new(),
+            None,
+        )?;
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [255, 0, 0, 255]
+        );
+        third.shutdown()?;
         running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;
         Ok(())
+    }
+
+    #[test]
+    fn broker_rejects_a_non_supervisor_peer() {
+        let error = ensure_supervisor_peer(std::process::id() as libc::pid_t)
+            .expect_err("the test process was accepted as a supervisor");
+        assert!(format!("{error:#}").contains("not the Sliver user supervisor"));
     }
 
     #[test]
