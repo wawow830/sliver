@@ -236,6 +236,7 @@ struct PendingFrame {
 }
 
 const PENDING_FRAME_RETRY_SECONDS: f64 = 0.005;
+const MAX_KEY_REQUESTS_PER_DRIVE: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StopReason {
@@ -1409,7 +1410,11 @@ fn create_key_operation(
         }
         let key = parse_lua_key(value)?;
         let modifiers = parse_modifier_mode(options)?;
-        requests.borrow_mut().push(KeyRequest {
+        let mut requests = requests.borrow_mut();
+        if requests.len() >= MAX_KEY_REQUESTS_PER_DRIVE {
+            return Err(mlua::Error::runtime("synthetic key request limit exceeded"));
+        }
+        requests.push(KeyRequest {
             operation,
             key,
             modifiers,
