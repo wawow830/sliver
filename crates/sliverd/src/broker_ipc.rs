@@ -543,7 +543,7 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
         }
     }
 
-    fallback.shutdown()
+    fallback.shutdown_for_broker()
 }
 
 fn accept_nonblocking(listener: &UnixListener) -> Result<Option<UnixStream>> {

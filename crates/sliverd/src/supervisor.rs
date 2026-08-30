@@ -2077,17 +2077,24 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     pub(crate) fn shutdown(self) -> Result<()> {
-        self.shutdown_with_reason(StopReason::Shutdown)
+        self.shutdown_with_reason(StopReason::Shutdown, true)
     }
 
     pub(crate) fn shutdown_for_logout(self) -> Result<()> {
-        self.shutdown_with_reason(StopReason::Logout)
+        self.shutdown_with_reason(StopReason::Logout, true)
     }
 
-    fn shutdown_with_reason(mut self, reason: StopReason) -> Result<()> {
+    /// The system broker lets the concrete adapter blank during release. This
+    /// keeps the adapter's final DRM operation together with ownership drop.
+    pub(crate) fn shutdown_for_broker(self) -> Result<()> {
+        self.shutdown_with_reason(StopReason::Shutdown, false)
+    }
+
+    fn shutdown_with_reason(mut self, reason: StopReason, paint_black: bool) -> Result<()> {
         let synthetic_result = self.release_synthetic_keys();
         let stop_result = self.stop_active_worker(reason);
-        let blank_result = if self.hardware_available
+        let blank_result = if paint_black
+            && self.hardware_available
             && self.hardware.is_available()
             && !self.hardware.session_revoked()
         {
@@ -2099,7 +2106,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         } else {
             Ok(())
         };
-        let backlight_result = if self.hardware_available
+        let backlight_result = if paint_black
+            && self.hardware_available
             && self.hardware.is_available()
             && !self.hardware.session_revoked()
         {

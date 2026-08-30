@@ -176,7 +176,8 @@ visible when Fn is released. Suspend sends visibility loss to the current
 worker, cancels contacts, pauses timers and rendering, releases synthetic keys,
 and turns off the backlight. Resume shifts timer deadlines by the suspended
 interval, restores script brightness, and requests one fresh frame without
-replacing a healthy worker.
+replacing a healthy worker. On broker shutdown, the adapter paints a black
+frame, turns off the backlight, ungrabs input, and releases DRM ownership.
 
 ## Privileges and ownership
 

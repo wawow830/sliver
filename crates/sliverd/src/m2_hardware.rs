@@ -1026,6 +1026,20 @@ fn copy_visible_rows(
     Ok(())
 }
 
+fn black_logical_frame() -> Result<LogicalFrame> {
+    let surface = ImageSurface::create(
+        cairo::Format::ARgb32,
+        sliver_core::STRIP_W as i32,
+        sliver_core::STRIP_H as i32,
+    )?;
+    let context = cairo::Context::new(&surface)?;
+    context.set_operator(Operator::Source);
+    context.set_source_rgb(0.0, 0.0, 0.0);
+    context.paint()?;
+    surface.flush();
+    LogicalFrame::from_surface(&surface)
+}
+
 fn paint_logical_frame(frame: &LogicalFrame, physical: &ImageSurface) -> Result<()> {
     ensure!(
         frame.width() == sliver_core::STRIP_W as usize
@@ -1562,7 +1576,24 @@ impl TouchBarHardware for M2TouchBar {
     }
 
     fn release(&mut self) -> Result<()> {
-        self.release_inner()
+        let mut first_error = None;
+        if self.is_claimed() {
+            match black_logical_frame().and_then(|frame| self.present_inner(&frame)) {
+                Ok(()) => {}
+                Err(error) => first_error = Some(error.context("painting black during release")),
+            }
+            if let Err(error) = self.set_backlight(0.0) {
+                if first_error.is_none() {
+                    first_error = Some(error.context("turning off the Touch Bar during release"));
+                }
+            }
+        }
+        if let Err(error) = self.release_inner() {
+            if first_error.is_none() {
+                first_error = Some(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 }
 
