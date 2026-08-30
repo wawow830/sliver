@@ -32,6 +32,7 @@ use crate::recovery::{RecoverySession, RecoveryTouchResult};
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
 const RECOVERY_HOLD_SECONDS: f64 = 3.0;
 const REQUEST_QUEUE_CAPACITY: usize = 16;
+const TOUCH_QUEUE_CAPACITY: usize = 256;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 struct ActiveConfig {
@@ -114,20 +115,36 @@ fn cancel_contacts(
 impl TouchQueue {
     fn new() -> Self {
         Self {
-            events: Vec::new(),
+            events: Vec::with_capacity(TOUCH_QUEUE_CAPACITY),
             moves: BTreeMap::new(),
         }
     }
 
-    fn push(&mut self, event: TouchEvent) {
+    fn push(&mut self, event: TouchEvent) -> Result<()> {
         if event.phase == TouchPhase::Move {
-            if let Some(index) = self.moves.insert(event.id, self.events.len()) {
-                self.events[index] = None;
+            if let Some(&index) = self.moves.get(&event.id) {
+                if self.events.len() >= TOUCH_QUEUE_CAPACITY {
+                    self.events[index] = Some(event);
+                } else {
+                    self.events[index] = None;
+                    self.events.push(Some(event));
+                    self.moves.insert(event.id, self.events.len() - 1);
+                }
+                return Ok(());
             }
+            if self.events.len() >= TOUCH_QUEUE_CAPACITY {
+                return Ok(());
+            }
+            self.moves.insert(event.id, self.events.len());
         } else {
             self.moves.remove(&event.id);
         }
+        ensure!(
+            self.events.len() < TOUCH_QUEUE_CAPACITY,
+            "non-droppable Touch Bar input queue overflow"
+        );
         self.events.push(Some(event));
+        Ok(())
     }
 
     fn drain(&mut self) -> Vec<TouchEvent> {
@@ -346,7 +363,7 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
 }
 
 type RecoveryTouchDispatch = fn(&mut RecoverySession, TouchEvent) -> RecoveryTouchResult;
-type ActiveTouchDispatch<H, L> = fn(&mut Supervisor<H, L>, TouchEvent);
+type ActiveTouchDispatch<H, L> = fn(&mut Supervisor<H, L>, TouchEvent) -> Result<()>;
 
 impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
     #[cfg(test)]
@@ -814,28 +831,32 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Err(CandidateFailure::Candidate(error))
     }
 
-    fn route_input(&mut self, key: ObservedKey, active: bool, now: f64) {
+    fn route_input(&mut self, key: ObservedKey, active: bool, now: f64) -> Result<()> {
         if !self.input_state.apply(key, active) {
-            return;
+            return Ok(());
         }
         if key == ObservedKey::Fn {
             self.fn_hold_started = active.then_some(now);
         }
-        if self.recovery.is_some() {
-            if key == ObservedKey::Fn && !active && self.active.is_some() {
-                self.input_transitions.push(InputTransition {
-                    key,
-                    active,
-                    state: self.input_state,
-                });
+        let should_queue = if self.recovery.is_some() {
+            key == ObservedKey::Fn && !active && self.active.is_some()
+        } else {
+            self.active.is_some()
+        };
+        if should_queue {
+            if self.input_transitions.len() >= TOUCH_QUEUE_CAPACITY {
+                self.fail_active_worker(anyhow::anyhow!(
+                    "non-droppable input transition queue overflow"
+                ))?;
+                bail!("non-droppable input transition queue overflow");
             }
-        } else if self.active.is_some() {
             self.input_transitions.push(InputTransition {
                 key,
                 active,
                 state: self.input_state,
             });
         }
+        Ok(())
     }
 
     fn route_touch(&mut self, event: TouchEvent) -> Result<()> {
@@ -879,8 +900,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if self.recovery.is_some() {
             self.route_recovery_phase(event, recovery_dispatch)
         } else {
-            active_dispatch(self, event);
-            Ok(())
+            active_dispatch(self, event)
         }
     }
 
@@ -910,30 +930,43 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
-    fn route_active_down(&mut self, event: TouchEvent) {
-        if let Some(active) = self.active.as_mut() {
-            active.contacts.insert(event.id, event);
-            self.touch_queue.push(event);
+    fn route_active_down(&mut self, event: TouchEvent) -> Result<()> {
+        let Some(active) = self.active.as_mut() else {
+            return Ok(());
+        };
+        active.contacts.insert(event.id, event);
+        if let Err(error) = self.touch_queue.push(event) {
+            active.contacts.remove(&event.id);
+            self.fail_active_worker(error)?;
+            bail!("non-droppable Touch Bar input queue overflow")
         }
+        Ok(())
     }
 
-    fn route_active_move(&mut self, event: TouchEvent) {
-        if let Some(active) = self.active.as_mut() {
-            if let std::collections::btree_map::Entry::Occupied(mut contact) =
-                active.contacts.entry(event.id)
-            {
-                contact.insert(event);
-                self.touch_queue.push(event);
-            }
+    fn route_active_move(&mut self, event: TouchEvent) -> Result<()> {
+        let Some(active) = self.active.as_mut() else {
+            return Ok(());
+        };
+        if let std::collections::btree_map::Entry::Occupied(mut contact) =
+            active.contacts.entry(event.id)
+        {
+            contact.insert(event);
+            self.touch_queue.push(event)?;
         }
+        Ok(())
     }
 
-    fn route_active_end(&mut self, event: TouchEvent) {
-        if let Some(active) = self.active.as_mut() {
-            if active.contacts.remove(&event.id).is_some() {
-                self.touch_queue.push(event);
+    fn route_active_end(&mut self, event: TouchEvent) -> Result<()> {
+        let Some(active) = self.active.as_mut() else {
+            return Ok(());
+        };
+        if active.contacts.remove(&event.id).is_some() {
+            if let Err(error) = self.touch_queue.push(event) {
+                self.fail_active_worker(error)?;
+                bail!("non-droppable Touch Bar input queue overflow")
             }
         }
+        Ok(())
     }
 
     fn activate_recovery_key(&mut self, key: OutputKey) -> Result<()> {
@@ -1070,15 +1103,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         match event {
             HardwareEvent::Touch(touch) => self.route_touch(touch),
             HardwareEvent::Fn { active } => {
-                self.route_input(ObservedKey::Fn, active, now);
+                self.route_input(ObservedKey::Fn, active, now)?;
                 if !active && self.has_healthy_recovery() {
                     self.exit_recovery(now)?;
                 }
                 Ok(())
             }
             HardwareEvent::Modifier { modifier, active } => {
-                self.route_input(ObservedKey::Modifier(modifier), active, now);
-                Ok(())
+                self.route_input(ObservedKey::Modifier(modifier), active, now)
             }
             HardwareEvent::Device { .. } | HardwareEvent::Visibility { .. } => Ok(()),
         }
@@ -4744,6 +4776,33 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0][1], 0.0);
         assert!((lines[1][1] - 0.05).abs() < 0.02);
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn non_droppable_touch_overflow_enters_fixed_recovery_without_growing_forever() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("queue.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, touch = function() end, render = function() end }",
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+        supervisor.apply(&source)?;
+        for id in 0..=super::TOUCH_QUEUE_CAPACITY as u32 {
+            supervisor
+                .hardware_mut()
+                .inject(HardwareEvent::Touch(overlap_touch(id, TouchPhase::Down)));
+        }
+
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("non-droppable input overflow was accepted");
+        assert!(format!("{error:#}").contains("input queue overflow"));
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
         supervisor.shutdown()?;
         Ok(())
     }
