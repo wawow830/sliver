@@ -1025,6 +1025,63 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
         }
 
+        // Presentation changes the broker's visible frame. Recheck before
+        // committing the candidate worker or selected path so a session that
+        // changes during presentation cannot make its frame authoritative.
+        if let Err(error) = self.hardware.confirm_owner() {
+            return self.rollback_candidate(
+                CandidateRollback {
+                    previous_path_state: previous_path_state.as_ref(),
+                    old_frame: old_frame.as_ref(),
+                    old_backlight,
+                    restore_frame: !preserve_recovery,
+                    restore_backlight: brightness_changed,
+                    old_synthetic: None,
+                },
+                error,
+            );
+        }
+        if let Some(authorization) = authorization {
+            if let Err(error) = self
+                .authorizer
+                .recheck(authorization.peer, &authorization.grant)
+            {
+                return self
+                    .rollback_candidate(
+                        CandidateRollback {
+                            previous_path_state: previous_path_state.as_ref(),
+                            old_frame: old_frame.as_ref(),
+                            old_backlight,
+                            restore_frame: !preserve_recovery,
+                            restore_backlight: brightness_changed,
+                            old_synthetic: None,
+                        },
+                        error,
+                    )
+                    .map_err(|failure| match failure {
+                        CandidateFailure::Candidate(error)
+                        | CandidateFailure::Authorization(error) => {
+                            CandidateFailure::Authorization(error)
+                        }
+                    });
+            }
+        }
+        if let Some(expected_session) = expected_session {
+            if let Err(error) = self.recheck_session_snapshot(expected_session) {
+                return self.rollback_candidate(
+                    CandidateRollback {
+                        previous_path_state: previous_path_state.as_ref(),
+                        old_frame: old_frame.as_ref(),
+                        old_backlight,
+                        restore_frame: !preserve_recovery,
+                        restore_backlight: brightness_changed,
+                        old_synthetic: None,
+                    },
+                    error,
+                );
+            }
+        }
+
         let now = self.now_seconds();
         if let Err(error) = worker.commit(now, self.input_state) {
             return self.rollback_candidate(
@@ -6046,14 +6103,6 @@ mod tests {
                     key: FakeKey::Keyboard(KeyboardKey::F2),
                     active: false,
                 }],
-                vec![FakeKeyEvent {
-                    key: FakeKey::Keyboard(KeyboardKey::F2),
-                    active: true,
-                }],
-                vec![FakeKeyEvent {
-                    key: FakeKey::Keyboard(KeyboardKey::F2),
-                    active: false,
-                }],
             ]
         );
         assert_eq!(
@@ -6067,16 +6116,8 @@ mod tests {
                 }),
                 FakeAction::Backlight(0.75),
                 FakeAction::Present,
-                FakeAction::SyntheticKey(FakeKeyEvent {
-                    key: FakeKey::Keyboard(KeyboardKey::F2),
-                    active: false,
-                }),
                 FakeAction::Present,
                 FakeAction::Backlight(0.0),
-                FakeAction::SyntheticKey(FakeKeyEvent {
-                    key: FakeKey::Keyboard(KeyboardKey::F2),
-                    active: true,
-                }),
                 FakeAction::SyntheticKey(FakeKeyEvent {
                     key: FakeKey::Keyboard(KeyboardKey::F2),
                     active: false,

@@ -1,7 +1,29 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use crate::logind::Logind;
 use crate::peer_credentials::PeerCredentials;
+
+#[derive(Debug)]
+pub(crate) struct NoActiveUserSession;
+
+impl std::fmt::Display for NoActiveUserSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("no active local user session")
+    }
+}
+
+impl std::error::Error for NoActiveUserSession {}
+
+#[derive(Debug)]
+pub(crate) struct WorkerNotOwnedByActiveUser;
+
+impl std::fmt::Display for WorkerNotOwnedByActiveUser {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("worker is not owned by the active user")
+    }
+}
+
+impl std::error::Error for WorkerNotOwnedByActiveUser {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthorizationGrant {
@@ -56,8 +78,13 @@ impl<L: Logind> SessionAuthorizer<L> {
             .logind
             .active_session(seat)
             .with_context(|| format!("looking up the active logind session on {seat}"))?
-            .context("no local user session is active")?;
-        ensure!(session.uid == uid, "worker is not owned by the active user");
+            .ok_or_else(|| {
+                anyhow!("no local user session is active").context(NoActiveUserSession)
+            })?;
+        if session.uid != uid {
+            return Err(anyhow!("worker is not owned by the active user")
+                .context(WorkerNotOwnedByActiveUser));
+        }
         let generation_after = self
             .logind
             .generation()

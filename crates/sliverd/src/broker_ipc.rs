@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 
-use crate::authorization::SessionAuthorizer;
+use crate::authorization::{NoActiveUserSession, SessionAuthorizer, WorkerNotOwnedByActiveUser};
 use crate::hardware::{
     function_key_output, tap_key_events, ContactId, HardwareEvent, InputState, LogicalFrame,
     Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware, TouchEvent,
@@ -23,14 +23,16 @@ const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const CLAIM: u8 = 1;
 const POLL: u8 = 2;
 const PRESENT: u8 = 3;
-const EMIT_KEYS: u8 = 4;
-const GET_BACKLIGHT: u8 = 5;
-const SET_BACKLIGHT: u8 = 6;
-const RELEASE: u8 = 7;
+const CONFIRM: u8 = 4;
+const EMIT_KEYS: u8 = 5;
+const GET_BACKLIGHT: u8 = 6;
+const SET_BACKLIGHT: u8 = 7;
+const RELEASE: u8 = 8;
 const OK: u8 = 0;
 const ERROR: u8 = 1;
 const SESSION_REVOKED: u8 = 2;
-const LOGOUT_COMPLETE: u8 = 8;
+const WAIT_FOR_SESSION: u8 = 3;
+const LOGOUT_COMPLETE: u8 = 9;
 const SEAT: &str = "seat0";
 
 pub(crate) fn socket_path() -> Result<PathBuf> {
@@ -42,6 +44,7 @@ pub(crate) fn socket_path() -> Result<PathBuf> {
 
 pub(crate) struct BrokerHardware {
     stream: Option<UnixStream>,
+    socket: Option<PathBuf>,
     input_state: InputState,
     claimed: bool,
     session_revoked: bool,
@@ -51,6 +54,18 @@ impl BrokerHardware {
     pub(crate) fn new() -> Self {
         Self {
             stream: None,
+            socket: None,
+            input_state: InputState::default(),
+            claimed: false,
+            session_revoked: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_at(socket: PathBuf) -> Self {
+        Self {
+            stream: None,
+            socket: Some(socket),
             input_state: InputState::default(),
             claimed: false,
             session_revoked: false,
@@ -93,7 +108,7 @@ impl BrokerHardware {
 impl TouchBarHardware for BrokerHardware {
     fn claim(&mut self) -> Result<()> {
         ensure!(!self.claimed, "broker hardware is already claimed");
-        let path = socket_path()?;
+        let path = self.socket.clone().unwrap_or(socket_path()?);
         let mut stream = UnixStream::connect(&path)
             .with_context(|| format!("connecting to hardware broker at {}", path.display()))?;
         write_message(&mut stream, CLAIM, &[])?;
@@ -102,11 +117,8 @@ impl TouchBarHardware for BrokerHardware {
             .split_first()
             .context("broker claim response is empty")?;
         if *status != OK {
-            let message = String::from_utf8_lossy(body).into_owned();
-            let error = anyhow::anyhow!(message.clone());
-            if message.contains("no local user session is active")
-                || message.contains("worker is not owned by the active user")
-            {
+            let error = anyhow::anyhow!(String::from_utf8_lossy(body).into_owned());
+            if *status == WAIT_FOR_SESSION {
                 return Err(error.context(crate::WaitForActiveSession));
             }
             return Err(error);
@@ -159,6 +171,11 @@ impl TouchBarHardware for BrokerHardware {
         put_u32(&mut payload, frame.stride())?;
         payload.extend_from_slice(frame.pixels());
         self.request(PRESENT, &payload).map(|_| ())
+    }
+
+    fn confirm_owner(&mut self) -> Result<()> {
+        ensure!(self.claimed, "broker hardware is not claimed");
+        self.request(CONFIRM, &[]).map(|_| ())
     }
 
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
@@ -470,7 +487,21 @@ fn handle_client_inner(
 ) -> Result<()> {
     let peer = crate::peer_credentials::read(&stream)?;
     ensure_supervisor_peer(peer.pid)?;
-    let grant = authorizer.authorize_active_uid(peer.uid, SEAT)?;
+    let grant = match authorizer.authorize_active_uid(peer.uid, SEAT) {
+        Ok(grant) => grant,
+        Err(error) => {
+            let status = if error.chain().any(|cause| {
+                cause.downcast_ref::<NoActiveUserSession>().is_some()
+                    || cause.downcast_ref::<WorkerNotOwnedByActiveUser>().is_some()
+            }) {
+                WAIT_FOR_SESSION
+            } else {
+                ERROR
+            };
+            write_message(&mut stream, status, error.to_string().as_bytes())?;
+            return Err(error);
+        }
+    };
     let request = read_message(&mut stream)?;
     let (operation, payload) = request.split_first().context("broker request is empty")?;
     ensure!(*operation == CLAIM, "broker expected a claim request");
@@ -539,6 +570,13 @@ fn handle_client_inner(
             PRESENT => {
                 let frame = decode_frame(payload)?;
                 fallback.hardware_mut().present(&frame)?;
+                Ok(Vec::new())
+            }
+            CONFIRM => {
+                ensure!(
+                    payload.is_empty(),
+                    "broker confirm has an unexpected payload"
+                );
                 Ok(Vec::new())
             }
             EMIT_KEYS => {
@@ -902,17 +940,41 @@ fn decode_frame(payload: &[u8]) -> Result<LogicalFrame> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::os::unix::net::UnixListener;
+    use std::thread;
 
     use super::*;
 
     #[test]
-    fn broker_socket_can_be_overridden_without_touching_the_apply_socket() {
-        std::env::set_var("SLIVER_BROKER_SOCKET", "/tmp/sliver-test-broker.sock");
-        assert_eq!(
-            socket_path().unwrap(),
-            Path::new("/tmp/sliver-test-broker.sock")
-        );
-        std::env::remove_var("SLIVER_BROKER_SOCKET");
+    fn revoked_user_must_acknowledge_lua_cleanup_before_disconnect() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let server = thread::spawn(move || -> Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            let request = read_message(&mut stream)?;
+            assert_eq!(request, vec![CLAIM]);
+            let mut claim = Vec::new();
+            encode_input_state(&mut claim, InputState::default());
+            claim.extend_from_slice(&0.75f64.to_bits().to_be_bytes());
+            write_message(&mut stream, OK, &claim)?;
+
+            let request = read_message(&mut stream)?;
+            assert_eq!(request[0], POLL);
+            write_message(&mut stream, SESSION_REVOKED, &encode_events(&[])?)?;
+
+            let request = read_message(&mut stream)?;
+            assert_eq!(request, vec![LOGOUT_COMPLETE]);
+            write_message(&mut stream, OK, &[])?;
+            Ok(())
+        });
+
+        let mut hardware = BrokerHardware::new_at(socket);
+        hardware.claim()?;
+        assert!(hardware.poll(Duration::ZERO).is_err());
+        assert!(hardware.session_revoked());
+        hardware.logout_complete()?;
+        server.join().expect("broker test server panicked")?;
+        Ok(())
     }
 }

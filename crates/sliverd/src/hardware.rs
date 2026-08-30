@@ -429,6 +429,11 @@ pub(crate) trait TouchBarHardware {
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>>;
     fn input_state(&self) -> InputState;
     fn present(&mut self, frame: &LogicalFrame) -> Result<()>;
+    /// Confirm ownership again after a candidate frame has been presented.
+    /// Adapters with a session owner use this as the handoff commit check.
+    fn confirm_owner(&mut self) -> Result<()> {
+        Ok(())
+    }
     /// Sends the complete ordered sequence as one virtual-device batch.
     /// Implementations must preserve slice order and must not split or delay it.
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()>;
