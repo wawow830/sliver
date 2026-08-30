@@ -91,9 +91,9 @@ impl ProcessWorker {
         let path = frame_path()?;
         let slots = FrameSlots::new_shared(
             &path,
-            sliver_core::STRIP_W as usize,
-            sliver_core::STRIP_H as usize,
-            sliver_core::STRIP_W as usize * 4,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
         )?;
         Self::stage_with_frames(
             source,
@@ -1767,9 +1767,9 @@ mod tests {
         let frame_path = frame_path()?;
         let slots = FrameSlots::new_shared(
             &frame_path,
-            sliver_core::STRIP_W as usize,
-            sliver_core::STRIP_H as usize,
-            sliver_core::STRIP_W as usize * 4,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
         )?;
         let worker = ProcessWorker::stage_with_frames_systemd(
             &embedded(

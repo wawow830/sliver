@@ -26,10 +26,12 @@ impl RecoveryKey {
     }
 
     fn hit_test(x: f64, y: f64) -> Option<Self> {
-        if !(0.0..sliver_core::STRIP_H).contains(&y) || !(0.0..sliver_core::STRIP_W).contains(&x) {
+        if !(0.0..crate::DISPLAY_HEIGHT_F64).contains(&y)
+            || !(0.0..crate::DISPLAY_WIDTH_F64).contains(&x)
+        {
             return None;
         }
-        let index = (x / (sliver_core::STRIP_W / KEY_COUNT as f64)).floor() as usize;
+        let index = (x / (crate::DISPLAY_WIDTH_F64 / KEY_COUNT as f64)).floor() as usize;
         Self::from_index(index)
     }
 
@@ -175,12 +177,12 @@ impl RecoveryRow {
         context.select_font_face("Sans", FontSlant::Normal, FontWeight::Normal);
         context.set_font_size(24.0);
 
-        let key_width = sliver_core::STRIP_W / KEY_COUNT as f64;
+        let key_width = crate::DISPLAY_WIDTH_F64 / KEY_COUNT as f64;
         for key in RecoveryKey::all() {
             let left = key.index() as f64 * key_width;
             if self.is_pressed(key) {
                 context.set_source_rgb(PRESSED_RGB.0, PRESSED_RGB.1, PRESSED_RGB.2);
-                context.rectangle(left, 0.0, key_width, sliver_core::STRIP_H);
+                context.rectangle(left, 0.0, key_width, crate::DISPLAY_HEIGHT_F64);
                 context.fill().context("filling recovery press feedback")?;
             }
 
@@ -189,7 +191,7 @@ impl RecoveryRow {
                 .text_extents(&label)
                 .context("measuring recovery label")?;
             let x = left + (key_width - extents.width()) / 2.0 - extents.x_bearing();
-            let y = (sliver_core::STRIP_H - extents.height()) / 2.0 - extents.y_bearing();
+            let y = (crate::DISPLAY_HEIGHT_F64 - extents.height()) / 2.0 - extents.y_bearing();
             context.set_source_rgb(1.0, 1.0, 1.0);
             context.move_to(x, y);
             context

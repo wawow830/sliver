@@ -21,9 +21,9 @@ use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, EventType, InputEvent, Key};
 
 use crate::hardware::{
-    function_key_output, modifier_output_keys, output_key_metadata, tap_key_events,
-    validate_backlight, ConsumerKey, HardwareCapability, HardwareEvent, InputState, KeyboardKey,
-    LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
+    output_key_metadata, validate_backlight, ConsumerKey, HardwareCapability, HardwareEvent,
+    InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent,
+    TouchBarHardware,
 };
 
 /// The panel's visible width; the buffer is padded to 64 for pitch sanity.
@@ -34,8 +34,6 @@ const TOUCH_NAME: &str = "Mac14,7 Touch Bar";
 const KEYBOARD_NAME: &str = "Apple MTP keyboard";
 
 /// A small wrapper keeps the Linux polling dependency private to this adapter.
-/// The crate currently gets libc transitively through evdev; it should be made
-/// a direct sliverd dependency when this module is wired into the crate.
 fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 {
@@ -461,7 +459,7 @@ fn normalize_axis(raw: i32, range: (i32, i32), extent: f64) -> f64 {
 
 #[cfg(test)]
 fn normalize_touch_x(raw: i32, range: (i32, i32)) -> f64 {
-    normalize_axis(raw, range, sliver_core::STRIP_W)
+    normalize_axis(raw, range, crate::DISPLAY_WIDTH_F64)
 }
 
 fn normalize_backlight_level(current: u32, maximum: u32) -> Result<f64> {
@@ -559,7 +557,7 @@ struct TouchProfile {
     pressure_range: Option<AxisRange>,
     width_range: Option<AxisRange>,
     height_range: Option<AxisRange>,
-    legacy_single_touch: bool,
+    single_touch_fallback: bool,
 }
 
 struct TouchState {
@@ -619,19 +617,21 @@ impl TouchState {
                     }
                 }
                 code if code == AbsoluteAxisType::ABS_MT_POSITION_X.0
-                    || (self.profile.legacy_single_touch && code == AbsoluteAxisType::ABS_X.0) =>
+                    || (self.profile.single_touch_fallback
+                        && code == AbsoluteAxisType::ABS_X.0) =>
                 {
                     self.slots[self.current_slot].x = event.value();
                     self.slots[self.current_slot].changed = true;
                 }
                 code if code == AbsoluteAxisType::ABS_MT_POSITION_Y.0
-                    || (self.profile.legacy_single_touch && code == AbsoluteAxisType::ABS_Y.0) =>
+                    || (self.profile.single_touch_fallback
+                        && code == AbsoluteAxisType::ABS_Y.0) =>
                 {
                     self.slots[self.current_slot].y = event.value();
                     self.slots[self.current_slot].changed = true;
                 }
                 code if code == AbsoluteAxisType::ABS_MT_PRESSURE.0
-                    || (self.profile.legacy_single_touch
+                    || (self.profile.single_touch_fallback
                         && code == AbsoluteAxisType::ABS_PRESSURE.0) =>
                 {
                     self.slots[self.current_slot].pressure = Some(event.value());
@@ -648,7 +648,7 @@ impl TouchState {
                 _ => {}
             },
             EventType::KEY
-                if self.profile.legacy_single_touch && event.code() == Key::BTN_TOUCH.code() =>
+                if self.profile.single_touch_fallback && event.code() == Key::BTN_TOUCH.code() =>
             {
                 let slot = &mut self.slots[0];
                 if event.value() == 1 {
@@ -709,8 +709,8 @@ impl TouchState {
             phase,
             id,
             time: self.started.elapsed().as_secs_f64(),
-            x: self.profile.x_range.normalize(slot.x) * sliver_core::STRIP_W,
-            y: self.profile.y_range.normalize(slot.y) * sliver_core::STRIP_H,
+            x: self.profile.x_range.normalize(slot.x) * crate::DISPLAY_WIDTH_F64,
+            y: self.profile.y_range.normalize(slot.y) * crate::DISPLAY_HEIGHT_F64,
             modifiers,
             pressure: slot
                 .pressure
@@ -782,15 +782,15 @@ impl TouchInput {
         };
         let mt_x = range_for(AbsoluteAxisType::ABS_MT_POSITION_X);
         let mt_y = range_for(AbsoluteAxisType::ABS_MT_POSITION_Y);
-        let legacy_x = range_for(AbsoluteAxisType::ABS_X);
-        let legacy_y = range_for(AbsoluteAxisType::ABS_Y);
-        let x_range = mt_x.or(legacy_x).unwrap_or(AxisRange {
+        let single_x = range_for(AbsoluteAxisType::ABS_X);
+        let single_y = range_for(AbsoluteAxisType::ABS_Y);
+        let x_range = mt_x.or(single_x).unwrap_or(AxisRange {
             min: 0,
-            max: sliver_core::STRIP_W as i32,
+            max: crate::DISPLAY_WIDTH as i32,
         });
-        let y_range = mt_y.or(legacy_y).unwrap_or(AxisRange {
+        let y_range = mt_y.or(single_y).unwrap_or(AxisRange {
             min: 0,
-            max: sliver_core::STRIP_H as i32,
+            max: crate::DISPLAY_HEIGHT as i32,
         });
         let slot_range = range_for(AbsoluteAxisType::ABS_MT_SLOT);
         let slot_count = slot_range
@@ -810,7 +810,7 @@ impl TouchInput {
             pressure_range,
             width_range,
             height_range,
-            legacy_single_touch: !has_mt,
+            single_touch_fallback: !has_mt,
         };
         eprintln!("touch: logical ranges x={x_range:?} y={y_range:?}, slots={slot_count}");
 
@@ -986,19 +986,6 @@ fn initial_keyboard_events(key_state: &AttributeSet<Key>) -> Vec<HardwareEvent> 
     events
 }
 
-fn function_key_events(index: usize, modifiers: ModifierState) -> io::Result<Vec<InputEvent>> {
-    let key = function_key_output(index).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "function-key index out of range",
-        )
-    })?;
-    Ok(encode_synthetic_key_events(&tap_key_events(
-        key,
-        &modifier_output_keys(modifiers),
-    )))
-}
-
 /// One virtual keyboard shared by the Lua worker and the fixed Fn row.
 struct KeyboardEmitter {
     device: VirtualDevice,
@@ -1016,10 +1003,6 @@ impl KeyboardEmitter {
             .build()?;
         eprintln!("keyboard: virtual Sliver Keyboard ready");
         Ok(Self { device })
-    }
-
-    fn tap(&mut self, index: usize, modifiers: ModifierState) -> io::Result<()> {
-        self.device.emit(&function_key_events(index, modifiers)?)
     }
 
     fn emit(&mut self, events: &[SyntheticKeyEvent]) -> io::Result<()> {
@@ -1111,8 +1094,8 @@ fn copy_visible_rows(
 fn black_logical_frame() -> Result<LogicalFrame> {
     let surface = ImageSurface::create(
         cairo::Format::ARgb32,
-        sliver_core::STRIP_W as i32,
-        sliver_core::STRIP_H as i32,
+        crate::DISPLAY_WIDTH as i32,
+        crate::DISPLAY_HEIGHT as i32,
     )?;
     let context = cairo::Context::new(&surface)?;
     context.set_operator(Operator::Source);
@@ -1124,8 +1107,7 @@ fn black_logical_frame() -> Result<LogicalFrame> {
 
 fn paint_logical_frame(frame: &LogicalFrame, physical: &ImageSurface) -> Result<()> {
     ensure!(
-        frame.width() == sliver_core::STRIP_W as usize
-            && frame.height() == sliver_core::STRIP_H as usize,
+        frame.width() == crate::DISPLAY_WIDTH && frame.height() == crate::DISPLAY_HEIGHT,
         "logical frame has unexpected dimensions: {}x{}",
         frame.width(),
         frame.height()
@@ -1377,7 +1359,7 @@ impl M2TouchBar {
         loop {
             let mut made_progress = false;
 
-            // Preserve the old daemon's cross-device ordering: update Fn and
+            // Preserve cross-device ordering: update Fn and
             // modifiers before interpreting a touch from the same poll.
             let keyboard_start = output.len();
             let keyboard_error = match self.keyboard.as_mut() {
@@ -1611,18 +1593,6 @@ impl TouchBarHardware for M2TouchBar {
         Ok(())
     }
 
-    fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
-        ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        let Some(emitter) = self.keyboard_emitter.as_mut() else {
-            self.lose_hardware(HardwareCapability::SyntheticKeys);
-            return Err(anyhow::anyhow!("Sliver Keyboard is unavailable"));
-        };
-        emitter.tap(index, modifiers).map_err(|error| {
-            self.lose_hardware(HardwareCapability::SyntheticKeys);
-            anyhow::anyhow!(error).context(format!("emitting F{}", index + 1))
-        })
-    }
-
     fn get_backlight(&mut self) -> Result<f64> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
         let (current, maximum) = match self
@@ -1683,6 +1653,7 @@ impl TouchBarHardware for M2TouchBar {
     }
 }
 
+#[cfg(feature = "calibration")]
 /// Calibration pattern, straight into the raw buffer. One photo of the
 /// glass tells us exactly how memory maps to pixels:
 ///   red    — the first 200 rows of scanout
@@ -1690,7 +1661,7 @@ impl TouchBarHardware for M2TouchBar {
 ///   green  — columns 0..20 (start of each scanline)
 ///   white  — columns 40..60 (end of the visible window)
 ///   magenta— the 4 padding columns (should never be visible)
-pub(crate) fn probe() -> Result<()> {
+pub(crate) fn calibration() -> Result<()> {
     let mut claim = claim_card()?;
     let (pw, ph) = claim.mode.size();
     let (pw, ph) = (u32::from(pw), u32::from(ph));
@@ -1705,7 +1676,7 @@ pub(crate) fn probe() -> Result<()> {
             Err(error) => {
                 if let Err(release_error) = claim.release(None, None) {
                     crate::system_log::broker_error(format!(
-                        "DRM release failed after probe error: {release_error:#}"
+                        "DRM release failed after calibration error: {release_error:#}"
                     ));
                 }
                 return Err(error.into());
@@ -1716,7 +1687,7 @@ pub(crate) fn probe() -> Result<()> {
         Err(error) => {
             if let Err(release_error) = claim.release(None, Some(dumb_buffer)) {
                 crate::system_log::broker_error(format!(
-                    "DRM release failed after probe error: {release_error:#}"
+                    "DRM release failed after calibration error: {release_error:#}"
                 ));
             }
             return Err(error.into());
@@ -1757,7 +1728,7 @@ pub(crate) fn probe() -> Result<()> {
         }
 
         claim.show(framebuffer)?;
-        eprintln!("probe on glass: red/blue ends, green/white flanks, magenta pad");
+        eprintln!("calibration pattern on glass: red/blue ends, green/white flanks, magenta pad");
         hold()
     })();
 
@@ -1765,17 +1736,18 @@ pub(crate) fn probe() -> Result<()> {
     match (result, release_result) {
         (Err(error), Err(release_error)) => {
             crate::system_log::broker_error(format!(
-                "DRM release failed after probe error: {release_error:#}"
+                "DRM release failed after calibration error: {release_error:#}"
             ));
             Err(error)
         }
         (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(error).context("releasing probe hardware"),
+        (Ok(()), Err(error)) => Err(error).context("releasing calibration hardware"),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
 
-/// Hold until Ctrl-C (probe's simpler pulse).
+#[cfg(feature = "calibration")]
+/// Hold until Ctrl-C (calibration's simpler pulse).
 fn hold() -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -1862,7 +1834,7 @@ mod tests {
             pressure_range: AxisRange::new(0, 10),
             width_range: AxisRange::new(0, 100),
             height_range: AxisRange::new(0, 100),
-            legacy_single_touch: false,
+            single_touch_fallback: false,
         });
         let mut output = Vec::new();
         let mut down_modifiers = ModifierState::default();
@@ -1933,7 +1905,7 @@ mod tests {
             pressure_range: None,
             width_range: None,
             height_range: None,
-            legacy_single_touch: false,
+            single_touch_fallback: false,
         });
         let mut output = Vec::new();
         for event in [
@@ -2023,22 +1995,6 @@ mod tests {
             ]
         );
 
-        let events = function_key_events(1, modifiers)?;
-        let observed: Vec<_> = events
-            .iter()
-            .map(|event| (event.code(), event.value()))
-            .collect();
-        assert_eq!(
-            observed,
-            vec![
-                (Key::KEY_LEFTCTRL.code(), 1),
-                (Key::KEY_RIGHTALT.code(), 1),
-                (Key::KEY_F2.code(), 1),
-                (Key::KEY_F2.code(), 0),
-                (Key::KEY_RIGHTALT.code(), 0),
-                (Key::KEY_LEFTCTRL.code(), 0),
-            ]
-        );
         Ok(())
     }
 
@@ -2046,24 +2002,24 @@ mod tests {
     fn logical_top_and_bottom_map_to_the_m2_panel_flanks() -> Result<()> {
         let logical = ImageSurface::create(
             cairo::Format::ARgb32,
-            sliver_core::STRIP_W as i32,
-            sliver_core::STRIP_H as i32,
+            crate::DISPLAY_WIDTH as i32,
+            crate::DISPLAY_HEIGHT as i32,
         )?;
         let context = cairo::Context::new(&logical)?;
         context.set_source_rgb(0.0, 0.0, 0.0);
         context.paint()?;
         context.set_source_rgb(1.0, 0.0, 0.0);
-        context.rectangle(0.0, 0.0, sliver_core::STRIP_W, 10.0);
+        context.rectangle(0.0, 0.0, crate::DISPLAY_WIDTH_F64, 10.0);
         context.fill()?;
         context.set_source_rgb(0.0, 0.0, 1.0);
-        context.rectangle(0.0, 50.0, sliver_core::STRIP_W, 10.0);
+        context.rectangle(0.0, 50.0, crate::DISPLAY_WIDTH_F64, 10.0);
         context.fill()?;
         logical.flush();
 
         let physical = ImageSurface::create(
             cairo::Format::ARgb32,
             PANEL_W as i32,
-            sliver_core::STRIP_W as i32,
+            crate::DISPLAY_WIDTH as i32,
         )?;
         paint_logical_frame(&LogicalFrame::from_surface(&logical)?, &physical)?;
         assert_eq!(rgba_at(&physical, 55, 1000)?, [255, 0, 0, 255]);

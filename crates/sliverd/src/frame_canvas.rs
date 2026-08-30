@@ -12,8 +12,8 @@ impl FrameCanvas {
     pub(crate) fn new() -> Result<Self> {
         let surface = ImageSurface::create(
             Format::ARgb32,
-            sliver_core::STRIP_W as i32,
-            sliver_core::STRIP_H as i32,
+            crate::DISPLAY_WIDTH as i32,
+            crate::DISPLAY_HEIGHT as i32,
         )
         .context("creating frame surface")?;
         let context = CairoContext::new(&surface).context("creating frame drawing context")?;

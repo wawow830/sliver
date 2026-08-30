@@ -3,15 +3,17 @@ name = "sliverd"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
+default-run = "sliver"
+
+[features]
+calibration = []
 
 [dependencies]
-sliver-core = { path = "../sliver-core" }
 anyhow = "1"
 cairo-rs = "0.20"
 drm = "0.14"
 ctrlc = { version = "3", features = ["termination"] }
 evdev = "0.12"
-chrono = "0.4"
 libc = "0.2"
 memmap2 = "0.9"
 mlua = { version = "0.12", default-features = false, features = ["lua54", "vendored"] }
@@ -20,3 +22,8 @@ pangocairo = "0.20"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "sliver-calibrate"
+path = "src/bin/sliver-calibrate.rs"
+required-features = ["calibration"]

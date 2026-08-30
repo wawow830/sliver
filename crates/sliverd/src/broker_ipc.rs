@@ -10,9 +10,8 @@ use anyhow::{bail, ensure, Context, Result};
 
 use crate::authorization::{NoActiveUserSession, SessionAuthorizer, WorkerNotOwnedByActiveUser};
 use crate::hardware::{
-    function_key_output, tap_key_events, ContactId, HardwareCapability, HardwareEvent, InputState,
-    LogicalFrame, Modifier, ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware,
-    TouchEvent, TouchPhase,
+    ContactId, HardwareCapability, HardwareEvent, InputState, LogicalFrame, Modifier,
+    ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware, TouchEvent, TouchPhase,
 };
 use crate::logind::RealLogind;
 use crate::lua_worker::StopReason;
@@ -338,14 +337,6 @@ impl TouchBarHardware for BrokerHardware {
             encode_key_event(&mut payload, *event);
         }
         self.request(EMIT_KEYS, &payload).map(|_| ())
-    }
-
-    fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
-        let key = function_key_output(index).context("function-key index is out of range")?;
-        self.emit_key_events(&tap_key_events(
-            key,
-            &crate::hardware::modifier_output_keys(modifiers),
-        ))
     }
 
     fn get_backlight(&mut self) -> Result<f64> {
@@ -1242,11 +1233,11 @@ fn decode_frame(payload: &[u8]) -> Result<LogicalFrame> {
     let height = read_u32(&mut reader)?;
     let stride = read_u32(&mut reader)?;
     ensure!(
-        width == sliver_core::STRIP_W as usize,
+        width == crate::DISPLAY_WIDTH,
         "broker frame width is invalid"
     );
     ensure!(
-        height == sliver_core::STRIP_H as usize,
+        height == crate::DISPLAY_HEIGHT,
         "broker frame height is invalid"
     );
     ensure!(stride >= width * 4, "broker frame stride is invalid");
@@ -1331,13 +1322,6 @@ mod tests {
                 .lock()
                 .expect("test hardware mutex poisoned")
                 .emit_key_events(events)
-        }
-
-        fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
-            self.0
-                .lock()
-                .expect("test hardware mutex poisoned")
-                .tap_function_key(index, modifiers)
         }
 
         fn get_backlight(&mut self) -> Result<f64> {

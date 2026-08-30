@@ -503,7 +503,6 @@ pub(crate) trait TouchBarHardware {
     /// Sends the complete ordered sequence as one virtual-device batch.
     /// Implementations must preserve slice order and must not split or delay it.
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()>;
-    fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()>;
     fn get_backlight(&mut self) -> Result<f64>;
     fn set_backlight(&mut self, level: f64) -> Result<()>;
     fn release(&mut self) -> Result<()>;
@@ -519,15 +518,12 @@ mod fake {
     use anyhow::{ensure, Result};
 
     use super::{
-        function_key_output, modifier_output_keys, tap_key_events, ConsumerKey, HardwareCapability,
-        HardwareEvent, InputState, KeyboardKey, LogicalFrame, Modifier, ModifierState, ObservedKey,
-        OutputKey, SyntheticKeyEvent, TouchBarHardware,
+        ConsumerKey, HardwareCapability, HardwareEvent, InputState, KeyboardKey, LogicalFrame,
+        ObservedKey, OutputKey, SyntheticKeyEvent, TouchBarHardware,
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) enum FakeKey {
-        Function(usize),
-        Modifier(Modifier),
         Keyboard(KeyboardKey),
         Consumer(ConsumerKey),
     }
@@ -776,47 +772,6 @@ mod fake {
                 self.actions.push(FakeAction::SyntheticKey(event));
             }
             self.synthetic_transactions.push(transaction);
-            Ok(())
-        }
-
-        fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
-            ensure!(self.claimed, "fake Touch Bar is not claimed");
-            let function_key = function_key_output(index)
-                .ok_or_else(|| anyhow::anyhow!("function-key index is out of range"))?;
-            for event in tap_key_events(function_key, &modifier_output_keys(modifiers)) {
-                let key = match event.key {
-                    key if key == function_key => FakeKey::Function(index),
-                    OutputKey::Keyboard(KeyboardKey::LeftCtrl) => {
-                        FakeKey::Modifier(Modifier::LeftCtrl)
-                    }
-                    OutputKey::Keyboard(KeyboardKey::RightCtrl) => {
-                        FakeKey::Modifier(Modifier::RightCtrl)
-                    }
-                    OutputKey::Keyboard(KeyboardKey::LeftAlt) => {
-                        FakeKey::Modifier(Modifier::LeftAlt)
-                    }
-                    OutputKey::Keyboard(KeyboardKey::RightAlt) => {
-                        FakeKey::Modifier(Modifier::RightAlt)
-                    }
-                    OutputKey::Keyboard(KeyboardKey::LeftShift) => {
-                        FakeKey::Modifier(Modifier::LeftShift)
-                    }
-                    OutputKey::Keyboard(KeyboardKey::RightShift) => {
-                        FakeKey::Modifier(Modifier::RightShift)
-                    }
-                    OutputKey::Keyboard(KeyboardKey::LeftSuper) => {
-                        FakeKey::Modifier(Modifier::LeftSuper)
-                    }
-                    OutputKey::Keyboard(KeyboardKey::RightSuper) => {
-                        FakeKey::Modifier(Modifier::RightSuper)
-                    }
-                    _ => unreachable!("function-key planner emitted an unsupported key"),
-                };
-                self.actions.push(FakeAction::SyntheticKey(FakeKeyEvent {
-                    key,
-                    active: event.active,
-                }));
-            }
             Ok(())
         }
 

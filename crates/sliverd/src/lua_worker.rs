@@ -374,10 +374,12 @@ struct DueTimer {
 }
 
 impl LuaWorker {
+    #[cfg(test)]
     pub(crate) fn stage(source: &Path) -> Result<StagedLuaWorker> {
         Self::stage_with_backlight(source, 0.0)
     }
 
+    #[cfg(test)]
     pub(crate) fn stage_with_backlight(
         source: &Path,
         initial_backlight: f64,
@@ -385,6 +387,7 @@ impl LuaWorker {
         Self::stage_with_backlight_and_input(source, initial_backlight, InputState::default())
     }
 
+    #[cfg(test)]
     pub(crate) fn stage_with_backlight_and_input(
         source: &Path,
         initial_backlight: f64,
@@ -397,7 +400,7 @@ impl LuaWorker {
         )
     }
 
-    #[allow(clippy::needless_return)]
+    #[cfg(test)]
     pub(crate) fn stage_source_with_backlight_and_input(
         source: LuaSource,
         initial_backlight: f64,
@@ -447,9 +450,9 @@ impl LuaWorker {
         let frame_path = worker_process::frame_path()?;
         let slots = FrameSlots::new_shared(
             &frame_path,
-            sliver_core::STRIP_W as usize,
-            sliver_core::STRIP_H as usize,
-            sliver_core::STRIP_W as usize * 4,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
         )?;
         let producer = slots.producer();
         let broker = slots.broker();
@@ -484,18 +487,18 @@ impl LuaWorker {
         validate_backlight_level(initial_backlight)?;
         #[cfg(test)]
         let slots = FrameSlots::new(
-            sliver_core::STRIP_W as usize,
-            sliver_core::STRIP_H as usize,
-            sliver_core::STRIP_W as usize * 4,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
         )?;
         #[cfg(not(test))]
         let frame_path = worker_process::frame_path()?;
         #[cfg(not(test))]
         let slots = FrameSlots::new_shared(
             &frame_path,
-            sliver_core::STRIP_W as usize,
-            sliver_core::STRIP_H as usize,
-            sliver_core::STRIP_W as usize * 4,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
         )?;
         #[cfg(test)]
         let producer = slots.producer();
@@ -503,9 +506,9 @@ impl LuaWorker {
 
         #[cfg(test)]
         {
-            let test_producer = producer.clone();
             let (command_tx, command_rx) = mpsc::channel();
             let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+            let test_producer = producer.clone();
             let owner = thread::Builder::new()
                 .name("sliver-lua".into())
                 .spawn(move || {
@@ -769,6 +772,7 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))
     }
 
+    #[cfg(test)]
     pub(crate) fn shutdown(self, reason: StopReason) -> Result<()> {
         self.shutdown_until(reason, Instant::now() + Duration::from_millis(500))
     }
