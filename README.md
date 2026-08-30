@@ -19,12 +19,12 @@ Sliver consists of:
 
 - Apple MacBook Pro (13-inch, M2, 2022 / Mac14,7)
 - Fedora Asahi Remix 44
-- Touchbar display: `/dev/dri/card1`, DSI-1, native mode 60x2008
-- Touch input: `Mac14,7 Touch Bar`
+- Touchbar display: Asahi `adp` DRM device, DSI-1, native mode 60x2008
+- Touch input: `Mac14,7 Touch Bar` (discovered by evdev name)
 - Keyboard: `Apple MTP keyboard`
 
-The current DRM and touch-device paths are hardware-specific; see
-[troubleshooting](docs/troubleshooting.md) if enumeration differs.
+The adapter discovers the DRM card, touch event node, and DSI backlight at
+startup; see [troubleshooting](docs/troubleshooting.md) if a device is absent.
 
 ## Build
 
@@ -56,13 +56,17 @@ Only one process can own the touchbar DRM device. Stop tiny-dfr first:
 sudo systemctl stop tiny-dfr
 ```
 
-Enable the system broker after installing its service account and device
-permissions:
+After the one-time account and udev setup, enable takeover with one
+administrator operation:
 
 ```bash
-sudo systemctl enable --now sliver-broker.service
-systemctl --user enable --now sliver-supervisor.service
+sudo systemctl enable --now sliver-broker.service && \
+  sudo systemctl --global enable sliver-supervisor.service
 ```
+
+The global user unit starts with each user's next graphical session. For an
+already-running session, enable it immediately with
+`systemctl --user enable --now sliver-supervisor.service`.
 
 The broker paints the embedded default before login. When a user session starts,
 that user's supervisor stages its selected Lua source and hands over the first

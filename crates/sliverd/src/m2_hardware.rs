@@ -7,11 +7,11 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use cairo::{Filter, ImageSurface, Operator};
 use drm::buffer::{Buffer as _, DrmFourcc};
 use drm::control::{self, connector, crtc, framebuffer, Device as _, Mode};
@@ -29,11 +29,8 @@ use crate::hardware::{
 const PANEL_W: u32 = 60;
 const FB_PAD: u32 = 4;
 
-const TOUCH_DEV: &str = "/dev/input/event2";
+const TOUCH_NAME: &str = "Mac14,7 Touch Bar";
 const KEYBOARD_NAME: &str = "Apple MTP keyboard";
-const BACKLIGHT_DIRECTORY: &str = "/sys/class/backlight/228600000.dsi.0";
-const BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0/brightness";
-const MAX_BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0/max_brightness";
 
 /// A small wrapper keeps the Linux polling dependency private to this adapter.
 /// The crate currently gets libc transitively through evdev; it should be made
@@ -126,13 +123,48 @@ struct CardClaim {
     released: bool,
 }
 
-/// Open card1, take DRM master, find the DSI Touch Bar, and find its CRTC.
+fn is_numbered_device(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn numbered_device_paths(directory: &str, prefix: &str) -> io::Result<Vec<PathBuf>> {
+    let mut paths = std::fs::read_dir(directory)?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| is_numbered_device(name, prefix))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
+}
+
+/// Find the card that exposes the connected Touch Bar DSI connector. Card
+/// numbers are assigned dynamically, so they are not part of the hardware
+/// profile.
 fn claim_card() -> Result<CardClaim> {
+    let paths = numbered_device_paths("/dev/dri", "card")?;
+    let mut last_error = None;
+    for path in &paths {
+        match claim_card_at(path) {
+            Ok(claim) => return Ok(claim),
+            Err(error) => last_error = Some(error.context(format!("probing {}", path.display()))),
+        }
+    }
+    match last_error {
+        Some(error) => Err(error.context("no connected DSI Touch Bar connector found")),
+        None => bail!("no DRM card devices found"),
+    }
+}
+
+fn claim_card_at(path: &Path) -> Result<CardClaim> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
-        .open("/dev/dri/card1")
-        .context("opening /dev/dri/card1 (need root, or the video group)")?;
+        .open(path)
+        .with_context(|| format!("opening {} (need the sliver-drm group)", path.display()))?;
     let card = Card(file);
     card.acquire_master_lock().context("becoming DRM master")?;
 
@@ -149,7 +181,7 @@ fn claim_card() -> Result<CardClaim> {
         .context("no connected DSI connector")?;
     let mode = *conn.modes().first().context("connector has no modes")?;
     let (w, h) = mode.size();
-    eprintln!("panel mode: {w}x{h}");
+    eprintln!("panel mode: {w}x{h} ({})", path.display());
 
     let crtc = conn
         .current_encoder()
@@ -271,6 +303,65 @@ fn backlight_value(level: f64, maximum: u32) -> Result<u32> {
     validate_backlight(level)?;
     ensure!(maximum > 0, "backlight maximum must be positive");
     Ok((level * f64::from(maximum)).round() as u32)
+}
+
+struct Backlight {
+    directory: PathBuf,
+    brightness: PathBuf,
+    maximum: PathBuf,
+}
+
+impl Backlight {
+    fn discover() -> Result<Self> {
+        let mut candidates = std::fs::read_dir("/sys/class/backlight")?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains("dsi"))
+            })
+            .filter_map(|directory| {
+                let brightness = directory.join("brightness");
+                let maximum = directory.join("max_brightness");
+                (brightness.exists() && maximum.exists()).then_some(Self {
+                    directory,
+                    brightness,
+                    maximum,
+                })
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.directory.cmp(&right.directory));
+        candidates
+            .into_iter()
+            .next()
+            .context("no DSI backlight found")
+    }
+
+    fn values(&self) -> Result<(u32, u32)> {
+        let maximum = std::fs::read_to_string(&self.maximum)
+            .with_context(|| format!("reading {}/max_brightness", self.directory.display()))?
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("parsing {}/max_brightness", self.directory.display()))?;
+        let current = std::fs::read_to_string(&self.brightness)
+            .with_context(|| format!("reading {}/brightness", self.directory.display()))?
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("parsing {}/brightness", self.directory.display()))?;
+        Ok((current, maximum))
+    }
+
+    fn set(&self, level: f64) -> Result<()> {
+        let (_, maximum) = self.values()?;
+        let value = backlight_value(level, maximum)?;
+        let mut brightness = OpenOptions::new()
+            .write(true)
+            .open(&self.brightness)
+            .with_context(|| format!("opening {}", self.brightness.display()))?;
+        write!(brightness, "{value}")
+            .with_context(|| format!("writing {}", self.brightness.display()))?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -472,16 +563,32 @@ impl TouchState {
 }
 
 struct TouchInput {
+    path: PathBuf,
     device: evdev::Device,
     state: TouchState,
     grabbed: bool,
+}
+
+fn open_touch_device() -> io::Result<(PathBuf, evdev::Device)> {
+    for path in numbered_device_paths("/dev/input", "event")? {
+        let Ok(device) = evdev::Device::open(&path) else {
+            continue;
+        };
+        if device.name() == Some(TOUCH_NAME) {
+            return Ok((path, device));
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("input device {TOUCH_NAME:?} not found"),
+    ))
 }
 
 impl TouchInput {
     fn open() -> io::Result<Self> {
         use evdev::AbsoluteAxisType;
 
-        let mut device = evdev::Device::open(TOUCH_DEV)?;
+        let (path, mut device) = open_touch_device()?;
         set_nonblocking(device.as_raw_fd())?;
 
         // Exclusive: touches on the strip are ours, not the compositor's cursor.
@@ -535,6 +642,7 @@ impl TouchInput {
         eprintln!("touch: logical ranges x={x_range:?} y={y_range:?}, slots={slot_count}");
 
         Ok(Self {
+            path,
             device,
             state: TouchState::new(profile),
             grabbed,
@@ -888,6 +996,7 @@ pub(crate) struct M2TouchBar {
     shown: bool,
     touch: Option<TouchInput>,
     keyboard: Option<KeyboardInput>,
+    backlight: Option<Backlight>,
     fn_active: bool,
     modifiers: ModifierState,
     keyboard_emitter: Option<KeyboardEmitter>,
@@ -903,6 +1012,7 @@ impl M2TouchBar {
             shown: false,
             touch: None,
             keyboard: None,
+            backlight: None,
             fn_active: false,
             modifiers: ModifierState::default(),
             keyboard_emitter: None,
@@ -986,7 +1096,7 @@ impl M2TouchBar {
                 Ok(touch) => Some(touch),
                 Err(e) => {
                     crate::system_log::broker_error(format!(
-                        "touch: can't open {TOUCH_DEV}: {e} (continuing untouchable)"
+                        "touch: can't discover {TOUCH_NAME}: {e} (continuing untouchable)"
                     ));
                     None
                 }
@@ -994,6 +1104,7 @@ impl M2TouchBar {
             let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);
+            self.backlight = Some(Backlight::discover().context("discovering DSI backlight")?);
             if self.keyboard_emitter.is_none() {
                 self.keyboard_emitter =
                     Some(KeyboardEmitter::new().context("creating Sliver Keyboard")?);
@@ -1082,7 +1193,14 @@ impl M2TouchBar {
                 None => None,
             };
             if let Some(error) = touch_error {
-                crate::system_log::broker_error(format!("touch: reader stopped: {error}"));
+                if let Some(touch) = self.touch.as_ref() {
+                    crate::system_log::broker_error(format!(
+                        "touch: reader stopped at {}: {error}",
+                        touch.path.display()
+                    ));
+                } else {
+                    crate::system_log::broker_error(format!("touch: reader stopped: {error}"));
+                }
                 if let Some(touch) = self.touch.as_mut() {
                     touch.cancel(&mut output, self.modifiers);
                 }
@@ -1153,6 +1271,7 @@ impl M2TouchBar {
         }
         self.touch = None;
         self.keyboard = None;
+        self.backlight = None;
         self.fn_active = false;
         self.modifiers = ModifierState::default();
 
@@ -1226,34 +1345,21 @@ impl TouchBarHardware for M2TouchBar {
 
     fn get_backlight(&mut self) -> Result<f64> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-        let maximum = std::fs::read_to_string(MAX_BACKLIGHT)
-            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/max_brightness"))?
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/max_brightness"))?;
-        let current = std::fs::read_to_string(BACKLIGHT)
-            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/brightness"))?
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/brightness"))?;
+        let backlight = self
+            .backlight
+            .as_ref()
+            .context("Touch Bar backlight is not initialized")?;
+        let (current, maximum) = backlight.values()?;
         normalize_backlight_level(current, maximum)
     }
 
     fn set_backlight(&mut self, level: f64) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
-
-        let maximum = std::fs::read_to_string(MAX_BACKLIGHT)
-            .with_context(|| format!("reading {BACKLIGHT_DIRECTORY}/max_brightness"))?
-            .trim()
-            .parse::<u32>()
-            .with_context(|| format!("parsing {BACKLIGHT_DIRECTORY}/max_brightness"))?;
-        let value = backlight_value(level, maximum)?;
-        let mut brightness = OpenOptions::new()
-            .write(true)
-            .open(BACKLIGHT)
-            .with_context(|| format!("opening {BACKLIGHT}"))?;
-        write!(brightness, "{value}").with_context(|| format!("writing {BACKLIGHT}"))?;
-        Ok(())
+        let backlight = self
+            .backlight
+            .as_ref()
+            .context("Touch Bar backlight is not initialized")?;
+        backlight.set(level)
     }
 
     fn release(&mut self) -> Result<()> {
@@ -1538,6 +1644,16 @@ mod tests {
 
         assert_eq!(output[0].phase, crate::hardware::TouchPhase::Down);
         assert_eq!(output[1].phase, crate::hardware::TouchPhase::Cancel);
+    }
+
+    #[test]
+    fn device_number_matching_ignores_unrelated_input_names() {
+        assert!(is_numbered_device("card0", "card"));
+        assert!(is_numbered_device("event12", "event"));
+        assert!(!is_numbered_device("card", "card"));
+        assert!(!is_numbered_device("eventx", "event"));
+        assert!(!is_numbered_device("card0-extra", "card"));
+        assert!(!is_numbered_device("event1", "card"));
     }
 
     #[test]
