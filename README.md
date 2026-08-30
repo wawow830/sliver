@@ -41,9 +41,8 @@ For the supported Fedora Asahi installation, build the RPM in
 service binaries in `/usr/libexec/sliver`. The package does not enable the
 services or install an editable copy of `default.lua`.
 
-```bash
-rpmbuild -ba packaging/fedora/sliver.spec
-```
+See [the Fedora package instructions](packaging/fedora/INSTALL.md) for the
+source archive preparation and RPM build command.
 
 The development binaries use the current user's device permissions. The
 installed broker uses the `sliver` account and the package's udev rules.
