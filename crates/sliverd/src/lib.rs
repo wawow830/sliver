@@ -90,12 +90,18 @@ pub fn supervisor_main() -> Result<()> {
     match (serve_result, shutdown_result) {
         (Err(error), Err(shutdown_error)) => {
             system_log::broker_error(format!(
-                "supervisor shutdown failed after service error: {shutdown_error:#}"
+                "supervisor service failed: {error:#}; shutdown also failed: {shutdown_error:#}"
             ));
             Err(error)
         }
-        (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Ok(())) => {
+            system_log::broker_error(format!("supervisor service failed: {error:#}"));
+            Err(error)
+        }
+        (Ok(()), Err(error)) => {
+            system_log::broker_error(format!("supervisor shutdown failed: {error:#}"));
+            Err(error)
+        }
         (Ok(()), Ok(())) => Ok(()),
     }
 }
