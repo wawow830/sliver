@@ -37,6 +37,8 @@ grep -F 'usage: sliver [FILE]' "$audit_tmp/stderr" >/dev/null ||
 
 spec=packaging/fedora/sliver.spec
 grep -F '%{_bindir}/sliver' "$spec" >/dev/null || fail "RPM does not install the public client"
+grep -F 'docs/lua.md docs/architecture.md docs/troubleshooting.md' "$spec" >/dev/null ||
+  fail "RPM omits the documentation linked by README"
 if grep -E '^%\{_(bindir|libexecdir)\}/sliver-(edit|preview|probe|calibrate)' "$spec" >/dev/null; then
   fail "RPM exposes a removed executable"
 fi

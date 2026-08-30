@@ -12,7 +12,10 @@ f:/usr/lib/systemd/system/sliver-broker.service
 f:/usr/lib/systemd/user/sliver-supervisor.service
 f:/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
 f:/usr/lib/udev/rules.d/70-sliver.rules
-f:/usr/lib/sysusers.d/sliver.conf'
+f:/usr/lib/sysusers.d/sliver.conf
+f:/usr/share/doc/sliver/lua.md
+f:/usr/share/doc/sliver/architecture.md
+f:/usr/share/doc/sliver/troubleshooting.md'
 
 for entry in $required; do
     kind=${entry%%:*}

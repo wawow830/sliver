@@ -250,6 +250,10 @@ on_exit() {
     warn "The temporary verifier config was removed. Run 'sliver' with no argument to clear its saved path."
   fi
   if (( status != 0 )); then
+    if (( TAKEOVER_ACTIVE )); then
+      warn "verification failed after takeover; attempting rollback now"
+      rollback
+    fi
     warn "verification stopped with status $status"
     warn "No automatic rollback was attempted. If takeover is active, run:"
     say "sudo systemctl disable --now sliver-broker.service"
