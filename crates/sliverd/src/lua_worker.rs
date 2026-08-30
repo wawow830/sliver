@@ -402,6 +402,43 @@ impl LuaWorker {
     }
 
     #[allow(clippy::needless_return)]
+    #[cfg(test)]
+    pub(crate) fn stage_source_with_identity_process(
+        source: LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        identity: WorkerIdentity,
+    ) -> Result<StagedLuaWorker> {
+        validate_backlight_level(initial_backlight)?;
+        let frame_path = worker_process::frame_path()?;
+        let slots = FrameSlots::new_shared(
+            &frame_path,
+            sliver_core::STRIP_W as usize,
+            sliver_core::STRIP_H as usize,
+            sliver_core::STRIP_W as usize * 4,
+        )?;
+        let producer = slots.producer();
+        let broker = slots.broker();
+        let process = worker_process::ProcessWorker::stage_with_frames(
+            &source,
+            initial_backlight,
+            initial_input,
+            &frame_path,
+            broker.clone(),
+            identity,
+        )?;
+        Ok(StagedLuaWorker {
+            worker: Self {
+                commands: None,
+                owner: None,
+                process: Some(process),
+                broker,
+                producer,
+            },
+        })
+    }
+
+    #[allow(clippy::needless_return)]
     pub(crate) fn stage_source_with_identity(
         source: LuaSource,
         initial_backlight: f64,

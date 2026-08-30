@@ -375,6 +375,8 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     state_file: PathBuf,
     default_source: LuaSource,
     fallback_worker: bool,
+    #[cfg(test)]
+    worker_process_backend: bool,
     active: Option<ActiveConfig>,
     recovery: Option<RecoverySession>,
     claimed: bool,
@@ -436,6 +438,36 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Self::new_with_logind_and_default(hardware, state_file, logind, default_source::source())
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_with_logind_process(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+    ) -> Result<Self> {
+        let mut supervisor = Self::new_with_logind(hardware, state_file, logind)?;
+        supervisor.worker_process_backend = true;
+        Ok(supervisor)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_startup_candidate_process(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+        injected_default: Option<LuaSource>,
+    ) -> Result<Self> {
+        let default_source = injected_default.unwrap_or_else(default_source::source);
+        let mut supervisor = Self::new_with_logind_process(hardware, state_file.clone(), logind)?;
+        supervisor.default_source = default_source;
+        let saved = read_selected_path(&state_file)?;
+        let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
+        if let Err(error) = supervisor.startup_candidate(selection) {
+            eprintln!("selected Lua worker entered recovery: {error:#}");
+            supervisor.enter_recovery()?;
+        }
+        Ok(supervisor)
+    }
+
     fn new_with_logind_and_default(
         mut hardware: H,
         state_file: PathBuf,
@@ -456,6 +488,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             state_file,
             default_source,
             fallback_worker: false,
+            #[cfg(test)]
+            worker_process_backend: false,
             active: None,
             recovery: None,
             claimed: true,
@@ -675,12 +709,30 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         } else {
             WorkerIdentity::User
         };
-        let StagedLuaWorker { worker } = LuaWorker::stage_source_with_identity(
+        #[cfg(test)]
+        let staged_worker = if self.worker_process_backend {
+            LuaWorker::stage_source_with_identity_process(
+                source.clone(),
+                current_backlight,
+                self.input_state,
+                identity,
+            )
+        } else {
+            LuaWorker::stage_source_with_identity(
+                source.clone(),
+                current_backlight,
+                self.input_state,
+                identity,
+            )
+        }?;
+        #[cfg(not(test))]
+        let staged_worker = LuaWorker::stage_source_with_identity(
             source.clone(),
             current_backlight,
             self.input_state,
             identity,
         )?;
+        let StagedLuaWorker { worker } = staged_worker;
         self.poll_hardware_deferred(Duration::ZERO)?;
         let render_now = self.now_seconds();
         let render_time = self

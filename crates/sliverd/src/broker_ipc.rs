@@ -1015,6 +1015,7 @@ mod tests {
     };
     use crate::logind::{ActiveSession, FakeLogind};
     use crate::lua_worker::LuaSource;
+    use crate::path_state::PreparedPathState;
 
     use super::*;
 
@@ -1156,7 +1157,7 @@ mod tests {
                 uid,
             }),
         );
-        let mut user = Supervisor::new_with_logind(
+        let mut user = Supervisor::new_with_logind_process(
             BrokerHardware::new_at(socket),
             user_state.clone(),
             FakeLogind::new(),
@@ -1189,6 +1190,130 @@ mod tests {
         );
         running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;
+        Ok(())
+    }
+
+    #[test]
+    fn supervisor_restart_reloads_the_saved_source_through_the_broker_loop() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("saved.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let user_state = directory.path().join("user-state/config-path");
+        PreparedPathState::prepare(&user_state, &source)?.commit()?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_session(
+            std::process::id() as libc::pid_t,
+            Some(crate::logind::Session {
+                id: "restart-session".into(),
+                uid,
+                seat: Some(SEAT.into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "restart-session".into(),
+                uid,
+            }),
+        );
+
+        let first_socket = directory.path().join("first-broker.sock");
+        let first_listener = UnixListener::bind(&first_socket)?;
+        let first_shared = ThreadFakeHardware::new();
+        let first_running = Arc::new(AtomicBool::new(true));
+        let first_broker_state = directory.path().join("first-broker-state/config-path");
+        let first_server_logind = logind.clone();
+        let first_server_shared = first_shared.clone();
+        let first_server_running = first_running.clone();
+        let first_server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                first_server_shared,
+                first_broker_state,
+                first_server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                first_listener,
+                fallback,
+                SessionAuthorizer::new(first_server_logind),
+                first_server_running,
+                SEAT,
+                false,
+            )
+        });
+        let first = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at(first_socket),
+            user_state.clone(),
+            FakeLogind::new(),
+            None,
+        )?;
+        assert_eq!(
+            first_shared.inspect(|hardware| hardware
+                .presented_frames()
+                .last()
+                .unwrap()
+                .rgba_at(10, 10)),
+            [255, 0, 0, 255]
+        );
+        first.shutdown()?;
+        first_running.store(false, Ordering::Release);
+        first_server.join().expect("first broker server panicked")?;
+
+        let second_socket = directory.path().join("second-broker.sock");
+        let second_listener = UnixListener::bind(&second_socket)?;
+        let second_shared = ThreadFakeHardware::new();
+        let second_running = Arc::new(AtomicBool::new(true));
+        let second_broker_state = directory.path().join("second-broker-state/config-path");
+        let second_server_logind = logind.clone();
+        let second_server_shared = second_shared.clone();
+        let second_server_running = second_running.clone();
+        let second_server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                second_server_shared,
+                second_broker_state,
+                second_server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                second_listener,
+                fallback,
+                SessionAuthorizer::new(second_server_logind),
+                second_server_running,
+                SEAT,
+                false,
+            )
+        });
+        let second = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at(second_socket),
+            user_state,
+            FakeLogind::new(),
+            None,
+        )?;
+        assert_eq!(
+            second_shared.inspect(|hardware| hardware
+                .presented_frames()
+                .last()
+                .unwrap()
+                .rgba_at(10, 10)),
+            [255, 0, 0, 255]
+        );
+        second.shutdown()?;
+        second_running.store(false, Ordering::Release);
+        second_server
+            .join()
+            .expect("second broker server panicked")?;
         Ok(())
     }
 
