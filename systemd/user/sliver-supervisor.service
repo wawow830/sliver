@@ -2,6 +2,7 @@
 Description=Sliver per-user Lua supervisor
 After=graphical-session.target
 PartOf=graphical-session.target
+ConditionGroup=sliver-supervisors
 
 [Service]
 Type=simple

@@ -3,7 +3,8 @@
 The Fedora package creates the `sliver` broker account and the
 `sliver-supervisors` group. Add users who may run a supervisor to that group.
 The package also installs the M2 udev rules that grant the broker its DRM,
-input, uinput, and backlight access. It does not enable either service.
+input, uinput, and backlight access through dedicated groups. It does not
+enable either service.
 See [the Fedora package instructions](../packaging/fedora/README.md) for the
 initial account setup and explicit takeover command.
 
@@ -15,10 +16,11 @@ sudo loginctl enable-linger sliver
 ```
 
 The broker conflicts with `tiny-dfr.service`; stopping it does not start
-`tiny-dfr` again. Enable `sliver-supervisor.service` for each user that should
-run a Lua supervisor. Log out and back in after changing group membership. The
-supervisor keeps its apply socket in that user's `$XDG_RUNTIME_DIR` and starts
-workers with that user's user manager.
+`tiny-dfr` again. The documented takeover command globally enables
+`sliver-supervisor.service`; `ConditionGroup=sliver-supervisors` keeps it
+inactive for users who were not granted access. Log out and back in after
+changing group membership. The supervisor keeps its apply socket in that
+user's `$XDG_RUNTIME_DIR` and starts workers with that user's user manager.
 
 The worker drop-in belongs under `/usr/lib/systemd/user/sliver-lua-worker-.service.d/`
 when installed from the package. The dash-truncated unit name applies the

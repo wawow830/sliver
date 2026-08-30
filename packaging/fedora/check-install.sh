@@ -59,6 +59,8 @@ grep -F 'Before=tiny-dfr.service' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
 grep -F 'ExecStart=/usr/libexec/sliver/sliver-supervisor' \
     "$root/usr/lib/systemd/user/sliver-supervisor.service" >/dev/null
+grep -F 'ConditionGroup=sliver-supervisors' \
+    "$root/usr/lib/systemd/user/sliver-supervisor.service" >/dev/null
 grep -F 'PrivateDevices=yes' \
     "$root/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf" >/dev/null
 grep -F 'MODE="0660"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null

@@ -58,11 +58,17 @@ install -Dpm0644 packaging/fedora/sliver.sysusers \
     %{buildroot}%{_sysusersdir}/sliver.conf
 
 %check
-# The production service tests need a live user manager, which mock builds do
-# not provide. Run those tests on an installed Fedora Asahi system instead.
-cargo test --release --locked --package sliverd --lib -- \
-    --skip systemd_worker_uses_the_declared_resource_and_device_policy \
-    --skip production_peer_verification_accepts_a_real_supervisor_unit
+# The production service tests exercise the transient user-service boundary.
+# Fedora mock builds without a user manager may opt out explicitly, but an
+# installed Fedora Asahi validation must run the complete suite.
+if systemd-run --user --wait --quiet true; then
+    cargo test --release --locked --package sliverd --lib
+else
+    echo 'Skipping user-manager integration tests: no systemd user manager' >&2
+    cargo test --release --locked --package sliverd --lib -- \
+        --skip systemd_worker_uses_the_declared_resource_and_device_policy \
+        --skip production_peer_verification_accepts_a_real_supervisor_unit
+fi
 cargo test --release --locked --package sliverd --test sliver_cli
 packaging/fedora/check-install.sh %{buildroot}
 

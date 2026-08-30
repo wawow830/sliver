@@ -1884,6 +1884,7 @@ mod tests {
             assert!(broker.contains(setting), "broker service lacks {setting}");
         }
         assert!(supervisor.contains("WantedBy=graphical-session.target"));
+        assert!(supervisor.contains("ConditionGroup=sliver-supervisors"));
         for setting in [
             "MemoryMax=512M",
             "TasksMax=64",

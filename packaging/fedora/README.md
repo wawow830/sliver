@@ -23,8 +23,13 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=drm
 sudo udevadm trigger --subsystem-match=input
 sudo udevadm trigger --subsystem-match=backlight
-sudo systemctl enable --now sliver-broker.service
-systemctl --user enable --now sliver-supervisor.service
+```
+
+Enable takeover with one administrator operation:
+
+```sh
+sudo systemctl enable --now sliver-broker.service && \
+  sudo systemctl --global enable sliver-supervisor.service
 ```
 
 The broker conflicts with `tiny-dfr.service` and starts before it. Stopping the
