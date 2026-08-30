@@ -388,10 +388,12 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                 Ok(outcome) => {
                     let active = authorizer.active_session(seat)?;
                     fallback_attempted = !outcome.logout_acknowledged && active.is_some();
+                    last_active = active;
                 }
                 Err(error) => {
                     crate::system_log::broker_error(format!("broker client failed: {error:#}"));
                     fallback_attempted = true;
+                    last_active = authorizer.active_session(seat)?;
                 }
             }
             if !fallback_running
@@ -1312,12 +1314,12 @@ mod tests {
         let claim = read_message(&mut client)?;
         assert_eq!(claim.first(), Some(&OK));
 
-        // The release authorization passes, then the session disappears before
-        // the handler reports the clean disconnect.
-        logind.clear_active_on_generation_read(6, SEAT);
+        // A clean release while active must still establish the session
+        // transition that the broker will observe when logout follows.
         write_message(&mut client, RELEASE, &[])?;
         assert_eq!(read_message(&mut client)?, vec![OK]);
         drop(client);
+        logind.set_active(SEAT, None);
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while shared.inspect(|hardware| hardware.presented_frames().len() < 2)
@@ -1331,6 +1333,43 @@ mod tests {
                     .presented_frames()
                     .last()
                     .expect("fallback frame was not restored")
+                    .rgba_at(10, 10)
+            }),
+            [0, 255, 0, 255]
+        );
+
+        // The release authorization can also pass immediately before the
+        // session disappears; that path must restore fallback as well.
+        let mut raced_client = UnixStream::connect(&socket)?;
+        raced_client.write_all(&[0, 0, 0])?;
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "second-release-race-session".into(),
+                uid,
+            }),
+        );
+        raced_client.write_all(&[5, CLAIM])?;
+        raced_client.write_all(&uid.to_be_bytes())?;
+        let claim = read_message(&mut raced_client)?;
+        assert_eq!(claim.first(), Some(&OK));
+        logind.clear_active_on_generation_read(12, SEAT);
+        write_message(&mut raced_client, RELEASE, &[])?;
+        assert_eq!(read_message(&mut raced_client)?, vec![OK]);
+        drop(raced_client);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 3)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            shared.inspect(|hardware| {
+                hardware
+                    .presented_frames()
+                    .last()
+                    .expect("fallback frame was not restored after release race")
                     .rgba_at(10, 10)
             }),
             [0, 255, 0, 255]
