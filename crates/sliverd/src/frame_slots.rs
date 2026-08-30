@@ -334,27 +334,37 @@ impl SharedFrameMap {
     }
 
     fn take_newest(&self) -> Result<Option<CompletedFrame>> {
-        let newest = {
-            let storage = self
-                .storage
-                .lock()
-                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
-            (0..SLOT_COUNT)
-                .filter(|index| read_slot_state(&storage, *index) == READY)
-                .max_by_key(|index| read_u64(&storage, slot_offset(*index) + 8).unwrap_or(0))
-        };
-        let Some(index) = newest else {
-            return Ok(None);
-        };
-        {
-            let storage = self
-                .storage
-                .lock()
-                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
-            if !compare_slot_state(&storage, index, READY, READING) {
+        // Selection and ownership must be separate operations. Another
+        // process may publish or reclaim a slot after the snapshot, so retry
+        // when the selected READY slot no longer belongs to us.
+        let index = loop {
+            let newest = {
+                let storage = self
+                    .storage
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+                (0..SLOT_COUNT)
+                    .filter(|index| read_slot_state(&storage, *index) == READY)
+                    .max_by_key(|index| read_u64(&storage, slot_offset(*index) + 8).unwrap_or(0))
+            };
+            let Some(index) = newest else {
                 return Ok(None);
+            };
+            let storage = self
+                .storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+            if compare_slot_state(&storage, index, READY, READING) {
+                break index;
             }
-        }
+        };
+        let selected_sequence = {
+            let storage = self
+                .storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+            read_u64(&storage, slot_offset(index) + 8)?
+        };
         let (pixels, timing) = {
             let storage = self
                 .storage
@@ -375,12 +385,17 @@ impl SharedFrameMap {
                 .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
             write_slot_state(&storage, index, FREE);
             for older in 0..SLOT_COUNT {
-                if older != index
-                    && read_slot_state(&storage, older) == READY
-                    && read_u64(&storage, slot_offset(older) + 8)?
-                        < read_u64(&storage, slot_offset(index) + 8)?
-                {
+                if older == index || !compare_slot_state(&storage, older, READY, RECLAIMING) {
+                    continue;
+                }
+                let older_sequence = read_u64(&storage, slot_offset(older) + 8)?;
+                // RECLAIMING closes the gap between observing READY and
+                // freeing it. A producer in another process can no longer
+                // turn this slot into WRITING while we inspect its sequence.
+                if older_sequence < selected_sequence {
                     write_slot_state(&storage, older, FREE);
+                } else {
+                    write_slot_state(&storage, older, READY);
                 }
             }
         }
