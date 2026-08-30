@@ -5,7 +5,7 @@ The Fedora package creates the `sliver` broker account and the
 The package also installs the M2 udev rules that grant the broker its DRM,
 input, uinput, and backlight access through dedicated groups. It does not
 enable either service.
-See [the Fedora package instructions](../packaging/fedora/README.md) for the
+See [the Fedora package instructions](../packaging/fedora/INSTALL.md) for the
 initial account setup and explicit takeover command.
 
 Enable a lingering user manager for `sliver` so its restricted fallback worker

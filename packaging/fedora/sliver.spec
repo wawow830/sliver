@@ -90,7 +90,7 @@ packaging/fedora/check-install.sh %{buildroot}
 %udev_rules_update
 
 %files
-%doc README.md packaging/fedora/README.md
+%doc README.md packaging/fedora/INSTALL.md
 %{_bindir}/sliver
 %dir %{_libexecdir}/sliver
 %{_libexecdir}/sliver/sliver-broker
