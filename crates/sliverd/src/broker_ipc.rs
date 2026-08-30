@@ -492,10 +492,8 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                 && !fallback_attempted
                 && authorizer.active_session(seat)?.is_none()
             {
-                eprintln!("broker: starting fallback after client");
                 fallback.start_fallback()?;
                 fallback_running = fallback.has_active_worker();
-                eprintln!("broker: fallback started={fallback_running}");
                 fallback_attempted = true;
             }
             continue;

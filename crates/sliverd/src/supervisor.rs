@@ -507,6 +507,16 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             0.0
         };
         let hardware_available = claimed && hardware.is_available();
+        let missing_capabilities = if hardware_available {
+            BTreeSet::new()
+        } else {
+            std::iter::once(
+                hardware
+                    .unavailable_capability()
+                    .unwrap_or(HardwareCapability::Display),
+            )
+            .collect()
+        };
         Ok(Self {
             hardware,
             state_file,
@@ -518,7 +528,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             recovery: None,
             claimed,
             hardware_available,
-            missing_capabilities: BTreeSet::new(),
+            missing_capabilities,
             suspended: false,
             worker_visible: false,
             origin: Instant::now(),
@@ -795,6 +805,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         };
 
         self.poll_hardware(Duration::ZERO)?;
+        self.ensure_hardware_available()
+            .map_err(CandidateFailure::Candidate)?;
         let current_backlight = self.hardware.get_backlight()?;
         self.backlight = current_backlight;
         let identity = if self.fallback_worker {
@@ -827,6 +839,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         )?;
         let StagedLuaWorker { worker } = staged_worker;
         self.poll_hardware_deferred(Duration::ZERO)?;
+        self.ensure_hardware_available()
+            .map_err(CandidateFailure::Candidate)?;
         let render_now = self.now_seconds();
         let render_time = self
             .last_presented_time
@@ -840,6 +854,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .map_err(CandidateFailure::Authorization)?;
         }
         let latest_backlight = self.hardware.get_backlight()?;
+        self.ensure_hardware_available()
+            .map_err(CandidateFailure::Candidate)?;
         self.backlight = latest_backlight;
         let (previous_path_state, path_state) = match state_update {
             SelectionState::Keep => (None, None),
@@ -1698,13 +1714,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .next_worker_deadline
             .is_some_and(|deadline| deadline <= now);
         if !self.suspended && self.active.is_some() && !self.worker_visible && worker_due {
-            self.drive_hidden(now)?;
-        } else if !self.suspended
-            && self.recovery.is_some()
-            && self.active.is_some()
-            && self.has_healthy_recovery()
-            && worker_due
-        {
             self.drive_hidden(now)?;
         } else if !self.suspended
             && self.recovery.is_none()

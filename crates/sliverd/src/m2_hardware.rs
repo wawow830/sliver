@@ -6,12 +6,13 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Write};
+use std::os::raw::c_void;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use cairo::{Filter, ImageSurface, Operator};
 use drm::buffer::{Buffer as _, DrmFourcc};
 use drm::control::{self, connector, crtc, framebuffer, Device as _, Mode};
@@ -55,9 +56,15 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
 fn wait_for_input(
     touch: Option<&TouchInput>,
     keyboard: Option<&KeyboardInput>,
+    sleep_monitor: Option<&SleepMonitor>,
     timeout: Duration,
 ) -> io::Result<()> {
     let mut fds = [
+        libc::pollfd {
+            fd: -1,
+            events: 0,
+            revents: 0,
+        },
         libc::pollfd {
             fd: -1,
             events: 0,
@@ -87,6 +94,14 @@ fn wait_for_input(
         };
         count += 1;
     }
+    if let Some(sleep_monitor) = sleep_monitor {
+        fds[count] = libc::pollfd {
+            fd: sleep_monitor.fd(),
+            events: sleep_monitor.events(),
+            revents: 0,
+        };
+        count += 1;
+    }
 
     if count == 0 {
         thread::sleep(timeout);
@@ -102,6 +117,163 @@ fn wait_for_input(
         if io::Error::last_os_error().kind() != ErrorKind::Interrupted {
             return Err(io::Error::last_os_error());
         }
+    }
+}
+
+#[repr(C)]
+struct SdBus {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+struct SdBusMessage {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+struct SdBusSlot {
+    _private: [u8; 0],
+}
+
+/// Receives login1's PrepareForSleep signal without making suspend a worker
+/// concern. The broker's normal hardware poll remains the only event pump.
+struct SleepEventQueue {
+    values: Vec<bool>,
+}
+
+struct SleepMonitor {
+    bus: *mut SdBus,
+    slot: *mut SdBusSlot,
+    events: Box<SleepEventQueue>,
+}
+
+unsafe extern "C" fn prepare_for_sleep(
+    message: *mut SdBusMessage,
+    userdata: *mut c_void,
+    _error: *mut c_void,
+) -> libc::c_int {
+    let mut preparing = 0;
+    let signature = b"b\0";
+    if ffi::sd_bus_message_read(message, signature.as_ptr().cast(), &mut preparing) >= 0 {
+        // userdata is a boxed queue whose address remains stable for the
+        // lifetime of the subscription.
+        (&mut *userdata.cast::<SleepEventQueue>())
+            .values
+            .push(preparing != 0);
+    }
+    0
+}
+
+impl SleepMonitor {
+    fn new() -> Result<Self> {
+        let mut bus = std::ptr::null_mut();
+        let result = unsafe { ffi::sd_bus_open_system(&mut bus) };
+        ensure!(result >= 0, "opening the system D-Bus: {result}");
+        let mut monitor = Self {
+            bus,
+            slot: std::ptr::null_mut(),
+            events: Box::new(SleepEventQueue { values: Vec::new() }),
+        };
+        let match_rule = b"type='signal',sender='org.freedesktop.login1',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'\0";
+        let result = unsafe {
+            ffi::sd_bus_add_match(
+                monitor.bus,
+                &mut monitor.slot,
+                match_rule.as_ptr().cast(),
+                Some(prepare_for_sleep),
+                (&mut *monitor.events as *mut SleepEventQueue).cast(),
+            )
+        };
+        if result < 0 {
+            unsafe {
+                ffi::sd_bus_unref(monitor.bus);
+            }
+            bail!("subscribing to PrepareForSleep: {result}");
+        }
+        ensure!(
+            unsafe { ffi::sd_bus_get_fd(monitor.bus) } >= 0,
+            "system D-Bus has no pollable descriptor"
+        );
+        Ok(monitor)
+    }
+
+    fn fd(&self) -> RawFd {
+        unsafe { ffi::sd_bus_get_fd(self.bus) }
+    }
+
+    fn events(&self) -> libc::c_short {
+        unsafe { ffi::sd_bus_get_events(self.bus) as libc::c_short }
+    }
+
+    fn drain(&mut self, output: &mut Vec<HardwareEvent>) -> Result<()> {
+        loop {
+            let mut message = std::ptr::null_mut();
+            let result = unsafe { ffi::sd_bus_process(self.bus, &mut message) };
+            if !message.is_null() {
+                unsafe {
+                    ffi::sd_bus_message_unref(message);
+                }
+            }
+            ensure!(result >= 0, "processing the system D-Bus: {result}");
+            if result == 0 {
+                break;
+            }
+        }
+        for preparing in self.events.values.drain(..) {
+            output.push(HardwareEvent::Visibility {
+                visible: !preparing,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Drop for SleepMonitor {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.slot.is_null() {
+                ffi::sd_bus_slot_unref(self.slot);
+            }
+            if !self.bus.is_null() {
+                ffi::sd_bus_unref(self.bus);
+            }
+        }
+    }
+}
+
+mod ffi {
+    use super::{SdBus, SdBusMessage, SdBusSlot};
+    use std::os::raw::{c_char, c_void};
+
+    pub(super) type MessageHandler = unsafe extern "C" fn(
+        message: *mut SdBusMessage,
+        userdata: *mut c_void,
+        error: *mut c_void,
+    ) -> libc::c_int;
+
+    extern "C" {
+        pub(super) fn sd_bus_open_system(bus: *mut *mut SdBus) -> libc::c_int;
+        pub(super) fn sd_bus_add_match(
+            bus: *mut SdBus,
+            slot: *mut *mut SdBusSlot,
+            match_rule: *const c_char,
+            callback: Option<MessageHandler>,
+            userdata: *mut c_void,
+        ) -> libc::c_int;
+        pub(super) fn sd_bus_get_fd(bus: *mut SdBus) -> libc::c_int;
+        pub(super) fn sd_bus_get_events(bus: *mut SdBus) -> libc::c_int;
+        pub(super) fn sd_bus_process(
+            bus: *mut SdBus,
+            message: *mut *mut SdBusMessage,
+        ) -> libc::c_int;
+        pub(super) fn sd_bus_message_read(
+            message: *mut SdBusMessage,
+            types: *const c_char,
+            ...
+        ) -> libc::c_int;
+        pub(super) fn sd_bus_message_unref(message: *mut SdBusMessage) -> *mut SdBusMessage;
+        pub(super) fn sd_bus_slot_unref(slot: *mut SdBusSlot) -> *mut SdBusSlot;
+        pub(super) fn sd_bus_unref(bus: *mut SdBus) -> *mut SdBus;
     }
 }
 
@@ -499,13 +671,8 @@ impl TouchInput {
         set_nonblocking(device.as_raw_fd())?;
 
         // Exclusive: touches on the strip are ours, not the compositor's cursor.
-        let grabbed = match device.grab() {
-            Ok(()) => true,
-            Err(e) => {
-                crate::system_log::broker_error(format!("touch: grab failed: {e} (sharing, then)"));
-                false
-            }
-        };
+        device.grab()?;
+        let grabbed = true;
 
         let abs_state = device.get_abs_state().ok();
         let range_for = |axis: AbsoluteAxisType| {
@@ -902,6 +1069,7 @@ pub(crate) struct M2TouchBar {
     shown: bool,
     touch: Option<TouchInput>,
     keyboard: Option<KeyboardInput>,
+    sleep_monitor: Option<SleepMonitor>,
     fn_active: bool,
     modifiers: ModifierState,
     keyboard_emitter: Option<KeyboardEmitter>,
@@ -919,6 +1087,7 @@ impl M2TouchBar {
             shown: false,
             touch: None,
             keyboard: None,
+            sleep_monitor: None,
             fn_active: false,
             modifiers: ModifierState::default(),
             keyboard_emitter: None,
@@ -934,6 +1103,13 @@ impl M2TouchBar {
     fn mark_unavailable(&mut self, capability: HardwareCapability) {
         self.available = false;
         self.unavailable_capability = Some(capability);
+    }
+
+    fn lose_hardware(&mut self, capability: HardwareCapability) {
+        self.mark_unavailable(capability);
+        if self.is_claimed() {
+            let _ = self.release_inner();
+        }
     }
 
     fn finish_claim_setup(&mut self, setup_result: Result<()>) -> Result<()> {
@@ -1021,6 +1197,15 @@ impl M2TouchBar {
             };
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);
+            self.sleep_monitor = match SleepMonitor::new() {
+                Ok(monitor) => Some(monitor),
+                Err(error) => {
+                    crate::system_log::broker_error(format!(
+                        "power: suspend monitor unavailable: {error:#}"
+                    ));
+                    None
+                }
+            };
             if self.keyboard_emitter.is_none() {
                 self.keyboard_emitter = Some(match KeyboardEmitter::new() {
                     Ok(emitter) => emitter,
@@ -1068,12 +1253,17 @@ impl M2TouchBar {
 
     fn poll_inner(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
         if !self.is_claimed() {
-            if self.claim().is_err() {
+            if self.reacquire().is_err() {
                 return Ok(Vec::new());
             }
             return Ok(vec![HardwareEvent::Device { present: true }]);
         }
-        if let Err(_error) = wait_for_input(self.touch.as_ref(), self.keyboard.as_ref(), timeout) {
+        if let Err(_error) = wait_for_input(
+            self.touch.as_ref(),
+            self.keyboard.as_ref(),
+            self.sleep_monitor.as_ref(),
+            timeout,
+        ) {
             self.mark_unavailable(HardwareCapability::Display);
             let _ = self.release_inner();
             return Ok(vec![HardwareEvent::Capability {
@@ -1083,6 +1273,9 @@ impl M2TouchBar {
         }
 
         let mut output = Vec::new();
+        if let Some(sleep_monitor) = self.sleep_monitor.as_mut() {
+            sleep_monitor.drain(&mut output)?;
+        }
         loop {
             let mut made_progress = false;
 
@@ -1212,6 +1405,7 @@ impl M2TouchBar {
         }
         self.touch = None;
         self.keyboard = None;
+        self.sleep_monitor = None;
         self.fn_active = false;
         self.modifiers = ModifierState::default();
 
@@ -1296,11 +1490,11 @@ impl TouchBarHardware for M2TouchBar {
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
         let Some(emitter) = self.keyboard_emitter.as_mut() else {
-            self.mark_unavailable(HardwareCapability::SyntheticKeys);
+            self.lose_hardware(HardwareCapability::SyntheticKeys);
             return Err(anyhow::anyhow!("Sliver Keyboard is unavailable"));
         };
         if let Err(error) = emitter.emit(events) {
-            self.mark_unavailable(HardwareCapability::SyntheticKeys);
+            self.lose_hardware(HardwareCapability::SyntheticKeys);
             return Err(error).context("emitting synthetic keyboard events");
         }
         Ok(())
@@ -1309,11 +1503,11 @@ impl TouchBarHardware for M2TouchBar {
     fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
         ensure!(self.is_claimed(), "Touch Bar is not claimed");
         let Some(emitter) = self.keyboard_emitter.as_mut() else {
-            self.mark_unavailable(HardwareCapability::SyntheticKeys);
+            self.lose_hardware(HardwareCapability::SyntheticKeys);
             return Err(anyhow::anyhow!("Sliver Keyboard is unavailable"));
         };
         emitter.tap(index, modifiers).map_err(|error| {
-            self.mark_unavailable(HardwareCapability::SyntheticKeys);
+            self.lose_hardware(HardwareCapability::SyntheticKeys);
             anyhow::anyhow!(error).context(format!("emitting F{}", index + 1))
         })
     }
@@ -1323,14 +1517,14 @@ impl TouchBarHardware for M2TouchBar {
         let (current, maximum) = match read_backlight() {
             Ok(values) => values,
             Err(error) => {
-                self.mark_unavailable(HardwareCapability::Backlight);
+                self.lose_hardware(HardwareCapability::Backlight);
                 return Err(error);
             }
         };
         match normalize_backlight_level(current, maximum) {
             Ok(level) => Ok(level),
             Err(error) => {
-                self.mark_unavailable(HardwareCapability::Backlight);
+                self.lose_hardware(HardwareCapability::Backlight);
                 Err(error)
             }
         }
@@ -1342,7 +1536,7 @@ impl TouchBarHardware for M2TouchBar {
         let (_, maximum) = match read_backlight() {
             Ok(values) => values,
             Err(error) => {
-                self.mark_unavailable(HardwareCapability::Backlight);
+                self.lose_hardware(HardwareCapability::Backlight);
                 return Err(error);
             }
         };
@@ -1354,14 +1548,14 @@ impl TouchBarHardware for M2TouchBar {
         {
             Ok(brightness) => brightness,
             Err(error) => {
-                self.mark_unavailable(HardwareCapability::Backlight);
+                self.lose_hardware(HardwareCapability::Backlight);
                 return Err(error);
             }
         };
         if let Err(error) =
             write!(brightness, "{value}").with_context(|| format!("writing {BACKLIGHT}"))
         {
-            self.mark_unavailable(HardwareCapability::Backlight);
+            self.lose_hardware(HardwareCapability::Backlight);
             return Err(error);
         }
         Ok(())
