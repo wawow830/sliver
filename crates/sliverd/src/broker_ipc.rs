@@ -384,14 +384,19 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                 peer_verification,
                 connection_stop.as_deref(),
             );
-            if let Err(error) = result {
-                crate::system_log::broker_error(format!("broker client failed: {error:#}"));
-            } else {
-                // A client was the user owner. Permit one fresh fallback start
-                // after that owner logs out.
-                fallback_attempted = false;
+            match result {
+                Ok(outcome) => {
+                    fallback_attempted = !outcome.logout_acknowledged;
+                }
+                Err(error) => {
+                    crate::system_log::broker_error(format!("broker client failed: {error:#}"));
+                    fallback_attempted = true;
+                }
             }
-            if !fallback_running && authorizer.active_session(seat)?.is_none() {
+            if !fallback_running
+                && !fallback_attempted
+                && authorizer.active_session(seat)?.is_none()
+            {
                 fallback.start_fallback()?;
                 fallback_running = fallback.has_active_worker();
                 fallback_attempted = true;
@@ -441,6 +446,10 @@ struct HeldKeys {
 struct ClientState {
     held_keys: HeldKeys,
     contacts: ActiveContacts,
+}
+
+struct ClientOutcome {
+    logout_acknowledged: bool,
 }
 
 #[derive(Default)]
@@ -518,7 +527,7 @@ fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Log
     seat: &str,
     peer_verification: PeerVerification,
     connection_stop: Option<&AtomicBool>,
-) -> Result<()> {
+) -> Result<ClientOutcome> {
     let mut client_state = ClientState::default();
     let result = handle_client_inner(
         stream,
@@ -536,8 +545,8 @@ fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Log
             Err(error).context(format!("broker key cleanup also failed: {cleanup_error:#}"))
         }
         (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(error).context("cleaning up broker client keys"),
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(_outcome), Err(error)) => Err(error).context("cleaning up broker client keys"),
+        (Ok(outcome), Ok(())) => Ok(outcome),
     }
 }
 
@@ -551,7 +560,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     seat: &str,
     peer_verification: PeerVerification,
     connection_stop: Option<&AtomicBool>,
-) -> Result<()> {
+) -> Result<ClientOutcome> {
     let peer = crate::peer_credentials::read(&stream)?;
     if connection_stop.is_some() {
         stream.set_read_timeout(Some(Duration::from_millis(10)))?;
@@ -600,6 +609,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     body.extend_from_slice(&backlight.to_bits().to_be_bytes());
     write_message(&mut stream, OK, &body)?;
     let mut session_revoked = false;
+    let mut logout_acknowledged = false;
 
     loop {
         let request = match read_message(&mut stream) {
@@ -636,6 +646,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             }
             ensure!(payload.is_empty(), "logout acknowledgement has a payload");
             write_message(&mut stream, OK, &[])?;
+            logout_acknowledged = true;
             break;
         }
         if let Err(error) = authorizer.recheck_active_uid(peer_uid, &grant) {
@@ -704,7 +715,9 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         })?;
         write_message(&mut stream, OK, &response)?;
     }
-    Ok(())
+    Ok(ClientOutcome {
+        logout_acknowledged,
+    })
 }
 
 fn ensure_supervisor_peer(pid: libc::pid_t) -> Result<()> {
