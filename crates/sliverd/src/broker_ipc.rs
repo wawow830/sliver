@@ -2333,7 +2333,14 @@ mod tests {
             .output()?;
         assert_eq!(output.status.code(), Some(1));
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("render"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(invalid.to_string_lossy().as_ref()),
+            "{stderr}"
+        );
+        assert!(stderr.contains("[render]"), "{stderr}");
+        assert!(stderr.contains("stack traceback"), "{stderr}");
+        assert!(stderr.contains("invalid.lua:1"), "{stderr}");
         assert_eq!(
             shared.inspect(|hardware| hardware.presented_frames().len()),
             frames_before_invalid

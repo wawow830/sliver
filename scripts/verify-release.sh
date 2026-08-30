@@ -217,6 +217,14 @@ blocker() {
   SKIPPED+=("$*")
 }
 
+refuse_if_blocked() {
+  if (( BLOCKED )); then
+    warn "A required check failed. No further privileged changes will be attempted."
+    for blocker in "${SKIPPED[@]}"; do note "  - $blocker"; done
+    exit 1
+  fi
+}
+
 rollback() {
   if (( TAKEOVER_ACTIVE )); then
     say "Stopping Sliver and disabling takeover."
@@ -316,14 +324,31 @@ run_optional pgrep -a -f 'tiny-dfr|sliver-broker|sliver-supervisor'
 if command -v drm_info >/dev/null 2>&1; then
   step "Save the DRM connector, native mode, and rotation properties in the evidence log."
   run_optional drm_info
+elif command -v modetest >/dev/null 2>&1; then
+  step "Save the DRM connector and mode output in the evidence log."
+  run_optional modetest -c
 else
-  warn "drm_info is not installed; inspect the DRM connector manually before takeover"
-  blocker "drm_info hardware inspection"
+  warn "Install drm_info or libdrm's modetest before hardware verification"
+  blocker "DRM connector and mode inspection"
 fi
-pause "Review the model, connector, and current owner above. Press Enter to continue."
+if command -v udevadm >/dev/null 2>&1; then
+  step "Save ID_SEAT and input capability properties for the Touch Bar and keyboard."
+  for device in /dev/input/event*; do
+    [[ -e "$device" ]] && run_optional udevadm info --query=property --name="$device"
+  done
+else
+  blocker "udev property inspection"
+fi
+if [[ -r /proc/bus/input/devices ]]; then
+  awk '/^N: Name=/{name=$0}/^H: Handlers=/{print name; print}' /proc/bus/input/devices
+else
+  blocker "input capability inspection"
+fi
+pause "Review the model, connector, input properties, and current owner above. Press Enter to continue."
 if ! confirm "Does the host report Mac14,7 and a connected 60x2008 DSI panel?"; then
   blocker "Mac14,7 and 60x2008 DSI preflight"
 fi
+refuse_if_blocked
 
 stage "Build and inspect the Fedora package"
 say "Build the RPM outside this verifier, then pass its path as the first argument."
@@ -342,6 +367,7 @@ else
   warn "package verification was skipped"
   blocker "Fedora RPM build and file-list verification"
 fi
+refuse_if_blocked
 
 stage "Install without taking ownership"
 if [[ -z "$RPM_PATH" ]]; then
@@ -374,6 +400,7 @@ else
 fi
 run_optional systemctl is-active tiny-dfr.service
 pause "Confirm that installation did not take over the panel. Press Enter to continue."
+refuse_if_blocked
 
 stage "Prepare accounts and udev permissions"
 step "Run the accepted administrator setup for the packaged broker and user supervisor."
@@ -404,6 +431,7 @@ for card in /dev/dri/card*; do
   [[ -e "$card" ]] && run_optional fuser -v "$card"
 done
 pause "Keep this evidence. It is the rollback reference. Press Enter to continue."
+refuse_if_blocked
 
 stage "Enable Sliver takeover"
 if ! confirm "Stop tiny-dfr and enable Sliver on the real panel?"; then
