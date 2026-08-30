@@ -19,17 +19,23 @@ cairo surface.
 
 ### sliverd
 
-Long-running hardware owner. The real adapter polls nonblocking evdev
-descriptors and emits normalized input events through the hardware seam. The
-owner coordinates:
+The `sliver-broker` system service owns DRM, evdev, uinput, and backlight. It
+runs the embedded fallback before login and accepts one authenticated active
+user supervisor over a private Unix socket. The broker never accepts config
+selection or Lua source from that socket.
 
-- the embedded fallback before login and session handoff for active users
+The `sliver-supervisor` user service owns that user's selected path and Lua
+worker. It accepts `sliver FILE` and the no-argument default request on the
+user's private runtime socket, then forwards only normalized hardware requests
+to the broker. The real adapter polls nonblocking evdev descriptors and emits
+normalized input events through the hardware seam. The broker coordinates:
+
+- the embedded fallback before login and its logout restart
 - DRM scanout and dirty-framebuffer updates
 - normalized hardware events from the adapter
 - uinput function-key output
-- once-per-second dynamic redraws
-- live TOML application over a Unix socket
-- shell actions attached to widgets
+- worker handoff without a blank frame
+- backlight and hardware release
 
 ### sliver-edit
 
@@ -140,20 +146,25 @@ recreate, or roll back a partially written device.
 
 ## Live-apply socket
 
-Path:
+The user supervisor listens at:
 
 ```text
-$XDG_RUNTIME_DIR/sliver.sock
+$XDG_RUNTIME_DIR/sliver/supervisor.sock
 ```
 
-Protocol:
+The supervisor-to-broker socket is an internal deployment detail:
 
-1. Connect with a Unix stream.
-2. Write one complete TOML document.
-3. Shutdown the stream's write side.
-4. Read `ok` or `error: ...`.
+```text
+/run/sliver/broker.sock
+```
 
-The render loop parses and swaps the config atomically from its own thread. If
+The supervisor protocol is a length-prefixed Unix stream. A request contains
+one tagged absolute path or the embedded-default tag. The client shuts down its
+write side and reads a status byte followed by an error message when the apply
+fails. The broker protocol is private to the two Sliver services and carries
+normalized events, complete frames, backlight requests, and generic key output.
+
+The supervisor parses and swaps a candidate atomically from its own thread. If
 Fn is held during an apply, the new config is stored immediately and becomes
 visible when Fn is released.
 
@@ -226,8 +237,8 @@ client environment.
 ## Lua worker lifecycle
 
 Each production Lua worker runs in the `sliver-lua-worker` executable. The
-supervisor keeps the hardware descriptors in its own process and gives the
-worker one private control socket. The worker receives source and input data
+user supervisor keeps its broker connection and gives the worker one private
+control socket. The broker keeps hardware descriptors in its own process. The worker receives source and input data
 through bounded packets and returns complete frames and output requests. Frame
 pixels never cross the process boundary until a render has finished.
 
