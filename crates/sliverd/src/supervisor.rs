@@ -428,13 +428,25 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
         state_file: PathBuf,
         injected_default: Option<LuaSource>,
     ) -> Result<Self> {
-        let default_source = injected_default.unwrap_or_else(default_source::source);
-        let mut supervisor = Self::new_with_logind_and_default(
+        Self::new_fallback_with_logind(
             hardware,
             state_file,
             RealLogind::default(),
-            default_source,
-        )?;
+            injected_default,
+        )
+    }
+}
+
+impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
+    pub(crate) fn new_fallback_with_logind(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+        injected_default: Option<LuaSource>,
+    ) -> Result<Self> {
+        let default_source = injected_default.unwrap_or_else(default_source::source);
+        let mut supervisor =
+            Self::new_with_logind_and_default(hardware, state_file, logind, default_source)?;
         let snapshot = supervisor.session_snapshot("seat0")?;
         supervisor.session_handoff = Some(SessionHandoff {
             seat: "seat0".into(),
@@ -444,9 +456,7 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
         supervisor.fallback_worker = true;
         Ok(supervisor)
     }
-}
 
-impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     #[cfg(test)]
     pub(crate) fn new_with_logind(hardware: H, state_file: PathBuf, logind: L) -> Result<Self> {
         Self::new_with_logind_and_default(hardware, state_file, logind, default_source::source())
@@ -8115,6 +8125,26 @@ mod tests {
 
     fn session_state_file(base: &std::path::Path, uid: libc::uid_t) -> std::path::PathBuf {
         super::state_file_for_uid(base, uid)
+    }
+
+    #[test]
+    fn fallback_controller_does_not_start_while_a_user_session_is_active() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("already-logged-in");
+        let supervisor = Supervisor::new_fallback_with_logind(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(
+                b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                    .to_vec(),
+            )),
+        )?;
+        assert!(!supervisor.has_active_worker());
+        assert!(supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
     }
 
     #[test]
