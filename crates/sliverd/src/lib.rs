@@ -42,6 +42,14 @@ pub fn lua_worker_main() -> Result<()> {
 /// Run the per-user supervisor process.
 #[doc(hidden)]
 pub fn supervisor_main() -> Result<()> {
+    let result = supervisor_main_inner();
+    if let Err(error) = &result {
+        system_log::broker_error(format!("supervisor service failed: {error:#}"));
+    }
+    result
+}
+
+fn supervisor_main_inner() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
 
@@ -88,20 +96,11 @@ pub fn supervisor_main() -> Result<()> {
     let shutdown_result = supervisor.shutdown();
     let _ = std::fs::remove_file(&socket);
     match (serve_result, shutdown_result) {
-        (Err(error), Err(shutdown_error)) => {
-            system_log::broker_error(format!(
-                "supervisor service failed: {error:#}; shutdown also failed: {shutdown_error:#}"
-            ));
-            Err(error)
-        }
-        (Err(error), Ok(())) => {
-            system_log::broker_error(format!("supervisor service failed: {error:#}"));
-            Err(error)
-        }
-        (Ok(()), Err(error)) => {
-            system_log::broker_error(format!("supervisor shutdown failed: {error:#}"));
-            Err(error)
-        }
+        (Err(error), Err(shutdown_error)) => Err(error).context(format!(
+            "supervisor shutdown also failed: {shutdown_error:#}"
+        )),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
     }
 }

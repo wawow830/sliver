@@ -608,8 +608,16 @@ impl LuaWorker {
     }
 
     pub(crate) fn drive(&self, request: DriveRequest) -> Result<WorkerEffects> {
+        self.drive_until(request, Instant::now() + Duration::from_secs(2))
+    }
+
+    pub(crate) fn drive_until(
+        &self,
+        request: DriveRequest,
+        deadline: Instant,
+    ) -> Result<WorkerEffects> {
         if let Some(process) = &self.process {
-            return process.drive(request);
+            return process.drive_until(request, deadline);
         }
         let commands = self
             .commands
@@ -666,9 +674,13 @@ impl LuaWorker {
             .map_err(|error| anyhow!(error))
     }
 
-    pub(crate) fn shutdown(mut self, reason: StopReason) -> Result<()> {
+    pub(crate) fn shutdown(self, reason: StopReason) -> Result<()> {
+        self.shutdown_until(reason, Instant::now() + Duration::from_millis(500))
+    }
+
+    pub(crate) fn shutdown_until(mut self, reason: StopReason, deadline: Instant) -> Result<()> {
         if let Some(process) = self.process.take() {
-            return process.shutdown(reason);
+            return process.shutdown_until(reason, deadline);
         }
         let commands = self
             .commands

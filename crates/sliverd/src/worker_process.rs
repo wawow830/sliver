@@ -27,6 +27,7 @@ const WORKER_FD: RawFd = 0;
 const FIRST_INHERITED_FD: RawFd = 3;
 const MAX_PACKET_BYTES: usize = 2 * 1024 * 1024;
 const CALLBACK_DEADLINE: Duration = Duration::from_secs(2);
+#[cfg(test)]
 const STOP_DEADLINE: Duration = Duration::from_millis(500);
 const KILL_REAP_DEADLINE: Duration = Duration::from_millis(500);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
@@ -264,16 +265,27 @@ fn spawn_systemd() -> Result<SpawnedWorker> {
     ] {
         launcher.arg("--property").arg(property);
     }
+    let worker_path = match worker_path() {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = std::fs::remove_file(&socket_path);
+            return Err(error);
+        }
+    };
     launcher
-        .arg(worker_path()?)
+        .arg(worker_path)
         .arg("--connect")
         .arg(&socket_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut child = launcher
-        .spawn()
-        .context("starting the systemd Lua worker service")?;
+    let mut child = match launcher.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = std::fs::remove_file(&socket_path);
+            return Err(error).context("starting the systemd Lua worker service");
+        }
+    };
     let deadline = Instant::now() + CALLBACK_DEADLINE;
     let stream = loop {
         match listener.accept() {
@@ -296,7 +308,11 @@ fn spawn_systemd() -> Result<SpawnedWorker> {
         }
     };
     let _ = std::fs::remove_file(&socket_path);
-    stream.set_nonblocking(true)?;
+    if let Err(error) = stream.set_nonblocking(true) {
+        kill_systemd_unit(&unit);
+        let _ = terminate_child(&mut child);
+        return Err(error).context("configuring Lua worker control socket");
+    }
     Ok(SpawnedWorker {
         child,
         stream,
@@ -384,11 +400,15 @@ impl ProcessWorker {
         self.terminal_response(parse_status_response("committing Lua worker", &response))
     }
 
-    pub(crate) fn drive(&self, request: DriveRequest) -> Result<WorkerEffects> {
+    pub(crate) fn drive_until(
+        &self,
+        request: DriveRequest,
+        deadline: Instant,
+    ) -> Result<WorkerEffects> {
         let mut payload = Vec::new();
         encode_drive_request(&mut payload, request)?;
-        let response = self.request(DRIVE, payload, CALLBACK_DEADLINE)?;
-        let effects = self.terminal_response(parse_effects_response(&response))?;
+        let response = self.request_until(DRIVE, payload, deadline)?;
+        let effects = self.terminal_response_until(parse_effects_response(&response), deadline)?;
         let frame = match effects.frame {
             Some(timing) => {
                 let completed = self
@@ -427,22 +447,26 @@ impl ProcessWorker {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn shutdown(self, reason: StopReason) -> Result<()> {
+        self.shutdown_until(reason, Instant::now() + STOP_DEADLINE)
+    }
+
+    pub(crate) fn shutdown_until(self, reason: StopReason, deadline: Instant) -> Result<()> {
         let payload = vec![stop_reason_code(reason)];
-        let deadline = Instant::now() + STOP_DEADLINE;
         let response = self.request_until(SHUTDOWN, payload, deadline);
         match response {
             Ok(response) => {
-                let result =
-                    self.terminal_response(parse_status_response("stopping Lua worker", &response));
+                let result = self.terminal_response_until(
+                    parse_status_response("stopping Lua worker", &response),
+                    deadline,
+                );
                 self.wait_for_exit_until(deadline)?;
+                self.kill_unit();
                 self.kill_process_group();
                 result
             }
-            Err(error) => {
-                self.terminate();
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -464,6 +488,7 @@ impl ProcessWorker {
             .is_some();
         if exited {
             self.mark_failed("Lua worker process exited".into());
+            self.kill_unit();
             self.kill_process_group();
             self.terminated.store(true, Ordering::Release);
             return false;
@@ -485,10 +510,13 @@ impl ProcessWorker {
         self.failure.lock().ok().and_then(|failure| failure.clone())
     }
 
-    fn kill_process_group(&self) {
+    fn kill_unit(&self) {
         if let Some(unit) = self.unit.as_deref() {
             kill_systemd_unit(unit);
         }
+    }
+
+    fn kill_process_group(&self) {
         for descendant in descendants_of(self.pid) {
             unsafe {
                 libc::kill(descendant, libc::SIGKILL);
@@ -500,10 +528,14 @@ impl ProcessWorker {
     }
 
     pub(crate) fn terminate(&self) {
+        self.terminate_until(Instant::now() + KILL_REAP_DEADLINE);
+    }
+
+    fn terminate_until(&self, deadline: Instant) {
         if self.terminated.swap(true, Ordering::AcqRel) {
             return;
         }
-        let deadline = Instant::now() + KILL_REAP_DEADLINE;
+        self.kill_unit();
         loop {
             self.kill_process_group();
             unsafe {
@@ -548,7 +580,7 @@ impl ProcessWorker {
                 .with_context(|| format!("sending Lua worker command {command}"))
             {
                 self.mark_failed(error.to_string());
-                self.terminate();
+                self.terminate_until(deadline);
                 return Err(error);
             }
         }
@@ -557,7 +589,7 @@ impl ProcessWorker {
                 Ok(packets) => packets,
                 Err(error) => {
                     self.mark_failed(error.to_string());
-                    self.terminate();
+                    self.terminate_until(deadline);
                     return Err(error);
                 }
             };
@@ -565,52 +597,79 @@ impl ProcessWorker {
                 match kind {
                     HEARTBEAT => self.note_heartbeat(),
                     REPLY => {
+                        if Instant::now() >= deadline {
+                            return Err(self.deadline_failure(command, deadline));
+                        }
                         let (response_command, response) = match split_reply(&payload) {
                             Ok(reply) => reply,
-                            Err(error) => return Err(self.protocol_failure(error)),
+                            Err(error) => {
+                                return Err(self.protocol_failure_until(error, deadline));
+                            }
                         };
                         if response_command != command {
-                            return Err(self.protocol_failure(anyhow!(
-                                "Lua worker replied to command {response_command} while waiting for {command}"
-                            )));
+                            return Err(self.protocol_failure_until(
+                                anyhow!(
+                                    "Lua worker replied to command {response_command} while waiting for {command}"
+                                ),
+                                deadline,
+                            ));
                         }
                         return Ok(response);
                     }
-                    READY if command == BOOTSTRAP => return Ok(payload),
+                    READY if command == BOOTSTRAP => {
+                        if Instant::now() >= deadline {
+                            return Err(self.deadline_failure(command, deadline));
+                        }
+                        return Ok(payload);
+                    }
                     READY => {
-                        return Err(self.protocol_failure(anyhow!(
-                            "Lua worker sent a startup packet outside bootstrap"
-                        )))
+                        return Err(self.protocol_failure_until(
+                            anyhow!("Lua worker sent a startup packet outside bootstrap"),
+                            deadline,
+                        ))
                     }
                     other => {
-                        return Err(
-                            self.protocol_failure(anyhow!("unexpected Lua worker packet {other}"))
-                        )
+                        return Err(self.protocol_failure_until(
+                            anyhow!("unexpected Lua worker packet {other}"),
+                            deadline,
+                        ))
                     }
                 }
             }
             if Instant::now() >= deadline {
-                let label = if command == SHUTDOWN {
-                    "Lua worker stop exceeded 500 milliseconds"
-                } else {
-                    "Lua worker callback exceeded two seconds"
-                };
-                self.mark_failed(label.into());
-                self.terminate();
-                bail!("{label}")
+                return Err(self.deadline_failure(command, deadline));
             }
             thread::sleep(WRITE_RETRY);
         }
     }
 
+    fn deadline_failure(&self, command: u8, deadline: Instant) -> anyhow::Error {
+        let label = if command == SHUTDOWN {
+            "Lua worker stop exceeded 500 milliseconds"
+        } else {
+            "Lua worker callback exceeded two seconds"
+        };
+        self.mark_failed(label.into());
+        self.terminate_until(deadline);
+        anyhow!(label)
+    }
+
     fn protocol_failure(&self, error: anyhow::Error) -> anyhow::Error {
+        self.protocol_failure_until(error, Instant::now() + KILL_REAP_DEADLINE)
+    }
+
+    fn protocol_failure_until(&self, error: anyhow::Error, deadline: Instant) -> anyhow::Error {
         self.mark_failed(format!("Lua worker protocol failure: {error:#}"));
-        self.terminate();
+        self.terminate_until(deadline);
         error.context("Lua worker protocol failure")
     }
 
     fn terminal_response<T>(&self, result: Result<T>) -> Result<T> {
         result.map_err(|error| self.protocol_failure(error))
+    }
+
+    fn terminal_response_until<T>(&self, result: Result<T>, deadline: Instant) -> Result<T> {
+        result.map_err(|error| self.protocol_failure_until(error, deadline))
     }
 
     fn drain_packets(&self) -> Result<Vec<(u8, Vec<u8>)>> {
@@ -639,13 +698,14 @@ impl ProcessWorker {
             if child.try_wait()?.is_some() {
                 self.terminated.store(true, Ordering::Release);
                 drop(child);
+                self.kill_unit();
                 self.kill_process_group();
                 return Ok(());
             }
             drop(child);
             if Instant::now() >= deadline {
                 self.mark_failed("Lua worker did not exit after stop".into());
-                self.terminate();
+                self.terminate_until(deadline);
                 bail!("Lua worker did not exit after stop")
             }
             thread::sleep(WRITE_RETRY);
@@ -1702,6 +1762,89 @@ mod tests {
             &[255, 0, 0, 255]
         );
         worker.shutdown(StopReason::Shutdown)
+    }
+
+    #[test]
+    fn a_blocking_c_module_is_killed_without_running_stop() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let c_source = directory.path().join("blocking_probe.c");
+        let module = directory.path().join("blocking_probe.so");
+        std::fs::write(
+            &c_source,
+            r#"
+            #include <stddef.h>
+            #include <unistd.h>
+            typedef struct lua_State lua_State;
+            typedef long long lua_Integer;
+            typedef double lua_Number;
+            extern void luaL_checkversion_(lua_State *, lua_Number, size_t);
+            extern void lua_createtable(lua_State *, int, int);
+            extern void lua_pushcclosure(lua_State *, int (*)(lua_State *), int);
+            extern void lua_setfield(lua_State *, int, const char *);
+            static int block(lua_State *state) {
+                (void)state;
+                sleep(10);
+                return 0;
+            }
+            int luaopen_blocking_probe(lua_State *state) {
+                luaL_checkversion_(state, 504.0, sizeof(lua_Integer) * 16 + sizeof(lua_Number));
+                lua_createtable(state, 0, 1);
+                lua_pushcclosure(state, block, 0);
+                lua_setfield(state, -2, "block");
+                return 1;
+            }
+            "#,
+        )?;
+        let compile = std::process::Command::new("cc")
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&module)
+            .arg(&c_source)
+            .status()
+            .context("compiling blocking Lua C-module probe")?;
+        anyhow::ensure!(compile.success(), "blocking C-module probe did not compile");
+        let source = directory.path().join("blocking.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local probe = require("blocking_probe")
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function()
+                    probe.block()
+                end,
+            }
+            "#,
+        )?;
+        let worker = ProcessWorker::stage(&LuaSource::file(source), 0.0, InputState::default())?;
+        let started = Instant::now();
+        let error = match worker.render(1.0, 0.0, InputState::default()) {
+            Ok(_) => bail!("blocking C callback returned"),
+            Err(error) => error,
+        };
+        assert!(started.elapsed() >= CALLBACK_DEADLINE);
+        assert!(error.to_string().contains("two seconds"));
+        Ok(())
+    }
+
+    #[test]
+    fn an_idle_worker_that_stops_heartbeating_is_killed() -> Result<()> {
+        let worker = ProcessWorker::stage(
+            &embedded(
+                r#"
+                require("sliver.v1")
+                return { api_version = 1, render = function() end }
+                "#,
+            ),
+            0.0,
+            InputState::default(),
+        )?;
+        unsafe {
+            libc::kill(worker.pid, libc::SIGSTOP);
+        }
+        thread::sleep(CALLBACK_DEADLINE + Duration::from_millis(50));
+        assert!(!worker.is_alive());
+        Ok(())
     }
 
     #[test]

@@ -101,6 +101,22 @@ fn cancel_contacts(
     now: f64,
     request: DriveRequest,
 ) -> Result<WorkerEffects> {
+    cancel_contacts_until(
+        worker,
+        contacts,
+        now,
+        request,
+        Instant::now() + Duration::from_secs(2),
+    )
+}
+
+fn cancel_contacts_until(
+    worker: &LuaWorker,
+    contacts: &BTreeMap<ContactId, TouchEvent>,
+    now: f64,
+    request: DriveRequest,
+    deadline: Instant,
+) -> Result<WorkerEffects> {
     let events = contacts
         .values()
         .map(|event| TouchEvent {
@@ -109,7 +125,7 @@ fn cancel_contacts(
             ..*event
         })
         .collect();
-    worker.drive(request.with_events(events))
+    worker.drive_until(request.with_events(events), deadline)
 }
 
 impl TouchQueue {
@@ -122,20 +138,18 @@ impl TouchQueue {
 
     fn push(&mut self, event: TouchEvent) -> Result<()> {
         if event.phase == TouchPhase::Move {
-            if let Some(&index) = self.moves.get(&event.id) {
+            if let Some(index) = self.moves.get(&event.id).copied() {
+                self.events[index] = None;
                 if self.events.len() >= TOUCH_QUEUE_CAPACITY {
-                    self.events[index] = Some(event);
-                } else {
-                    self.events[index] = None;
-                    self.events.push(Some(event));
-                    self.moves.insert(event.id, self.events.len() - 1);
+                    self.compact();
                 }
-                return Ok(());
+                self.moves.insert(event.id, self.events.len());
+            } else {
+                if self.events.len() >= TOUCH_QUEUE_CAPACITY {
+                    return Ok(());
+                }
+                self.moves.insert(event.id, self.events.len());
             }
-            if self.events.len() >= TOUCH_QUEUE_CAPACITY {
-                return Ok(());
-            }
-            self.moves.insert(event.id, self.events.len());
         } else {
             self.moves.remove(&event.id);
         }
@@ -145,6 +159,23 @@ impl TouchQueue {
         );
         self.events.push(Some(event));
         Ok(())
+    }
+
+    fn compact(&mut self) {
+        let mut moves = BTreeMap::new();
+        let events = std::mem::take(&mut self.events)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(|(index, event)| {
+                if event.phase == TouchPhase::Move {
+                    moves.insert(event.id, index);
+                }
+                Some(event)
+            })
+            .collect();
+        self.events = events;
+        self.moves = moves;
     }
 
     fn drain(&mut self) -> Vec<TouchEvent> {
@@ -731,32 +762,40 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             self.enter_recovery()?;
         }
         if let Some(replaced) = replaced {
+            let stop_deadline = Instant::now() + Duration::from_millis(500);
             if self.recovery.is_none()
                 && (!deferred_transitions.is_empty() || !deferred_touches.is_empty())
             {
-                if let Err(error) = replaced.worker.drive(DriveRequest::new(
-                    now,
-                    self.input_state,
-                    deferred_transitions,
-                    0.0,
-                    deferred_touches,
-                )) {
+                if let Err(error) = replaced.worker.drive_until(
+                    DriveRequest::new(
+                        now,
+                        self.input_state,
+                        deferred_transitions,
+                        0.0,
+                        deferred_touches,
+                    ),
+                    stop_deadline,
+                ) {
                     eprintln!("replaced Lua worker did not receive deferred input: {error:#}");
                 }
             }
             if !replaced.contacts.is_empty() {
-                if let Err(error) = cancel_contacts(
+                if let Err(error) = cancel_contacts_until(
                     &replaced.worker,
                     &replaced.contacts,
                     now,
                     DriveRequest::without_input(now, self.input_state),
+                    stop_deadline,
                 ) {
                     eprintln!(
                         "replaced Lua worker did not receive contact cancellation: {error:#}"
                     );
                 }
             }
-            if let Err(error) = replaced.worker.shutdown(StopReason::Replaced) {
+            if let Err(error) = replaced
+                .worker
+                .shutdown_until(StopReason::Replaced, stop_deadline)
+            {
                 eprintln!("replaced Lua worker did not stop cleanly: {error:#}");
             }
         }
@@ -848,7 +887,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 self.fail_active_worker(anyhow::anyhow!(
                     "non-droppable input transition queue overflow"
                 ))?;
-                bail!("non-droppable input transition queue overflow");
+                return Ok(());
             }
             self.input_transitions.push(InputTransition {
                 key,
@@ -938,7 +977,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if let Err(error) = self.touch_queue.push(event) {
             active.contacts.remove(&event.id);
             self.fail_active_worker(error)?;
-            bail!("non-droppable Touch Bar input queue overflow")
         }
         Ok(())
     }
@@ -963,7 +1001,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if active.contacts.remove(&event.id).is_some() {
             if let Err(error) = self.touch_queue.push(event) {
                 self.fail_active_worker(error)?;
-                bail!("non-droppable Touch Bar input queue overflow")
             }
         }
         Ok(())
@@ -1376,21 +1413,23 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn stop_active_worker(&mut self, reason: StopReason) -> Result<()> {
         let now = self.now_seconds();
+        let stop_deadline = Instant::now() + Duration::from_millis(500);
         self.input_transitions.clear();
         let Some(active) = self.active.take() else {
             return Ok(());
         };
         if !active.contacts.is_empty() {
-            if let Err(error) = cancel_contacts(
+            if let Err(error) = cancel_contacts_until(
                 &active.worker,
                 &active.contacts,
                 now,
                 DriveRequest::without_input(now, self.input_state),
+                stop_deadline,
             ) {
                 eprintln!("active Lua worker did not receive contact cancellation: {error:#}");
             }
         }
-        active.worker.shutdown(reason)
+        active.worker.shutdown_until(reason, stop_deadline)
     }
 
     #[allow(dead_code)]
@@ -1694,6 +1733,9 @@ fn serve_queued_request<H: TouchBarHardware, L: Logind>(
     let result = queued
         .request
         .and_then(|request| supervisor.apply_authorized(request));
+    if let Err(error) = &result {
+        crate::system_log::broker_error(format!("apply request failed: {error:#}"));
+    }
     crate::apply_ipc::write_reply(&mut queued.stream, &result).context("sending apply reply")
 }
 
@@ -4856,6 +4898,24 @@ mod tests {
         let events = queue.drain();
         assert_eq!(events.len(), super::TOUCH_QUEUE_CAPACITY);
         assert_eq!(events.iter().find(|event| event.id == 0).unwrap().x, 999.0);
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_moves_do_not_consume_queue_capacity_before_their_end() -> Result<()> {
+        let mut queue = super::TouchQueue::new();
+        queue.push(overlap_touch(1, TouchPhase::Down))?;
+        for index in 0..=super::TOUCH_QUEUE_CAPACITY {
+            let mut move_event = overlap_touch(1, TouchPhase::Move);
+            move_event.x = index as f64;
+            queue.push(move_event)?;
+        }
+        queue.push(overlap_touch(1, TouchPhase::Up))?;
+        let events = queue.drain();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[1].phase, TouchPhase::Move);
+        assert_eq!(events[1].x, super::TOUCH_QUEUE_CAPACITY as f64);
+        assert_eq!(events[2].phase, TouchPhase::Up);
         Ok(())
     }
 
