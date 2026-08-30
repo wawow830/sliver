@@ -409,6 +409,30 @@ impl LuaWorker {
         initial_input: InputState,
         identity: WorkerIdentity,
     ) -> Result<StagedLuaWorker> {
+        Self::stage_source_with_process_backend(
+            source,
+            initial_backlight,
+            initial_input,
+            identity,
+            worker_process::ProcessWorker::stage_with_frames,
+        )
+    }
+
+    #[cfg(test)]
+    fn stage_source_with_process_backend(
+        source: LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        identity: WorkerIdentity,
+        stage: fn(
+            &LuaSource,
+            f64,
+            InputState,
+            &std::path::Path,
+            FrameBroker,
+            WorkerIdentity,
+        ) -> Result<worker_process::ProcessWorker>,
+    ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
         let frame_path = worker_process::frame_path()?;
         let slots = FrameSlots::new_shared(
@@ -419,7 +443,7 @@ impl LuaWorker {
         )?;
         let producer = slots.producer();
         let broker = slots.broker();
-        let process = worker_process::ProcessWorker::stage_with_frames(
+        let process = stage(
             &source,
             initial_backlight,
             initial_input,

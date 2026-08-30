@@ -368,11 +368,52 @@ pub(crate) fn broker_main() -> Result<()> {
 
 fn run_broker<H: TouchBarHardware, L: crate::logind::Logind>(
     listener: UnixListener,
+    fallback: Supervisor<H, L>,
+    authorizer: SessionAuthorizer<L>,
+    running: Arc<AtomicBool>,
+    seat: &str,
+    peer_verification: PeerVerification,
+) -> Result<()> {
+    run_broker_with_connection_stop(
+        listener,
+        fallback,
+        authorizer,
+        running,
+        seat,
+        peer_verification,
+        None,
+    )
+}
+
+#[cfg(test)]
+fn run_broker_for_test_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind>(
+    listener: UnixListener,
+    fallback: Supervisor<H, L>,
+    authorizer: SessionAuthorizer<L>,
+    running: Arc<AtomicBool>,
+    seat: &str,
+    peer_verification: PeerVerification,
+    connection_stop: Arc<AtomicBool>,
+) -> Result<()> {
+    run_broker_with_connection_stop(
+        listener,
+        fallback,
+        authorizer,
+        running,
+        seat,
+        peer_verification,
+        Some(connection_stop),
+    )
+}
+
+fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind>(
+    listener: UnixListener,
     mut fallback: Supervisor<H, L>,
     authorizer: SessionAuthorizer<L>,
     running: Arc<AtomicBool>,
     seat: &str,
     peer_verification: PeerVerification,
+    connection_stop: Option<Arc<AtomicBool>>,
 ) -> Result<()> {
     let initial_active = authorizer.active_session(seat)?;
     let mut fallback_running = false;
@@ -387,13 +428,14 @@ fn run_broker<H: TouchBarHardware, L: crate::logind::Logind>(
     listener.set_nonblocking(true)?;
     while running.load(Ordering::Acquire) {
         if let Some(stream) = accept_nonblocking(&listener)? {
-            let result = handle_client(
+            let result = handle_client_with_connection_stop(
                 stream,
                 &mut fallback,
                 &authorizer,
                 &mut fallback_running,
                 seat,
                 peer_verification,
+                connection_stop.as_deref(),
             );
             if let Err(error) = result {
                 crate::system_log::broker_error(format!("broker client failed: {error:#}"));
@@ -521,6 +563,7 @@ impl HeldKeys {
     }
 }
 
+#[cfg(test)]
 fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
     stream: UnixStream,
     fallback: &mut Supervisor<H, L>,
@@ -528,6 +571,26 @@ fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
     fallback_running: &mut bool,
     seat: &str,
     peer_verification: PeerVerification,
+) -> Result<()> {
+    handle_client_with_connection_stop(
+        stream,
+        fallback,
+        authorizer,
+        fallback_running,
+        seat,
+        peer_verification,
+        None,
+    )
+}
+
+fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind>(
+    stream: UnixStream,
+    fallback: &mut Supervisor<H, L>,
+    authorizer: &SessionAuthorizer<L>,
+    fallback_running: &mut bool,
+    seat: &str,
+    peer_verification: PeerVerification,
+    connection_stop: Option<&AtomicBool>,
 ) -> Result<()> {
     let mut client_state = ClientState::default();
     let result = handle_client_inner(
@@ -538,6 +601,7 @@ fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
         &mut client_state,
         seat,
         peer_verification,
+        connection_stop,
     );
     let cleanup = client_state.held_keys.release(fallback.hardware_mut());
     match (result, cleanup) {
@@ -550,6 +614,7 @@ fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     mut stream: UnixStream,
     fallback: &mut Supervisor<H, L>,
@@ -558,8 +623,12 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     client_state: &mut ClientState,
     seat: &str,
     peer_verification: PeerVerification,
+    connection_stop: Option<&AtomicBool>,
 ) -> Result<()> {
     let peer = crate::peer_credentials::read(&stream)?;
+    if connection_stop.is_some() {
+        stream.set_read_timeout(Some(Duration::from_millis(10)))?;
+    }
     if matches!(peer_verification, PeerVerification::Production) {
         ensure_supervisor_peer(peer.pid)?;
     }
@@ -601,6 +670,13 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         let request = match read_message(&mut stream) {
             Ok(request) => request,
             Err(error) if is_disconnect(&error) => break,
+            Err(error)
+                if is_timeout(&error)
+                    && connection_stop.is_some_and(|stop| stop.load(Ordering::Acquire)) =>
+            {
+                break
+            }
+            Err(error) if is_timeout(&error) => continue,
             Err(error) => return Err(error),
         };
         let (operation, payload) = request.split_first().context("broker request is empty")?;
@@ -721,6 +797,17 @@ fn is_disconnect(error: &anyhow::Error) -> bool {
                 std::io::ErrorKind::UnexpectedEof
                     | std::io::ErrorKind::BrokenPipe
                     | std::io::ErrorKind::ConnectionReset
+            )
+        })
+    })
+}
+
+fn is_timeout(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
             )
         })
     })
@@ -1315,6 +1402,126 @@ mod tests {
                 second_listener,
                 fallback,
                 SessionAuthorizer::new(second_server_logind),
+                second_server_running,
+                SEAT,
+                PeerVerification::Test,
+            )
+        });
+        let second = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at(second_socket),
+            user_state,
+            FakeLogind::new(),
+            None,
+        )?;
+        assert_eq!(
+            second_shared.inspect(|hardware| hardware
+                .presented_frames()
+                .last()
+                .unwrap()
+                .rgba_at(10, 10)),
+            [255, 0, 0, 255]
+        );
+        second.shutdown()?;
+        second_running.store(false, Ordering::Release);
+        second_server
+            .join()
+            .expect("second broker server panicked")?;
+        Ok(())
+    }
+
+    #[test]
+    fn live_broker_restart_leaves_the_saved_source_ready_for_reconnect() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("saved.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let user_state = directory.path().join("user-state/config-path");
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_session(
+            std::process::id() as libc::pid_t,
+            Some(crate::logind::Session {
+                id: "live-restart-session".into(),
+                uid,
+                seat: Some(SEAT.into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "live-restart-session".into(),
+                uid,
+            }),
+        );
+        let first_socket = directory.path().join("first-broker.sock");
+        let first_listener = UnixListener::bind(&first_socket)?;
+        let first_running = Arc::new(AtomicBool::new(true));
+        let first_connection_stop = Arc::new(AtomicBool::new(false));
+        let first_state = directory.path().join("first-state/config-path");
+        let first_logind = logind.clone();
+        let first_stop = first_connection_stop.clone();
+        let first_server_running = first_running.clone();
+        let first_server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                ThreadFakeHardware::new(),
+                first_state,
+                first_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker_for_test_with_connection_stop(
+                first_listener,
+                fallback,
+                SessionAuthorizer::new(first_logind),
+                first_server_running,
+                SEAT,
+                PeerVerification::Test,
+                first_stop,
+            )
+        });
+        let mut user = Supervisor::new_with_logind_process(
+            BrokerHardware::new_at(first_socket),
+            user_state.clone(),
+            FakeLogind::new(),
+        )?;
+        user.apply(&source)?;
+        first_connection_stop.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while user.poll(Duration::ZERO).is_ok() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        first_running.store(false, Ordering::Release);
+        first_server.join().expect("first broker server panicked")?;
+        drop(user);
+
+        let second_socket = directory.path().join("second-broker.sock");
+        let second_listener = UnixListener::bind(&second_socket)?;
+        let second_shared = ThreadFakeHardware::new();
+        let second_running = Arc::new(AtomicBool::new(true));
+        let second_state = directory.path().join("second-state/config-path");
+        let second_logind = logind.clone();
+        let second_server_shared = second_shared.clone();
+        let second_server_running = second_running.clone();
+        let second_server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                second_server_shared,
+                second_state,
+                second_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                second_listener,
+                fallback,
+                SessionAuthorizer::new(second_logind),
                 second_server_running,
                 SEAT,
                 PeerVerification::Test,

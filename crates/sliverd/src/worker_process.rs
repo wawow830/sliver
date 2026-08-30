@@ -1,7 +1,6 @@
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-#[cfg(not(test))]
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -106,6 +105,7 @@ impl ProcessWorker {
         )
     }
 
+    #[allow(clippy::needless_return)]
     pub(crate) fn stage_with_frames(
         source: &LuaSource,
         initial_backlight: f64,
@@ -114,14 +114,66 @@ impl ProcessWorker {
         broker: FrameBroker,
         identity: WorkerIdentity,
     ) -> Result<Self> {
+        #[cfg(test)]
+        {
+            return Self::stage_with_spawned(
+                source,
+                initial_backlight,
+                initial_input,
+                frame_path,
+                broker,
+                identity,
+                spawn_direct,
+            );
+        }
+        #[cfg(not(test))]
+        {
+            Self::stage_with_spawned(
+                source,
+                initial_backlight,
+                initial_input,
+                frame_path,
+                broker,
+                identity,
+                spawn_systemd,
+            )
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stage_with_frames_systemd(
+        source: &LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        frame_path: &Path,
+        broker: FrameBroker,
+        identity: WorkerIdentity,
+    ) -> Result<Self> {
+        Self::stage_with_spawned(
+            source,
+            initial_backlight,
+            initial_input,
+            frame_path,
+            broker,
+            identity,
+            spawn_systemd,
+        )
+    }
+
+    fn stage_with_spawned(
+        source: &LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        frame_path: &Path,
+        broker: FrameBroker,
+        identity: WorkerIdentity,
+        spawn: fn(WorkerIdentity) -> Result<SpawnedWorker>,
+    ) -> Result<Self> {
         if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) } < 0 {
             return Err(std::io::Error::last_os_error())
                 .context("enabling Lua worker child reaping");
         }
-        #[cfg(test)]
-        let mut spawned = spawn_direct(identity)?;
-        #[cfg(not(test))]
-        let mut spawned = spawn_systemd(identity)?;
+        let mut spawned = spawn(identity)?;
         let mut stream = spawned.stream;
         if let Err(error) = stream.set_nonblocking(true) {
             if let Some(unit) = spawned.unit.as_deref() {
@@ -218,7 +270,6 @@ fn spawn_direct(_identity: WorkerIdentity) -> Result<SpawnedWorker> {
     })
 }
 
-#[cfg(not(test))]
 fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -1687,6 +1738,49 @@ mod tests {
             &[0, 0, 255, 255]
         );
         worker.shutdown(StopReason::Replaced)
+    }
+
+    #[test]
+    fn systemd_worker_uses_the_declared_resource_and_device_policy() -> Result<()> {
+        let available = std::process::Command::new("systemd-run")
+            .args(["--user", "--wait", "--quiet", "true"])
+            .status();
+        if !available.is_ok_and(|status| status.success()) {
+            return Ok(());
+        }
+
+        let _directory = tempfile::tempdir()?;
+        let frame_path = frame_path()?;
+        let slots = FrameSlots::new_shared(
+            &frame_path,
+            sliver_core::STRIP_W as usize,
+            sliver_core::STRIP_H as usize,
+            sliver_core::STRIP_W as usize * 4,
+        )?;
+        let worker = ProcessWorker::stage_with_frames_systemd(
+            &embedded(
+                r#"
+                require("sliver.v1")
+                return { api_version = 1, render = function() end }
+                "#,
+            ),
+            0.0,
+            InputState::default(),
+            &frame_path,
+            slots.broker(),
+            WorkerIdentity::RestrictedFallback,
+        )?;
+        let unit = worker.unit.clone().context("systemd worker had no unit")?;
+        let properties = std::process::Command::new("systemctl")
+            .args(["--user", "show", &unit])
+            .output()
+            .context("reading systemd worker properties")?;
+        let properties = String::from_utf8_lossy(&properties.stdout);
+        assert!(properties.contains("MemoryMax=536870912"));
+        assert!(properties.contains("TasksMax=64"));
+        assert!(properties.contains("PrivateDevices=yes"));
+        assert!(properties.contains("DevicePolicy=closed"));
+        worker.shutdown(StopReason::Shutdown)
     }
 
     #[test]
