@@ -225,6 +225,14 @@ impl TouchBarHardware for BrokerHardware {
         Ok(())
     }
 
+    fn reacquire(&mut self) -> Result<()> {
+        if self.claimed {
+            Ok(())
+        } else {
+            self.claim()
+        }
+    }
+
     fn is_available(&self) -> bool {
         self.hardware_available
     }
@@ -779,7 +787,20 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             POLL => {
                 ensure!(payload.len() == 8, "broker poll request is malformed");
                 let timeout = u64::from_be_bytes(payload.try_into()?).min(u64::from(u32::MAX));
-                let events = fallback.poll_events(Duration::from_millis(timeout))?;
+                let was_available = fallback.is_hardware_available();
+                let mut events = fallback.poll_events(Duration::from_millis(timeout))?;
+                if !was_available && fallback.is_hardware_available() {
+                    let already_reported = events.iter().any(|event| {
+                        matches!(
+                            event,
+                            HardwareEvent::Device { present: true }
+                                | HardwareEvent::Capability { present: true, .. }
+                        )
+                    });
+                    if !already_reported {
+                        events.push(HardwareEvent::Device { present: true });
+                    }
+                }
                 client_state.contacts.observe(&events);
                 encode_events(&events)
             }

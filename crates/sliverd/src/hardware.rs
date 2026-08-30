@@ -589,6 +589,7 @@ mod fake {
         backlight: f64,
         input_state: InputState,
         available: bool,
+        discovery_available: bool,
         unavailable_capability: Option<HardwareCapability>,
         virtual_keyboard_name: Option<String>,
         virtual_keyboard_creations: usize,
@@ -600,14 +601,28 @@ mod fake {
         pub(crate) fn new() -> Self {
             Self {
                 available: true,
+                discovery_available: true,
                 ..Self::default()
             }
+        }
+
+        pub(crate) fn unavailable() -> Self {
+            Self {
+                available: false,
+                discovery_available: false,
+                ..Self::new()
+            }
+        }
+
+        pub(crate) fn make_available(&mut self) {
+            self.discovery_available = true;
         }
 
         pub(crate) fn with_input_state(input_state: InputState) -> Self {
             Self {
                 input_state,
                 available: true,
+                discovery_available: true,
                 ..Self::default()
             }
         }
@@ -651,6 +666,10 @@ mod fake {
 
     impl TouchBarHardware for FakeTouchBar {
         fn claim(&mut self) -> Result<()> {
+            ensure!(
+                self.discovery_available,
+                "fake Touch Bar hardware is unavailable"
+            );
             ensure!(!self.claimed, "fake Touch Bar is already claimed");
             self.claimed = true;
             self.available = true;
@@ -661,6 +680,13 @@ mod fake {
             }
             self.actions.push(FakeAction::Grab);
             Ok(())
+        }
+
+        fn reacquire(&mut self) -> Result<()> {
+            if self.claimed {
+                return Ok(());
+            }
+            self.claim()
         }
 
         fn poll(&mut self, _timeout: std::time::Duration) -> Result<Vec<HardwareEvent>> {

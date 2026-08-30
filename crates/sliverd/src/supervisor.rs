@@ -1577,6 +1577,36 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     pub(crate) fn poll_events(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+        if !self.claimed && !self.suspended {
+            let now = self.now_seconds();
+            match self.hardware.reacquire() {
+                Ok(()) => {
+                    self.claimed = true;
+                    self.hardware_available = true;
+                    self.missing_capabilities.clear();
+                    self.input_state = self.hardware.input_state();
+                    match self.hardware.get_backlight() {
+                        Ok(level) => self.backlight = level,
+                        Err(error) if !self.hardware.is_available() => {
+                            self.set_hardware_capability(
+                                HardwareCapability::Backlight,
+                                false,
+                                now,
+                            )?;
+                            eprintln!("Touch Bar backlight reacquisition failed: {error:#}");
+                            return Ok(Vec::new());
+                        }
+                        Err(error) => return Err(error),
+                    }
+                    self.recover_visible_worker(VisibilityReason::Device, now)?;
+                }
+                Err(error) if !self.hardware.is_available() => {
+                    eprintln!("Touch Bar reacquisition failed: {error:#}");
+                    return Ok(Vec::new());
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let events = match self.hardware.poll(timeout) {
             Ok(events) => events,
             Err(error) if !self.hardware.is_available() => {
@@ -8408,6 +8438,28 @@ mod tests {
             frames_before_suspend + 1
         );
         assert!(std::fs::read_to_string(&log)?.contains("visibility:true"));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn late_hardware_discovery_reclaims_before_the_first_apply() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("late.lua");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let mut supervisor = Supervisor::new(FakeTouchBar::unavailable(), state_file)?;
+        assert!(!supervisor.is_hardware_available());
+        supervisor.hardware_mut().make_available();
+        supervisor.poll(Duration::ZERO)?;
+        assert!(supervisor.is_hardware_available());
+        supervisor.apply(&source)?;
         supervisor.shutdown()?;
         Ok(())
     }
