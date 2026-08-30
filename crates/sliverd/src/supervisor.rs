@@ -731,6 +731,19 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             self.ensure_fallback_unowned()
                 .map_err(CandidateFailure::Candidate)?;
         }
+        if let Err(error) = self.hardware.confirm_owner() {
+            return self.rollback_candidate(
+                CandidateRollback {
+                    previous_path_state: previous_path_state.as_ref(),
+                    old_frame: old_frame.as_ref(),
+                    old_backlight,
+                    restore_frame: false,
+                    restore_backlight: false,
+                    old_synthetic: None,
+                },
+                error,
+            );
+        }
         let now = self.now_seconds();
         if let Err(error) = worker.commit(now, self.input_state) {
             return self.rollback_candidate(
@@ -780,9 +793,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
         }
 
-        // Presentation changes the broker's visible frame. Recheck before
-        // committing the candidate worker or selected path so a session that
-        // changes during presentation cannot make its frame authoritative.
+        // Presentation changes the broker's visible frame. Recheck after it
+        // so a session that changes during presentation cannot keep its frame.
         if let Err(error) = self.hardware.confirm_owner() {
             return self.rollback_candidate(
                 CandidateRollback {
@@ -5805,6 +5817,14 @@ mod tests {
                     key: FakeKey::Keyboard(KeyboardKey::F2),
                     active: false,
                 }],
+                vec![FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                }],
+                vec![FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                }],
             ]
         );
         assert_eq!(
@@ -5818,8 +5838,16 @@ mod tests {
                 }),
                 FakeAction::Backlight(0.75),
                 FakeAction::Present,
+                FakeAction::SyntheticKey(FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: false,
+                }),
                 FakeAction::Present,
                 FakeAction::Backlight(0.0),
+                FakeAction::SyntheticKey(FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::F2),
+                    active: true,
+                }),
                 FakeAction::SyntheticKey(FakeKeyEvent {
                     key: FakeKey::Keyboard(KeyboardKey::F2),
                     active: false,
