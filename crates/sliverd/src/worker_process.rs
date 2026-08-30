@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 
 use std::io::{ErrorKind, Read, Write};
-use std::os::fd::{FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
@@ -20,10 +20,13 @@ use super::{
 use crate::frame_slots::FrameTiming;
 use crate::hardware::{LogicalFrame, Modifier, ObservedKey, OutputKey};
 
-const WORKER_FD: RawFd = 3;
+const WORKER_FD: RawFd = 0;
+const FIRST_INHERITED_FD: RawFd = 3;
 const MAX_PACKET_BYTES: usize = 2 * 1024 * 1024;
 const CALLBACK_DEADLINE: Duration = Duration::from_secs(2);
 const STOP_DEADLINE: Duration = Duration::from_millis(500);
+const KILL_REAP_DEADLINE: Duration = Duration::from_millis(500);
+const WORKER_MEMORY_LIMIT: libc::rlim_t = 512 * 1024 * 1024;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 const WRITE_RETRY: Duration = Duration::from_millis(2);
 
@@ -45,6 +48,7 @@ const STATUS_ERROR: u8 = 1;
 
 pub(crate) struct ProcessWorker {
     child: Mutex<Child>,
+    pidfd: std::fs::File,
     stream: Mutex<UnixStream>,
     input: Mutex<Vec<u8>>,
     last_heartbeat: Mutex<Instant>,
@@ -62,20 +66,29 @@ impl ProcessWorker {
     ) -> Result<Self> {
         let (parent_fd, child_fd) = socket_pair()?;
         let parent_pid = unsafe { libc::getpid() };
+        if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) } < 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("enabling Lua worker child reaping");
+        }
         let mut command = worker_command()?;
+        command.stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(child_fd)) });
         unsafe {
             use std::os::unix::process::CommandExt;
             command.pre_exec(move || {
-                if child_fd != WORKER_FD && libc::dup2(child_fd, WORKER_FD) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if child_fd != WORKER_FD {
-                    libc::close(child_fd);
-                }
                 if libc::setpgid(0, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let limit = libc::rlimit {
+                    rlim_cur: WORKER_MEMORY_LIMIT,
+                    rlim_max: WORKER_MEMORY_LIMIT,
+                };
+                if libc::setrlimit(libc::RLIMIT_AS, &limit) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::getppid() != parent_pid {
@@ -86,11 +99,19 @@ impl ProcessWorker {
             });
         }
         command.env("SLIVER_LUA_WORKER_FD", WORKER_FD.to_string());
-        let child = command.spawn().context("starting the Lua worker process")?;
-        unsafe {
-            libc::close(child_fd);
-        }
+        let mut child = command.spawn().context("starting the Lua worker process")?;
         let pid = child.id() as libc::pid_t;
+        let pidfd = match open_pidfd(pid) {
+            Ok(pidfd) => pidfd,
+            Err(error) => {
+                unsafe {
+                    libc::close(parent_fd);
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error).context("opening the Lua worker pidfd");
+            }
+        };
         let process_group = pid;
         let stream = unsafe { UnixStream::from_raw_fd(parent_fd) };
         stream
@@ -98,6 +119,7 @@ impl ProcessWorker {
             .context("configuring Lua worker control socket")?;
         let worker = Self {
             child: Mutex::new(child),
+            pidfd,
             stream: Mutex::new(stream),
             input: Mutex::new(Vec::new()),
             last_heartbeat: Mutex::new(Instant::now()),
@@ -170,11 +192,13 @@ impl ProcessWorker {
 
     pub(crate) fn shutdown(self, reason: StopReason) -> Result<()> {
         let payload = vec![stop_reason_code(reason)];
-        let response = self.request(SHUTDOWN, payload, STOP_DEADLINE);
+        let deadline = Instant::now() + STOP_DEADLINE;
+        let response = self.request_until(SHUTDOWN, payload, deadline);
         match response {
             Ok(response) => {
                 let result = parse_status_response("stopping Lua worker", &response);
-                self.wait_for_exit(STOP_DEADLINE)?;
+                self.wait_for_exit_until(deadline)?;
+                self.kill_process_group();
                 result
             }
             Err(error) => {
@@ -202,6 +226,7 @@ impl ProcessWorker {
             .is_some();
         if exited {
             self.mark_failed("Lua worker process exited".into());
+            self.kill_process_group();
             self.terminated.store(true, Ordering::Release);
             return false;
         }
@@ -222,16 +247,38 @@ impl ProcessWorker {
         self.failure.lock().ok().and_then(|failure| failure.clone())
     }
 
+    fn kill_process_group(&self) {
+        for descendant in descendants_of(self.pid) {
+            unsafe {
+                libc::kill(descendant, libc::SIGKILL);
+            }
+        }
+        unsafe {
+            libc::kill(-self.process_group, libc::SIGKILL);
+        }
+    }
+
     pub(crate) fn terminate(&self) {
         if self.terminated.swap(true, Ordering::AcqRel) {
             return;
         }
-        unsafe {
-            libc::kill(-self.process_group, libc::SIGKILL);
-            libc::kill(self.pid, libc::SIGKILL);
-        }
-        let deadline = Instant::now() + CALLBACK_DEADLINE;
+        let deadline = Instant::now() + KILL_REAP_DEADLINE;
         loop {
+            self.kill_process_group();
+            let result = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    self.pidfd.as_raw_fd(),
+                    libc::SIGKILL,
+                    0,
+                    0,
+                )
+            };
+            if result < 0 {
+                unsafe {
+                    libc::kill(self.pid, libc::SIGKILL);
+                }
+            }
             let exited = self
                 .child
                 .lock()
@@ -247,17 +294,33 @@ impl ProcessWorker {
     }
 
     fn request(&self, command: u8, payload: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+        self.request_until(command, payload, Instant::now() + timeout)
+    }
+
+    fn request_until(&self, command: u8, payload: Vec<u8>, deadline: Instant) -> Result<Vec<u8>> {
         if self.terminated.load(Ordering::Acquire) {
             bail!("Lua worker process is not running")
         }
-        let deadline = Instant::now() + timeout;
         {
             let mut stream = lock(&self.stream, "Lua worker control socket")?;
-            write_packet(&mut stream, COMMAND, &[command], &payload, deadline)
-                .with_context(|| format!("sending Lua worker command {command}"))?;
+            if let Err(error) = write_packet(&mut stream, COMMAND, &[command], &payload, deadline)
+                .with_context(|| format!("sending Lua worker command {command}"))
+            {
+                self.mark_failed(error.to_string());
+                self.terminate();
+                return Err(error);
+            }
         }
         loop {
-            for (kind, payload) in self.drain_packets()? {
+            let packets = match self.drain_packets() {
+                Ok(packets) => packets,
+                Err(error) => {
+                    self.mark_failed(error.to_string());
+                    self.terminate();
+                    return Err(error);
+                }
+            };
+            for (kind, payload) in packets {
                 match kind {
                     HEARTBEAT => self.note_heartbeat(),
                     REPLY => {
@@ -307,12 +370,13 @@ impl ProcessWorker {
         }
     }
 
-    fn wait_for_exit(&self, timeout: Duration) -> Result<()> {
-        let deadline = Instant::now() + timeout;
+    fn wait_for_exit_until(&self, deadline: Instant) -> Result<()> {
         loop {
             let mut child = lock(&self.child, "Lua worker process")?;
             if child.try_wait()?.is_some() {
                 self.terminated.store(true, Ordering::Release);
+                drop(child);
+                self.kill_process_group();
                 return Ok(());
             }
             drop(child);
@@ -337,7 +401,14 @@ pub(crate) fn worker_main() -> Result<()> {
         .context("SLIVER_LUA_WORKER_FD is not set")?
         .parse::<RawFd>()
         .context("SLIVER_LUA_WORKER_FD is invalid")?;
-    let mut stream = unsafe { UnixStream::from_raw_fd(fd) };
+    let control_fd = unsafe { libc::dup(fd) };
+    if control_fd < 0 {
+        return Err(std::io::Error::last_os_error()).context("duplicating Lua worker control fd");
+    }
+    unsafe {
+        libc::close(fd);
+    }
+    let mut stream = unsafe { UnixStream::from_raw_fd(control_fd) };
     stream.set_nonblocking(true)?;
     let mut input = Vec::new();
     let (source, initial_backlight, initial_input) = loop {
@@ -364,6 +435,7 @@ pub(crate) fn worker_main() -> Result<()> {
     let runtime = match Runtime::load(&source, initial_backlight, initial_input, producer) {
         Ok(runtime) => runtime,
         Err(error) => {
+            eprintln!("Lua worker failed during startup: {error}");
             send_ready(&mut stream, STATUS_ERROR, error)?;
             return Ok(());
         }
@@ -390,7 +462,10 @@ fn run_worker_loop(
             let result = handle_command(*command, payload, &mut runtime, &broker);
             let (status, body) = match result {
                 Ok(body) => (STATUS_OK, body),
-                Err(error) => (STATUS_ERROR, encode_error(&error.to_string())),
+                Err(error) => {
+                    eprintln!("Lua worker command failed: {error:#}");
+                    (STATUS_ERROR, encode_error(&error.to_string()))
+                }
             };
             let mut response = vec![*command, status];
             response.extend(body);
@@ -510,6 +585,30 @@ fn socket_pair() -> Result<(RawFd, RawFd)> {
     Ok((fds[0], fds[1]))
 }
 
+fn open_pidfd(pid: libc::pid_t) -> Result<std::fs::File> {
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(unsafe { std::fs::File::from_raw_fd(fd as RawFd) })
+}
+
+fn descendants_of(pid: libc::pid_t) -> Vec<libc::pid_t> {
+    let path = format!("/proc/{pid}/task/{pid}/children");
+    let Ok(children) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut descendants = Vec::new();
+    for child in children
+        .split_whitespace()
+        .filter_map(|value| value.parse::<libc::pid_t>().ok())
+    {
+        descendants.push(child);
+        descendants.extend(descendants_of(child));
+    }
+    descendants
+}
+
 fn worker_command() -> Result<Command> {
     if let Some(path) = std::env::var_os("SLIVER_LUA_WORKER") {
         return Ok(Command::new(path));
@@ -526,7 +625,7 @@ unsafe fn close_inherited_descriptors() {
     #[allow(clippy::useless_conversion)]
     let result = libc::syscall(
         libc::SYS_close_range,
-        (WORKER_FD + 1) as libc::c_ulong,
+        FIRST_INHERITED_FD as libc::c_ulong,
         libc::c_uint::MAX as libc::c_ulong,
         0,
     );
@@ -582,7 +681,13 @@ fn read_packets(stream: &mut UnixStream, input: &mut Vec<u8>) -> Result<Vec<(u8,
     loop {
         match stream.read(&mut bytes) {
             Ok(0) => break,
-            Ok(count) => input.extend_from_slice(&bytes[..count]),
+            Ok(count) => {
+                ensure!(
+                    input.len().saturating_add(count) <= MAX_PACKET_BYTES + 4,
+                    "Lua worker packet buffer is full"
+                );
+                input.extend_from_slice(&bytes[..count]);
+            }
             Err(error) if error.kind() == ErrorKind::WouldBlock => break,
             Err(error) => return Err(error).context("reading Lua worker packet"),
         }
