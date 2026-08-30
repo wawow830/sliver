@@ -4,27 +4,30 @@ set -eu
 root=${1:?usage: check-install.sh BUILDROOT}
 
 required='
-/usr/bin/sliver
-/usr/libexec/sliver/sliver-broker
-/usr/libexec/sliver/sliver-supervisor
-/usr/libexec/sliver/sliver-lua-worker
-/usr/lib/systemd/system/sliver-broker.service
-/usr/lib/systemd/user/sliver-supervisor.service
-/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
-/usr/lib/udev/rules.d/70-sliver.rules
-/usr/lib/sysusers.d/sliver.conf'
+x:/usr/bin/sliver
+x:/usr/libexec/sliver/sliver-broker
+x:/usr/libexec/sliver/sliver-supervisor
+x:/usr/libexec/sliver/sliver-lua-worker
+f:/usr/lib/systemd/system/sliver-broker.service
+f:/usr/lib/systemd/user/sliver-supervisor.service
+f:/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
+f:/usr/lib/udev/rules.d/70-sliver.rules
+f:/usr/lib/sysusers.d/sliver.conf'
 
-for path in $required; do
+for entry in $required; do
+    mode=${entry%%:*}
+    path=${entry#*:}
     test -e "$root$path" || {
         printf 'missing packaged file: %s\n' "$path" >&2
         exit 1
     }
+    if test "$mode" = x; then
+        test -x "$root$path" || {
+            printf 'packaged file is not executable: %s\n' "$path" >&2
+            exit 1
+        }
+    fi
 done
-
-test -x "$root/usr/bin/sliver"
-test -x "$root/usr/libexec/sliver/sliver-broker"
-test -x "$root/usr/libexec/sliver/sliver-supervisor"
-test -x "$root/usr/libexec/sliver/sliver-lua-worker"
 
 for path in \
     /usr/bin/sliverd \
