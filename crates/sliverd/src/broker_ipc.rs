@@ -313,9 +313,6 @@ pub(crate) fn broker_main() -> Result<()> {
     };
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
-    // With Type=notify, systemd does not advertise the broker as started
-    // until hardware discovery and socket setup have both completed.
-    notify_ready();
     let authorizer = SessionAuthorizer::new(RealLogind::default());
     let result = run_broker(
         listener,
@@ -404,6 +401,9 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
         fallback_running = fallback.has_active_worker();
         fallback_attempted = true;
     }
+    // With Type=notify, systemd does not advertise the broker as started
+    // until hardware discovery, fallback staging, and socket setup complete.
+    notify_ready();
     let mut last_active = initial_active;
 
     listener.set_nonblocking(true)?;
