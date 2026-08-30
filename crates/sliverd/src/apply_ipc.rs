@@ -111,6 +111,9 @@ pub(crate) fn write_reply(stream: &mut UnixStream, result: &Result<()>) -> Resul
 }
 
 pub(crate) fn supervisor_socket_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("SLIVER_SUPERVISOR_SOCKET") {
+        return Ok(PathBuf::from(path));
+    }
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
         .context("XDG_RUNTIME_DIR is not set; no per-user supervisor is available")?;
     Ok(PathBuf::from(runtime)

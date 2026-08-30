@@ -1956,6 +1956,112 @@ mod tests {
     }
 
     #[test]
+    fn production_peer_verification_accepts_a_real_supervisor_unit() -> Result<()> {
+        let supervisor = std::env::current_exe()?
+            .parent()
+            .and_then(|path| path.parent())
+            .map(|path| path.join("sliver-supervisor"));
+        let Some(supervisor) = supervisor else {
+            return Ok(());
+        };
+        if !supervisor.exists() {
+            return Ok(());
+        }
+        let available = std::process::Command::new("systemd-run")
+            .args(["--user", "--wait", "--quiet", "true"])
+            .status();
+        if !available.is_ok_and(|status| status.success()) {
+            return Ok(());
+        }
+
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let source = directory.path().join("supervisor.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let state_home = directory.path().join("state");
+        let state_file = state_home.join("sliver/config-path");
+        PreparedPathState::prepare(&state_file, &source)?.commit()?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "systemd-test".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let broker_state = directory.path().join("broker-state/config-path");
+        let supervisor_socket = directory.path().join("supervisor.sock");
+        let server_shared = shared.clone();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_running = running.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                broker_state,
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                PeerVerification::Production,
+            )
+        });
+        let unit = "sliver-supervisor.service";
+        let mut launcher = std::process::Command::new("systemd-run");
+        launcher.args([
+            "--user",
+            "--unit",
+            unit,
+            "--collect",
+            "--quiet",
+            "--service-type=exec",
+            "--setenv",
+        ]);
+        launcher.arg(format!("SLIVER_BROKER_SOCKET={}", socket.display()));
+        launcher.arg("--setenv");
+        launcher.arg(format!(
+            "SLIVER_SUPERVISOR_SOCKET={}",
+            supervisor_socket.display()
+        ));
+        launcher.arg("--setenv");
+        launcher.arg(format!("XDG_STATE_HOME={}", state_home.display()));
+        launcher.arg(&supervisor);
+        let mut child = launcher.spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while shared.inspect(|hardware| hardware.presented_frames().is_empty())
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let frame_presented = !shared.inspect(|hardware| hardware.presented_frames().is_empty());
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "stop", unit])
+            .status();
+        let _ = child.wait();
+        running.store(false, Ordering::Release);
+        server.join().expect("systemd broker server panicked")?;
+        assert!(
+            frame_presented,
+            "real supervisor did not pass broker peer verification"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn broker_rejects_a_non_supervisor_peer() {
         let error = ensure_supervisor_peer(std::process::id() as libc::pid_t)
             .expect_err("the test process was accepted as a supervisor");
