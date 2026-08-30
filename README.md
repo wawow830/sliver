@@ -5,13 +5,15 @@ Touch Bar on Asahi Linux.
 
 Sliver consists of:
 
-- **`sliverd`** — owns the DRM touchbar panel, renders widgets, reads touch and
-  Fn/Globe input, emits F1–F12 through uinput, and accepts live layouts over a
-  Unix socket.
-- **`sliver-core`** — shared config, layout, hit-testing, and cairo/pango
-  renderer. The GUI preview and physical strip use the same code.
-- **`sliver-edit`** — GTK4/libadwaita customizer with live preview, widget
-  creation, styling, reorder/delete, Apply, and Save.
+- **`sliver-broker`** — system service that owns the DRM Touch Bar, normalized
+  input, uinput, backlight, and the embedded fallback before login.
+- **`sliver-supervisor`** — per-user service that owns one user's selected Lua
+  worker and accepts `sliver FILE` apply requests.
+- **`sliver`** — the public CLI for selecting an explicit Lua source or the
+  embedded default.
+- **`sliverd`**, **`sliver-core`**, and **`sliver-edit`** — retained legacy
+  binaries and libraries during the migration away from the TOML widget
+  product.
 
 ## Hardware tested
 
@@ -49,26 +51,17 @@ Only one process can own the touchbar DRM device. Stop tiny-dfr first:
 sudo systemctl stop tiny-dfr
 ```
 
-Start the daemon and keep it running:
+Enable the system broker after installing its service account and device
+permissions:
 
 ```bash
-cd ~/Projects/sliver
-./target/release/sliverd sliver.toml --drm
+sudo systemctl enable --now sliver-broker.service
+systemctl --user enable --now sliver-supervisor.service
 ```
 
-Start the customizer in another terminal:
-
-```bash
-cd ~/Projects/sliver
-./target/release/sliver-edit
-```
-
-In the customizer:
-
-1. Add or select a widget.
-2. Edit its text, color, font, width, alignment, background, or action.
-3. Choose **Apply to strip** for an immediate live update.
-4. Choose **Save** to write the layout to `sliver.toml` for future starts.
+The broker paints the embedded default before login. When a user session starts,
+that user's supervisor stages its selected Lua source and hands over the first
+complete frame without clearing the panel.
 
 ## Function keys
 
