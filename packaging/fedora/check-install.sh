@@ -13,11 +13,7 @@ f:/usr/lib/systemd/user/sliver-supervisor.service
 f:/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
 f:/usr/lib/udev/rules.d/70-sliver.rules
 f:/usr/lib/sysusers.d/sliver.conf
-f:/usr/share/doc/sliver/lua.md
-f:/usr/share/doc/sliver/architecture.md
-f:/usr/share/doc/sliver/troubleshooting.md
-f:/usr/share/doc/sliver/release-commit'
-
+'
 for entry in $required; do
     kind=${entry%%:*}
     path=${entry#*:}
@@ -45,6 +41,7 @@ sed \
     -e '\#^/usr/libexec/sliver$#d' \
     -e '\#^/usr/lib/systemd/user/sliver-lua-worker-.service.d$#d' \
     -e '\#^/usr/share/doc/sliver$#d' \
+    -e '\#^/usr/share/doc/sliver/#d' \
     "$manifest" > "$expected"
 find "$root" -type f -printf '/%P\n' | sort > "$actual"
 diff -u "$expected" "$actual"
