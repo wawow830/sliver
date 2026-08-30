@@ -7,10 +7,14 @@ Before=tiny-dfr.service
 [Service]
 Type=simple
 User=sliver
-Group=sliver
+Group=users
+SupplementaryGroups=video input
 RuntimeDirectory=sliver
+RuntimeDirectoryMode=0755
 StateDirectory=sliver
 Environment=SLIVER_BROKER_SOCKET=/run/sliver/broker.sock
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
 ExecStart=/usr/bin/sliver-broker
 Restart=on-failure
 RestartSec=1s

@@ -29,6 +29,7 @@ const SET_BACKLIGHT: u8 = 6;
 const RELEASE: u8 = 7;
 const OK: u8 = 0;
 const ERROR: u8 = 1;
+const SESSION_REVOKED: u8 = 2;
 const SEAT: &str = "seat0";
 
 pub(crate) fn socket_path() -> Result<PathBuf> {
@@ -42,6 +43,7 @@ pub(crate) struct BrokerHardware {
     stream: Option<UnixStream>,
     input_state: InputState,
     claimed: bool,
+    session_revoked: bool,
 }
 
 impl BrokerHardware {
@@ -50,7 +52,12 @@ impl BrokerHardware {
             stream: None,
             input_state: InputState::default(),
             claimed: false,
+            session_revoked: false,
         }
+    }
+
+    pub(crate) fn session_revoked(&self) -> bool {
+        self.session_revoked
     }
 
     fn request(&mut self, operation: u8, payload: &[u8]) -> Result<Vec<u8>> {
@@ -64,6 +71,14 @@ impl BrokerHardware {
         match *status {
             OK => Ok(body.to_vec()),
             ERROR => bail!("{}", String::from_utf8_lossy(body)),
+            SESSION_REVOKED if operation == POLL => {
+                self.session_revoked = true;
+                Ok(body.to_vec())
+            }
+            SESSION_REVOKED => {
+                self.session_revoked = true;
+                bail!("broker revoked the user session")
+            }
             other => bail!("broker returned unknown status {other}"),
         }
     }
@@ -165,7 +180,11 @@ impl TouchBarHardware for BrokerHardware {
         if !self.claimed {
             return Ok(());
         }
-        let result = self.request(RELEASE, &[]).map(|_| ());
+        let result = if self.session_revoked {
+            Ok(())
+        } else {
+            self.request(RELEASE, &[]).map(|_| ())
+        };
         self.stream = None;
         self.claimed = false;
         result
@@ -248,7 +267,7 @@ pub(crate) fn broker_main() -> Result<()> {
         let _ = std::fs::remove_file(&socket);
     }
     let listener = UnixListener::bind(&socket)?;
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666))?;
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
 
     let shared = SharedHardware::new(M2TouchBar::new());
     let mut fallback = Supervisor::new_fallback(
@@ -257,12 +276,18 @@ pub(crate) fn broker_main() -> Result<()> {
         Some(crate::default_source::source()),
     )?;
     let authorizer = SessionAuthorizer::new(RealLogind::default());
+    let initial_active = authorizer.active_session(SEAT)?;
     let running = Arc::new(AtomicBool::new(true));
     let signal_running = running.clone();
     ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
-    let mut fallback_running = fallback.has_active_worker();
-    let mut fallback_attempted = true;
-    let mut last_active = authorizer.active_session(SEAT)?;
+    let mut fallback_running = false;
+    let mut fallback_attempted = false;
+    if initial_active.is_none() {
+        fallback.start_fallback()?;
+        fallback_running = fallback.has_active_worker();
+        fallback_attempted = true;
+    }
+    let mut last_active = initial_active;
 
     listener.set_nonblocking(true)?;
     while running.load(Ordering::Acquire) {
@@ -297,8 +322,12 @@ pub(crate) fn broker_main() -> Result<()> {
             fallback.start_fallback()?;
             fallback_attempted = true;
         }
-        fallback.poll(Duration::from_millis(50))?;
-        fallback_running = fallback.has_active_worker();
+        if fallback_running || fallback.has_recovery() {
+            fallback.poll(Duration::from_millis(50))?;
+            fallback_running = fallback.has_active_worker();
+        } else {
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     fallback.shutdown()?;
@@ -422,11 +451,11 @@ fn handle_client_inner(
     contacts: &mut ActiveContacts,
 ) -> Result<()> {
     let peer = crate::peer_credentials::read(&stream)?;
-    let grant = authorizer.authorize(peer)?;
+    let grant = authorizer.authorize_active_uid(peer.uid, SEAT)?;
     let request = read_message(&mut stream)?;
     let (operation, payload) = request.split_first().context("broker request is empty")?;
     ensure!(*operation == CLAIM, "broker expected a claim request");
-    authorizer.recheck(peer, &grant)?;
+    authorizer.recheck_active_uid(peer.uid, &grant)?;
     if *fallback_running {
         fallback.handoff_owner()?;
         *fallback_running = false;
@@ -448,13 +477,13 @@ fn handle_client_inner(
             Err(error) => return Err(error),
         };
         let (operation, payload) = request.split_first().context("broker request is empty")?;
-        if let Err(error) = authorizer.recheck(peer, &grant) {
-            if *operation == POLL {
-                let cancellations = contacts.cancel();
-                if !cancellations.is_empty() {
-                    write_message(&mut stream, OK, &encode_events(&cancellations)?)?;
-                }
-            }
+        if let Err(error) = authorizer.recheck_active_uid(peer.uid, &grant) {
+            let cancellations = if *operation == POLL {
+                encode_events(&contacts.cancel())?
+            } else {
+                Vec::new()
+            };
+            write_message(&mut stream, SESSION_REVOKED, &cancellations)?;
             return Err(error);
         }
         let response = (match *operation {

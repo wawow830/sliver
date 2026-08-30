@@ -43,6 +43,51 @@ impl<L: Logind> SessionAuthorizer<L> {
             .with_context(|| format!("looking up the active logind session on {seat}"))
     }
 
+    pub(crate) fn authorize_active_uid(
+        &self,
+        uid: libc::uid_t,
+        seat: &str,
+    ) -> Result<AuthorizationGrant> {
+        ensure!(uid != 0, "root is not authorized to own Sliver workers");
+        let generation_before = self
+            .logind
+            .generation()
+            .context("reading the logind session generation")?;
+        let session = self
+            .logind
+            .active_session(seat)
+            .with_context(|| format!("looking up the active logind session on {seat}"))?
+            .context("no local user session is active")?;
+        ensure!(session.uid == uid, "worker is not owned by the active user");
+        let generation_after = self
+            .logind
+            .generation()
+            .context("reading the logind session generation")?;
+        ensure!(
+            generation_before == generation_after,
+            "session changed while checking worker ownership"
+        );
+        Ok(AuthorizationGrant {
+            session_id: session.id,
+            seat: seat.to_owned(),
+            uid,
+            generation: generation_after,
+        })
+    }
+
+    pub(crate) fn recheck_active_uid(
+        &self,
+        uid: libc::uid_t,
+        expected: &AuthorizationGrant,
+    ) -> Result<()> {
+        let current = self.authorize_active_uid(uid, &expected.seat)?;
+        ensure!(
+            current == *expected,
+            "worker session changed during broker request"
+        );
+        Ok(())
+    }
+
     pub(crate) fn authorize(&self, peer: PeerCredentials) -> Result<AuthorizationGrant> {
         if peer.uid == 0 {
             bail!("root is not authorized to apply Sliver configurations");
@@ -184,6 +229,24 @@ mod tests {
             .recheck(peer(uid), &grant)
             .expect_err("an unchanged session snapshot hid a generation change");
         assert!(format!("{error:#}").contains("changed during config apply"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_user_manager_is_authorized_by_its_active_uid_and_seat() -> Result<()> {
+        let uid = unsafe { libc::getuid() };
+        let logind = FakeLogind::new();
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "user-session".into(),
+                uid,
+            }),
+        );
+        let authorizer = SessionAuthorizer::new(logind.clone());
+
+        let grant = authorizer.authorize_active_uid(uid, "seat0")?;
+        authorizer.recheck_active_uid(uid, &grant)?;
         Ok(())
     }
 

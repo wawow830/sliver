@@ -62,6 +62,8 @@ pub fn supervisor_main() -> Result<()> {
 fn supervisor_main_inner() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     let socket = apply_ipc::supervisor_socket_path()?;
     let socket_directory = socket
@@ -102,10 +104,36 @@ fn supervisor_main_inner() -> Result<()> {
         crate::logind::RealLogind::default(),
         Some(default_source::source()),
     )?;
-    let serve_result = supervisor::serve(listener, &mut supervisor);
-    let shutdown_result = supervisor.shutdown();
+    let running = Arc::new(AtomicBool::new(true));
+    let signal_running = running.clone();
+    ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
+    let serve_result = supervisor::serve_until(listener, &mut supervisor, running);
+    let session_revoked = supervisor.hardware().session_revoked();
+    let handoff_result = if session_revoked {
+        supervisor.handoff_owner()
+    } else {
+        Ok(())
+    };
+    let service_result = if session_revoked {
+        Ok(())
+    } else {
+        serve_result
+    };
+    let shutdown_result = if session_revoked {
+        supervisor.shutdown()
+    } else {
+        supervisor.shutdown_for_logout()
+    };
     let _ = std::fs::remove_file(&socket);
-    match (serve_result, shutdown_result) {
+    let service_result = match (service_result, handoff_result) {
+        (Err(error), Err(handoff_error)) => {
+            Err(error).context(format!("owner handoff also failed: {handoff_error:#}"))
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    };
+    match (service_result, shutdown_result) {
         (Err(error), Err(shutdown_error)) => Err(error).context(format!(
             "supervisor shutdown also failed: {shutdown_error:#}"
         )),

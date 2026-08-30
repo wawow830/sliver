@@ -441,7 +441,6 @@ impl<H: TouchBarHardware> Supervisor<H, RealLogind> {
             default_source,
         )?;
         supervisor.fallback_worker = true;
-        supervisor.start_fallback()?;
         Ok(supervisor)
     }
 }
@@ -765,6 +764,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     pub(crate) fn has_active_worker(&self) -> bool {
         self.active.is_some()
+    }
+
+    pub(crate) fn has_recovery(&self) -> bool {
+        self.recovery.is_some()
     }
 
     pub(crate) fn poll(&mut self, timeout: Duration) -> Result<()> {
@@ -1155,11 +1158,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn release_synthetic_keys(&mut self) -> Result<()> {
         let (empty, events) = self.synthetic.release();
-        if !events.is_empty() {
-            self.hardware.emit_key_events(&events)?;
-        }
+        let result = if events.is_empty() {
+            Ok(())
+        } else {
+            self.hardware.emit_key_events(&events)
+        };
         self.synthetic = empty;
-        Ok(())
+        result
     }
 
     fn restore_synthetic_state(&mut self, state: &SyntheticState) -> Result<()> {
@@ -1797,8 +1802,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     #[allow(dead_code)]
     pub(crate) fn handoff_owner(&mut self) -> Result<()> {
-        self.poll_hardware(Duration::ZERO)?;
-        self.release_synthetic_keys()?;
+        if let Err(error) = self.poll_hardware(Duration::ZERO) {
+            eprintln!("hardware poll failed during owner handoff: {error:#}");
+        }
+        if let Err(error) = self.release_synthetic_keys() {
+            eprintln!("synthetic key cleanup failed during owner handoff: {error:#}");
+        }
         let stop_result = self.stop_active_worker(StopReason::Logout);
         let input_state = self.hardware.input_state();
         self.reset_owner_state(input_state);
@@ -1819,9 +1828,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
-    pub(crate) fn shutdown(mut self) -> Result<()> {
+    pub(crate) fn shutdown(self) -> Result<()> {
+        self.shutdown_with_reason(StopReason::Shutdown)
+    }
+
+    pub(crate) fn shutdown_for_logout(self) -> Result<()> {
+        self.shutdown_with_reason(StopReason::Logout)
+    }
+
+    fn shutdown_with_reason(mut self, reason: StopReason) -> Result<()> {
         let synthetic_result = self.release_synthetic_keys();
-        let stop_result = self.stop_active_worker(StopReason::Shutdown);
+        let stop_result = self.stop_active_worker(reason);
         let release_result = self.hardware.release();
         self.claimed = false;
         match (stop_result.and(synthetic_result), release_result) {
@@ -1837,7 +1854,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn hardware(&self) -> &H {
         &self.hardware
     }
@@ -1936,11 +1952,12 @@ struct QueuedRequest {
     request: Result<AuthorizedRequest>,
 }
 
-pub(crate) fn serve<H: TouchBarHardware, L: Logind>(
+pub(crate) fn serve_until<H: TouchBarHardware, L: Logind>(
     listener: UnixListener,
     supervisor: &mut Supervisor<H, L>,
+    running: Arc<AtomicBool>,
 ) -> Result<()> {
-    serve_queue(listener, supervisor, None)
+    serve_queue(listener, supervisor, None, Some(running))
 }
 
 #[cfg(test)]
@@ -1949,17 +1966,18 @@ fn serve_for_test<H: TouchBarHardware, L: Logind>(
     supervisor: &mut Supervisor<H, L>,
     request_limit: usize,
 ) -> Result<()> {
-    serve_queue(listener, supervisor, Some(request_limit))
+    serve_queue(listener, supervisor, Some(request_limit), None)
 }
 
 fn serve_queue<H: TouchBarHardware, L: Logind>(
     listener: UnixListener,
     supervisor: &mut Supervisor<H, L>,
     request_limit: Option<usize>,
+    external_stop: Option<Arc<AtomicBool>>,
 ) -> Result<()> {
     let authorizer = supervisor.authorizer.clone();
     let (sender, receiver) = mpsc::sync_channel(REQUEST_QUEUE_CAPACITY);
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = external_stop.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let acceptor_stop = stop.clone();
     let acceptor = thread::spawn(move || {
         accept_requests(listener, authorizer, sender, request_limit, acceptor_stop)
