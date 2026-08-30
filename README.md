@@ -1,9 +1,10 @@
 # sliver
 
-Sliver is a scriptable Touch Bar service for Apple Silicon MacBooks running
+Sliver is a scriptable Touch Bar service for the tested M2 Mac14,7 running
 Asahi Linux. Lua owns the layout, visuals, and normal interaction. Sliver owns
 DRM scanout, normalized input, generic key output, backlight, service
-lifecycle, and recovery.
+lifecycle, and recovery. This release does not claim M1 support; that requires
+separate real-hardware validation.
 
 ## Public command
 
@@ -137,6 +138,24 @@ sudo systemctl stop sliver-broker.service
 sudo systemctl stop tiny-dfr.service  # only if it was started separately
 sudo systemctl start tiny-dfr.service
 ```
+
+## Release verification
+
+Run the repository-side audit before a release:
+
+```sh
+scripts/check-release-surface.sh
+```
+
+A real Mac14,7 and administrator access are required for hardware and RPM
+cutover checks. The interactive verifier records commands and journal output,
+asks before stopping `tiny-dfr` or enabling Sliver, and prints rollback commands:
+
+```sh
+scripts/verify-release.sh /path/to/sliver-0.1.0-1.aarch64.rpm
+```
+
+Do not run that verifier over SSH. It cannot validate M1 hardware.
 
 See [architecture](docs/architecture.md) and
 [troubleshooting](docs/troubleshooting.md) for hardware, ownership, and

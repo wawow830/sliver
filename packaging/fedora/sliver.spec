@@ -62,10 +62,12 @@ install -Dpm0644 packaging/fedora/sliver.sysusers \
 # Fedora mock builds without a user manager may opt out explicitly, but an
 # installed Fedora Asahi validation must run the complete suite.
 if systemd-run --user --wait --quiet true; then
-    %cargo_test -- --package sliverd --lib
+    SLIVER_LUA_WORKER=%{buildroot}%{_libexecdir}/sliver/sliver-lua-worker \
+        %cargo_test -- --package sliverd --lib
 else
     echo 'Skipping user-manager integration tests: no systemd user manager' >&2
-    %cargo_test -- --package sliverd --lib -- --skip systemd_worker_uses_the_declared_resource_and_device_policy --skip production_peer_verification_accepts_a_real_supervisor_unit
+    SLIVER_LUA_WORKER=%{buildroot}%{_libexecdir}/sliver/sliver-lua-worker \
+        %cargo_test -- --package sliverd --lib -- --skip systemd_worker_uses_the_declared_resource_and_device_policy --skip production_peer_verification_accepts_a_real_supervisor_unit
 fi
 %cargo_test -- --package sliverd --test sliver_cli
 packaging/fedora/check-install.sh %{buildroot}

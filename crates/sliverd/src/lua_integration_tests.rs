@@ -664,14 +664,22 @@ fn lua_raw_decoded_frames_hold_native_rate_under_broker_contention() -> Result<(
     let crate::lua_worker::StagedLuaWorker { worker, .. } =
         crate::lua_worker::LuaWorker::stage(&source)?;
     let broker = worker.broker_for_test();
+    let started = Instant::now();
     let done = Arc::new(AtomicBool::new(false));
     let consumer_done = done.clone();
-    let consumer = thread::spawn(move || -> Result<(usize, u8)> {
+    let consumer = thread::spawn(move || -> Result<(usize, u8, f64)> {
         let mut hardware = FakeTouchBar::new();
         hardware.claim()?;
+        let mut max_latency = 0.0_f64;
         loop {
             if let Some(completed) = broker.take_newest()? {
-                let (frame, _) = LogicalFrame::from_completed(completed);
+                let (frame, timing) = LogicalFrame::from_completed(completed);
+                let intended = started + Duration::from_secs_f64(timing.presentation_time);
+                max_latency = max_latency.max(
+                    Instant::now()
+                        .saturating_duration_since(intended)
+                        .as_secs_f64(),
+                );
                 hardware.present(&frame)?;
             } else if consumer_done.load(Ordering::Acquire) {
                 break;
@@ -685,29 +693,34 @@ fn lua_raw_decoded_frames_hold_native_rate_under_broker_contention() -> Result<(
             .map(|frame| frame.rgba_at(0, 0)[0])
             .unwrap_or_default();
         hardware.release()?;
-        Ok((count, last))
+        Ok((count, last, max_latency))
     });
 
-    let started = Instant::now();
     for frame in 0..60 {
         worker.render_to_slots_at(
-            frame as f64 / 60.0,
+            started.elapsed().as_secs_f64(),
             if frame == 0 { 0.0 } else { 1.0 / 60.0 },
         )?;
     }
     let elapsed = started.elapsed();
     done.store(true, Ordering::Release);
-    let (presented, last) = consumer.join().expect("broker thread panicked")?;
+    let (presented, last, max_latency) = consumer.join().expect("broker thread panicked")?;
     worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
 
     let fps = 60.0 / elapsed.as_secs_f64();
-    eprintln!("Lua raw decoded 2008x60 producer: {fps:.1} FPS, presented {presented}/60 frames");
+    eprintln!(
+        "Lua raw decoded 2008x60 producer: {fps:.1} FPS, presented {presented}/60 frames, max latency {max_latency:.3}s"
+    );
     assert!(
         elapsed <= Duration::from_secs(1),
         "Lua raw-pixel producer missed the 60 FPS deadline: {elapsed:?}"
     );
     assert!(presented < 60, "broker did not drop any stale frames");
     assert_eq!(last, 60, "broker did not present the newest complete frame");
+    assert!(
+        max_latency <= 0.15,
+        "frame latency exceeded the bounded 150 ms budget: {max_latency:.3}s"
+    );
     Ok(())
 }
 

@@ -75,3 +75,9 @@ On a tested Mac14,7, verify a package install with these checks:
    must not enter a service restart loop.
 4. Stop Sliver and confirm that `tiny-dfr` remains stopped until an
    administrator starts it.
+
+The repository-side checks cover source, fake-hardware, and package-manifest
+behaviour. For the privileged Mac14,7 cutover, run
+[`scripts/verify-release.sh`](../../scripts/verify-release.sh) from the source
+tree. It asks before service changes, records journal output, and prints the
+rollback commands instead of treating an unavailable host as a pass.
