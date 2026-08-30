@@ -70,7 +70,9 @@ else
         %cargo_test -- --package sliverd --lib -- --skip systemd_worker_uses_the_declared_resource_and_device_policy --skip production_peer_verification_accepts_a_real_supervisor_unit
 fi
 %cargo_test -- --package sliverd --test sliver_cli
+printf 'sliver package check: packaged worker and pure-Lua/C-module tests passed\n'
 packaging/fedora/check-install.sh %{buildroot}
+printf 'sliver package check: exact install manifest passed\n'
 
 %pre
 %sysusers_create_package %{name} %SOURCE1
@@ -90,7 +92,7 @@ packaging/fedora/check-install.sh %{buildroot}
 %udev_rules_update
 
 %files
-%doc README.md packaging/fedora/INSTALL.md docs/lua.md docs/architecture.md docs/troubleshooting.md
+%doc README.md packaging/fedora/INSTALL.md docs/lua.md docs/architecture.md docs/troubleshooting.md release-commit
 %{_bindir}/sliver
 %dir %{_libexecdir}/sliver
 %{_libexecdir}/sliver/sliver-broker

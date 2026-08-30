@@ -15,7 +15,8 @@ f:/usr/lib/udev/rules.d/70-sliver.rules
 f:/usr/lib/sysusers.d/sliver.conf
 f:/usr/share/doc/sliver/lua.md
 f:/usr/share/doc/sliver/architecture.md
-f:/usr/share/doc/sliver/troubleshooting.md'
+f:/usr/share/doc/sliver/troubleshooting.md
+f:/usr/share/doc/sliver/release-commit'
 
 for entry in $required; do
     kind=${entry%%:*}
@@ -35,6 +36,12 @@ for entry in $required; do
             ;;
     esac
 done
+
+manifest=$(dirname "$0")/release-manifest.txt
+actual=$(mktemp)
+trap 'rm -f "$actual"' EXIT
+find "$root" -type f -printf '/%P\n' | sort > "$actual"
+diff -u "$manifest" "$actual"
 
 for path in \
     /usr/bin/sliverd \
