@@ -26,7 +26,7 @@ The worker drop-in belongs under `/usr/lib/systemd/user/sliver-lua-worker-.servi
 when installed from the package. The dash-truncated unit name applies the
 policy to generated `sliver-lua-worker-*.service` units.
 
-Workers have no Lua, TOML, or CLI setting for memory or task limits. A host
+Workers have no Lua or CLI setting for memory or task limits. A host
 administrator changes those limits here. The user who owns the user manager can
 still change that manager's units; use a system-manager `user-UID.slice` limit
 when the ceiling must include all units for an account.

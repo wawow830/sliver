@@ -1,155 +1,143 @@
 # sliver
 
-A create/edit/apply widget system for the 13-inch Apple Silicon MacBook Pro
-Touch Bar on Asahi Linux.
+Sliver is a scriptable Touch Bar service for Apple Silicon MacBooks running
+Asahi Linux. Lua owns the layout, visuals, and normal interaction. Sliver owns
+DRM scanout, normalized input, generic key output, backlight, service
+lifecycle, and recovery.
 
-Sliver consists of:
+## Public command
 
-- **`sliver-broker`** — system service that owns the DRM Touch Bar, normalized
-  input, uinput, backlight, and the embedded fallback before login.
-- **`sliver-supervisor`** — per-user service that owns one user's selected Lua
-  worker and accepts `sliver FILE` apply requests.
-- **`sliver`** — the public CLI for selecting an explicit Lua source or the
-  embedded default.
-- **`sliverd`**, **`sliver-core`**, and **`sliver-edit`** — retained legacy
-  binaries and libraries during the migration away from the TOML widget
-  product.
+There is one public executable. Its only operational forms are:
 
-## Hardware tested
+```sh
+sliver          # select the embedded default and clear the saved path
+sliver FILE     # apply FILE as the active Lua configuration
+sliver --help
+sliver --version
+```
 
-- Apple MacBook Pro (13-inch, M2, 2022 / Mac14,7)
-- Fedora Asahi Remix 44
-- Touchbar display: Asahi `adp` DRM device, DSI-1, native mode 60x2008
-- Touch input: `Mac14,7 Touch Bar` (discovered by evdev name)
-- Keyboard: `Apple MTP keyboard`
+An apply succeeds only after the candidate has loaded, passed validation, and
+presented its first complete frame. Success is silent. Usage errors exit 2;
+service and application failures exit 1.
 
-The adapter discovers the DRM card, touch event node, and DSI backlight at
-startup; see [troubleshooting](docs/troubleshooting.md) if a device is absent.
+## Runtime
+
+The package contains three private service processes:
+
+- `sliver-broker` owns the Touch Bar hardware and the persistent `Sliver
+  Keyboard` uinput device.
+- `sliver-supervisor` runs for the active local user and stages Lua workers.
+- `sliver-lua-worker` runs one disposable configuration without hardware
+  device access.
+
+The embedded default is the canonical `crates/sliverd/src/default.lua` source
+and is embedded into the worker at build time. It is not installed as an
+editable file.
 
 ## Build
 
-System libraries required by the Rust crates include GTK4, libadwaita,
-cairo, and pango development files.
+System libraries required by the Rust crate include Cairo, Pango, and
+PangoCairo. Build with:
 
-```bash
-cd ~/Projects/sliver
+```sh
 cargo build --release
+cargo test --workspace
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-For the supported Fedora Asahi installation, build the RPM in
-`packaging/fedora/sliver.spec`. It installs `/usr/bin/sliver` and keeps the
-service binaries in `/usr/libexec/sliver`. The package does not enable the
-services or install an editable copy of `default.lua`.
+Fedora Asahi packaging is documented in
+[packaging/fedora/INSTALL.md](packaging/fedora/INSTALL.md).
 
-See [the Fedora package instructions](packaging/fedora/INSTALL.md) for the
-source archive preparation and RPM build command.
+## Enable the service
 
-The development binaries use the current user's device permissions. The
-installed broker uses the `sliver` account and the package's udev rules.
+The package does not take over the Touch Bar during installation. Stop
+`tiny-dfr` before enabling Sliver; the broker also declares a systemd conflict
+with it.
 
-## Run
+After the one-time account and udev setup, an administrator enables takeover:
 
-Only one process can own the touchbar DRM device. Stop tiny-dfr first:
-
-```bash
-sudo systemctl stop tiny-dfr
-```
-
-After the one-time account and udev setup, enable takeover with one
-administrator operation:
-
-```bash
+```sh
 sudo systemctl enable --now sliver-broker.service && \
   sudo systemctl --global enable sliver-supervisor.service
 ```
 
-The global user unit starts with each user's next graphical session. For an
-already-running session, enable it immediately with
-`systemctl --user enable --now sliver-supervisor.service`.
+For an existing graphical session, start the user unit immediately:
 
-The broker paints the embedded default before login. When a user session starts,
-that user's supervisor stages its selected Lua source and hands over the first
-complete frame without clearing the panel. Suspend hides the worker, pauses
-its timers, and turns off the backlight; resume restores the same worker and
-requests a fresh frame.
-
-## Function keys
-
-Hold the physical **Fn/Globe** key to replace the custom layout with F1–F12.
-Tap a key and release Fn to return to your widgets.
-
-Sliver mirrors held Ctrl, Alt, Shift, and Super modifiers onto its virtual
-keyboard, so cross-device chords work. For example, to switch to TTY2:
-
-1. Hold **Ctrl + Alt + Fn/Globe**.
-2. Tap **F2** on the touchbar.
-3. Release the held keys.
-
-F1–F12 are emitted as real Linux key events through `/dev/uinput`.
-
-## Scriptable apply CLI
-
-The supervisor accepts one tagged apply request through a local Unix socket.
-Use `sliver FILE` for an explicit Lua source, or run `sliver` with no path to
-select the embedded default and remove the saved path. Success is silent;
-failures go to stderr.
-
-The embedded default is one canonical `default.lua` source. It uses the same
-Lua worker, canvas, input, key, timer, and backlight interfaces as an explicit
-file. A broken saved path stays selected and shows the fixed recovery row.
-
-## Legacy TOML CLI
-
-Render a PNG preview without touching hardware:
-
-```bash
-./target/release/sliverd sliver.toml preview.png
+```sh
+systemctl --user enable --now sliver-supervisor.service
 ```
 
-Apply a config to a running daemon:
+The broker shows the embedded default before login. A local user's supervisor
+keeps that frame visible until its selected configuration commits. A broken
+saved path remains selected and shows the fixed recovery row; it does not
+silently fall back to the default.
 
-```bash
-./target/release/sliverd --apply sliver.toml
+## Lua v1
+
+A configuration returns one application table:
+
+```lua
+local sliver = require("sliver.v1")
+
+return {
+    api_version = 1,
+    render = function(canvas, time, delta)
+        canvas:rectangle(0, 0, 2008, 60, "#000000")
+        canvas:text(20, 36, "Hello", 24, "#ffffff")
+    end,
+}
 ```
 
-Paint raw calibration bands on the panel:
+The allowed fields are `api_version`, `start`, `stop`, `visibility`, `touch`,
+`key`, and required `render`. Unknown fields and invalid callback values are
+rejected during apply. Callbacks run serially, cannot yield, and have no useful
+return value.
 
-```bash
-./target/release/sliverd --probe
+The module provides:
+
+- `sliver.redraw()` for a coalesced frame request;
+- `sliver.timer.after(seconds, callback)` and
+  `sliver.timer.every(seconds, callback)`;
+- `sliver.input.state()` and `sliver.input.key.down`, `.up`, and `.tap`;
+- versioned keyboard and consumer-key constants under
+  `sliver.input.keys.keyboard` and `.consumer`;
+- `sliver.backlight.get()` and `.set(level)` for levels from 0.0 to 1.0;
+- a logical 2008 by 60 Cairo/Pango canvas with rectangles, paths, fill, stroke,
+  text, images, raw pixels, transforms, clipping, alpha, save/restore, and
+  source or source-over compositing.
+
+Touch callbacks receive `down`, `move`, `up`, and `cancel` events with contact
+ID, monotonic time, logical coordinates, modifier state, and optional pressure
+and contact dimensions. Fn and left/right Ctrl, Alt, Shift, and Super
+transitions are exposed; general keyboard monitoring is not.
+
+See [the Lua interface reference](docs/lua.md) for the complete v1 surface.
+
+## Safety and recovery
+
+Workers run as the applying user but cannot access DRM, evdev, uinput, or the
+backlight. A callback deadline is two seconds; graceful cleanup has a 500 ms
+deadline. Worker descendants are terminated on replacement or failure.
+
+Holding the physical Fn/Globe key for three seconds selects the compiled F1–F12
+recovery row. It is also shown when no worker is healthy. Recovery touches do
+not reach Lua, synthetic keys are released during replacement, and recovery
+uses 0.75 brightness.
+
+Suspend hides the worker, cancels contacts, pauses timers, turns off the
+backlight, and restores the worker with one fresh frame after resume.
+
+## Return to tiny-dfr
+
+Stopping Sliver does not restart another daemon automatically:
+
+```sh
+sudo systemctl stop sliver-broker.service
+sudo systemctl stop tiny-dfr.service  # only if it was started separately
+sudo systemctl start tiny-dfr.service
 ```
 
-Stop Sliver and return to tiny-dfr:
-
-```bash
-pkill -INT -x sliverd
-sudo systemctl start tiny-dfr
-```
-
-## Documentation
-
-- [Configuration and widget reference](docs/configuration.md)
-- [Architecture and hardware notes](docs/architecture.md)
-- [Troubleshooting](docs/troubleshooting.md)
-
-## Development checks
-
-```bash
-cargo fmt --all --check
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-## Current capabilities
-
-- Shared cairo/pango renderer and exact GUI preview
-- TOML label, button, clock, battery, and spacer widgets
-- Per-widget color, font size, bold, background pill, alignment, and width
-- Shell actions on touch
-- Live battery data and once-per-second redraws
-- Live apply via `$XDG_RUNTIME_DIR/sliver/supervisor.sock`
-- Touch press feedback
-- Momentary Fn/Globe F1–F12 layer with modifier bridging
-- GTK4/libadwaita customizer
-
-Drag-and-drop reordering and richer widgets such as media state and sliders
-remain natural next steps.
+See [architecture](docs/architecture.md) and
+[troubleshooting](docs/troubleshooting.md) for hardware, ownership, and
+failure details.

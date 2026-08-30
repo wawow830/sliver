@@ -1,6 +1,6 @@
 # Domain docs
 
-Sliver is a Rust Cargo workspace with three crates: `sliver-core`, `sliverd`, and `sliver-edit`. They share one domain context. Do not split the glossary or decisions by crate unless the repository adopts a context map later.
+Sliver is a Rust Cargo package with one private runtime crate, `sliverd`. It builds the public `sliver` client and the broker, supervisor, and worker service binaries. They share one domain context. Do not split the glossary or decisions by process unless the repository adopts a context map later.
 
 ## Before changing code
 

@@ -1,144 +1,91 @@
 # Troubleshooting
 
-## `Device or resource busy` / cannot become DRM master
+## Check ownership
 
-Another process owns the Touch Bar DRM card.
+Only one process can own the Touch Bar DRM device. Inspect the broker and its
+current owner:
 
-```bash
+```sh
+systemctl status sliver-broker.service
+pgrep -a 'sliver-broker|tiny-dfr'
 fuser -v /dev/dri/card*
-pgrep -a 'sliverd|tiny-dfr'
 ```
 
-Stop the existing owner:
+Stop `tiny-dfr` before enabling Sliver. Stopping Sliver does not start
+`tiny-dfr` automatically.
 
-```bash
-pkill -INT -x sliverd
-sudo systemctl stop tiny-dfr
-```
+## Check permissions
 
-Then start one Sliver daemon.
+The broker account needs access to the DRM card, Touch Bar and keyboard evdev
+nodes, `/dev/uinput`, and the DSI backlight:
 
-## `Permission denied`
-
-Check device ownership and groups:
-
-```bash
-id
+```sh
+id sliver
 ls -l /dev/dri/card* /dev/input/event* /dev/uinput
+journalctl -u sliver-broker.service -b
 ```
 
-The Fedora package grants device-specific hardware access to the `sliver`
-broker account through dedicated udev groups. A user applying a config needs membership in
-`sliver-supervisors`; group changes require a new login session.
+Applying users need membership in `sliver-supervisors`. Start a new login
+session after changing group membership.
 
-## The strip still shows an old image
+## Check the apply socket
 
-The DSI panel retains its last frame when scanout stops. Check the process and
-DRM owner rather than trusting the glass:
+The public client talks to the per-user supervisor at:
 
-```bash
-pgrep -a sliverd
+```sh
+ls -l "$XDG_RUNTIME_DIR/sliver/supervisor.sock"
+journalctl --user -u sliver-supervisor.service -b
+```
+
+`sliver FILE` reports load, validation, worker, authorization, and hardware
+errors on stderr. A missing or broken saved path remains selected and puts the
+fixed recovery row on the panel; it does not choose another source.
+
+## No frame or stale frame
+
+A command-mode DSI panel can retain its last frame after a process exits. Check
+the journal and DRM owner rather than trusting the glass:
+
+```sh
+journalctl -u sliver-broker.service -b
+journalctl --user -u sliver-supervisor.service -b
 fuser -v /dev/dri/card*
 ```
 
-A failed new daemon can leave the previous frame visibly frozen.
+The tested M2 adapter must flush every repaint with the dirty-framebuffer
+ioctl. A missing display, touch input, Fn observer, synthetic-key device, or
+backlight is reported by capability name and blocks apply until discovery
+succeeds again.
 
-## The first frame appears, but updates do not
+## Touch, Fn, or key output fails
 
-Command-mode DSI requires a dirty-framebuffer ioctl after changing memory.
-Current Sliver calls `dirty_framebuffer` after every repaint. If modifying the
-backend, preserve that flush.
+The adapter discovers devices by hardware identity rather than a fixed event
+number. Check the broker journal and input devices:
 
-## Touch does not react
-
-```bash
-ls -l /dev/input/event*
-rg 'touch:' /tmp/sliverd.log
-```
-
-The adapter looks for the `Mac14,7 Touch Bar` device by name. Verify the
-assigned event node with:
-
-```bash
+```sh
+journalctl -u sliver-broker.service -b | grep -E 'display|touch|Fn|synthetic|backlight'
 awk '/^N: Name=/{name=$0}/^H: Handlers=/{print name; print}' \
   /proc/bus/input/devices
 ```
 
-The event number is assigned dynamically and is not a configuration value.
+Holding Fn/Globe continuously for three seconds should show the compiled F1–F12
+recovery row. Physical Ctrl, Alt, Shift, and Super modifiers are bridged to
+virtual key taps. Synthetic keys are released whenever a worker fails or is
+replaced.
 
-## Fn does not show F1–F12
+## Suspend or device loss
 
-Check daemon startup logs for both lines:
-
-```text
-fn: watching /dev/input/eventN (Apple MTP keyboard)
-fn: virtual F-key keyboard ready
-```
-
-Then verify input/uinput permissions. The keyboard event node is discovered by
-name; `/dev/uinput` must be writable.
-
-## Ctrl+Alt+Fn+F2 does not switch TTY
-
-Use this order:
-
-1. Hold physical Ctrl and Alt.
-2. Hold Fn/Globe until F1–F12 appears.
-3. Tap F2 on the strip.
-4. Release the held keys.
-
-Use a current build containing modifier bridging. Restart `sliverd` after
-rebuilding; a previously running process does not gain new code automatically.
-
-## Apply fails from the customizer
-
-Confirm the daemon and socket exist:
-
-```bash
-pgrep -a sliverd
-ls -l "$XDG_RUNTIME_DIR/sliver.sock"
-```
-
-Test the protocol directly:
-
-```bash
-./target/release/sliverd --apply sliver.toml
-```
-
-## The customizer does not open
-
-Run it in a terminal to see GTK errors:
-
-```bash
-./target/release/sliver-edit
-```
-
-On Hyprland, portal warnings may indicate a missing or failed
-`xdg-desktop-portal` backend, but they are not normally fatal to this app.
-Required runtime libraries are GTK4 and libadwaita.
+During suspend the worker is hidden, contacts are canceled, timers pause, and
+the backlight turns off. Resume reacquires hardware and requests one fresh
+frame. For device loss, wait for the broker's rediscovery attempt and inspect
+both service journals.
 
 ## Return to tiny-dfr
 
-```bash
-pkill -INT -x sliverd
-sudo systemctl start tiny-dfr
-```
+Sliver does not restart another Touch Bar daemon during shutdown. Hand ownership
+back explicitly:
 
-To return to Sliver:
-
-```bash
-sudo systemctl stop tiny-dfr
-./target/release/sliverd sliver.toml --drm
-```
-
-## Collect a useful diagnostic bundle
-
-```bash
-uname -a
-fastfetch --logo none
-pgrep -a 'sliverd|tiny-dfr'
-fuser -v /dev/dri/card*
-awk 'BEGIN { RS="" } /Touch Bar|Apple MTP keyboard|Sliver Function Row/' \
-  /proc/bus/input/devices
-cat /tmp/sliverd.log
+```sh
+sudo systemctl stop sliver-broker.service
+sudo systemctl start tiny-dfr.service
 ```

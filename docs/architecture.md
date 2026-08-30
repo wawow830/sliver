@@ -2,25 +2,11 @@
 
 ## Components
 
-### sliver-core
-
-Shared library containing:
-
-- serde TOML config types
-- widget layout and hit-testing
-- cairo/pango rendering
-- battery data lookup
-- generated F1–F12 layer
-- socket-path convention
-
-The daemon and customizer both call the same renderer. A GUI preview is not an
-approximation of the strip; it is the same layout and draw path on another
-cairo surface.
-
-### sliverd
+The public interface is the `sliver` executable. Its only configuration
+language is Lua v1; the embedded default is ordinary Lua source.
 
 The `sliver-broker` system service owns DRM, evdev, uinput, and backlight. It
-runs the embedded fallback before login and accepts one authenticated active
+runs the embedded default before login and accepts one authenticated active
 user supervisor over a private Unix socket. The broker never accepts config
 selection or Lua source from that socket.
 
@@ -30,26 +16,16 @@ user's private runtime socket, then forwards only normalized hardware requests
 to the broker. The real adapter polls nonblocking evdev descriptors and emits
 normalized input events through the hardware seam. The broker coordinates:
 
-- the embedded fallback before login and its logout restart
+- the embedded default before login and its logout restart
 - DRM scanout and dirty-framebuffer updates
 - normalized hardware events from the adapter
 - uinput function-key output
 - worker handoff without a blank frame
 - backlight and hardware release
 
-### sliver-edit
-
-GTK4/libadwaita editor with shared mutable config state. It provides:
-
-- live shared-renderer preview
-- add/select/reorder/delete operations
-- property controls
-- Save to TOML
-- Apply over the Unix socket
-
-GTK signals are reentrant. List refreshes collect model text and release
-`RefCell` borrows before selecting rows, because `select_row` emits callbacks
-synchronously.
+Each `sliver-lua-worker` is disposable and unprivileged with respect to
+hardware. Its complete frames cross a bounded shared-memory frame interface;
+input and output requests cross private control sockets.
 
 ## Display path
 
@@ -73,7 +49,7 @@ native buffer:
 logical (x, y) -> buffer (60-y, x)
 ```
 
-A raw `--probe` experiment established:
+The tested panel has these established mapping properties:
 
 - buffer rows run left-to-right across the physical strip
 - column zero maps to the lower edge
@@ -198,8 +174,9 @@ through its udev rules and systemd service. Users only need membership in
 acquired by the first suitable opener; tiny-dfr and Sliver cannot own the panel
 simultaneously.
 
-Button/label actions execute with the Sliver user's privileges through
-`sh -c`. Configs must therefore be treated as executable content.
+Lua configurations are trusted executable content. They run with the active
+user's ordinary environment and standard Lua file, process, and module access;
+only hardware ownership stays in the broker.
 
 ## Lua apply transaction
 
