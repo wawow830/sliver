@@ -2324,8 +2324,9 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
 ) -> Result<()> {
     let authorizer = supervisor.authorizer.clone();
     let (sender, receiver) = mpsc::sync_channel(REQUEST_QUEUE_CAPACITY);
-    let stop = external_stop.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-    let acceptor_stop = stop.clone();
+    let running = external_stop.unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
+    let acceptor_stop = Arc::new(AtomicBool::new(false));
+    let acceptor_stop_signal = acceptor_stop.clone();
     let acceptor = thread::spawn(move || {
         accept_requests(listener, authorizer, sender, request_limit, acceptor_stop)
     });
@@ -2333,6 +2334,9 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
     let mut service_result = Ok(());
     let mut processed = 0;
     loop {
+        if !running.load(Ordering::Acquire) {
+            break;
+        }
         match receiver.try_recv() {
             Ok(queued) => {
                 if let Err(error) = serve_queued_request(queued, supervisor) {
@@ -2359,7 +2363,7 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
         }
     }
 
-    stop.store(true, Ordering::Release);
+    acceptor_stop_signal.store(true, Ordering::Release);
     let acceptor_result = acceptor
         .join()
         .map_err(|_| anyhow::anyhow!("apply acceptor thread panicked"))?;

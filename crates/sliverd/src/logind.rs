@@ -309,6 +309,7 @@ mod fake {
     #[derive(Default)]
     struct State {
         sessions: std::collections::HashMap<libc::pid_t, Session>,
+        default_session: Option<Session>,
         active: std::collections::HashMap<String, ActiveSession>,
         generation: u64,
         generation_reads: usize,
@@ -329,6 +330,16 @@ mod fake {
             } else {
                 state.sessions.remove(&pid);
             }
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .expect("fake logind generation overflow");
+        }
+
+        pub(crate) fn set_session_for_any_pid(&self, session: Session) {
+            let (lock, _) = &*self.state;
+            let mut state = lock.lock().expect("fake logind mutex poisoned");
+            state.default_session = Some(session);
             state.generation = state
                 .generation
                 .checked_add(1)
@@ -433,12 +444,12 @@ mod fake {
 
         fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>> {
             let (lock, _) = &*self.state;
-            Ok(lock
-                .lock()
-                .expect("fake logind mutex poisoned")
+            let state = lock.lock().expect("fake logind mutex poisoned");
+            Ok(state
                 .sessions
                 .get(&pid)
-                .cloned())
+                .cloned()
+                .or_else(|| state.default_session.clone()))
         }
 
         fn active_session(&self, seat: &str) -> Result<Option<ActiveSession>> {

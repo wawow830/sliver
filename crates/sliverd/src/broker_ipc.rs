@@ -1265,9 +1265,10 @@ mod tests {
         FakeTouchBar, HardwareEvent, InputState, LogicalFrame, ModifierState, SyntheticKeyEvent,
         TouchBarHardware,
     };
-    use crate::logind::{ActiveSession, FakeLogind};
+    use crate::logind::{ActiveSession, FakeLogind, Session};
     use crate::lua_worker::LuaSource;
     use crate::path_state::PreparedPathState;
+    use crate::supervisor::serve_until;
 
     use super::*;
 
@@ -2218,6 +2219,127 @@ mod tests {
         let error = ensure_supervisor_peer(std::process::id() as libc::pid_t)
             .expect_err("the test process was accepted as a supervisor");
         assert!(format!("{error:#}").contains("not the Sliver user supervisor"));
+    }
+
+    #[test]
+    fn public_cli_applies_through_real_supervisor_worker_and_fake_hardware() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let supervisor_socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&supervisor_socket)?;
+        let broker_state = directory.path().join("broker-state/config-path");
+        let source = directory.path().join("user.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let invalid = directory.path().join("invalid.lua");
+        std::fs::write(
+            &invalid,
+            "require('sliver.v1'); return { api_version = 1, render = function() error('render failed') end }",
+        )?;
+
+        let uid = unsafe { libc::getuid() };
+        let logind = FakeLogind::new();
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "public-cli-session".into(),
+                uid,
+            }),
+        );
+        logind.set_session_for_any_pid(Session {
+            id: "public-cli-session".into(),
+            uid,
+            seat: Some(SEAT.into()),
+            remote: false,
+            active: true,
+        });
+        let shared = ThreadFakeHardware::new();
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_running = running.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let mut supervisor = Supervisor::new_with_startup_candidate_process(
+                server_shared,
+                broker_state,
+                server_logind,
+                Some(LuaSource::embedded(default_source_bytes())),
+            )?;
+            serve_until(listener, &mut supervisor, server_running)
+        });
+
+        let cli_path = std::env::current_exe()?
+            .parent()
+            .and_then(|path| path.parent())
+            .map(|path| path.join("sliver"))
+            .context("public CLI binary is required for this test")?;
+        ensure!(
+            cli_path.exists(),
+            "public CLI binary is required for this test"
+        );
+        let output = std::process::Command::new(&cli_path)
+            .arg(&source)
+            .env("SLIVER_SUPERVISOR_SOCKET", &supervisor_socket)
+            .output()?;
+        if !output.status.success() {
+            running.store(false, Ordering::Release);
+            let server_result = server.join().expect("supervisor server panicked");
+            panic!(
+                "CLI failed: {:?}; supervisor result: {:?}",
+                output, server_result
+            );
+        }
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            shared.inspect(|hardware| hardware
+                .presented_frames()
+                .last()
+                .expect("successful CLI apply presented no frame")
+                .rgba_at(10, 10)),
+            [255, 0, 0, 255]
+        );
+
+        let frames_before_invalid = shared.inspect(|hardware| hardware.presented_frames().len());
+        let output = std::process::Command::new(&cli_path)
+            .arg(&invalid)
+            .env("SLIVER_SUPERVISOR_SOCKET", &supervisor_socket)
+            .output()?;
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("render"));
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().len()),
+            frames_before_invalid
+        );
+
+        let output = std::process::Command::new(&cli_path)
+            .env("SLIVER_SUPERVISOR_SOCKET", &supervisor_socket)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "default reset failed: {:?}",
+            output
+        );
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            shared.inspect(|hardware| hardware
+                .presented_frames()
+                .last()
+                .expect("default reset presented no frame")
+                .rgba_at(10, 10)),
+            [0, 255, 0, 255]
+        );
+
+        running.store(false, Ordering::Release);
+        server.join().expect("supervisor server panicked")?;
+        Ok(())
+    }
+
+    fn default_source_bytes() -> Vec<u8> {
+        b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec()
     }
 
     #[test]
