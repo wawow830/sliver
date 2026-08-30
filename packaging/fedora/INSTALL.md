@@ -2,8 +2,8 @@
 
 The RPM installs one command in `PATH`, `/usr/bin/sliver`. The broker,
 supervisor, and disposable worker live in `/usr/libexec/sliver`; they are only
-started by systemd. `default.lua` and `sliver.toml` are not installed. The
-default is embedded in the worker binary.
+started by systemd. The embedded default is stored in the worker binary and is
+not installed as an editable file.
 
 The RPM creates the `sliver` system account and the `sliver-supervisors` group.
 Add each user who should apply a configuration to that group, then start a
@@ -61,8 +61,8 @@ rpm -qlp ~/rpmbuild/RPMS/$(uname -m)/sliver-*.rpm
 
 The file list should contain `/usr/bin/sliver`, the three files under
 `/usr/libexec/sliver`, both systemd service definitions, the worker drop-in,
-the sysusers file, and the udev rule. It must not contain a second
-`default.lua`, `sliver.toml`, `sliverd`, or `sliver-edit` executable.
+the sysusers file, and the udev rule. It should contain no editable default or
+unlisted executable.
 
 On a tested Mac14,7, verify a package install with these checks:
 

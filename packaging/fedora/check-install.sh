@@ -39,8 +39,8 @@ for path in \
     /usr/bin/sliver-broker \
     /usr/bin/sliver-supervisor \
     /usr/bin/sliver-lua-worker \
-    /usr/share/sliver/default.lua \
-    /usr/share/sliver/sliver.toml; do
+    /usr/libexec/sliver/sliver-calibrate \
+    /usr/share/sliver/default.lua; do
     test ! -e "$root$path" || {
         printf 'unexpected public or editable file: %s\n' "$path" >&2
         exit 1
