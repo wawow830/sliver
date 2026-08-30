@@ -1919,7 +1919,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             }
         }
         if let Err(cleanup_error) = self.release_synthetic_keys() {
-            crate::system_log::broker_error(format!(
+            crate::system_log::supervisor_error(format!(
                 "releasing synthetic keys after worker failure failed: {cleanup_error:#}"
             ));
         }
@@ -2190,7 +2190,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let worker_result = stop_result.and(synthetic_result);
         match (worker_result, hardware_error) {
             (Err(error), Some(hardware_error)) => {
-                crate::system_log::broker_error(format!(
+                crate::system_log::supervisor_error(format!(
                     "hardware shutdown failed after Lua stop error: {hardware_error:#}"
                 ));
                 Err(error)
@@ -2465,7 +2465,7 @@ fn serve_queued_request<H: TouchBarHardware, L: Logind>(
         .request
         .and_then(|request| supervisor.apply_authorized(request));
     if let Err(error) = &result {
-        crate::system_log::broker_error(format!("apply request failed: {error:#}"));
+        crate::system_log::supervisor_error(format!("apply request failed: {error:#}"));
     }
     crate::apply_ipc::write_reply(&mut queued.stream, &result).context("sending apply reply")
 }
@@ -2484,7 +2484,7 @@ impl<H: TouchBarHardware, L: Logind> Drop for Supervisor<H, L> {
     fn drop(&mut self) {
         if self.claimed {
             if let Err(error) = self.release_synthetic_keys() {
-                crate::system_log::broker_error(format!(
+                crate::system_log::supervisor_error(format!(
                     "synthetic key cleanup failed during supervisor drop: {error:#}"
                 ));
             }

@@ -72,7 +72,7 @@ pub fn supervisor_main() -> Result<()> {
             continue;
         }
         if let Err(error) = &result {
-            system_log::broker_error(format!("supervisor service failed: {error:#}"));
+            system_log::supervisor_error(format!("supervisor service failed: {error:#}"));
         }
         return result;
     }
