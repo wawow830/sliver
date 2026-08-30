@@ -331,6 +331,15 @@ fn claim_card() -> Result<CardClaim> {
     }
 }
 
+fn validate_panel_mode(width: u32, height: u32) -> Result<()> {
+    ensure!(
+        (width, height) == (PANEL_W, crate::DISPLAY_WIDTH as u32),
+        "unsupported Touch Bar mode {width}x{height}; expected {PANEL_W}x{}",
+        crate::DISPLAY_WIDTH
+    );
+    Ok(())
+}
+
 fn claim_card_at(path: &Path) -> Result<CardClaim> {
     let file = OpenOptions::new()
         .read(true)
@@ -353,6 +362,7 @@ fn claim_card_at(path: &Path) -> Result<CardClaim> {
         .context("no connected DSI connector")?;
     let mode = *conn.modes().first().context("connector has no modes")?;
     let (w, h) = mode.size();
+    validate_panel_mode(u32::from(w), u32::from(h))?;
     eprintln!("panel mode: {w}x{h} ({})", path.display());
 
     let crtc = conn
@@ -1223,7 +1233,7 @@ impl M2TouchBar {
         let mut claim = claim_card()?;
         let (panel_width, panel_height) = claim.mode.size();
         let (panel_width, panel_height) = (u32::from(panel_width), u32::from(panel_height));
-        debug_assert_eq!(panel_width, PANEL_W);
+        validate_panel_mode(panel_width, panel_height)?;
 
         let mut dumb_buffer = None;
         let mut framebuffer = None;
@@ -2008,6 +2018,13 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn rejects_non_native_touch_bar_modes() {
+        assert!(validate_panel_mode(PANEL_W, crate::DISPLAY_WIDTH as u32).is_ok());
+        assert!(validate_panel_mode(2008, 60).is_err());
+        assert!(validate_panel_mode(60, 2007).is_err());
     }
 
     #[test]

@@ -62,7 +62,8 @@ rpm -qlp ~/rpmbuild/RPMS/$(uname -m)/sliver-*.rpm
 The file list should contain `/usr/bin/sliver`, the three files under
 `/usr/libexec/sliver`, both systemd service definitions, the worker drop-in,
 the sysusers file, and the udev rule. It should contain no editable default or
-unlisted executable.
+unlisted executable. The package `%check` points the process-worker smoke tests
+at the packaged worker, including pure Lua and compiled Lua 5.4 module loads.
 
 On a tested Mac14,7, verify a package install with these checks:
 

@@ -1753,6 +1753,36 @@ mod tests {
     }
 
     #[test]
+    fn process_worker_loads_a_pure_lua_module_from_the_entry_directory() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        std::fs::write(
+            directory.path().join("helper.lua"),
+            "return { red = 1, green = 0, blue = 0 }",
+        )?;
+        let source = directory.path().join("entry.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local color = require("helper")
+            require("sliver.v1")
+            return {
+                api_version = 1,
+                render = function(canvas)
+                    canvas:rectangle(0, 0, 20, 20, color.red, color.green, color.blue, 1)
+                end,
+            }
+            "#,
+        )?;
+        let worker = ProcessWorker::stage(&LuaSource::file(source), 0.0, InputState::default())?;
+        let frame = worker.render(1.0, 0.0, InputState::default())?;
+        assert_eq!(
+            &frame.frame.pixels()[10 * frame.frame.stride() + 10 * 4..][..4],
+            &[0, 0, 255, 255]
+        );
+        worker.shutdown(StopReason::Shutdown)
+    }
+
+    #[test]
     fn systemd_worker_uses_the_declared_resource_and_device_policy() -> Result<()> {
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])

@@ -193,6 +193,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 RPM_PATH="${1:-}"
 PACKAGE_WAS_INSTALLED=0
+BLOCKED=0
 TINY_STOPPED=0
 TAKEOVER_ACTIVE=0
 CONFIG_DIR=""
@@ -206,8 +207,14 @@ run_optional() {
     return 0
   fi
   warn "command failed, so record it as a blocker: $*"
+  BLOCKED=1
   SKIPPED+=("$*")
   return 0
+}
+
+blocker() {
+  BLOCKED=1
+  SKIPPED+=("$*")
 }
 
 rollback() {
@@ -229,6 +236,11 @@ rollback() {
 
 on_exit() {
   local status=$?
+  if [[ -n "$CONFIG_DIR" ]]; then
+    rm -rf -- "$CONFIG_DIR"
+    CONFIG_DIR=""
+    warn "The temporary verifier config was removed. Run 'sliver' with no argument to clear its saved path."
+  fi
   if (( status != 0 )); then
     warn "verification stopped with status $status"
     warn "No automatic rollback was attempted. If takeover is active, run:"
@@ -297,7 +309,7 @@ elif [[ -r /sys/devices/virtual/dmi/id/product_name ]]; then
   printf '  product name: '; cat /sys/devices/virtual/dmi/id/product_name
 else
   warn "could not find a host model file"
-  SKIPPED+=("host model discovery")
+  blocker "host model discovery"
 fi
 run_optional id sliver
 run_optional pgrep -a -f 'tiny-dfr|sliver-broker|sliver-supervisor'
@@ -306,7 +318,7 @@ if command -v drm_info >/dev/null 2>&1; then
   run_optional drm_info
 else
   warn "drm_info is not installed; inspect the DRM connector manually before takeover"
-  SKIPPED+=("drm_info hardware inspection")
+  blocker "drm_info hardware inspection"
 fi
 pause "Review the model, connector, and current owner above. Press Enter to continue."
 
@@ -325,23 +337,38 @@ if [[ -n "$RPM_PATH" ]]; then
   ! grep -E '/(sliver-edit|sliver-probe|sliver-preview|default\.lua)$' "$VERIFY_DIR/package-files.txt" >/dev/null
 else
   warn "package verification was skipped"
-  SKIPPED+=("Fedora RPM build and file-list verification")
+  blocker "Fedora RPM build and file-list verification"
 fi
 
 stage "Install without taking ownership"
 if [[ -z "$RPM_PATH" ]]; then
   warn "No RPM was supplied. The install and service checks cannot pass."
-  SKIPPED+=("package installation")
+  blocker "package installation"
 else
   step "The RPM must not enable or start Sliver by itself."
+  if systemctl is-enabled --quiet sliver-broker.service; then
+    warn "Sliver broker was already enabled before this install"
+    blocker "pre-install broker enablement"
+  fi
+  if sudo systemctl --global is-enabled --quiet sliver-supervisor.service; then
+    warn "Sliver supervisor was already globally enabled before this install"
+    blocker "pre-install supervisor enablement"
+  fi
   if confirm "Install this RPM with dnf now?"; then
     sudo dnf install -y "$RPM_PATH"
   else
     warn "installation was declined"
-    SKIPPED+=("package installation")
+    blocker "package installation"
+  fi
+  if systemctl is-enabled --quiet sliver-broker.service; then
+    warn "The package enabled the broker; acceptance requires explicit enablement"
+    blocker "package enabled broker during installation"
+  fi
+  if sudo systemctl --global is-enabled --quiet sliver-supervisor.service; then
+    warn "The package globally enabled the supervisor; acceptance requires explicit enablement"
+    blocker "package enabled supervisor during installation"
   fi
 fi
-run_optional systemctl is-enabled sliver-broker.service
 run_optional systemctl is-active tiny-dfr.service
 pause "Confirm that installation did not take over the panel. Press Enter to continue."
 
@@ -360,7 +387,7 @@ if [[ -n "$RPM_PATH" ]]; then
   pause "After starting a fresh local graphical session, press Enter to continue."
 else
   warn "account and udev setup skipped because no package was installed"
-  SKIPPED+=("broker account and udev setup")
+  blocker "broker account and udev setup"
 fi
 
 stage "Capture the pre-takeover owner"
@@ -370,13 +397,15 @@ run_optional pgrep -a -f 'tiny-dfr|sliver-broker'
 for device in /dev/dri/card* /dev/input/event* /dev/uinput; do
   [[ -e "$device" ]] && ls -l "$device"
 done
-run_optional fuser -v /dev/dri/card0
+for card in /dev/dri/card*; do
+  [[ -e "$card" ]] && run_optional fuser -v "$card"
+done
 pause "Keep this evidence. It is the rollback reference. Press Enter to continue."
 
 stage "Enable Sliver takeover"
 if ! confirm "Stop tiny-dfr and enable Sliver on the real panel?"; then
   warn "takeover was declined; no release evidence can be collected"
-  SKIPPED+=("real hardware takeover")
+  blocker "real hardware takeover"
   exit 1
 fi
 if systemctl is-active --quiet tiny-dfr.service; then
@@ -432,7 +461,7 @@ if confirm "Suspend the machine now, then resume it to verify backlight, touch c
   sudo systemctl suspend
 else
   warn "suspend verification was declined"
-  SKIPPED+=("suspend and resume")
+  blocker "suspend and resume"
 fi
 step "Run the repository's fake-adapter 2008x60 producer test and keep its measured output."
 run_optional cargo test --release lua_raw_decoded_frames_hold_native_rate_under_broker_contention -- --nocapture
@@ -451,6 +480,16 @@ else
   say "systemctl --user disable --now sliver-supervisor.service"
   say "sudo systemctl --global disable sliver-supervisor.service"
   say "sudo systemctl start tiny-dfr.service  # only when handing ownership back"
+fi
+
+if (( PACKAGE_WAS_INSTALLED )); then
+  note "The verifier found an existing Sliver installation and did not remove it."
+fi
+if (( BLOCKED )); then
+  warn "Verification is incomplete. The run is not an acceptance pass."
+  warn "Resolve the blockers listed below, then rerun this verifier."
+  for blocker in "${SKIPPED[@]}"; do note "  - $blocker"; done
+  exit 1
 fi
 
 finish
