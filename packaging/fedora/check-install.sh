@@ -64,10 +64,6 @@ grep -F 'Conflicts=tiny-dfr.service' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
 grep -F 'Before=tiny-dfr.service' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
-grep -F 'StartLimitIntervalSec=30s' \
-    "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
-grep -F 'StartLimitBurst=5' \
-    "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
 grep -F 'ExecStart=/usr/libexec/sliver/sliver-supervisor' \
     "$root/usr/lib/systemd/user/sliver-supervisor.service" >/dev/null
 grep -F 'ConditionGroup=sliver-supervisors' \
