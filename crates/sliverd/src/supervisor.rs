@@ -5337,7 +5337,7 @@ mod tests {
         let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
         supervisor.apply(&source)?;
         let committed_at = supervisor.now_seconds();
-        supervisor.step_at(1.0)?;
+        supervisor.step_at(committed_at + 1.0)?;
 
         let lines: Vec<_> = std::fs::read_to_string(log)?
             .lines()
@@ -5350,7 +5350,7 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0][1], 0.0);
         assert!(lines[1][0] > lines[0][0]);
-        assert!((lines[1][1] - (1.0 - committed_at)).abs() < 0.002);
+        assert!((lines[1][1] - 1.0).abs() < 0.002);
         supervisor.shutdown()?;
         Ok(())
     }
