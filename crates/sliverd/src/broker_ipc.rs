@@ -1471,8 +1471,7 @@ mod tests {
                 first_state,
                 first_logind.clone(),
                 Some(LuaSource::embedded(
-                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
-                        .to_vec(),
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
                 )),
             )?;
             run_broker_for_test_with_connection_stop(
@@ -1514,8 +1513,7 @@ mod tests {
                 second_state,
                 second_logind.clone(),
                 Some(LuaSource::embedded(
-                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
-                        .to_vec(),
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
                 )),
             )?;
             run_broker(
@@ -2007,8 +2005,7 @@ mod tests {
                 broker_state,
                 server_logind.clone(),
                 Some(LuaSource::embedded(
-                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
-                        .to_vec(),
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
                 )),
             )?;
             run_broker(
@@ -2050,6 +2047,8 @@ mod tests {
         let frame_presented = !shared.inspect(|hardware| hardware.presented_frames().is_empty());
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "stop", unit])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
         let _ = child.wait();
         running.store(false, Ordering::Release);
