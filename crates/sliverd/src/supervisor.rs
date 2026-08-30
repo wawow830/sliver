@@ -634,6 +634,23 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             None => ConfigSelection::Default,
         };
 
+        // The fallback is allowed to exist only while the seat has no user.
+        // Its last frame stays on the panel while the user's worker stages.
+        if matches!(previous_owner, WorkerOwner::Fallback)
+            && matches!(target_owner, WorkerOwner::User(_))
+        {
+            if let Err(cleanup_error) = self.release_synthetic_keys() {
+                crate::system_log::broker_error(format!(
+                    "releasing fallback keys before user handoff failed: {cleanup_error:#}"
+                ));
+            }
+            if let Err(cleanup_error) = self.stop_active_worker(StopReason::Replaced) {
+                crate::system_log::broker_error(format!(
+                    "stopping the fallback before user handoff failed: {cleanup_error:#}"
+                ));
+            }
+        }
+
         self.handoff_in_progress = true;
         let result = self.apply_candidate(
             selection,
@@ -8265,6 +8282,62 @@ mod tests {
 
     fn set_session_active(logind: &FakeLogind, id: &str, uid: libc::uid_t) {
         logind.set_active("seat0", Some(ActiveSession { id: id.into(), uid }));
+    }
+
+    #[test]
+    fn failed_logout_default_stops_the_user_before_entering_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let source = directory.path().join("logout-user.lua");
+        let stop_log = directory.path().join("logout-stop");
+        std::fs::write(
+            &source,
+            format!(
+                "require('sliver.v1'); return {{ api_version = 1, stop = function(reason) local file = assert(io.open({stop_log:?}, 'w')); file:write(reason); file:close() end, render = function() end }}"
+            ),
+        )?;
+        PreparedPathState::prepare(&state_file, &source)?.commit()?;
+        let uid = unsafe { libc::getuid() };
+        let logind = FakeLogind::new();
+        logind.set_session(
+            std::process::id() as libc::pid_t,
+            Some(Session {
+                id: "failed-logout".into(),
+                uid,
+                seat: Some("seat0".into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            "seat0",
+            Some(ActiveSession {
+                id: "failed-logout".into(),
+                uid,
+            }),
+        );
+        let mut supervisor = Supervisor::new_with_session_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind.clone(),
+            Some(LuaSource::embedded(
+                b"require('sliver.v1'); error('fallback failed')".to_vec(),
+            )),
+            "seat0",
+        )?;
+
+        logind.set_active("seat0", None);
+        supervisor.step_at(1.0)?;
+
+        assert_eq!(std::fs::read_to_string(stop_log)?, "logout");
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        Ok(())
     }
 
     #[test]
