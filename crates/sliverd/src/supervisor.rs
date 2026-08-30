@@ -641,7 +641,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     pub(crate) fn poll(&mut self, timeout: Duration) -> Result<()> {
-        self.poll_hardware(timeout)
+        self.poll_events(timeout).map(|_| ())
     }
 
     fn ensure_fallback_unowned(&self) -> Result<()> {
@@ -806,10 +806,17 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             ConfigSelection::Default => self.default_source.clone(),
         };
 
-        self.poll_hardware(Duration::ZERO)?;
+        self.poll_events(Duration::ZERO)?;
         self.ensure_hardware_available()
             .map_err(CandidateFailure::Candidate)?;
-        let current_backlight = self.hardware.get_backlight()?;
+        let current_backlight = match self.hardware.get_backlight() {
+            Ok(level) => level,
+            Err(error) => {
+                return Err(self
+                    .record_hardware_failure(error, HardwareCapability::Backlight)
+                    .into())
+            }
+        };
         self.backlight = current_backlight;
         let identity = if self.fallback_worker {
             WorkerIdentity::RestrictedFallback
@@ -855,7 +862,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .recheck(authorization.peer, &authorization.grant)
                 .map_err(CandidateFailure::Authorization)?;
         }
-        let latest_backlight = self.hardware.get_backlight()?;
+        let latest_backlight = match self.hardware.get_backlight() {
+            Ok(level) => level,
+            Err(error) => {
+                return Err(self
+                    .record_hardware_failure(error, HardwareCapability::Backlight)
+                    .into())
+            }
+        };
         self.ensure_hardware_available()
             .map_err(CandidateFailure::Candidate)?;
         self.backlight = latest_backlight;
@@ -923,6 +937,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if let Some(level) = pending_backlight {
             if !preserve_recovery {
                 if let Err(error) = self.hardware.set_backlight(level) {
+                    let error = self.record_hardware_failure(error, HardwareCapability::Backlight);
                     return self.rollback_candidate(
                         CandidateRollback {
                             previous_path_state: previous_path_state.as_ref(),
@@ -941,6 +956,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         if !preserve_recovery {
             if let Err(error) = self.hardware.present(&frame) {
+                let error = self.record_hardware_failure(error, HardwareCapability::Display);
                 return self.rollback_candidate(
                     CandidateRollback {
                         previous_path_state: previous_path_state.as_ref(),
@@ -971,6 +987,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             );
         }
         if let Err(error) = self.release_synthetic_keys() {
+            let error = self.record_hardware_failure(error, HardwareCapability::SyntheticKeys);
             return self.rollback_candidate(
                 CandidateRollback {
                     previous_path_state: previous_path_state.as_ref(),
@@ -1223,6 +1240,22 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.set_hardware_capability(capability, false, self.now_seconds())
     }
 
+    fn record_hardware_failure(
+        &mut self,
+        mut error: anyhow::Error,
+        fallback: HardwareCapability,
+    ) -> anyhow::Error {
+        if !self.hardware.is_available() {
+            let capability = self.hardware.unavailable_capability().unwrap_or(fallback);
+            if let Err(state_error) = self.mark_hardware_unavailable(capability) {
+                error = error.context(format!(
+                    "recording hardware loss after the operation also failed: {state_error:#}"
+                ));
+            }
+        }
+        error
+    }
+
     fn set_hardware_capability(
         &mut self,
         capability: HardwareCapability,
@@ -1352,12 +1385,32 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             return Ok(());
         }
         self.suspended = false;
+        if let Err(error) = self.hardware.reacquire() {
+            let capability = self
+                .hardware
+                .unavailable_capability()
+                .unwrap_or(HardwareCapability::Display);
+            self.hardware_available = false;
+            self.missing_capabilities.insert(capability);
+            eprintln!("hardware resume reacquisition failed: {error:#}");
+            return Ok(());
+        }
+        if !self.hardware.is_available() {
+            let capability = self
+                .hardware
+                .unavailable_capability()
+                .unwrap_or(HardwareCapability::Display);
+            self.hardware_available = false;
+            self.missing_capabilities.insert(capability);
+            return Ok(());
+        }
+        self.claimed = true;
+        self.hardware_available = true;
+        self.missing_capabilities.clear();
         self.input_state = self.hardware.input_state();
         self.fn_hold_started = self.input_state.fn_active.then_some(now);
-        if self.hardware_available {
-            if let Err(error) = self.recover_visible_worker(VisibilityReason::Suspend, now) {
-                eprintln!("hardware resume failed: {error:#}");
-            }
+        if let Err(error) = self.recover_visible_worker(VisibilityReason::Suspend, now) {
+            eprintln!("hardware resume failed: {error:#}");
         }
         Ok(())
     }
@@ -1650,10 +1703,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(events)
     }
 
-    fn poll_hardware(&mut self, timeout: Duration) -> Result<()> {
-        self.poll_events(timeout).map(|_| ())
-    }
-
     fn poll_hardware_deferred(&mut self, timeout: Duration) -> Result<()> {
         let now = self.now_seconds();
         let events = match self.hardware.poll(timeout) {
@@ -1716,13 +1765,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 self.route_input(ObservedKey::Modifier(modifier), active, now)
             }
             HardwareEvent::Device { present } => {
-                for capability in [
-                    HardwareCapability::Display,
-                    HardwareCapability::Touch,
-                    HardwareCapability::Fn,
-                    HardwareCapability::SyntheticKeys,
-                    HardwareCapability::Backlight,
-                ] {
+                for capability in HardwareCapability::ALL {
                     self.set_hardware_capability(capability, present, now)?;
                 }
                 Ok(())
@@ -2060,7 +2103,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     pub(crate) fn handoff_owner_with_reason(&mut self, reason: StopReason) -> Result<()> {
-        if let Err(error) = self.poll_hardware(Duration::ZERO) {
+        if let Err(error) = self.poll_events(Duration::ZERO) {
             eprintln!("hardware poll failed during owner handoff: {error:#}");
         }
         if let Err(error) = self.release_synthetic_keys() {
@@ -2300,14 +2343,14 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
                 if request_limit.is_some_and(|limit| processed >= limit) {
                     break;
                 }
-                if let Err(error) = supervisor.poll_hardware(Duration::ZERO) {
+                if let Err(error) = supervisor.poll_events(Duration::ZERO) {
                     service_result = Err(error);
                     break;
                 }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 let now = supervisor.now_seconds();
-                if let Err(error) = supervisor.poll_hardware(supervisor.poll_wait(now)) {
+                if let Err(error) = supervisor.poll_events(supervisor.poll_wait(now)) {
                     service_result = Err(error);
                     break;
                 }
@@ -2563,8 +2606,11 @@ mod tests {
         inner: FakeTouchBar,
         state_file: std::path::PathBuf,
         fail_next_present: bool,
+        fail_present_as_unavailable: bool,
         fail_next_backlight: bool,
         fail_next_key: bool,
+        fail_reacquire: bool,
+        available: bool,
         state_seen_at_failure: Vec<u8>,
         state_seen_at_key_failure: Vec<u8>,
     }
@@ -2575,8 +2621,11 @@ mod tests {
                 inner: FakeTouchBar::new(),
                 state_file,
                 fail_next_present: false,
+                fail_present_as_unavailable: false,
                 fail_next_backlight: false,
                 fail_next_key: false,
+                fail_reacquire: false,
+                available: true,
                 state_seen_at_failure: Vec::new(),
                 state_seen_at_key_failure: Vec::new(),
             }
@@ -2585,11 +2634,39 @@ mod tests {
 
     impl TouchBarHardware for FailingPresentHardware {
         fn claim(&mut self) -> Result<()> {
-            self.inner.claim()
+            let result = self.inner.claim();
+            if result.is_ok() {
+                self.available = true;
+            }
+            result
+        }
+
+        fn reacquire(&mut self) -> Result<()> {
+            if self.fail_reacquire {
+                self.available = false;
+                bail!("injected hardware reacquisition failure");
+            }
+            self.inner.reacquire()
         }
 
         fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
-            self.inner.poll(timeout)
+            let result = self.inner.poll(timeout);
+            if !self.inner.is_available() {
+                self.available = false;
+            }
+            result
+        }
+
+        fn is_available(&self) -> bool {
+            self.available && self.inner.is_available()
+        }
+
+        fn unavailable_capability(&self) -> Option<HardwareCapability> {
+            if !self.available {
+                Some(HardwareCapability::Display)
+            } else {
+                self.inner.unavailable_capability()
+            }
         }
 
         fn input_state(&self) -> InputState {
@@ -2599,6 +2676,7 @@ mod tests {
         fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
             if self.fail_next_present {
                 self.fail_next_present = false;
+                self.available = !self.fail_present_as_unavailable;
                 self.state_seen_at_failure = std::fs::read(&self.state_file)?;
                 bail!("injected presentation failure");
             }
@@ -8475,6 +8553,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Visibility { visible: true });
         supervisor.step_at(101.0)?;
+        assert_eq!(supervisor.hardware().reacquire_calls(), 1);
         assert_eq!(supervisor.hardware().backlight_level(), 0.4);
         assert_eq!(
             supervisor.hardware().presented_frames().len(),
@@ -8532,6 +8611,7 @@ mod tests {
                 return {{
                     api_version = 1,
                     visibility = function(event) record("visibility:" .. tostring(event.visible) .. ":" .. event.reason) end,
+                    touch = function(event) record("touch:" .. event.phase) end,
                     render = function() record("render") end,
                 }}
                 "#,
@@ -8542,14 +8622,23 @@ mod tests {
         let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
         supervisor.apply(&source)?;
         let frame_count = supervisor.hardware().presented_frames().len();
+        supervisor
+            .hardware_mut()
+            .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
+        supervisor.step_at(0.5)?;
         supervisor.hardware_mut().inject(HardwareEvent::Capability {
             capability: HardwareCapability::Display,
             present: false,
         });
         supervisor.step_at(1.0)?;
         assert!(!supervisor.is_hardware_available());
-        assert!(supervisor.apply(&source).is_err());
-        assert!(std::fs::read_to_string(&log)?.contains("visibility:false:device"));
+        let error = supervisor
+            .apply(&source)
+            .expect_err("apply was accepted without the display");
+        assert!(format!("{error:#}").contains("display"));
+        let events = std::fs::read_to_string(&log)?;
+        assert!(events.contains("touch:cancel"));
+        assert!(events.contains("visibility:false:device"));
 
         supervisor.step_at(5.0)?;
         assert_eq!(supervisor.hardware().presented_frames().len(), frame_count);
@@ -8566,6 +8655,114 @@ mod tests {
             frame_count + 1
         );
         assert!(std::fs::read_to_string(&log)?.contains("visibility:true:device"));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn each_missing_hardware_capability_rejects_new_applies() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("capability.lua");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+
+        for capability in HardwareCapability::ALL {
+            let state_file = directory
+                .path()
+                .join(format!("state/{capability:?}/config-path"));
+            let mut supervisor = Supervisor::new(FakeTouchBar::new(), state_file)?;
+            supervisor.apply(&source)?;
+            supervisor.hardware_mut().inject(HardwareEvent::Capability {
+                capability,
+                present: false,
+            });
+            supervisor.step_at(1.0)?;
+
+            let error = supervisor
+                .apply(&source)
+                .expect_err("apply was accepted with a missing capability");
+            assert!(
+                format!("{error:#}").contains(capability.name()),
+                "missing capability was not named: {error:#}"
+            );
+            supervisor.shutdown()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn display_loss_during_candidate_presentation_marks_hardware_unavailable() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let old_source = directory.path().join("old.lua");
+        let new_source = directory.path().join("new.lua");
+        let config = |red: u8, blue: u8| {
+            format!(
+                "require('sliver.v1'); return {{ api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, {}, 0, {}, 1) end }}",
+                f64::from(red) / 255.0,
+                f64::from(blue) / 255.0,
+            )
+        };
+        std::fs::write(&old_source, config(255, 0))?;
+        std::fs::write(&new_source, config(0, 255))?;
+        let mut supervisor =
+            Supervisor::new(FailingPresentHardware::new(state_file.clone()), state_file)?;
+        supervisor.apply(&old_source)?;
+        supervisor.hardware_mut().fail_next_present = true;
+        supervisor.hardware_mut().fail_present_as_unavailable = true;
+
+        let error = supervisor
+            .apply(&new_source)
+            .expect_err("display loss during presentation was accepted");
+        assert!(format!("{error:#}").contains("injected presentation failure"));
+        assert!(!supervisor.is_hardware_available());
+        let error = supervisor
+            .apply(&new_source)
+            .expect_err("apply was accepted after display loss");
+        assert!(format!("{error:#}").contains("display"));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_resume_reacquisition_waits_for_hardware_recovery() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("resume.lua");
+        let state_file = directory.path().join("state/sliver/config-path");
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            return { api_version = 1, render = function() end }
+            "#,
+        )?;
+        let mut supervisor = Supervisor::new(
+            FailingPresentHardware::new(state_file),
+            directory.path().join("state/sliver/config-path"),
+        )?;
+        supervisor.apply(&source)?;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Visibility { visible: false });
+        supervisor.step_at(1.0)?;
+        supervisor.hardware_mut().fail_reacquire = true;
+        supervisor
+            .hardware_mut()
+            .inner
+            .inject(HardwareEvent::Visibility { visible: true });
+        supervisor.step_at(2.0)?;
+
+        assert!(!supervisor.is_hardware_available());
+        let error = supervisor
+            .apply(&source)
+            .expect_err("apply was accepted after failed resume reacquisition");
+        assert!(format!("{error:#}").contains("display"));
         supervisor.shutdown()?;
         Ok(())
     }

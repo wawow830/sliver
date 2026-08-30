@@ -347,6 +347,14 @@ pub(crate) enum HardwareCapability {
 }
 
 impl HardwareCapability {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Display,
+        Self::Touch,
+        Self::Fn,
+        Self::SyntheticKeys,
+        Self::Backlight,
+    ];
+
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Display => "display",
@@ -584,6 +592,7 @@ mod fake {
         events: Vec<HardwareEvent>,
         scheduled_events: Vec<(usize, HardwareEvent)>,
         poll_count: usize,
+        reacquire_calls: usize,
         actions: Vec<FakeAction>,
         frames: Vec<FrameSnapshot>,
         backlight: f64,
@@ -639,6 +648,10 @@ mod fake {
             &self.actions
         }
 
+        pub(crate) fn reacquire_calls(&self) -> usize {
+            self.reacquire_calls
+        }
+
         pub(crate) fn presented_frames(&self) -> &[FrameSnapshot] {
             &self.frames
         }
@@ -683,6 +696,7 @@ mod fake {
         }
 
         fn reacquire(&mut self) -> Result<()> {
+            self.reacquire_calls += 1;
             if self.claimed {
                 return Ok(());
             }

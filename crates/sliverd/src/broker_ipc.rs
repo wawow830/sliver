@@ -236,11 +236,13 @@ impl TouchBarHardware for BrokerHardware {
     }
 
     fn reacquire(&mut self) -> Result<()> {
-        if self.claimed {
-            Ok(())
-        } else {
-            self.claim()
+        if self.claimed && self.hardware_available {
+            return Ok(());
         }
+        if self.claimed {
+            self.release()?;
+        }
+        self.claim()
     }
 
     fn is_available(&self) -> bool {
@@ -284,13 +286,7 @@ impl TouchBarHardware for BrokerHardware {
                                 self.missing_capabilities.clear();
                                 self.unavailable_capability = None;
                             } else {
-                                self.missing_capabilities.extend([
-                                    HardwareCapability::Display,
-                                    HardwareCapability::Touch,
-                                    HardwareCapability::Fn,
-                                    HardwareCapability::SyntheticKeys,
-                                    HardwareCapability::Backlight,
-                                ]);
+                                self.missing_capabilities.extend(HardwareCapability::ALL);
                             }
                             self.hardware_available = present;
                         }

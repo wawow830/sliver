@@ -137,14 +137,14 @@ struct SdBusSlot {
 
 /// Receives login1's PrepareForSleep signal without making suspend a worker
 /// concern. The broker's normal hardware poll remains the only event pump.
-struct SleepEventQueue {
-    values: Vec<bool>,
+struct PendingSleepStates {
+    preparing: Vec<bool>,
 }
 
 struct SleepMonitor {
     bus: *mut SdBus,
     slot: *mut SdBusSlot,
-    events: Box<SleepEventQueue>,
+    events: Box<PendingSleepStates>,
 }
 
 unsafe extern "C" fn prepare_for_sleep(
@@ -157,8 +157,8 @@ unsafe extern "C" fn prepare_for_sleep(
     if ffi::sd_bus_message_read(message, signature.as_ptr().cast(), &mut preparing) >= 0 {
         // userdata is a boxed queue whose address remains stable for the
         // lifetime of the subscription.
-        (&mut *userdata.cast::<SleepEventQueue>())
-            .values
+        (&mut *userdata.cast::<PendingSleepStates>())
+            .preparing
             .push(preparing != 0);
     }
     0
@@ -172,7 +172,9 @@ impl SleepMonitor {
         let mut monitor = Self {
             bus,
             slot: std::ptr::null_mut(),
-            events: Box::new(SleepEventQueue { values: Vec::new() }),
+            events: Box::new(PendingSleepStates {
+                preparing: Vec::new(),
+            }),
         };
         let match_rule = b"type='signal',sender='org.freedesktop.login1',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'\0";
         let result = unsafe {
@@ -181,7 +183,7 @@ impl SleepMonitor {
                 &mut monitor.slot,
                 match_rule.as_ptr().cast(),
                 Some(prepare_for_sleep),
-                (&mut *monitor.events as *mut SleepEventQueue).cast(),
+                (&mut *monitor.events as *mut PendingSleepStates).cast(),
             )
         };
         if result < 0 {
@@ -219,7 +221,7 @@ impl SleepMonitor {
                 break;
             }
         }
-        for preparing in self.events.values.drain(..) {
+        for preparing in self.events.preparing.drain(..) {
             output.push(HardwareEvent::Visibility {
                 visible: !preparing,
             });
@@ -1211,15 +1213,8 @@ impl M2TouchBar {
             };
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);
-            self.sleep_monitor = match SleepMonitor::new() {
-                Ok(monitor) => Some(monitor),
-                Err(error) => {
-                    crate::system_log::broker_error(format!(
-                        "power: suspend monitor unavailable: {error:#}"
-                    ));
-                    None
-                }
-            };
+            self.sleep_monitor =
+                Some(SleepMonitor::new().context("subscribing to the suspend monitor")?);
             if self.keyboard_emitter.is_none() {
                 self.keyboard_emitter = Some(match KeyboardEmitter::new() {
                     Ok(emitter) => emitter,
@@ -1265,7 +1260,7 @@ impl M2TouchBar {
         self.modifiers = ModifierState::default();
     }
 
-    fn poll_inner(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+    fn poll_claimed_hardware(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
         if !self.is_claimed() {
             if self.reacquire().is_err() {
                 return Ok(Vec::new());
@@ -1307,7 +1302,7 @@ impl M2TouchBar {
                 None => None,
             };
             self.remember_keyboard_events(&output[keyboard_start..]);
-            let mut lost = Vec::new();
+            let mut lost_capabilities = Vec::new();
             if let Some(error) = keyboard_error {
                 if let Some(keyboard) = self.keyboard.as_ref() {
                     crate::system_log::broker_error(format!(
@@ -1320,7 +1315,7 @@ impl M2TouchBar {
                     ));
                 }
                 self.reset_keyboard_state(&mut output);
-                lost.push(HardwareCapability::Fn);
+                lost_capabilities.push(HardwareCapability::Fn);
             }
 
             let touch_error = match self.touch.as_mut() {
@@ -1338,12 +1333,12 @@ impl M2TouchBar {
                 if let Some(touch) = self.touch.as_mut() {
                     touch.cancel(&mut output, self.modifiers);
                 }
-                lost.push(HardwareCapability::Touch);
+                lost_capabilities.push(HardwareCapability::Touch);
             }
 
-            if !lost.is_empty() {
+            if !lost_capabilities.is_empty() {
                 let _ = self.release_inner();
-                for capability in lost {
+                for capability in lost_capabilities {
                     self.mark_unavailable(capability);
                     output.push(HardwareEvent::Capability {
                         capability,
@@ -1420,6 +1415,7 @@ impl M2TouchBar {
         self.touch = None;
         self.keyboard = None;
         self.sleep_monitor = None;
+        self.keyboard_emitter = None;
         self.fn_active = false;
         self.modifiers = ModifierState::default();
 
@@ -1469,6 +1465,9 @@ impl TouchBarHardware for M2TouchBar {
     }
 
     fn reacquire(&mut self) -> Result<()> {
+        if self.is_claimed() {
+            return Ok(());
+        }
         self.claim()
     }
 
@@ -1481,7 +1480,7 @@ impl TouchBarHardware for M2TouchBar {
     }
 
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
-        self.poll_inner(timeout)
+        self.poll_claimed_hardware(timeout)
     }
 
     fn input_state(&self) -> InputState {
@@ -1727,23 +1726,13 @@ mod tests {
     }
 
     #[test]
-    fn release_keeps_keyboard_emitter_for_reclaim() -> Result<()> {
+    fn release_discards_keyboard_emitter_for_reclaim() -> Result<()> {
         let mut hardware = M2TouchBar::new();
         hardware.keyboard_emitter = Some(KeyboardEmitter::new()?);
-        let first = hardware
-            .keyboard_emitter
-            .as_ref()
-            .expect("keyboard emitter was not created")
-            as *const KeyboardEmitter;
 
         hardware.release_inner()?;
 
-        let second = hardware
-            .keyboard_emitter
-            .as_ref()
-            .expect("release discarded the keyboard emitter")
-            as *const KeyboardEmitter;
-        assert_eq!(first, second);
+        assert!(hardware.keyboard_emitter.is_none());
         Ok(())
     }
 
