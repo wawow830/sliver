@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -26,11 +24,10 @@ const MAX_PACKET_BYTES: usize = 2 * 1024 * 1024;
 const CALLBACK_DEADLINE: Duration = Duration::from_secs(2);
 const STOP_DEADLINE: Duration = Duration::from_millis(500);
 const KILL_REAP_DEADLINE: Duration = Duration::from_millis(500);
-const WORKER_MEMORY_LIMIT: libc::rlim_t = 512 * 1024 * 1024;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(100);
 const WRITE_RETRY: Duration = Duration::from_millis(2);
 
-const BOOTSTRAP: u8 = 1;
+const BOOTSTRAP: u8 = 10;
 const COMMAND: u8 = 2;
 const REPLY: u8 = 3;
 const READY: u8 = 4;
@@ -72,6 +69,10 @@ impl ProcessWorker {
         }
         let mut command = worker_command()?;
         command.stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(child_fd)) });
+        #[cfg(test)]
+        {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
         unsafe {
             use std::os::unix::process::CommandExt;
             command.pre_exec(move || {
@@ -82,13 +83,6 @@ impl ProcessWorker {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                let limit = libc::rlimit {
-                    rlim_cur: WORKER_MEMORY_LIMIT,
-                    rlim_max: WORKER_MEMORY_LIMIT,
-                };
-                if libc::setrlimit(libc::RLIMIT_AS, &limit) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::getppid() != parent_pid {
@@ -303,7 +297,12 @@ impl ProcessWorker {
         }
         {
             let mut stream = lock(&self.stream, "Lua worker control socket")?;
-            if let Err(error) = write_packet(&mut stream, COMMAND, &[command], &payload, deadline)
+            let (kind, prefix) = if command == BOOTSTRAP {
+                (BOOTSTRAP, &[][..])
+            } else {
+                (COMMAND, &[command][..])
+            };
+            if let Err(error) = write_packet(&mut stream, kind, prefix, &payload, deadline)
                 .with_context(|| format!("sending Lua worker command {command}"))
             {
                 self.mark_failed(error.to_string());
@@ -614,11 +613,24 @@ fn worker_command() -> Result<Command> {
         return Ok(Command::new(path));
     }
     let current = std::env::current_exe().context("finding the Sliver supervisor executable")?;
-    let worker = current
+    let parent = current
         .parent()
-        .context("Sliver supervisor executable has no parent")?
-        .join("sliver-lua-worker");
-    Ok(Command::new(worker))
+        .context("Sliver supervisor executable has no parent")?;
+    let worker = parent.join("sliver-lua-worker");
+    if worker.exists() {
+        return Ok(Command::new(worker));
+    }
+    let test_worker = parent
+        .file_name()
+        .is_some_and(|name| name == "deps")
+        .then(|| {
+            parent
+                .parent()
+                .map(|parent| parent.join("sliver-lua-worker"))
+        })
+        .flatten()
+        .context("Sliver Lua worker executable was not found")?;
+    Ok(Command::new(test_worker))
 }
 
 unsafe fn close_inherited_descriptors() {
@@ -1293,6 +1305,132 @@ impl<'a> Reader<'a> {
             self.offset == self.bytes.len(),
             "Lua worker packet has trailing bytes"
         );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+
+    fn embedded(source: &str) -> LuaSource {
+        LuaSource::embedded(source.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn process_worker_renders_and_stops_with_a_reason() -> Result<()> {
+        let worker = ProcessWorker::stage(
+            &embedded(
+                r#"
+                local sliver = require("sliver.v1")
+                return {
+                    api_version = 1,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }
+                "#,
+            ),
+            0.0,
+            InputState::default(),
+        )?;
+        let frame = worker.render(1.0, 0.0, InputState::default())?;
+        assert_eq!((frame.frame.width(), frame.frame.height()), (2008, 60));
+        worker.shutdown(StopReason::Replaced)
+    }
+
+    #[test]
+    fn a_blocking_process_call_is_killed_without_running_stop() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let marker = directory.path().join("stop-called");
+        let source = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            return {{
+                api_version = 1,
+                stop = function()
+                    local file = assert(io.open({marker:?}, "w"))
+                    file:close()
+                end,
+                render = function()
+                    os.execute("sleep 10")
+                end,
+            }}
+            "#,
+            marker = marker.to_string_lossy(),
+        );
+        let worker = ProcessWorker::stage(&embedded(&source), 0.0, InputState::default())?;
+        let started = Instant::now();
+        let error = match worker.render(1.0, 0.0, InputState::default()) {
+            Ok(_) => bail!("blocking process call returned"),
+            Err(error) => error,
+        };
+        assert!(started.elapsed() >= CALLBACK_DEADLINE);
+        assert!(error.to_string().contains("two seconds"));
+        assert!(!marker.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn a_hung_render_is_killed_without_running_stop() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let marker = directory.path().join("stop-called");
+        let source = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            return {{
+                api_version = 1,
+                stop = function()
+                    local file = assert(io.open({marker:?}, "w"))
+                    file:close()
+                end,
+                render = function()
+                    while true do end
+                end,
+            }}
+            "#,
+            marker = marker.to_string_lossy(),
+        );
+        let worker = ProcessWorker::stage(&embedded(&source), 0.0, InputState::default())?;
+        let started = Instant::now();
+        let error = match worker.render(1.0, 0.0, InputState::default()) {
+            Ok(_) => bail!("hung Lua callback returned"),
+            Err(error) => error,
+        };
+        assert!(started.elapsed() >= CALLBACK_DEADLINE);
+        assert!(error.to_string().contains("two seconds"));
+        assert!(!worker.is_alive());
+        assert!(!marker.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn a_hung_stop_is_killed_at_the_graceful_stop_deadline() -> Result<()> {
+        let source = embedded(
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                stop = function(reason)
+                    assert(reason == "shutdown")
+                    while true do end
+                end,
+                render = function() end,
+            }
+            "#,
+        );
+        let worker = ProcessWorker::stage(&source, 0.0, InputState::default())?;
+        let started = Instant::now();
+        let error = match worker.shutdown(StopReason::Shutdown) {
+            Ok(()) => bail!("hung stop callback returned"),
+            Err(error) => error,
+        };
+        let elapsed = started.elapsed();
+        assert!(elapsed >= STOP_DEADLINE);
+        assert!(elapsed < CALLBACK_DEADLINE);
+        assert!(error.to_string().contains("stop exceeded 500 milliseconds"));
         Ok(())
     }
 }
