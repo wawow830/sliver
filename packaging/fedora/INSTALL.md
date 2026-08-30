@@ -1,22 +1,22 @@
 # Fedora Asahi package
 
 The RPM installs one command in `PATH`, `/usr/bin/sliver`. The broker,
-supervisor, and disposable worker live in `/usr/libexec/sliver`; they are only
-started by systemd. The embedded default is stored in the worker binary and is
-not installed as an editable file.
+supervisor, and disposable worker live in `/usr/libexec/sliver`; systemd
+starts them only after explicit enablement. The embedded default is stored in
+the worker binary and is not installed as an editable file.
 
-The RPM creates the `sliver` system account and the `sliver-supervisors` group.
-Add each user who should apply a configuration to that group, then start a
-user manager for the broker account so its pre-login worker can run:
+The package creates the `sliver` system account and the
+`sliver-supervisors` group. Add users who should apply a configuration to that
+group, then give the broker account a user manager for its pre-login worker:
 
 ```sh
 sudo usermod --append --groups sliver-supervisors "$USER"
 sudo loginctl enable-linger sliver
 ```
 
-Installation does not enable either unit. Reload the udev rules after an
-installation or upgrade, log out and back in after changing group membership,
-then perform the takeover explicitly:
+Installation does not enable either unit. Reload udev rules after an install or
+upgrade, log out and back in after changing group membership, then perform the
+takeover explicitly:
 
 ```sh
 sudo udevadm control --reload-rules
@@ -37,17 +37,11 @@ The broker conflicts with `tiny-dfr.service` and starts before it. Stopping the
 broker does not start `tiny-dfr` again. Start `tiny-dfr` manually when handing
 back ownership.
 
-The udev rules grant the broker device-specific access through dedicated
-`sliver-drm`, `sliver-input`, and `sliver-backlight` groups: the Asahi DRM
-card, the Mac14,7 Touch Bar, the Apple MTP keyboard, uinput, and the DSI
-backlight. Lua workers run in transient
-user units with private devices, closed device policy, no new privileges, a
-512 MiB memory limit, and a 64-task limit. Their output goes to the user
-journal. Broker output goes to the system journal.
-
 ## Package checks
 
-Build and inspect the RPM with Fedora's normal tools:
+Build from the exact clean commit that will be tested. The source archive
+expands `release-commit` to that commit, and the verifier rejects a package
+with a different identity.
 
 ```sh
 mkdir -p ~/rpmbuild/SOURCES
@@ -55,30 +49,65 @@ version=$(awk '$1 == "Version:" { print $2 }' packaging/fedora/sliver.spec)
 git archive --format=tar.gz --prefix="sliver-${version}/" \
   -o "$HOME/rpmbuild/SOURCES/sliver-${version}.tar.gz" HEAD
 cp packaging/fedora/sliver.sysusers ~/rpmbuild/SOURCES/
-rpmbuild -ba packaging/fedora/sliver.spec
-rpm -qlp ~/rpmbuild/RPMS/$(uname -m)/sliver-*.rpm
+rpmbuild -ba packaging/fedora/sliver.spec 2>&1 | tee "$HOME/sliver-rpmbuild.log"
+rpm=$(find ~/rpmbuild/RPMS -name 'sliver-*.rpm' -type f | sort | tail -n1)
+rpm -qlp "$rpm"
 ```
 
-The file list should contain `/usr/bin/sliver`, the three files under
-`/usr/libexec/sliver`, both systemd service definitions, the worker drop-in,
-the sysusers file, and the udev rule. It should contain no editable default or
-unlisted executable. The package `%check` points the process-worker smoke tests
-at the packaged worker, including pure Lua and compiled Lua 5.4 module loads.
+The build must run the complete `%check`, including the packaged worker's
+pure-Lua and compiled Lua 5.4 module checks, and must end with the exact
+manifest checks. Do not use a build log that says the user-manager tests were
+skipped. `packaging/fedora/check-install.sh` is the buildroot-side manifest
+check; `packaging/fedora/release-manifest.txt` is its expected file list.
 
-On a tested Mac14,7, verify a package install with these checks:
+## Physical release verification
 
-1. Before enablement, `systemctl is-enabled sliver-broker.service` reports
-   `disabled` or `not-found`, and `tiny-dfr` still owns the panel.
-2. Enable Sliver and confirm `tiny-dfr` stops, the broker runs as `sliver`, and
-   the broker and supervisor journals are separate.
-3. Check login, logout, user switching, broker restart, shutdown, DRM release,
-   and device rediscovery. The panel must retain a frame during handoff and
-   must not enter a service restart loop.
-4. Stop Sliver and confirm that `tiny-dfr` remains stopped until an
-   administrator starts it.
+Run the verifier from a persistent local terminal on the tested Fedora Asahi
+Mac14,7. It requires a TTY and an active, non-remote `seat0` graphical
+session. It captures state before any change and records each acceptance item
+separately. It asks before installation, account and udev setup, takeover,
+service restart, suspend, and rollback.
 
-The repository-side checks cover source, fake-hardware, and package-manifest
-behaviour. For the privileged Mac14,7 cutover, run
-[`scripts/verify-release.sh`](../../scripts/verify-release.sh) from the source
-tree. It asks before service changes, records journal output, and prints the
-rollback commands instead of treating an unavailable host as a pass.
+```sh
+scripts/verify-release.sh --build-log "$HOME/sliver-rpmbuild.log" "$rpm"
+```
+
+The account and udev stage stops before logout. After logging out and back in
+locally, continue from a new terminal using the printed command:
+
+```sh
+scripts/verify-release.sh --resume "$HOME/sliver-release-verification/YYYYMMDD-HHMMSS"
+```
+
+The verifier creates named fixtures in the evidence directory:
+`valid.lua`, `invalid.lua`, `hung.lua`, and `video-2008x60.lua`. The last one
+redraws a complete native 2008 by 60 RGBA frame at 60 Hz. The wizard asks for
+the real-panel interval, presented rate, misses, input-to-frame delay, and
+latency growth. Enter measured values only.
+
+A failed run automatically attempts a full rollback. It restores only state
+captured before this run, removes the fresh RPM and package-created account
+and groups, restores linger and udev loading, and restores the selected-path
+file including a final symlink. It verifies every restoration. If a command is
+interrupted, rerun the printed `--rollback DIR` command from a local terminal.
+
+`--service-only DIR` is different. It stops the Sliver takeover and restores
+the captured service state, but deliberately leaves the RPM, account, linger,
+udev, and selected-path changes in place. Use it only when retaining that
+installation is intentional. It is not a full rollback.
+
+Do not run the verifier over SSH. Do not close the release issues from a
+partial log, a skipped check, or an unobserved physical behavior.
+
+## Return to tiny-dfr
+
+Stopping Sliver does not restart another daemon automatically:
+
+```sh
+sudo systemctl stop sliver-broker.service
+sudo systemctl stop tiny-dfr.service  # only if it was started separately
+sudo systemctl start tiny-dfr.service
+```
+
+The verifier's full rollback runs the equivalent service changes only when
+they differ from its captured pre-run state.

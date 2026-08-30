@@ -147,15 +147,29 @@ Run the repository-side audit before a release:
 scripts/check-release-surface.sh
 ```
 
-A real Mac14,7 and administrator access are required for hardware and RPM
-cutover checks. The interactive verifier records commands and journal output,
-asks before stopping `tiny-dfr` or enabling Sliver, and prints rollback commands:
+A real Mac14,7, a local graphical session, and administrator access are
+required for hardware and RPM cutover checks. Build the RPM from a clean,
+tested commit and keep the `rpmbuild` output. The verifier checks the RPM's
+NEVRA, complete file list, and embedded source commit before it asks to install:
 
 ```sh
-scripts/verify-release.sh /path/to/sliver-0.1.0-1.aarch64.rpm
+scripts/verify-release.sh --build-log "$HOME/sliver-rpmbuild.log" \
+  /path/to/sliver-0.1.0-1.aarch64.rpm
 ```
 
-Do not run that verifier over SSH. It cannot validate M1 hardware.
+The verifier is a resumable wizard. Account setup ends before logout, and the
+next local graphical session continues with:
+
+```sh
+scripts/verify-release.sh --resume "$HOME/sliver-release-verification/YYYYMMDD-HHMMSS"
+```
+
+Every acceptance item gets its own evidence entry. A failed run performs a
+full rollback and verifies the package, account, linger, udev, service, and
+selected-path state. If a machine is left in takeover state, use the explicit
+`--service-only` cleanup only when retaining the package is intentional. Use
+`--rollback` for the full transaction. Do not run the verifier over SSH or
+claim M1 support from this run.
 
 See [architecture](docs/architecture.md) and
 [troubleshooting](docs/troubleshooting.md) for hardware, ownership, and
