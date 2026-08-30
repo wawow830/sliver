@@ -37,11 +37,17 @@ for entry in $required; do
     esac
 done
 
-manifest=$(dirname "$0")/release-files.txt
+manifest=$(dirname "$0")/release-manifest.txt
+expected=$(mktemp)
 actual=$(mktemp)
-trap 'rm -f "$actual"' EXIT
+trap 'rm -f "$expected" "$actual"' EXIT
+sed \
+    -e '\#^/usr/libexec/sliver$#d' \
+    -e '\#^/usr/lib/systemd/user/sliver-lua-worker-.service.d$#d' \
+    -e '\#^/usr/share/doc/sliver$#d' \
+    "$manifest" > "$expected"
 find "$root" -type f -printf '/%P\n' | sort > "$actual"
-diff -u "$manifest" "$actual"
+diff -u "$expected" "$actual"
 
 for path in \
     /usr/bin/sliverd \
