@@ -314,13 +314,16 @@ fi
 run_optional id sliver
 run_optional pgrep -a -f 'tiny-dfr|sliver-broker|sliver-supervisor'
 if command -v drm_info >/dev/null 2>&1; then
-  step "Save the DRM connector and mode output in the evidence log."
+  step "Save the DRM connector, native mode, and rotation properties in the evidence log."
   run_optional drm_info
 else
   warn "drm_info is not installed; inspect the DRM connector manually before takeover"
   blocker "drm_info hardware inspection"
 fi
 pause "Review the model, connector, and current owner above. Press Enter to continue."
+if ! confirm "Does the host report Mac14,7 and a connected 60x2008 DSI panel?"; then
+  blocker "Mac14,7 and 60x2008 DSI preflight"
+fi
 
 stage "Build and inspect the Fedora package"
 say "Build the RPM outside this verifier, then pass its path as the first argument."
@@ -444,15 +447,21 @@ stage "Exercise login, handoff, recovery, and cleanup"
 say "These checks need a person at the machine. Do not use SSH for the apply test."
 step "With the default visible, log into a second local graphical session and switch back and forth."
 step "Apply a valid file as the active user, then apply the invalid file and confirm the previous frame remains."
-step "Hold Fn/Globe continuously for three seconds, tap a recovery key, and confirm modifier bridging."
+step "Check the 60x2008 rotation, logical left/right and top/bottom touch edges, multi-contact mapping, and cancel events."
+step "Hold Fn/Globe continuously for three seconds, tap a recovery key, and confirm left/right modifier bridging and uinput delivery."
 step "Log out, confirm the pre-login default returns, then log back in and confirm the saved config commits without a blank interval."
 step "Check that a stopped or failed worker leaves no child process and no held synthetic key."
 pause "Perform the checks above and press Enter only after reviewing the panel and both journals."
+if ! confirm "Did discovery, rotation, touch, Fn, modifiers, uinput, handoff, and cleanup all pass?"; then
+  blocker "interactive lifecycle and input checks"
+fi
 run_optional systemctl --user status sliver-supervisor.service
 run_optional systemctl status sliver-broker.service
 
 stage "Exercise suspend, restart, and frame-rate evidence"
 step "Restart each infrastructure service once and inspect the handoff and journal output."
+step "Change a visible pixel or control and confirm the command-mode panel updates, proving the dirty-framebuffer flush."
+step "Set and restore the Touch Bar backlight, then confirm the restored value survives worker restart."
 sudo systemctl restart sliver-broker.service
 systemctl --user restart sliver-supervisor.service
 run_optional systemctl status sliver-broker.service
@@ -467,6 +476,9 @@ step "Run the repository's fake-adapter 2008x60 producer test and keep its measu
 run_optional cargo test --release lua_raw_decoded_frames_hold_native_rate_under_broker_contention -- --nocapture
 step "On Mac14,7, repeat the video workload while watching the panel. Record frame misses, input-to-frame delay, and whether latency grows."
 pause "Record the real 60 FPS bounded-latency result in the evidence log. Press Enter to continue."
+if ! confirm "Did suspend, restart, dirty-framebuffer, backlight, and 60 FPS latency checks pass?"; then
+  blocker "interactive suspend, restart, display, backlight, and performance checks"
+fi
 
 stage "Choose rollback and save the evidence"
 say "The evidence log is $LOG_FILE"
