@@ -244,6 +244,7 @@ rollback() {
 
 on_exit() {
   local status=$?
+  local rollback_attempted=0
   if [[ -n "$CONFIG_DIR" ]]; then
     rm -rf -- "$CONFIG_DIR"
     CONFIG_DIR=""
@@ -253,10 +254,15 @@ on_exit() {
     if (( TAKEOVER_ACTIVE )); then
       warn "verification failed after takeover; attempting rollback now"
       rollback
+      rollback_attempted=1
     fi
     warn "verification stopped with status $status"
-    warn "No automatic rollback was attempted. If takeover is active, run:"
-    say "sudo systemctl disable --now sliver-broker.service"
+    if (( rollback_attempted )); then
+      warn "Rollback was attempted. Confirm the service state before re-running."
+    else
+      warn "No automatic rollback was needed. If takeover is active, run:"
+      say "sudo systemctl disable --now sliver-broker.service"
+    fi
     say "systemctl --user disable --now sliver-supervisor.service"
     say "sudo systemctl --global disable sliver-supervisor.service"
     say "sudo systemctl start tiny-dfr.service  # only if it owned the panel before this run"
