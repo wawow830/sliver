@@ -62,6 +62,8 @@ pub(crate) struct BrokerHardware {
     claimed: bool,
     session_revoked: bool,
     revoked_reason: Option<StopReason>,
+    #[cfg(test)]
+    test_uid: Option<libc::uid_t>,
 }
 
 impl BrokerHardware {
@@ -73,6 +75,8 @@ impl BrokerHardware {
             claimed: false,
             session_revoked: false,
             revoked_reason: None,
+            #[cfg(test)]
+            test_uid: None,
         }
     }
 
@@ -85,7 +89,17 @@ impl BrokerHardware {
             claimed: false,
             session_revoked: false,
             revoked_reason: None,
+            test_uid: None,
         }
+    }
+
+    #[cfg(test)]
+    // The test transport supplies a second UID because a unit test cannot
+    // create a second Unix user. Production always uses SO_PEERCRED.
+    fn new_at_as(socket: PathBuf, uid: libc::uid_t) -> Self {
+        let mut hardware = Self::new_at(socket);
+        hardware.test_uid = Some(uid);
+        hardware
     }
 
     pub(crate) fn session_revoked(&self) -> bool {
@@ -141,7 +155,13 @@ impl TouchBarHardware for BrokerHardware {
         let path = self.socket.clone().unwrap_or(socket_path()?);
         let mut stream = UnixStream::connect(&path)
             .with_context(|| format!("connecting to hardware broker at {}", path.display()))?;
-        write_message(&mut stream, CLAIM, &[])?;
+        #[cfg(test)]
+        let claim_payload = self
+            .test_uid
+            .map_or_else(Vec::new, |uid| uid.to_be_bytes().to_vec());
+        #[cfg(not(test))]
+        let claim_payload = Vec::new();
+        write_message(&mut stream, CLAIM, &claim_payload)?;
         let response = read_message(&mut stream)?;
         let (status, body) = response
             .split_first()
@@ -632,7 +652,19 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     if matches!(peer_verification, PeerVerification::Production) {
         ensure_supervisor_peer(peer.pid)?;
     }
-    let grant = match authorizer.authorize_active_uid(peer.uid, seat) {
+    let request = read_message(&mut stream)?;
+    let (operation, payload) = request.split_first().context("broker request is empty")?;
+    ensure!(*operation == CLAIM, "broker expected a claim request");
+    let peer_uid = if matches!(peer_verification, PeerVerification::Production) {
+        ensure!(payload.is_empty(), "broker claim has an unexpected payload");
+        peer.uid
+    } else if payload.is_empty() {
+        peer.uid
+    } else {
+        ensure!(payload.len() == 4, "test broker claim UID is malformed");
+        u32::from_be_bytes(payload.try_into()?) as libc::uid_t
+    };
+    let grant = match authorizer.authorize_active_uid(peer_uid, seat) {
         Ok(grant) => grant,
         Err(error) => {
             let status = if error.chain().any(|cause| {
@@ -647,10 +679,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             return Err(error);
         }
     };
-    let request = read_message(&mut stream)?;
-    let (operation, payload) = request.split_first().context("broker request is empty")?;
-    ensure!(*operation == CLAIM, "broker expected a claim request");
-    authorizer.recheck_active_uid(peer.uid, &grant)?;
+    authorizer.recheck_active_uid(peer_uid, &grant)?;
     if *fallback_running {
         fallback.handoff_owner_with_reason(StopReason::Replaced)?;
         *fallback_running = false;
@@ -659,7 +688,6 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         let hardware = fallback.hardware_mut();
         (hardware.input_state(), hardware.get_backlight()?)
     };
-    ensure!(payload.is_empty(), "broker claim has an unexpected payload");
     let mut body = Vec::new();
     encode_input_state(&mut body, input_state);
     body.extend_from_slice(&backlight.to_bits().to_be_bytes());
@@ -703,7 +731,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             write_message(&mut stream, OK, &[])?;
             break;
         }
-        if let Err(error) = authorizer.recheck_active_uid(peer.uid, &grant) {
+        if let Err(error) = authorizer.recheck_active_uid(peer_uid, &grant) {
             let reason = if authorizer.active_session(seat)?.is_some() {
                 REVOKED_REPLACED
             } else {
@@ -1798,6 +1826,7 @@ mod tests {
         let state_b = directory.path().join("user-b-state/config-path");
         let logind = FakeLogind::new();
         let uid = unsafe { libc::getuid() };
+        let second_uid = uid.wrapping_add(1);
         logind.set_session(
             std::process::id() as libc::pid_t,
             Some(crate::logind::Session {
@@ -1870,7 +1899,7 @@ mod tests {
             SEAT,
             Some(ActiveSession {
                 id: "user-b-session".into(),
-                uid,
+                uid: second_uid,
             }),
         );
         assert!(first.poll(Duration::ZERO).is_err());
@@ -1883,7 +1912,7 @@ mod tests {
         first.shutdown()?;
 
         let mut second = Supervisor::new_with_logind_process(
-            BrokerHardware::new_at(socket.clone()),
+            BrokerHardware::new_at_as(socket.clone(), second_uid),
             state_b.clone(),
             FakeLogind::new(),
         )?;
