@@ -86,11 +86,13 @@ fn supervisor_main_inner() -> Result<()> {
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
 
     let state_file = selected_path_state_file()?;
-    let mut supervisor = supervisor::Supervisor::new_with_startup_candidate(
+    let seat = std::env::var("SLIVER_SEAT").unwrap_or_else(|_| "seat0".into());
+    let mut supervisor = supervisor::Supervisor::new_with_session_startup_candidate(
         m2_hardware::M2TouchBar::new(),
         state_file,
         crate::logind::RealLogind::default(),
         Some(default_source::source()),
+        &seat,
     )?;
     let serve_result = supervisor::serve(listener, &mut supervisor);
     let shutdown_result = supervisor.shutdown();

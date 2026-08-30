@@ -11,6 +11,12 @@ pub(crate) struct AuthorizationGrant {
     generation: u64,
 }
 
+impl AuthorizationGrant {
+    pub(crate) fn uid(&self) -> libc::uid_t {
+        self.uid
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct SessionAuthorizer<L> {
     logind: L,
@@ -19,6 +25,21 @@ pub(crate) struct SessionAuthorizer<L> {
 impl<L: Logind> SessionAuthorizer<L> {
     pub(crate) fn new(logind: L) -> Self {
         Self { logind }
+    }
+
+    pub(crate) fn generation(&self) -> Result<u64> {
+        self.logind
+            .generation()
+            .context("reading the logind session generation")
+    }
+
+    pub(crate) fn active_session(
+        &self,
+        seat: &str,
+    ) -> Result<Option<crate::logind::ActiveSession>> {
+        self.logind
+            .active_session(seat)
+            .with_context(|| format!("looking up the active logind session on {seat}"))
     }
 
     pub(crate) fn authorize(&self, peer: PeerCredentials) -> Result<AuthorizationGrant> {
