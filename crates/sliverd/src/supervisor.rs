@@ -430,6 +430,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let mut supervisor =
             Self::new_with_logind_and_default(hardware, state_file, logind, default_source)?;
         supervisor.fallback_worker = true;
+        #[cfg(test)]
+        {
+            supervisor.worker_process_backend = true;
+        }
         Ok(supervisor)
     }
 

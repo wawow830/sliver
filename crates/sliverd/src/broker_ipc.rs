@@ -1194,7 +1194,8 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_restart_reloads_the_saved_source_through_the_broker_loop() -> Result<()> {
+    fn broker_and_supervisor_restart_reload_the_saved_source_through_the_broker_loop() -> Result<()>
+    {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("saved.lua");
         std::fs::write(
