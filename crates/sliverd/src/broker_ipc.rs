@@ -293,14 +293,28 @@ pub(crate) fn broker_main() -> Result<()> {
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
 
-    let fallback = Supervisor::new_fallback(
-        M2TouchBar::new(),
-        PathBuf::from("/var/lib/sliver/config-path"),
-    )?;
-    let authorizer = SessionAuthorizer::new(RealLogind::default());
     let running = Arc::new(AtomicBool::new(true));
     let signal_running = running.clone();
     ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
+    let fallback = loop {
+        match Supervisor::new_fallback(
+            M2TouchBar::new(),
+            PathBuf::from("/var/lib/sliver/config-path"),
+        ) {
+            Ok(fallback) => break fallback,
+            Err(error) if running.load(Ordering::Acquire) => {
+                crate::system_log::broker_error(format!(
+                    "hardware is not ready; retrying discovery: {error:#}"
+                ));
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            Err(_) => {
+                let _ = std::fs::remove_file(&socket);
+                return Ok(());
+            }
+        }
+    };
+    let authorizer = SessionAuthorizer::new(RealLogind::default());
     let result = run_broker(
         listener,
         fallback,
