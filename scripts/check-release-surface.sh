@@ -13,6 +13,9 @@ cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+audit_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-release-audit.XXXXXX")
+trap 'rm -rf -- "$audit_tmp"' EXIT
+
 cli=${SLIVER_CLI:-target/debug/sliver}
 if [[ ! -x "$cli" ]]; then
   cargo build --package sliverd --bin sliver
@@ -24,20 +27,20 @@ version_output=$($cli --version)
 [[ "$version_output" =~ ^sliver\ [0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "unexpected --version output"
 
 set +e
-$cli one.lua two.lua > /tmp/sliver-release-audit.stdout 2> /tmp/sliver-release-audit.stderr
+$cli one.lua two.lua > "$audit_tmp/stdout" 2> "$audit_tmp/stderr"
 usage_status=$?
 set -e
 [[ "$usage_status" == 2 ]] || fail "extra arguments returned status $usage_status, expected 2"
-[[ ! -s /tmp/sliver-release-audit.stdout ]] || fail "usage error wrote to stdout"
-grep -F 'usage: sliver [FILE]' /tmp/sliver-release-audit.stderr >/dev/null ||
+[[ ! -s "$audit_tmp/stdout" ]] || fail "usage error wrote to stdout"
+grep -F 'usage: sliver [FILE]' "$audit_tmp/stderr" >/dev/null ||
   fail "usage error omitted its usage line"
 
 spec=packaging/fedora/sliver.spec
 grep -F '%{_bindir}/sliver' "$spec" >/dev/null || fail "RPM does not install the public client"
-if grep -E '%(bindir|libexecdir)/sliver-(edit|preview|probe|calibrate)' "$spec" >/dev/null; then
+if grep -E '^%\{_(bindir|libexecdir)\}/sliver-(edit|preview|probe|calibrate)' "$spec" >/dev/null; then
   fail "RPM exposes a removed executable"
 fi
-if grep -E '^\s*sliver (preview|probe|status|logs|diagnostic|install|service)(\s|$)' \
+if grep -E '^[[:space:]]*sliver (preview|probe|status|logs|diagnostic|install|service)([[:space:]]|$)' \
   README.md docs packaging systemd >/dev/null 2>&1; then
   fail "documentation exposes a removed public command"
 fi

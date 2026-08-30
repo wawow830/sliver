@@ -43,6 +43,8 @@ enum PeerVerification {
     Production,
     #[cfg(test)]
     Test,
+    #[cfg(test)]
+    TestProduction,
 }
 
 pub(crate) fn socket_path() -> Result<PathBuf> {
@@ -706,10 +708,18 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     if matches!(peer_verification, PeerVerification::Production) {
         ensure_supervisor_peer(peer.pid)?;
     }
+    #[cfg(test)]
+    if matches!(peer_verification, PeerVerification::TestProduction) {
+        ensure_supervisor_test_peer(peer.pid)?;
+    }
     let request = read_message(&mut stream)?;
     let (operation, payload) = request.split_first().context("broker request is empty")?;
     ensure!(*operation == CLAIM, "broker expected a claim request");
-    let peer_uid = if matches!(peer_verification, PeerVerification::Production) {
+    let production_peer = matches!(peer_verification, PeerVerification::Production);
+    #[cfg(test)]
+    let production_peer =
+        production_peer || matches!(peer_verification, PeerVerification::TestProduction);
+    let peer_uid = if production_peer {
         ensure!(payload.is_empty(), "broker claim has an unexpected payload");
         peer.uid
     } else if payload.is_empty() {
@@ -906,6 +916,25 @@ fn ensure_supervisor_peer(pid: libc::pid_t) -> Result<()> {
             .any(|line| line.ends_with("/sliver-supervisor.service")),
         "broker peer is not the Sliver user supervisor"
     );
+    ensure_supervisor_executable(pid)
+}
+
+#[cfg(test)]
+fn ensure_supervisor_test_peer(pid: libc::pid_t) -> Result<()> {
+    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .with_context(|| format!("reading the supervisor cgroup for peer {pid}"))?;
+    ensure!(
+        cgroup.lines().any(|line| {
+            line.rsplit('/').next().is_some_and(|unit| {
+                unit.starts_with("sliver-supervisor-test-") && unit.ends_with(".service")
+            })
+        }),
+        "broker peer is not the test Sliver user supervisor"
+    );
+    ensure_supervisor_executable(pid)
+}
+
+fn ensure_supervisor_executable(pid: libc::pid_t) -> Result<()> {
     let executable = std::fs::read_link(format!("/proc/{pid}/exe"))?;
     ensure!(
         executable.file_name() == Some(std::ffi::OsStr::new("sliver-supervisor")),
@@ -2147,20 +2176,15 @@ mod tests {
                 SessionAuthorizer::new(server_logind),
                 server_running,
                 SEAT,
-                PeerVerification::Production,
+                PeerVerification::TestProduction,
             )
         });
-        let unit = "sliver-supervisor.service";
+        let unit = format!("sliver-supervisor-test-{}.service", std::process::id());
         let mut launcher = std::process::Command::new("systemd-run");
-        launcher.args([
-            "--user",
-            "--unit",
-            unit,
-            "--collect",
-            "--quiet",
-            "--service-type=exec",
-            "--setenv",
-        ]);
+        launcher.args(["--user", "--unit"]);
+        launcher
+            .arg(&unit)
+            .args(["--collect", "--quiet", "--service-type=exec", "--setenv"]);
         launcher.arg(format!("SLIVER_BROKER_SOCKET={}", socket.display()));
         launcher.arg("--setenv");
         launcher.arg(format!(
@@ -2191,7 +2215,8 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         let _ = std::process::Command::new("systemctl")
-            .args(["--user", "stop", unit])
+            .args(["--user", "stop"])
+            .arg(&unit)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
