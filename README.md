@@ -19,12 +19,12 @@ Sliver consists of:
 
 - Apple MacBook Pro (13-inch, M2, 2022 / Mac14,7)
 - Fedora Asahi Remix 44
-- Touchbar display: `/dev/dri/card1`, DSI-1, native mode 60x2008
-- Touch input: `Mac14,7 Touch Bar`
+- Touchbar display: Asahi `adp` DRM device, DSI-1, native mode 60x2008
+- Touch input: `Mac14,7 Touch Bar` (discovered by evdev name)
 - Keyboard: `Apple MTP keyboard`
 
-The current DRM and touch-device paths are hardware-specific; see
-[troubleshooting](docs/troubleshooting.md) if enumeration differs.
+The adapter discovers the DRM card, touch event node, and DSI backlight at
+startup; see [troubleshooting](docs/troubleshooting.md) if a device is absent.
 
 ## Build
 
@@ -36,12 +36,16 @@ cd ~/Projects/sliver
 cargo build --release
 ```
 
-The user running Sliver needs access to the `video` and `input` groups:
+For the supported Fedora Asahi installation, build the RPM in
+`packaging/fedora/sliver.spec`. It installs `/usr/bin/sliver` and keeps the
+service binaries in `/usr/libexec/sliver`. The package does not enable the
+services or install an editable copy of `default.lua`.
 
-```bash
-id
-ls -l /dev/dri/card1 /dev/input/event2 /dev/uinput
-```
+See [the Fedora package instructions](packaging/fedora/INSTALL.md) for the
+source archive preparation and RPM build command.
+
+The development binaries use the current user's device permissions. The
+installed broker uses the `sliver` account and the package's udev rules.
 
 ## Run
 
@@ -51,13 +55,17 @@ Only one process can own the touchbar DRM device. Stop tiny-dfr first:
 sudo systemctl stop tiny-dfr
 ```
 
-Enable the system broker after installing its service account and device
-permissions:
+After the one-time account and udev setup, enable takeover with one
+administrator operation:
 
 ```bash
-sudo systemctl enable --now sliver-broker.service
-systemctl --user enable --now sliver-supervisor.service
+sudo systemctl enable --now sliver-broker.service && \
+  sudo systemctl --global enable sliver-supervisor.service
 ```
+
+The global user unit starts with each user's next graphical session. For an
+already-running session, enable it immediately with
+`systemctl --user enable --now sliver-supervisor.service`.
 
 The broker paints the embedded default before login. When a user session starts,
 that user's supervisor stages its selected Lua source and hands over the first

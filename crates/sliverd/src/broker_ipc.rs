@@ -392,21 +392,34 @@ pub(crate) fn broker_main() -> Result<()> {
         .parent()
         .context("broker socket path has no parent directory")?;
     std::fs::create_dir_all(directory)?;
-    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o750))?;
     if socket.exists() {
         let _ = std::fs::remove_file(&socket);
     }
-    let listener = UnixListener::bind(&socket)?;
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
-
-    let fallback = Supervisor::new_fallback(
-        M2TouchBar::new(),
-        PathBuf::from("/var/lib/sliver/config-path"),
-    )?;
-    let authorizer = SessionAuthorizer::new(RealLogind::default());
     let running = Arc::new(AtomicBool::new(true));
     let signal_running = running.clone();
     ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
+    let fallback = loop {
+        match Supervisor::new_fallback(
+            M2TouchBar::new(),
+            PathBuf::from("/var/lib/sliver/config-path"),
+        ) {
+            Ok(fallback) => break fallback,
+            Err(error) if running.load(Ordering::Acquire) => {
+                crate::system_log::broker_error(format!(
+                    "hardware is not ready; retrying discovery: {error:#}"
+                ));
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            Err(_) => {
+                let _ = std::fs::remove_file(&socket);
+                return Ok(());
+            }
+        }
+    };
+    let listener = UnixListener::bind(&socket)?;
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
+    let authorizer = SessionAuthorizer::new(RealLogind::default());
     let result = run_broker(
         listener,
         fallback,
@@ -417,6 +430,24 @@ pub(crate) fn broker_main() -> Result<()> {
     );
     let _ = std::fs::remove_file(socket);
     result
+}
+
+fn notify_ready() {
+    let state = b"READY=1\0";
+    // sd_notify returns zero when no notification socket is configured, which
+    // is expected when the broker is run outside systemd.
+    unsafe {
+        ffi::sd_notify(0, state.as_ptr().cast());
+    }
+}
+
+mod ffi {
+    extern "C" {
+        pub(super) fn sd_notify(
+            unset_environment: libc::c_int,
+            state: *const libc::c_char,
+        ) -> libc::c_int;
+    }
 }
 
 fn run_broker<H: TouchBarHardware, L: crate::logind::Logind>(
@@ -476,6 +507,9 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
         fallback_running = fallback.has_active_worker();
         fallback_attempted = true;
     }
+    // With Type=notify, systemd does not advertise the broker as started
+    // until hardware discovery, fallback staging, and socket setup complete.
+    notify_ready();
     let mut last_active = initial_active;
 
     listener.set_nonblocking(true)?;
@@ -2046,13 +2080,15 @@ mod tests {
         let worker = include_str!("../../../systemd/sliver-lua-worker-.service.d/50-defaults.conf");
 
         for setting in [
+            "Type=notify",
             "User=sliver",
-            "SupplementaryGroups=video input",
+            "SupplementaryGroups=sliver-drm sliver-input sliver-backlight",
             "Restart=on-failure",
         ] {
             assert!(broker.contains(setting), "broker service lacks {setting}");
         }
         assert!(supervisor.contains("WantedBy=graphical-session.target"));
+        assert!(supervisor.contains("ConditionGroup=sliver-supervisors"));
         for setting in [
             "MemoryMax=512M",
             "TasksMax=64",

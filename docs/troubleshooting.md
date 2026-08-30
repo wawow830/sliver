@@ -2,10 +2,10 @@
 
 ## `Device or resource busy` / cannot become DRM master
 
-Another process owns `/dev/dri/card1`.
+Another process owns the Touch Bar DRM card.
 
 ```bash
-fuser -v /dev/dri/card1
+fuser -v /dev/dri/card*
 pgrep -a 'sliverd|tiny-dfr'
 ```
 
@@ -24,11 +24,12 @@ Check device ownership and groups:
 
 ```bash
 id
-ls -l /dev/dri/card1 /dev/input/event1 /dev/input/event2 /dev/uinput
+ls -l /dev/dri/card* /dev/input/event* /dev/uinput
 ```
 
-The tested Fedora setup grants access through `video` and `input`. Group
-changes require a new login session.
+The Fedora package grants device-specific hardware access to the `sliver`
+broker account through dedicated udev groups. A user applying a config needs membership in
+`sliver-supervisors`; group changes require a new login session.
 
 ## The strip still shows an old image
 
@@ -37,7 +38,7 @@ DRM owner rather than trusting the glass:
 
 ```bash
 pgrep -a sliverd
-fuser -v /dev/dri/card1
+fuser -v /dev/dri/card*
 ```
 
 A failed new daemon can leave the previous frame visibly frozen.
@@ -51,19 +52,19 @@ backend, preserve that flush.
 ## Touch does not react
 
 ```bash
-ls -l /dev/input/event2
+ls -l /dev/input/event*
 rg 'touch:' /tmp/sliverd.log
 ```
 
-On the tested hardware, event2 is `Mac14,7 Touch Bar`. Verify with:
+The adapter looks for the `Mac14,7 Touch Bar` device by name. Verify the
+assigned event node with:
 
 ```bash
 awk '/^N: Name=/{name=$0}/^H: Handlers=/{print name; print}' \
   /proc/bus/input/devices
 ```
 
-The touch path is currently fixed in source; change `TOUCH_DEV` if enumeration
-differs.
+The event number is assigned dynamically and is not a configuration value.
 
 ## Fn does not show F1–F12
 
@@ -136,7 +137,7 @@ sudo systemctl stop tiny-dfr
 uname -a
 fastfetch --logo none
 pgrep -a 'sliverd|tiny-dfr'
-fuser -v /dev/dri/card1
+fuser -v /dev/dri/card*
 awk 'BEGIN { RS="" } /Touch Bar|Apple MTP keyboard|Sliver Function Row/' \
   /proc/bus/input/devices
 cat /tmp/sliverd.log

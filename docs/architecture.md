@@ -56,11 +56,14 @@ synchronously.
 On the tested Mac14,7:
 
 ```text
-/dev/dri/card1
+/dev/dri/cardN
   driver: adp
   connector: DSI-1
   mode: 60x2008
 ```
+
+The adapter scans the numbered DRM cards and selects the one with a connected
+DSI connector, rather than relying on card numbering.
 
 The physical strip is landscape, while the panel scanout is portrait. The
 logical renderer draws in 2008x60 coordinates and cairo transforms it into the
@@ -93,10 +96,11 @@ The touch digitizer is exposed as:
 
 ```text
 Mac14,7 Touch Bar
-/dev/input/event2   # on the tested boot
+/dev/input/eventN
 ```
 
-The real adapter opens this evdev node in nonblocking mode and polls it
+The real adapter finds this evdev node by name, opens it in nonblocking mode,
+and polls it
 without handing touches to the compositor. It normalizes raw coordinates and
 lifecycle data into logical 2008x60 `TouchEvent` values, then emits them through
 the hardware seam. The supervisor forwards those normalized events without
@@ -188,9 +192,11 @@ Sliver requires:
 - read/write access to the touch evdev node
 - read/write access to `/dev/uinput`
 
-On this Fedora installation, membership in `video` and `input` provides those
-permissions. DRM master is acquired by the first suitable opener; tiny-dfr and
-Sliver cannot own the panel simultaneously.
+The Fedora package grants those permissions to the `sliver` broker account
+through its udev rules and systemd service. Users only need membership in
+`sliver-supervisors` to connect their supervisor to the broker. DRM master is
+acquired by the first suitable opener; tiny-dfr and Sliver cannot own the panel
+simultaneously.
 
 Button/label actions execute with the Sliver user's privileges through
 `sh -c`. Configs must therefore be treated as executable content.
