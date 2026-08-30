@@ -313,6 +313,9 @@ pub(crate) fn broker_main() -> Result<()> {
     };
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
+    // With Type=notify, systemd does not advertise the broker as started
+    // until hardware discovery and socket setup have both completed.
+    notify_ready();
     let authorizer = SessionAuthorizer::new(RealLogind::default());
     let result = run_broker(
         listener,
@@ -324,6 +327,24 @@ pub(crate) fn broker_main() -> Result<()> {
     );
     let _ = std::fs::remove_file(socket);
     result
+}
+
+fn notify_ready() {
+    let state = b"READY=1\0";
+    // sd_notify returns zero when no notification socket is configured, which
+    // is expected when the broker is run outside systemd.
+    unsafe {
+        ffi::sd_notify(0, state.as_ptr().cast());
+    }
+}
+
+mod ffi {
+    extern "C" {
+        pub(super) fn sd_notify(
+            unset_environment: libc::c_int,
+            state: *const libc::c_char,
+        ) -> libc::c_int;
+    }
 }
 
 fn run_broker<H: TouchBarHardware, L: crate::logind::Logind>(
@@ -1890,6 +1911,7 @@ mod tests {
         let worker = include_str!("../../../systemd/sliver-lua-worker-.service.d/50-defaults.conf");
 
         for setting in [
+            "Type=notify",
             "User=sliver",
             "SupplementaryGroups=sliver-drm sliver-input sliver-backlight",
             "Restart=on-failure",

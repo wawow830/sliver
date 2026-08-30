@@ -47,6 +47,10 @@ for path in \
     }
 done
 
+grep -F 'Type=notify' \
+    "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
+grep -F 'NotifyAccess=main' \
+    "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
 grep -F 'User=sliver' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
 grep -F 'Group=sliver-supervisors' \

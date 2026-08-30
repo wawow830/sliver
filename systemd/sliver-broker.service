@@ -4,7 +4,8 @@ After=systemd-logind.service
 Conflicts=tiny-dfr.service
 Before=tiny-dfr.service
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 KillSignal=SIGINT
 User=sliver
 Group=sliver-supervisors
