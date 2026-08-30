@@ -590,6 +590,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(())
     }
 
+    fn confirm_candidate_owner(&mut self) -> Result<()> {
+        if self.fallback_worker {
+            self.ensure_fallback_unowned()
+        } else {
+            self.hardware.confirm_owner()
+        }
+    }
+
     pub(crate) fn start_fallback(&mut self) -> Result<()> {
         ensure!(self.fallback_worker, "supervisor is not the fallback owner");
         if self.authorizer.active_session("seat0")?.is_some() {
@@ -795,10 +803,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .recheck(authorization.peer, &authorization.grant)
                 .map_err(CandidateFailure::Authorization)?;
         }
-        if self.fallback_worker {
-            self.ensure_fallback_unowned()
-                .map_err(CandidateFailure::Candidate)?;
-        }
+        self.confirm_candidate_owner()
+            .map_err(CandidateFailure::Candidate)?;
 
         let old_frame = self.active.as_ref().map(|active| active.frame.clone());
         let old_synthetic = self.synthetic.clone();
@@ -815,11 +821,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 .recheck(authorization.peer, &authorization.grant)
                 .map_err(CandidateFailure::Authorization)?;
         }
-        if self.fallback_worker {
-            self.ensure_fallback_unowned()
-                .map_err(CandidateFailure::Candidate)?;
-        }
-        if let Err(error) = self.hardware.confirm_owner() {
+        if let Err(error) = self.confirm_candidate_owner() {
             return self.rollback_candidate(
                 CandidateRollback {
                     previous_path_state: previous_path_state.as_ref(),
@@ -883,7 +885,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
         // Presentation changes the broker's visible frame. Recheck after it
         // so a session that changes during presentation cannot keep its frame.
-        if let Err(error) = self.hardware.confirm_owner() {
+        if let Err(error) = self.confirm_candidate_owner() {
             return self.rollback_candidate(
                 CandidateRollback {
                     previous_path_state: previous_path_state.as_ref(),
@@ -5727,6 +5729,29 @@ mod tests {
         assert!(format!("{error:#}").contains("session changed while checking authorization"));
         assert!(!state_file.exists());
         assert!(supervisor.hardware().presented_frames().is_empty());
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_rejects_a_session_that_activates_after_presentation() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        let mut supervisor = Supervisor::new_fallback_with_logind(
+            SessionSwitchingHardware::new(logind.clone(), uid),
+            directory.path().join("state/config-path"),
+            logind,
+            Some(LuaSource::embedded(
+                b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
+            )),
+        )?;
+        supervisor.hardware_mut().switch_on_present = true;
+
+        supervisor.start_fallback()?;
+
+        assert!(!supervisor.has_active_worker());
+        assert!(supervisor.has_recovery());
         supervisor.shutdown()?;
         Ok(())
     }

@@ -313,6 +313,7 @@ mod fake {
         generation: u64,
         generation_reads: usize,
         generation_hook: Option<(usize, String, ActiveSession)>,
+        clear_active_hook: Option<(usize, String)>,
     }
 
     impl FakeLogind {
@@ -368,6 +369,12 @@ mod fake {
             state.generation_hook = Some((read, seat.to_owned(), active));
         }
 
+        pub(crate) fn clear_active_on_generation_read(&self, read: usize, seat: &str) {
+            let (lock, _) = &*self.state;
+            let mut state = lock.lock().expect("fake logind mutex poisoned");
+            state.clear_active_hook = Some((read, seat.to_owned()));
+        }
+
         pub(crate) fn wait_for_generation_reads(&self, expected: usize, timeout: Duration) -> bool {
             let (lock, condition) = &*self.state;
             let mut state = lock.lock().expect("fake logind mutex poisoned");
@@ -408,6 +415,17 @@ mod fake {
                     .generation
                     .checked_add(1)
                     .expect("fake logind generation overflow");
+            }
+            if state
+                .clear_active_hook
+                .as_ref()
+                .is_some_and(|(read, _)| *read == state.generation_reads)
+            {
+                let (_, seat) = state
+                    .clear_active_hook
+                    .take()
+                    .expect("fake logind clear hook was just checked");
+                state.active.remove(&seat);
             }
             condition.notify_all();
             Ok(state.generation)

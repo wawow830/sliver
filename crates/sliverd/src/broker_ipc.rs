@@ -386,7 +386,8 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
             );
             match result {
                 Ok(outcome) => {
-                    fallback_attempted = !outcome.logout_acknowledged;
+                    let active = authorizer.active_session(seat)?;
+                    fallback_attempted = !outcome.logout_acknowledged && active.is_some();
                 }
                 Err(error) => {
                     crate::system_log::broker_error(format!("broker client failed: {error:#}"));
@@ -1058,7 +1059,8 @@ fn decode_frame(payload: &[u8]) -> Result<LogicalFrame> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::net::UnixListener;
+    use std::io::Write;
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Instant;
@@ -1249,6 +1251,91 @@ mod tests {
             shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
             [0, 255, 0, 255]
         );
+        running.store(false, Ordering::Release);
+        server.join().expect("broker server panicked")?;
+        Ok(())
+    }
+
+    #[test]
+    fn broker_restores_fallback_when_logout_races_with_release() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let server_state = directory.path().join("broker-state/config-path");
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                server_state,
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                PeerVerification::Test,
+            )
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().is_empty())
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!shared.inspect(|hardware| hardware.presented_frames().is_empty()));
+
+        let mut client = UnixStream::connect(&socket)?;
+        // Keep the broker in the client handler so it cannot observe the
+        // active session before the connection completes its claim.
+        client.write_all(&[0, 0, 0])?;
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "release-race-session".into(),
+                uid,
+            }),
+        );
+        client.write_all(&[5, CLAIM])?;
+        client.write_all(&uid.to_be_bytes())?;
+        let claim = read_message(&mut client)?;
+        assert_eq!(claim.first(), Some(&OK));
+
+        // The release authorization passes, then the session disappears before
+        // the handler reports the clean disconnect.
+        logind.clear_active_on_generation_read(6, SEAT);
+        write_message(&mut client, RELEASE, &[])?;
+        assert_eq!(read_message(&mut client)?, vec![OK]);
+        drop(client);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 2)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            shared.inspect(|hardware| {
+                hardware
+                    .presented_frames()
+                    .last()
+                    .expect("fallback frame was not restored")
+                    .rgba_at(10, 10)
+            }),
+            [0, 255, 0, 255]
+        );
+
         running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;
         Ok(())
