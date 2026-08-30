@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -320,7 +321,6 @@ impl<H: TouchBarHardware> TouchBarHardware for SharedHardware<H> {
 
 pub(crate) fn broker_main() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     let socket = socket_path()?;
     let directory = socket
@@ -335,16 +335,27 @@ pub(crate) fn broker_main() -> Result<()> {
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660))?;
 
     let shared = SharedHardware::new(M2TouchBar::new());
-    let mut fallback = Supervisor::new_fallback(
+    let fallback = Supervisor::new_fallback(
         shared,
         PathBuf::from("/var/lib/sliver/config-path"),
         Some(crate::default_source::source()),
     )?;
     let authorizer = SessionAuthorizer::new(RealLogind::default());
-    let initial_active = authorizer.active_session(SEAT)?;
     let running = Arc::new(AtomicBool::new(true));
-    let signal_running = running.clone();
-    ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
+    let result = run_broker(listener, fallback, authorizer, running, SEAT, true);
+    let _ = std::fs::remove_file(socket);
+    result
+}
+
+fn run_broker<H: TouchBarHardware, L: crate::logind::Logind>(
+    listener: UnixListener,
+    mut fallback: Supervisor<H, L>,
+    authorizer: SessionAuthorizer<L>,
+    running: Arc<AtomicBool>,
+    seat: &str,
+    verify_supervisor: bool,
+) -> Result<()> {
+    let initial_active = authorizer.active_session(seat)?;
     let mut fallback_running = false;
     let mut fallback_attempted = false;
     if initial_active.is_none() {
@@ -362,8 +373,8 @@ pub(crate) fn broker_main() -> Result<()> {
                 &mut fallback,
                 &authorizer,
                 &mut fallback_running,
-                SEAT,
-                true,
+                seat,
+                verify_supervisor,
             );
             if let Err(error) = result {
                 crate::system_log::broker_error(format!("broker client failed: {error:#}"));
@@ -372,7 +383,7 @@ pub(crate) fn broker_main() -> Result<()> {
                 // after that owner logs out.
                 fallback_attempted = false;
             }
-            if !fallback_running && authorizer.active_session(SEAT)?.is_none() {
+            if !fallback_running && authorizer.active_session(seat)?.is_none() {
                 fallback.start_fallback()?;
                 fallback_running = fallback.has_active_worker();
                 fallback_attempted = true;
@@ -380,7 +391,7 @@ pub(crate) fn broker_main() -> Result<()> {
             continue;
         }
 
-        let active = authorizer.active_session(SEAT)?;
+        let active = authorizer.active_session(seat)?;
         if active != last_active {
             if active.is_none() {
                 fallback_attempted = false;
@@ -402,9 +413,7 @@ pub(crate) fn broker_main() -> Result<()> {
         }
     }
 
-    fallback.shutdown()?;
-    let _ = std::fs::remove_file(socket);
-    Ok(())
+    fallback.shutdown()
 }
 
 fn accept_nonblocking(listener: &UnixListener) -> Result<Option<UnixStream>> {
@@ -998,6 +1007,7 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::sync::{Arc, Mutex};
     use std::thread;
+    use std::time::Instant;
 
     use crate::hardware::{
         FakeTouchBar, FrameSnapshot, HardwareEvent, InputState, LogicalFrame, ModifierState,
@@ -1084,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn real_supervisor_applies_a_lua_worker_through_the_broker_ipc_seam() -> Result<()> {
+    fn real_supervisor_applies_a_lua_worker_through_the_broker_loop() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");
         let listener = UnixListener::bind(&socket)?;
@@ -1105,6 +1115,40 @@ mod tests {
                 active: true,
             }),
         );
+        let shared = ThreadFakeHardware::new();
+        let broker_state = directory.path().join("broker-state/config-path");
+        let user_state = directory.path().join("user-state/config-path");
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_running = running.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                broker_state,
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                false,
+            )
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().is_empty())
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!shared.inspect(|hardware| hardware.presented_frames().is_empty()));
+
         logind.set_active(
             SEAT,
             Some(ActiveSession {
@@ -1112,47 +1156,38 @@ mod tests {
                 uid,
             }),
         );
-        let shared = ThreadFakeHardware::new();
-        let broker_state = directory.path().join("broker-state/config-path");
-        let user_state = directory.path().join("user-state/config-path");
-        let server_logind = logind.clone();
-        let server_shared = shared.clone();
-        let server = thread::spawn(move || -> Result<()> {
-            let mut fallback =
-                Supervisor::new_with_logind(server_shared, broker_state, server_logind.clone())?;
-            let authorizer = SessionAuthorizer::new(server_logind);
-            let (stream, _) = listener.accept()?;
-            let mut fallback_running = false;
-            handle_client(
-                stream,
-                &mut fallback,
-                &authorizer,
-                &mut fallback_running,
-                SEAT,
-                false,
-            )?;
-            fallback.shutdown()
-        });
-
         let mut user = Supervisor::new_with_logind(
             BrokerHardware::new_at(socket),
             user_state.clone(),
             FakeLogind::new(),
         )?;
         user.apply(&source)?;
-        let frame = shared.inspect(|hardware| {
-            hardware
-                .presented_frames()
-                .last()
-                .cloned()
-                .expect("broker-backed supervisor did not present a frame")
-        });
-        assert_eq!(frame.rgba_at(10, 10), [255, 0, 0, 255]);
         assert_eq!(
-            std::fs::read(user_state)?,
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            std::fs::read(&user_state)?,
             source.as_os_str().as_encoded_bytes()
         );
+
+        logind.set_active(SEAT, None);
+        assert!(user.poll(Duration::ZERO).is_err());
+        user.handoff_owner_with_reason(StopReason::Logout)?;
+        user.hardware_mut().logout_complete()?;
         user.shutdown()?;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 3)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [0, 255, 0, 255]
+        );
+        running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;
         Ok(())
     }
