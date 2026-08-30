@@ -1451,92 +1451,185 @@ mod tests {
     }
 
     #[test]
-    fn broker_switches_users_without_reusing_an_old_frame_or_worker() -> Result<()> {
+    fn real_supervisor_failed_login_enters_recovery_through_the_broker_loop() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");
         let listener = UnixListener::bind(&socket)?;
+        let source = directory.path().join("failed.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); error('failed login candidate')",
+        )?;
+        let user_state = directory.path().join("user-state/config-path");
         let logind = FakeLogind::new();
-        let default = LuaSource::embedded(
-            b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
-        );
-        let shared = SharedHardware::new(FakeTouchBar::new());
-        let mut fallback = Supervisor::new_fallback_with_logind(
-            shared.clone(),
-            directory.path().join("state/config-path"),
-            logind.clone(),
-            Some(default),
-        )?;
-        fallback.start_fallback()?;
-        let mut fallback_running = true;
-        let authorizer = SessionAuthorizer::new(logind.clone());
         let uid = unsafe { libc::getuid() };
-
-        let set_active = |id: &str| {
-            logind.set_active(SEAT, Some(ActiveSession { id: id.into(), uid }));
-        };
-        let client = |color: [u8; 3], logout: bool| {
-            let socket = socket.clone();
-            let logind = logind.clone();
-            thread::spawn(move || -> Result<()> {
-                let mut hardware = BrokerHardware::new_at(socket);
-                hardware.claim()?;
-                let stride = sliver_core::STRIP_W as usize * 4;
-                let pixel = [color[2], color[1], color[0], 255];
-                let pixels = pixel.repeat(stride * sliver_core::STRIP_H as usize / 4);
-                hardware.present(&LogicalFrame::from_wire(
-                    sliver_core::STRIP_W as usize,
-                    sliver_core::STRIP_H as usize,
-                    stride,
-                    pixels,
-                ))?;
-                hardware.confirm_owner()?;
-                if logout {
-                    logind.set_active(SEAT, None);
-                    assert!(hardware.poll(Duration::ZERO).is_err());
-                    hardware.logout_complete()?;
-                } else {
-                    hardware.release()?;
-                }
-                Ok(())
-            })
-        };
-
-        set_active("user-a");
-        let first = client([255, 0, 0], false);
-        let (stream, _) = listener.accept()?;
-        handle_client(
-            stream,
-            &mut fallback,
-            &authorizer,
-            &mut fallback_running,
+        logind.set_session(
+            std::process::id() as libc::pid_t,
+            Some(crate::logind::Session {
+                id: "failed-login-session".into(),
+                uid,
+                seat: Some(SEAT.into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
             SEAT,
-            false,
+            Some(ActiveSession {
+                id: "failed-login-session".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let broker_state = directory.path().join("broker-state/config-path");
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                broker_state,
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                false,
+            )
+        });
+        let mut user = Supervisor::new_with_logind_process(
+            BrokerHardware::new_at(socket),
+            user_state.clone(),
+            FakeLogind::new(),
         )?;
-        first.join().expect("first broker client panicked")?;
-        assert!(!fallback_running);
+        let error = user
+            .apply(&source)
+            .expect_err("failed login candidate was accepted");
+        assert!(format!("{error:#}").contains("failed login candidate"));
+        assert!(!user.has_active_worker());
+        assert!(user.has_recovery());
+        assert!(user_state.exists());
+        user.shutdown()?;
+        running.store(false, Ordering::Release);
+        server
+            .join()
+            .expect("failed-login broker server panicked")?;
+        Ok(())
+    }
 
-        set_active("user-b");
-        let second = client([0, 0, 255], true);
-        let (stream, _) = listener.accept()?;
-        handle_client(
-            stream,
-            &mut fallback,
-            &authorizer,
-            &mut fallback_running,
+    #[test]
+    fn broker_switches_multiple_supervisors_through_the_production_loop() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let source_a = directory.path().join("user-a.lua");
+        let source_b = directory.path().join("user-b.lua");
+        std::fs::write(
+            &source_a,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        std::fs::write(
+            &source_b,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1) end }",
+        )?;
+        let state_a = directory.path().join("user-a-state/config-path");
+        let state_b = directory.path().join("user-b-state/config-path");
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_session(
+            std::process::id() as libc::pid_t,
+            Some(crate::logind::Session {
+                id: "user-a-session".into(),
+                uid,
+                seat: Some(SEAT.into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
             SEAT,
-            false,
-        )?;
-        second.join().expect("second broker client panicked")?;
-        fallback.start_fallback()?;
+            Some(ActiveSession {
+                id: "user-a-session".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let broker_state = directory.path().join("broker-state/config-path");
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                broker_state,
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                false,
+            )
+        });
 
-        let frames: Vec<FrameSnapshot> =
-            shared.inspect(|hardware| hardware.presented_frames().to_vec());
-        assert_eq!(frames.len(), 4);
-        assert_eq!(frames[0].rgba_at(10, 10), [0, 255, 0, 255]);
-        assert_eq!(frames[1].rgba_at(10, 10), [255, 0, 0, 255]);
-        assert_eq!(frames[2].rgba_at(10, 10), [0, 0, 255, 255]);
-        assert_eq!(frames[3].rgba_at(10, 10), [0, 255, 0, 255]);
-        fallback.shutdown()?;
+        let mut first = Supervisor::new_with_logind_process(
+            BrokerHardware::new_at(socket.clone()),
+            state_a.clone(),
+            FakeLogind::new(),
+        )?;
+        first.apply(&source_a)?;
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [255, 0, 0, 255]
+        );
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "user-b-session".into(),
+                uid,
+            }),
+        );
+        assert!(first.poll(Duration::ZERO).is_err());
+        first.handoff_owner_with_reason(StopReason::Replaced)?;
+        first.hardware_mut().logout_complete()?;
+        first.shutdown()?;
+
+        let mut second = Supervisor::new_with_logind_process(
+            BrokerHardware::new_at(socket),
+            state_b.clone(),
+            FakeLogind::new(),
+        )?;
+        second.apply(&source_b)?;
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [0, 0, 255, 255]
+        );
+        assert_eq!(
+            std::fs::read(&state_a)?,
+            source_a.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            std::fs::read(&state_b)?,
+            source_b.as_os_str().as_encoded_bytes()
+        );
+        second.shutdown()?;
+        running.store(false, Ordering::Release);
+        server.join().expect("broker server panicked")?;
         Ok(())
     }
 
