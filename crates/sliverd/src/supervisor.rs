@@ -2091,7 +2091,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn shutdown_with_reason(mut self, reason: StopReason, paint_black: bool) -> Result<()> {
-        let synthetic_result = self.release_synthetic_keys();
+        let synthetic_result = if self.hardware_available {
+            self.release_synthetic_keys()
+        } else {
+            Ok(())
+        };
         let stop_result = self.stop_active_worker(reason);
         let blank_result = if paint_black
             && self.hardware_available
