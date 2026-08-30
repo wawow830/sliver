@@ -15,18 +15,22 @@ f:/usr/lib/udev/rules.d/70-sliver.rules
 f:/usr/lib/sysusers.d/sliver.conf'
 
 for entry in $required; do
-    mode=${entry%%:*}
+    kind=${entry%%:*}
     path=${entry#*:}
-    test -e "$root$path" || {
-        printf 'missing packaged file: %s\n' "$path" >&2
-        exit 1
-    }
-    if test "$mode" = x; then
-        test -x "$root$path" || {
+    case "$kind" in
+        f) test -f "$root$path" || {
+            printf 'missing packaged file: %s\n' "$path" >&2
+            exit 1
+        };;
+        x) test -x "$root$path" || {
             printf 'packaged file is not executable: %s\n' "$path" >&2
             exit 1
-        }
-    fi
+        };;
+        *)
+            printf 'invalid package manifest entry: %s\n' "$entry" >&2
+            exit 1
+            ;;
+    esac
 done
 
 for path in \

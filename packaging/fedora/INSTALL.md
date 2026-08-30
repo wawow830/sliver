@@ -51,9 +51,9 @@ Build and inspect the RPM with Fedora's normal tools:
 
 ```sh
 mkdir -p ~/rpmbuild/SOURCES
-
-git archive --format=tar.gz --prefix=sliver-0.1.0/ \
-  -o ~/rpmbuild/SOURCES/sliver-0.1.0.tar.gz HEAD
+version=$(awk '$1 == "Version:" { print $2 }' packaging/fedora/sliver.spec)
+git archive --format=tar.gz --prefix="sliver-${version}/" \
+  -o "$HOME/rpmbuild/SOURCES/sliver-${version}.tar.gz" HEAD
 cp packaging/fedora/sliver.sysusers ~/rpmbuild/SOURCES/
 rpmbuild -ba packaging/fedora/sliver.spec
 rpm -qlp ~/rpmbuild/RPMS/$(uname -m)/sliver-*.rpm

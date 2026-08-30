@@ -9,7 +9,7 @@ Source0:        sliver-%{version}.tar.gz
 Source1:        sliver.sysusers
 
 BuildRequires:  cargo
-BuildRequires:  rust-packaging
+BuildRequires:  cargo-rpm-macros >= 24
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  pkgconfig(cairo)
 BuildRequires:  pkgconfig(libsystemd)
@@ -29,13 +29,13 @@ Lua workers, but does not enable them or take over the Touch Bar during install.
 
 %prep
 %autosetup -n sliver-%{version}
+%cargo_prep
+
+%generate_buildrequires
+%cargo_generate_buildrequires -t
 
 %build
-cargo build --release --locked --package sliverd \
-    --bin sliver \
-    --bin sliver-broker \
-    --bin sliver-supervisor \
-    --bin sliver-lua-worker
+%cargo_build -- --package sliverd --bin sliver --bin sliver-broker --bin sliver-supervisor --bin sliver-lua-worker
 
 %install
 install -Dpm0755 target/release/sliver \
@@ -62,14 +62,12 @@ install -Dpm0644 packaging/fedora/sliver.sysusers \
 # Fedora mock builds without a user manager may opt out explicitly, but an
 # installed Fedora Asahi validation must run the complete suite.
 if systemd-run --user --wait --quiet true; then
-    cargo test --release --locked --package sliverd --lib
+    %cargo_test -- --package sliverd --lib
 else
     echo 'Skipping user-manager integration tests: no systemd user manager' >&2
-    cargo test --release --locked --package sliverd --lib -- \
-        --skip systemd_worker_uses_the_declared_resource_and_device_policy \
-        --skip production_peer_verification_accepts_a_real_supervisor_unit
+    %cargo_test -- --package sliverd --lib -- --skip systemd_worker_uses_the_declared_resource_and_device_policy --skip production_peer_verification_accepts_a_real_supervisor_unit
 fi
-cargo test --release --locked --package sliverd --test sliver_cli
+%cargo_test -- --package sliverd --test sliver_cli
 packaging/fedora/check-install.sh %{buildroot}
 
 %pre
