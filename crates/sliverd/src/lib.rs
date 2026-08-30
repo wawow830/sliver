@@ -52,8 +52,17 @@ pub fn broker_main() -> Result<()> {
 
 /// Run the per-user supervisor process.
 pub fn supervisor_main() -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let running = Arc::new(AtomicBool::new(true));
+    let signal_running = running.clone();
+    ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
     loop {
-        let result = supervisor_main_inner();
+        if !running.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let result = supervisor_main_inner(running.clone());
         if is_transient_supervisor_error(&result) {
             std::thread::sleep(std::time::Duration::from_secs(1));
             continue;
@@ -65,21 +74,28 @@ pub fn supervisor_main() -> Result<()> {
     }
 }
 
-fn is_transient_supervisor_error(result: &Result<()>) -> bool {
-    let Err(error) = result else {
-        return false;
-    };
-    let message = format!("{error:#}");
-    message.contains("no local user session is active")
-        || message.contains("worker is not owned by the active user")
-        || message.contains("active user session ended")
+#[derive(Debug)]
+struct WaitForActiveSession;
+
+impl std::fmt::Display for WaitForActiveSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("waiting for an active local user session")
+    }
 }
 
-fn supervisor_main_inner() -> Result<()> {
+impl std::error::Error for WaitForActiveSession {}
+
+fn is_transient_supervisor_error(result: &Result<()>) -> bool {
+    result.as_ref().err().is_some_and(|error| {
+        error
+            .chain()
+            .any(|cause| cause.downcast_ref::<WaitForActiveSession>().is_some())
+    })
+}
+
+fn supervisor_main_inner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
 
     let socket = apply_ipc::supervisor_socket_path()?;
     let socket_directory = socket
@@ -120,9 +136,6 @@ fn supervisor_main_inner() -> Result<()> {
         crate::logind::RealLogind::default(),
         Some(default_source::source()),
     )?;
-    let running = Arc::new(AtomicBool::new(true));
-    let signal_running = running.clone();
-    ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
     let serve_result = supervisor::serve_until(listener, &mut supervisor, running);
     let session_revoked = supervisor.hardware().session_revoked();
     let handoff_result = if session_revoked {
@@ -141,7 +154,7 @@ fn supervisor_main_inner() -> Result<()> {
     };
     let graceful_service_stop = serve_result.is_ok();
     let service_result = if session_revoked {
-        Err(anyhow::anyhow!("active user session ended"))
+        Err(anyhow::anyhow!("active user session ended")).context(WaitForActiveSession)
     } else {
         serve_result
     };

@@ -101,7 +101,16 @@ impl TouchBarHardware for BrokerHardware {
         let (status, body) = response
             .split_first()
             .context("broker claim response is empty")?;
-        ensure!(*status == OK, "{}", String::from_utf8_lossy(body));
+        if *status != OK {
+            let message = String::from_utf8_lossy(body).into_owned();
+            let error = anyhow::anyhow!(message.clone());
+            if message.contains("no local user session is active")
+                || message.contains("worker is not owned by the active user")
+            {
+                return Err(error.context(crate::WaitForActiveSession));
+            }
+            return Err(error);
+        }
         let (input_state, backlight) = decode_claim(body)?;
         self.stream = Some(stream);
         self.input_state = input_state;
@@ -584,10 +593,16 @@ fn ensure_supervisor_peer(pid: libc::pid_t) -> Result<()> {
 }
 
 fn is_disconnect(error: &anyhow::Error) -> bool {
-    let message = format!("{error:#}");
-    message.contains("failed to fill whole buffer")
-        || message.contains("failed to read")
-        || message.contains("early eof")
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+            )
+        })
+    })
 }
 
 fn write_message(stream: &mut UnixStream, operation: u8, payload: &[u8]) -> Result<()> {
