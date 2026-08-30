@@ -719,6 +719,20 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let candidate_backlight = pending_backlight.unwrap_or(old_backlight);
         let brightness_attempted = pending_backlight.is_some();
         let mut brightness_changed = false;
+        let now = self.now_seconds();
+        if let Err(error) = worker.commit(now, self.input_state) {
+            return self.rollback_candidate(
+                CandidateRollback {
+                    previous_path_state: previous_path_state.as_ref(),
+                    old_frame: old_frame.as_ref(),
+                    old_backlight,
+                    restore_frame: false,
+                    restore_backlight: false,
+                    old_synthetic: None,
+                },
+                error,
+            );
+        }
         if let Some(level) = pending_backlight {
             if !preserve_recovery {
                 if let Err(error) = self.hardware.set_backlight(level) {
@@ -809,21 +823,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     error,
                 );
             }
-        }
-
-        let now = self.now_seconds();
-        if let Err(error) = worker.commit(now, self.input_state) {
-            return self.rollback_candidate(
-                CandidateRollback {
-                    previous_path_state: previous_path_state.as_ref(),
-                    old_frame: old_frame.as_ref(),
-                    old_backlight,
-                    restore_frame: !preserve_recovery,
-                    restore_backlight: brightness_changed,
-                    old_synthetic: None,
-                },
-                error,
-            );
         }
 
         if let Err(error) = self.release_synthetic_keys() {

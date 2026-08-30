@@ -477,7 +477,7 @@ impl HeldKeys {
         }
     }
 
-    fn release<H: TouchBarHardware>(&mut self, hardware: &mut SharedHardware<H>) -> Result<()> {
+    fn release<H: TouchBarHardware>(&mut self, hardware: &mut H) -> Result<()> {
         let events: Vec<_> = self
             .keys
             .iter()
@@ -495,7 +495,7 @@ impl HeldKeys {
 
 fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
     stream: UnixStream,
-    fallback: &mut Supervisor<SharedHardware<H>, L>,
+    fallback: &mut Supervisor<H, L>,
     authorizer: &SessionAuthorizer<L>,
     fallback_running: &mut bool,
     seat: &str,
@@ -524,7 +524,7 @@ fn handle_client<H: TouchBarHardware, L: crate::logind::Logind>(
 
 fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     mut stream: UnixStream,
-    fallback: &mut Supervisor<SharedHardware<H>, L>,
+    fallback: &mut Supervisor<H, L>,
     authorizer: &SessionAuthorizer<L>,
     fallback_running: &mut bool,
     client_state: &mut ClientState,
@@ -996,13 +996,166 @@ fn decode_frame(payload: &[u8]) -> Result<LogicalFrame> {
 #[cfg(test)]
 mod tests {
     use std::os::unix::net::UnixListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
-    use crate::hardware::{FakeTouchBar, FrameSnapshot};
+    use crate::hardware::{
+        FakeTouchBar, FrameSnapshot, HardwareEvent, InputState, LogicalFrame, ModifierState,
+        SyntheticKeyEvent, TouchBarHardware,
+    };
     use crate::logind::{ActiveSession, FakeLogind};
     use crate::lua_worker::LuaSource;
 
     use super::*;
+
+    #[derive(Clone)]
+    struct ThreadFakeHardware(Arc<Mutex<FakeTouchBar>>);
+
+    impl ThreadFakeHardware {
+        fn new() -> Self {
+            Self(Arc::new(Mutex::new(FakeTouchBar::new())))
+        }
+
+        fn inspect<R>(&self, inspect: impl FnOnce(&FakeTouchBar) -> R) -> R {
+            inspect(&self.0.lock().expect("test hardware mutex poisoned"))
+        }
+    }
+
+    impl TouchBarHardware for ThreadFakeHardware {
+        fn claim(&mut self) -> Result<()> {
+            self.0.lock().expect("test hardware mutex poisoned").claim()
+        }
+
+        fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .poll(timeout)
+        }
+
+        fn input_state(&self) -> InputState {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .input_state()
+        }
+
+        fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .present(frame)
+        }
+
+        fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .emit_key_events(events)
+        }
+
+        fn tap_function_key(&mut self, index: usize, modifiers: ModifierState) -> Result<()> {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .tap_function_key(index, modifiers)
+        }
+
+        fn get_backlight(&mut self) -> Result<f64> {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .get_backlight()
+        }
+
+        fn set_backlight(&mut self, level: f64) -> Result<()> {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .set_backlight(level)
+        }
+
+        fn release(&mut self) -> Result<()> {
+            self.0
+                .lock()
+                .expect("test hardware mutex poisoned")
+                .release()
+        }
+    }
+
+    #[test]
+    fn real_supervisor_applies_a_lua_worker_through_the_broker_ipc_seam() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let source = directory.path().join("user.lua");
+        std::fs::write(
+            &source,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_session(
+            std::process::id() as libc::pid_t,
+            Some(crate::logind::Session {
+                id: "broker-test-session".into(),
+                uid,
+                seat: Some(SEAT.into()),
+                remote: false,
+                active: true,
+            }),
+        );
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "broker-test-session".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let broker_state = directory.path().join("broker-state/config-path");
+        let user_state = directory.path().join("user-state/config-path");
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let mut fallback =
+                Supervisor::new_with_logind(server_shared, broker_state, server_logind.clone())?;
+            let authorizer = SessionAuthorizer::new(server_logind);
+            let (stream, _) = listener.accept()?;
+            let mut fallback_running = false;
+            handle_client(
+                stream,
+                &mut fallback,
+                &authorizer,
+                &mut fallback_running,
+                SEAT,
+                false,
+            )?;
+            fallback.shutdown()
+        });
+
+        let mut user = Supervisor::new_with_logind(
+            BrokerHardware::new_at(socket),
+            user_state.clone(),
+            FakeLogind::new(),
+        )?;
+        user.apply(&source)?;
+        let frame = shared.inspect(|hardware| {
+            hardware
+                .presented_frames()
+                .last()
+                .cloned()
+                .expect("broker-backed supervisor did not present a frame")
+        });
+        assert_eq!(frame.rgba_at(10, 10), [255, 0, 0, 255]);
+        assert_eq!(
+            std::fs::read(user_state)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        user.shutdown()?;
+        server.join().expect("broker server panicked")?;
+        Ok(())
+    }
 
     #[test]
     fn broker_handoff_keeps_frames_and_restarts_the_fallback_after_logout() -> Result<()> {
