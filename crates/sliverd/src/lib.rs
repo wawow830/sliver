@@ -40,7 +40,7 @@ pub fn lua_worker_main() -> Result<()> {
     lua_worker::worker_process_main()
 }
 
-/// Run the per-user supervisor process.
+/// Run the system hardware broker process.
 #[doc(hidden)]
 pub fn broker_main() -> Result<()> {
     let result = broker_ipc::broker_main();
@@ -52,11 +52,27 @@ pub fn broker_main() -> Result<()> {
 
 /// Run the per-user supervisor process.
 pub fn supervisor_main() -> Result<()> {
-    let result = supervisor_main_inner();
-    if let Err(error) = &result {
-        system_log::broker_error(format!("supervisor service failed: {error:#}"));
+    loop {
+        let result = supervisor_main_inner();
+        if is_transient_supervisor_error(&result) {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            continue;
+        }
+        if let Err(error) = &result {
+            system_log::broker_error(format!("supervisor service failed: {error:#}"));
+        }
+        return result;
     }
-    result
+}
+
+fn is_transient_supervisor_error(result: &Result<()>) -> bool {
+    let Err(error) = result else {
+        return false;
+    };
+    let message = format!("{error:#}");
+    message.contains("no local user session is active")
+        || message.contains("worker is not owned by the active user")
+        || message.contains("active user session ended")
 }
 
 fn supervisor_main_inner() -> Result<()> {
@@ -123,15 +139,16 @@ fn supervisor_main_inner() -> Result<()> {
     } else {
         Ok(())
     };
+    let graceful_service_stop = serve_result.is_ok();
     let service_result = if session_revoked {
         Err(anyhow::anyhow!("active user session ended"))
     } else {
         serve_result
     };
-    let shutdown_result = if session_revoked {
-        supervisor.shutdown()
-    } else {
+    let shutdown_result = if session_revoked || graceful_service_stop {
         supervisor.shutdown_for_logout()
+    } else {
+        supervisor.shutdown()
     };
     let _ = std::fs::remove_file(&socket);
     let service_result = match (service_result, handoff_result) {

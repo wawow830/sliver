@@ -1,9 +1,17 @@
 # systemd services and worker policy
 
-The system broker owns the Touch Bar before login. Install
-`sliver-broker.service` after the `sliver` account has the required DRM, input,
-and uinput device permissions. Enable a lingering user manager for `sliver` so
-its restricted fallback worker can start before login:
+The system broker owns the Touch Bar before login. Create a group for users
+who may run a supervisor, add those users, and install `sliver-broker.service`
+after the `sliver` account has the required DRM, input, and uinput device
+permissions:
+
+```sh
+sudo groupadd --system sliver-supervisors
+sudo usermod --append --groups sliver-supervisors "$USER"
+```
+
+Enable a lingering user manager for `sliver` so its restricted fallback worker
+can start before login:
 
 ```sh
 sudo loginctl enable-linger sliver
@@ -17,7 +25,8 @@ sudo systemctl enable --now sliver-broker.service
 
 The broker conflicts with `tiny-dfr.service`; stopping it does not start
 `tiny-dfr` again. Enable `systemd/user/sliver-supervisor.service` for each user
-that should run a Lua supervisor. The supervisor keeps its apply socket in that
+that should run a Lua supervisor. Log out and back in after changing group
+membership. The supervisor keeps its apply socket in that
 user's `$XDG_RUNTIME_DIR` and starts workers with that user's user manager.
 
 Install the worker drop-in under `/etc/systemd/user/sliver-lua-worker-.service.d/`

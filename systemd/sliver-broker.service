@@ -7,7 +7,7 @@ Before=tiny-dfr.service
 [Service]
 Type=simple
 User=sliver
-Group=users
+Group=sliver-supervisors
 SupplementaryGroups=video input
 RuntimeDirectory=sliver
 RuntimeDirectoryMode=0755

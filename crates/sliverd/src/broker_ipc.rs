@@ -79,7 +79,7 @@ impl BrokerHardware {
             ERROR => bail!("{}", String::from_utf8_lossy(body)),
             SESSION_REVOKED if operation == POLL => {
                 self.session_revoked = true;
-                Ok(body.to_vec())
+                bail!("broker revoked the user session")
             }
             SESSION_REVOKED => {
                 self.session_revoked = true;
@@ -491,6 +491,12 @@ fn handle_client_inner(
         if session_revoked {
             if *operation == EMIT_KEYS {
                 let events = decode_key_events(payload)?;
+                ensure!(
+                    events
+                        .iter()
+                        .all(|event| !event.active && held_keys.keys.contains(&event.key)),
+                    "revoked worker attempted new synthetic output"
+                );
                 fallback.hardware_mut().emit_key_events(&events)?;
                 held_keys.observe(&events);
                 write_message(&mut stream, OK, &[])?;

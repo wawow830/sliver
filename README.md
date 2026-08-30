@@ -143,7 +143,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 - Per-widget color, font size, bold, background pill, alignment, and width
 - Shell actions on touch
 - Live battery data and once-per-second redraws
-- Live apply via `$XDG_RUNTIME_DIR/sliver.sock`
+- Live apply via `$XDG_RUNTIME_DIR/sliver/supervisor.sock`
 - Touch press feedback
 - Momentary Fn/Globe F1–F12 layer with modifier bridging
 - GTK4/libadwaita customizer
