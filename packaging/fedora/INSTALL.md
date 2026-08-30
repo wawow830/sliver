@@ -50,7 +50,11 @@ journal. Broker output goes to the system journal.
 Build and inspect the RPM with Fedora's normal tools:
 
 ```sh
-spectool -g -R packaging/fedora/sliver.spec
+mkdir -p ~/rpmbuild/SOURCES
+
+git archive --format=tar.gz --prefix=sliver-0.1.0/ \
+  -o ~/rpmbuild/SOURCES/sliver-0.1.0.tar.gz HEAD
+cp packaging/fedora/sliver.sysusers ~/rpmbuild/SOURCES/
 rpmbuild -ba packaging/fedora/sliver.spec
 rpm -qlp ~/rpmbuild/RPMS/$(uname -m)/sliver-*.rpm
 ```

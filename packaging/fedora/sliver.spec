@@ -5,8 +5,8 @@ Summary:        Lua-scriptable Touch Bar service for Asahi Linux
 License:        MIT OR Apache-2.0
 URL:            https://github.com/wawow830/sliver
 ExclusiveArch:  aarch64
-Source0:        %{url}/archive/v%{version}/sliver-%{version}.tar.gz
-Source1:        %{url}/raw/v%{version}/packaging/fedora/sliver.sysusers
+Source0:        sliver-%{version}.tar.gz
+Source1:        sliver.sysusers
 
 BuildRequires:  cargo
 BuildRequires:  rust-packaging
