@@ -523,20 +523,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         logind: L,
         injected_default: Option<LuaSource>,
     ) -> Result<Self> {
-        let default_source = injected_default.unwrap_or_else(default_source::source);
-        let mut supervisor = Self::new_with_logind_and_default(
+        Self::new_with_startup_candidate_source(
             hardware,
-            state_file.clone(),
+            state_file,
             logind,
-            default_source,
-        )?;
-        let saved = read_selected_path(&state_file)?;
-        let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
-        if let Err(error) = supervisor.startup_candidate(selection) {
-            eprintln!("selected Lua worker entered recovery: {error:#}");
-            supervisor.enter_recovery()?;
-        }
-        Ok(supervisor)
+            injected_default.unwrap_or_else(default_source::source),
+        )
     }
 
     #[cfg(not(test))]
@@ -545,11 +537,25 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         state_file: PathBuf,
         logind: L,
     ) -> Result<Self> {
+        Self::new_with_startup_candidate_source(
+            hardware,
+            state_file,
+            logind,
+            default_source::source(),
+        )
+    }
+
+    fn new_with_startup_candidate_source(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+        default_source: LuaSource,
+    ) -> Result<Self> {
         let mut supervisor = Self::new_with_logind_and_default(
             hardware,
             state_file.clone(),
             logind,
-            default_source::source(),
+            default_source,
         )?;
         let saved = read_selected_path(&state_file)?;
         let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
