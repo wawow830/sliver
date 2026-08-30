@@ -719,6 +719,18 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let candidate_backlight = pending_backlight.unwrap_or(old_backlight);
         let brightness_attempted = pending_backlight.is_some();
         let mut brightness_changed = false;
+        // This is the last ownership check before committing the staged
+        // worker. The broker confirms again after presentation to catch a
+        // session change during the hardware operation.
+        if let Some(authorization) = authorization {
+            self.authorizer
+                .recheck(authorization.peer, &authorization.grant)
+                .map_err(CandidateFailure::Authorization)?;
+        }
+        if self.fallback_worker {
+            self.ensure_fallback_unowned()
+                .map_err(CandidateFailure::Candidate)?;
+        }
         let now = self.now_seconds();
         if let Err(error) = worker.commit(now, self.input_state) {
             return self.rollback_candidate(
@@ -784,47 +796,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 error,
             );
         }
-        if let Some(authorization) = authorization {
-            if let Err(error) = self
-                .authorizer
-                .recheck(authorization.peer, &authorization.grant)
-            {
-                return self
-                    .rollback_candidate(
-                        CandidateRollback {
-                            previous_path_state: previous_path_state.as_ref(),
-                            old_frame: old_frame.as_ref(),
-                            old_backlight,
-                            restore_frame: !preserve_recovery,
-                            restore_backlight: brightness_changed,
-                            old_synthetic: None,
-                        },
-                        error,
-                    )
-                    .map_err(|failure| match failure {
-                        CandidateFailure::Candidate(error)
-                        | CandidateFailure::Authorization(error) => {
-                            CandidateFailure::Authorization(error)
-                        }
-                    });
-            }
-        }
-        if self.fallback_worker {
-            if let Err(error) = self.ensure_fallback_unowned() {
-                return self.rollback_candidate(
-                    CandidateRollback {
-                        previous_path_state: previous_path_state.as_ref(),
-                        old_frame: old_frame.as_ref(),
-                        old_backlight,
-                        restore_frame: !preserve_recovery,
-                        restore_backlight: brightness_changed,
-                        old_synthetic: None,
-                    },
-                    error,
-                );
-            }
-        }
-
         if let Err(error) = self.release_synthetic_keys() {
             return self.rollback_candidate(
                 CandidateRollback {
