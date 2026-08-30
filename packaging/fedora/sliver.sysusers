@@ -1,0 +1,5 @@
+# The broker and its pre-login worker run under this account. The supervisor
+# socket is readable by members of sliver-supervisors, not by every local user.
+u sliver - "Sliver Touch Bar broker" /var/lib/sliver
+
+g sliver-supervisors -

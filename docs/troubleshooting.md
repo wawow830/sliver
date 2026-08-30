@@ -27,8 +27,9 @@ id
 ls -l /dev/dri/card1 /dev/input/event1 /dev/input/event2 /dev/uinput
 ```
 
-The tested Fedora setup grants access through `video` and `input`. Group
-changes require a new login session.
+The Fedora package grants hardware access to the `sliver` broker account
+through udev. A user applying a config needs membership in
+`sliver-supervisors`; group changes require a new login session.
 
 ## The strip still shows an old image
 

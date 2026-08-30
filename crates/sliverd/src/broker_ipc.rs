@@ -286,7 +286,7 @@ pub(crate) fn broker_main() -> Result<()> {
         .parent()
         .context("broker socket path has no parent directory")?;
     std::fs::create_dir_all(directory)?;
-    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o750))?;
     if socket.exists() {
         let _ = std::fs::remove_file(&socket);
     }

@@ -177,9 +177,11 @@ Sliver requires:
 - read/write access to the touch evdev node
 - read/write access to `/dev/uinput`
 
-On this Fedora installation, membership in `video` and `input` provides those
-permissions. DRM master is acquired by the first suitable opener; tiny-dfr and
-Sliver cannot own the panel simultaneously.
+The Fedora package grants those permissions to the `sliver` broker account
+through its udev rules and systemd service. Users only need membership in
+`sliver-supervisors` to connect their supervisor to the broker. DRM master is
+acquired by the first suitable opener; tiny-dfr and Sliver cannot own the panel
+simultaneously.
 
 Button/label actions execute with the Sliver user's privileges through
 `sh -c`. Configs must therefore be treated as executable content.

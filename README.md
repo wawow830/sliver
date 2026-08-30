@@ -36,12 +36,17 @@ cd ~/Projects/sliver
 cargo build --release
 ```
 
-The user running Sliver needs access to the `video` and `input` groups:
+For the supported Fedora Asahi installation, build the RPM in
+`packaging/fedora/sliver.spec`. It installs `/usr/bin/sliver` and keeps the
+service binaries in `/usr/libexec/sliver`. The package does not enable the
+services or install an editable copy of `default.lua`.
 
 ```bash
-id
-ls -l /dev/dri/card1 /dev/input/event2 /dev/uinput
+rpmbuild -ba packaging/fedora/sliver.spec
 ```
+
+The development binaries use the current user's device permissions. The
+installed broker uses the `sliver` account and the package's udev rules.
 
 ## Run
 

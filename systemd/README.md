@@ -1,14 +1,11 @@
 # systemd services and worker policy
 
-The system broker owns the Touch Bar before login. Create a group for users
-who may run a supervisor, add those users, and install `sliver-broker.service`
-after the `sliver` account has the required DRM, input, and uinput device
-permissions:
-
-```sh
-sudo groupadd --system sliver-supervisors
-sudo usermod --append --groups sliver-supervisors "$USER"
-```
+The Fedora package creates the `sliver` broker account and the
+`sliver-supervisors` group. Add users who may run a supervisor to that group.
+The package also installs the M2 udev rules that grant the broker its DRM,
+input, uinput, and backlight access. It does not enable either service.
+See [the Fedora package instructions](../packaging/fedora/README.md) for the
+initial account setup and explicit takeover command.
 
 Enable a lingering user manager for `sliver` so its restricted fallback worker
 can start before login:
@@ -17,21 +14,15 @@ can start before login:
 sudo loginctl enable-linger sliver
 ```
 
-Enable the broker only as the administrator's explicit takeover step:
-
-```sh
-sudo systemctl enable --now sliver-broker.service
-```
-
 The broker conflicts with `tiny-dfr.service`; stopping it does not start
-`tiny-dfr` again. Enable `systemd/user/sliver-supervisor.service` for each user
-that should run a Lua supervisor. Log out and back in after changing group
-membership. The supervisor keeps its apply socket in that
-user's `$XDG_RUNTIME_DIR` and starts workers with that user's user manager.
+`tiny-dfr` again. Enable `sliver-supervisor.service` for each user that should
+run a Lua supervisor. Log out and back in after changing group membership. The
+supervisor keeps its apply socket in that user's `$XDG_RUNTIME_DIR` and starts
+workers with that user's user manager.
 
-Install the worker drop-in under `/etc/systemd/user/sliver-lua-worker-.service.d/`
-and run `systemctl --user daemon-reload` after changing it. The dash-truncated
-unit name applies the policy to generated `sliver-lua-worker-*.service` units.
+The worker drop-in belongs under `/usr/lib/systemd/user/sliver-lua-worker-.service.d/`
+when installed from the package. The dash-truncated unit name applies the
+policy to generated `sliver-lua-worker-*.service` units.
 
 Workers have no Lua, TOML, or CLI setting for memory or task limits. A host
 administrator changes those limits here. The user who owns the user manager can
