@@ -31,9 +31,10 @@ The broker conflicts with `tiny-dfr.service` and starts before it. Stopping the
 broker does not start `tiny-dfr` again. Start `tiny-dfr` manually when handing
 back ownership.
 
-The udev rule grants the broker's existing `video` and `input` device access
-only for the tested M2 adapter: the Asahi DRM card, the Mac14,7 Touch Bar, the
-Apple MTP keyboard, uinput, and the DSI backlight. Lua workers run in transient
+The udev rules grant the broker device-specific access through dedicated
+`sliver-drm`, `sliver-input`, and `sliver-backlight` groups: the Asahi DRM
+card, the Mac14,7 Touch Bar, the Apple MTP keyboard, uinput, and the DSI
+backlight. Lua workers run in transient
 user units with private devices, closed device policy, no new privileges, a
 512 MiB memory limit, and a 64-task limit. Their output goes to the user
 journal. Broker output goes to the system journal.

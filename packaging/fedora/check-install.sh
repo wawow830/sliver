@@ -46,8 +46,11 @@ grep -F 'Group=sliver-supervisors' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
 grep -F 'RuntimeDirectoryMode=0750' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
-grep -F 'SupplementaryGroups=video input' \
+grep -F 'SupplementaryGroups=sliver-drm sliver-input sliver-backlight' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
+grep -F 'g sliver-drm -' "$root/usr/lib/sysusers.d/sliver.conf" >/dev/null
+grep -F 'g sliver-input -' "$root/usr/lib/sysusers.d/sliver.conf" >/dev/null
+grep -F 'g sliver-backlight -' "$root/usr/lib/sysusers.d/sliver.conf" >/dev/null
 grep -F 'ExecStart=/usr/libexec/sliver/sliver-broker' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
 grep -F 'Conflicts=tiny-dfr.service' \

@@ -1878,7 +1878,7 @@ mod tests {
 
         for setting in [
             "User=sliver",
-            "SupplementaryGroups=video input",
+            "SupplementaryGroups=sliver-drm sliver-input sliver-backlight",
             "Restart=on-failure",
         ] {
             assert!(broker.contains(setting), "broker service lacks {setting}");

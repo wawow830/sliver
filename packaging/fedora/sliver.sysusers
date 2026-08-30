@@ -3,3 +3,6 @@
 u sliver - "Sliver Touch Bar broker" /var/lib/sliver
 
 g sliver-supervisors -
+g sliver-drm -
+g sliver-input -
+g sliver-backlight -

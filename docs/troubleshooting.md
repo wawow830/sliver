@@ -27,8 +27,8 @@ id
 ls -l /dev/dri/card1 /dev/input/event1 /dev/input/event2 /dev/uinput
 ```
 
-The Fedora package grants hardware access to the `sliver` broker account
-through udev. A user applying a config needs membership in
+The Fedora package grants device-specific hardware access to the `sliver`
+broker account through dedicated udev groups. A user applying a config needs membership in
 `sliver-supervisors`; group changes require a new login session.
 
 ## The strip still shows an old image

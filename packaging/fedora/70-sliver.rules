@@ -1,9 +1,9 @@
 # Sliver's adapter only needs the tested M2 Touch Bar devices. Keep these
 # rules tied to device identity so event and DRM numbering may change.
-SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="adp", GROUP="video", MODE="0660"
-SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="Mac14,7 Touch Bar", GROUP="input", MODE="0660"
-SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="Apple MTP keyboard", GROUP="input", MODE="0640"
-KERNEL=="uinput", GROUP="input", MODE="0660"
-SUBSYSTEM=="backlight", KERNEL=="228600000.dsi.0", GROUP="video", MODE="0660", \
-  RUN+="/usr/bin/chgrp video /sys/class/backlight/%k/brightness", \
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="adp", GROUP="sliver-drm", MODE="0660"
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="Mac14,7 Touch Bar", GROUP="sliver-input", MODE="0660"
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="Apple MTP keyboard", GROUP="sliver-input", MODE="0640"
+KERNEL=="uinput", GROUP="sliver-input", MODE="0660"
+SUBSYSTEM=="backlight", KERNEL=="*dsi*", GROUP="sliver-backlight", MODE="0660", \
+  RUN+="/usr/bin/chgrp sliver-backlight /sys/class/backlight/%k/brightness", \
   RUN+="/usr/bin/chmod 0660 /sys/class/backlight/%k/brightness"
