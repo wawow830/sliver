@@ -569,19 +569,23 @@ struct TouchInput {
     grabbed: bool,
 }
 
-fn open_touch_device() -> io::Result<(PathBuf, evdev::Device)> {
+fn open_named_event_device(name: &str) -> io::Result<(PathBuf, evdev::Device)> {
     for path in numbered_device_paths("/dev/input", "event")? {
         let Ok(device) = evdev::Device::open(&path) else {
             continue;
         };
-        if device.name() == Some(TOUCH_NAME) {
+        if device.name() == Some(name) {
             return Ok((path, device));
         }
     }
     Err(io::Error::new(
         io::ErrorKind::NotFound,
-        format!("input device {TOUCH_NAME:?} not found"),
+        format!("input device {name:?} not found"),
     ))
+}
+
+fn open_touch_device() -> io::Result<(PathBuf, evdev::Device)> {
+    open_named_event_device(TOUCH_NAME)
 }
 
 impl TouchInput {
@@ -700,25 +704,7 @@ impl Drop for TouchInput {
 /// Find the internal keyboard by identity rather than assuming event1 will
 /// remain event1 forever.
 fn open_main_keyboard() -> io::Result<(PathBuf, evdev::Device)> {
-    for entry in std::fs::read_dir("/dev/input")? {
-        let path = entry?.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !name.starts_with("event") {
-            continue;
-        }
-        let Ok(device) = evdev::Device::open(&path) else {
-            continue;
-        };
-        if device.name() == Some(KEYBOARD_NAME) {
-            return Ok((path, device));
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        format!("input device {KEYBOARD_NAME:?} not found"),
-    ))
+    open_named_event_device(KEYBOARD_NAME)
 }
 
 struct KeyboardInput {
@@ -1092,7 +1078,15 @@ impl M2TouchBar {
         self.physical_surface = Some(physical_surface);
 
         let setup_result = (|| -> Result<()> {
-            self.touch = Some(TouchInput::open().context("opening Touch Bar touch input")?);
+            self.touch = match TouchInput::open() {
+                Ok(touch) => Some(touch),
+                Err(error) => {
+                    crate::system_log::broker_error(format!(
+                        "touch: can't discover {TOUCH_NAME}: {error} (continuing untouchable)"
+                    ));
+                    None
+                }
+            };
             let keyboard = KeyboardInput::open().context("opening internal keyboard")?;
             self.modifiers = keyboard.initial_modifiers();
             self.keyboard = Some(keyboard);

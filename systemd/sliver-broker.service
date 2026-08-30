@@ -3,6 +3,8 @@ Description=Sliver Touch Bar hardware broker
 After=systemd-logind.service
 Conflicts=tiny-dfr.service
 Before=tiny-dfr.service
+StartLimitIntervalSec=30s
+StartLimitBurst=5
 
 [Service]
 Type=simple

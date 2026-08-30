@@ -22,6 +22,7 @@ then perform the takeover explicitly:
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=drm
 sudo udevadm trigger --subsystem-match=input
+sudo udevadm trigger --subsystem-match=misc
 sudo udevadm trigger --subsystem-match=backlight
 ```
 
