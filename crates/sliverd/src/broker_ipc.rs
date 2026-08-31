@@ -706,11 +706,17 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         stream.set_read_timeout(Some(Duration::from_millis(10)))?;
     }
     if matches!(peer_verification, PeerVerification::Production) {
-        ensure_supervisor_peer(peer.pid)?;
+        if let Err(error) = ensure_supervisor_peer(peer.pid) {
+            write_message(&mut stream, ERROR, error.to_string().as_bytes())?;
+            return Err(error);
+        }
     }
     #[cfg(test)]
     if matches!(peer_verification, PeerVerification::TestProduction) {
-        ensure_supervisor_test_peer(peer.pid)?;
+        if let Err(error) = ensure_supervisor_test_peer(peer.pid) {
+            write_message(&mut stream, ERROR, error.to_string().as_bytes())?;
+            return Err(error);
+        }
     }
     let request = read_message(&mut stream)?;
     let (operation, payload) = request.split_first().context("broker request is empty")?;
@@ -731,19 +737,17 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     let grant = match authorizer.authorize_active_uid(peer_uid, seat) {
         Ok(grant) => grant,
         Err(error) => {
-            let status = if error.chain().any(|cause| {
-                cause.downcast_ref::<NoActiveUserSession>().is_some()
-                    || cause.downcast_ref::<WorkerNotOwnedByActiveUser>().is_some()
-            }) {
-                WAIT_FOR_SESSION
-            } else {
-                ERROR
-            };
+            let status = broker_error_status(&error);
             write_message(&mut stream, status, error.to_string().as_bytes())?;
             return Err(error);
         }
     };
-    authorizer.recheck_active_uid(peer_uid, &grant)?;
+    if let Err(error) = authorizer.recheck_active_uid(peer_uid, &grant) {
+        // The session can change during this short claim transaction. Tell a
+        // supervisor to retry instead of closing the stream with a raw reset.
+        write_message(&mut stream, WAIT_FOR_SESSION, error.to_string().as_bytes())?;
+        return Err(error);
+    }
     if *fallback_running {
         fallback.handoff_owner_with_reason(StopReason::Replaced)?;
         *fallback_running = false;
@@ -905,6 +909,17 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     Ok(ClientOutcome {
         logout_acknowledged,
     })
+}
+
+fn broker_error_status(error: &anyhow::Error) -> u8 {
+    if error.chain().any(|cause| {
+        cause.downcast_ref::<NoActiveUserSession>().is_some()
+            || cause.downcast_ref::<WorkerNotOwnedByActiveUser>().is_some()
+    }) {
+        WAIT_FOR_SESSION
+    } else {
+        ERROR
+    }
 }
 
 fn ensure_supervisor_peer(pid: libc::pid_t) -> Result<()> {
@@ -1286,6 +1301,7 @@ fn decode_frame(payload: &[u8]) -> Result<LogicalFrame> {
 mod tests {
     use std::io::Write;
     use std::os::unix::net::{UnixListener, UnixStream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Instant;
@@ -1294,7 +1310,7 @@ mod tests {
         FakeTouchBar, HardwareEvent, InputState, LogicalFrame, ModifierState, SyntheticKeyEvent,
         TouchBarHardware,
     };
-    use crate::logind::{ActiveSession, FakeLogind, Session};
+    use crate::logind::{ActiveSession, FakeLogind, Logind, Session};
     use crate::lua_worker::LuaSource;
     use crate::path_state::PreparedPathState;
     use crate::supervisor::serve_until;
@@ -1374,6 +1390,102 @@ mod tests {
                 .expect("test hardware mutex poisoned")
                 .release()
         }
+    }
+
+    #[derive(Clone)]
+    struct GenerationBumpingLogind {
+        inner: FakeLogind,
+        bump_on_read: usize,
+        generation_reads: Arc<AtomicUsize>,
+    }
+
+    impl GenerationBumpingLogind {
+        fn new(inner: FakeLogind, bump_on_read: usize) -> Self {
+            Self {
+                inner,
+                bump_on_read,
+                generation_reads: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl Logind for GenerationBumpingLogind {
+        fn generation(&self) -> Result<u64> {
+            let read = self.generation_reads.fetch_add(1, Ordering::Relaxed) + 1;
+            if read == self.bump_on_read {
+                self.inner.bump_generation();
+            }
+            self.inner.generation()
+        }
+
+        fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>> {
+            self.inner.session_for_pid(pid)
+        }
+
+        fn active_session(&self, seat: &str) -> Result<Option<ActiveSession>> {
+            self.inner.active_session(seat)
+        }
+    }
+
+    #[test]
+    fn failed_claim_recheck_returns_a_protocol_error_instead_of_reset() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let base_logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        base_logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "claim-recheck-session".into(),
+                uid,
+            }),
+        );
+        let logind = GenerationBumpingLogind::new(base_logind, 3);
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_running = running.clone();
+        let server_logind = logind.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                shared,
+                directory.path().join("broker-state/config-path"),
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                PeerVerification::Test,
+            )
+        });
+
+        let mut client = BrokerHardware::new_at(socket.clone());
+        let error = client
+            .claim()
+            .expect_err("a failed pre-claim recheck reset the broker stream");
+        assert!(
+            format!("{error:#}").contains("worker session changed during broker request"),
+            "unexpected claim error: {error:#}"
+        );
+        assert!(
+            format!("{error:#}").starts_with("waiting for an active local user session:"),
+            "claim recheck failure was not marked retryable: {error:#}"
+        );
+
+        let mut retry = BrokerHardware::new_at(socket);
+        retry.claim()?;
+        retry.release()?;
+
+        running.store(false, Ordering::Release);
+        server.join().expect("broker server panicked")?;
+        Ok(())
     }
 
     #[test]
