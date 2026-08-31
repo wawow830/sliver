@@ -67,8 +67,11 @@ unsafe impl Send for LoginMonitor {}
 
 impl LoginMonitor {
     fn new() -> Result<Self> {
+        // Session and manager-service churn must not invalidate a stable
+        // claim. Seat events still cover active-seat handoff and logout.
+        let category = CString::new("seat").expect("static login monitor category has no NUL");
         let mut raw = ptr::null_mut();
-        let code = unsafe { ffi::sd_login_monitor_new(ptr::null(), &mut raw) };
+        let code = unsafe { ffi::sd_login_monitor_new(category.as_ptr(), &mut raw) };
         ensure!(
             code >= 0,
             "sd_login_monitor_new failed: {}",
@@ -323,6 +326,7 @@ mod fake {
         }
 
         pub(crate) fn set_session(&self, pid: libc::pid_t, session: Option<Session>) {
+            // The real monitor watches seat changes, not every session event.
             let (lock, _) = &*self.state;
             let mut state = lock.lock().expect("fake logind mutex poisoned");
             if let Some(session) = session {
@@ -330,20 +334,13 @@ mod fake {
             } else {
                 state.sessions.remove(&pid);
             }
-            state.generation = state
-                .generation
-                .checked_add(1)
-                .expect("fake logind generation overflow");
         }
 
         pub(crate) fn set_session_for_any_pid(&self, session: Session) {
+            // This models a caller-session lookup, not an active-seat change.
             let (lock, _) = &*self.state;
             let mut state = lock.lock().expect("fake logind mutex poisoned");
             state.default_session = Some(session);
-            state.generation = state
-                .generation
-                .checked_add(1)
-                .expect("fake logind generation overflow");
         }
 
         pub(crate) fn set_active(&self, seat: &str, session: Option<ActiveSession>) {
