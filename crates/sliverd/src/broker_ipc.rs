@@ -1427,6 +1427,68 @@ mod tests {
     }
 
     #[test]
+    fn an_unrelated_logind_session_event_does_not_revoke_a_stable_claim() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "stable-session".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                directory.path().join("broker-state/config-path"),
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                PeerVerification::Test,
+            )
+        });
+
+        let mut client = BrokerHardware::new_at(socket);
+        client.claim()?;
+
+        // A root manager session is unrelated to the active local user on
+        // seat0. It must not revoke an otherwise stable broker claim.
+        logind.set_session(
+            4242,
+            Some(Session {
+                id: "unrelated-root-session".into(),
+                uid: 0,
+                seat: None,
+                remote: false,
+                active: true,
+            }),
+        );
+        client.poll(Duration::ZERO)?;
+        client.release()?;
+
+        running.store(false, Ordering::Release);
+        server.join().expect("broker server panicked")?;
+        Ok(())
+    }
+
+    #[test]
     fn failed_claim_recheck_returns_a_protocol_error_instead_of_reset() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");
