@@ -2194,6 +2194,7 @@ mod tests {
         )?;
         let state_a = directory.path().join("user-a-state/config-path");
         let state_b = directory.path().join("user-b-state/config-path");
+        PreparedPathState::prepare(&state_a, &source_a)?.commit()?;
         let logind = FakeLogind::new();
         let uid = unsafe { libc::getuid() };
         let second_uid = uid.wrapping_add(1);
@@ -2239,12 +2240,12 @@ mod tests {
             )
         });
 
-        let mut first = Supervisor::new_with_logind_process(
+        let mut first = Supervisor::new_with_startup_candidate_process(
             BrokerHardware::new_at(socket.clone()),
             state_a.clone(),
             FakeLogind::new(),
+            None,
         )?;
-        first.apply(&source_a)?;
         assert_eq!(
             shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
             [255, 0, 0, 255]
@@ -2343,6 +2344,9 @@ mod tests {
         }
         assert!(supervisor.contains("WantedBy=graphical-session.target"));
         assert!(supervisor.contains("ConditionGroup=sliver-supervisors"));
+        assert!(!supervisor.contains("PartOf=graphical-session.target"));
+        assert!(!broker.contains("XDG_RUNTIME_DIR=/run/user/%U"));
+        assert!(!broker.contains("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"));
         for setting in [
             "MemoryMax=512M",
             "TasksMax=64",
