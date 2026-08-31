@@ -978,7 +978,7 @@ package_stage() {
         fail_check package_nevra "RPM identity is $identity, expected sliver $expected_version-$expected_release.aarch64"
 
     actual_manifest="$VERIFY_DIR/package-manifest.txt"
-    rpm -qpl "$RPM_PATH" | sort > "$actual_manifest"
+    rpm -qpl "$RPM_PATH" | LC_ALL=C sort > "$actual_manifest"
     if diff -u "$MANIFEST" "$actual_manifest" > "$VERIFY_DIR/package-manifest.diff"; then
         pass_check package_manifest "RPM file list exactly matches $MANIFEST"
     else
