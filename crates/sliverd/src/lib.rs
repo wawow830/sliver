@@ -102,10 +102,12 @@ impl std::error::Error for WaitForActiveSession {}
 
 fn is_transient_supervisor_error(result: &Result<()>) -> bool {
     result.as_ref().err().is_some_and(|error| {
-        error.chain().any(|cause| {
-            cause.downcast_ref::<WaitForActiveSession>().is_some()
-                || cause.downcast_ref::<WaitForHardware>().is_some()
-        })
+        error.downcast_ref::<WaitForActiveSession>().is_some()
+            || error.downcast_ref::<WaitForHardware>().is_some()
+            || error.chain().any(|cause| {
+                cause.downcast_ref::<WaitForActiveSession>().is_some()
+                    || cause.downcast_ref::<WaitForHardware>().is_some()
+            })
     })
 }
 
@@ -218,4 +220,17 @@ fn selected_path_state_file() -> Result<std::path::PathBuf> {
 #[cfg(feature = "calibration")]
 pub fn calibration_main() -> Result<()> {
     m2_hardware::calibration()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wait_for_session_error_restarts_supervisor_startup() {
+        let result: Result<()> =
+            Err(anyhow::anyhow!("claim was deferred").context(WaitForActiveSession));
+
+        assert!(is_transient_supervisor_error(&result));
+    }
 }

@@ -25,6 +25,17 @@ impl std::fmt::Display for WorkerNotOwnedByActiveUser {
 
 impl std::error::Error for WorkerNotOwnedByActiveUser {}
 
+#[derive(Debug)]
+pub(crate) struct SessionChanged(&'static str);
+
+impl std::fmt::Display for SessionChanged {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for SessionChanged {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthorizationGrant {
     session_id: String,
@@ -83,10 +94,11 @@ impl<L: Logind> SessionAuthorizer<L> {
             .logind
             .generation()
             .context("reading the logind session generation")?;
-        ensure!(
-            generation_before == generation_after,
-            "session changed while checking worker ownership"
-        );
+        if generation_before != generation_after {
+            return Err(anyhow::Error::new(SessionChanged(
+                "session changed while checking worker ownership",
+            )));
+        }
         Ok(AuthorizationGrant {
             session_id: session.id,
             seat: seat.to_owned(),
@@ -101,10 +113,11 @@ impl<L: Logind> SessionAuthorizer<L> {
         expected: &AuthorizationGrant,
     ) -> Result<()> {
         let current = self.authorize_active_uid(uid, &expected.seat)?;
-        ensure!(
-            current == *expected,
-            "worker session changed during broker request"
-        );
+        if current != *expected {
+            return Err(anyhow::Error::new(SessionChanged(
+                "worker session changed during broker request",
+            )));
+        }
         Ok(())
     }
 
@@ -149,10 +162,11 @@ impl<L: Logind> SessionAuthorizer<L> {
             .logind
             .generation()
             .context("reading the logind session generation")?;
-        ensure!(
-            generation_before == generation_after,
-            "session changed while checking authorization"
-        );
+        if generation_before != generation_after {
+            return Err(anyhow::Error::new(SessionChanged(
+                "session changed while checking authorization",
+            )));
+        }
 
         Ok(AuthorizationGrant {
             session_id: session.id,
@@ -168,10 +182,11 @@ impl<L: Logind> SessionAuthorizer<L> {
         expected: &AuthorizationGrant,
     ) -> Result<()> {
         let current = self.authorize(peer)?;
-        ensure!(
-            current == *expected,
-            "caller session changed during config apply"
-        );
+        if current != *expected {
+            return Err(anyhow::Error::new(SessionChanged(
+                "caller session changed during config apply",
+            )));
+        }
         Ok(())
     }
 }
@@ -249,6 +264,7 @@ mod tests {
             .recheck(peer(uid), &grant)
             .expect_err("an unchanged session snapshot hid a generation change");
         assert!(format!("{error:#}").contains("changed during config apply"));
+        assert!(error.downcast_ref::<SessionChanged>().is_some());
         Ok(())
     }
 

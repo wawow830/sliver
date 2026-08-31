@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 
-use crate::authorization::{NoActiveUserSession, SessionAuthorizer, WorkerNotOwnedByActiveUser};
+use crate::authorization::{
+    NoActiveUserSession, SessionAuthorizer, SessionChanged, WorkerNotOwnedByActiveUser,
+};
 use crate::hardware::{
     ContactId, HardwareCapability, HardwareEvent, InputState, LogicalFrame, Modifier,
     ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware, TouchEvent, TouchPhase,
@@ -745,7 +747,8 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     if let Err(error) = authorizer.recheck_active_uid(peer_uid, &grant) {
         // The session can change during this short claim transaction. Tell a
         // supervisor to retry instead of closing the stream with a raw reset.
-        write_message(&mut stream, WAIT_FOR_SESSION, error.to_string().as_bytes())?;
+        let status = broker_error_status(&error);
+        write_message(&mut stream, status, error.to_string().as_bytes())?;
         return Err(error);
     }
     if *fallback_running {
@@ -912,10 +915,10 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
 }
 
 fn broker_error_status(error: &anyhow::Error) -> u8 {
-    if error.chain().any(|cause| {
-        cause.downcast_ref::<NoActiveUserSession>().is_some()
-            || cause.downcast_ref::<WorkerNotOwnedByActiveUser>().is_some()
-    }) {
+    if error.downcast_ref::<NoActiveUserSession>().is_some()
+        || error.downcast_ref::<SessionChanged>().is_some()
+        || error.downcast_ref::<WorkerNotOwnedByActiveUser>().is_some()
+    {
         WAIT_FOR_SESSION
     } else {
         ERROR
@@ -1434,21 +1437,15 @@ mod tests {
         let listener = UnixListener::bind(&socket)?;
         let base_logind = FakeLogind::new();
         let uid = unsafe { libc::getuid() };
-        base_logind.set_active(
-            SEAT,
-            Some(ActiveSession {
-                id: "claim-recheck-session".into(),
-                uid,
-            }),
-        );
         let logind = GenerationBumpingLogind::new(base_logind, 3);
         let shared = ThreadFakeHardware::new();
+        let server_shared = shared.clone();
         let running = Arc::new(AtomicBool::new(true));
         let server_running = running.clone();
         let server_logind = logind.clone();
         let server = thread::spawn(move || -> Result<()> {
             let fallback = Supervisor::new_fallback_with_logind(
-                shared,
+                server_shared,
                 directory.path().join("broker-state/config-path"),
                 server_logind.clone(),
                 Some(LuaSource::embedded(
@@ -1465,6 +1462,24 @@ mod tests {
                 PeerVerification::Test,
             )
         });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().is_empty())
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            !shared.inspect(|hardware| hardware.presented_frames().is_empty()),
+            "fallback did not present before the user claim"
+        );
+        logind.inner.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "claim-recheck-session".into(),
+                uid,
+            }),
+        );
 
         let mut client = BrokerHardware::new_at(socket.clone());
         let error = client
