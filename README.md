@@ -164,9 +164,12 @@ next local graphical session continues with:
 scripts/verify-release.sh --resume "$HOME/sliver-release-verification/YYYYMMDD-HHMMSS"
 ```
 
-Every acceptance item gets its own evidence entry. A failed run performs a
-full rollback and verifies the package, account, linger, udev, service, and
-selected-path state. If a machine is left in takeover state, use the explicit
+Every acceptance item gets its own evidence entry. If administrator
+authentication times out before a privileged check runs, the verifier records
+no result, leaves the transaction intact, and exits so the same run can be
+resumed after authentication. A real check failure performs a full rollback
+and verifies the package, account, linger, udev, service, and selected-path
+state. If a machine is left in takeover state, use the explicit
 `--service-only` cleanup only when retaining the package is intentional. Use
 `--rollback` for the full transaction. Do not run the verifier over SSH or
 claim M1 support from this run.

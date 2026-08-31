@@ -72,5 +72,54 @@ grep -F 'invalid.lua' "$script" >/dev/null || fail 'invalid fixture is not named
 grep -F 'hung.lua' "$script" >/dev/null || fail 'watchdog fixture is not named'
 grep -F 'video-2008x60.lua' "$script" >/dev/null || fail 'video workload is not named'
 grep -F 'refuse_if_blocked' "$script" >/dev/null || fail 'failure gate is missing'
+grep -F 'source "$ROOT/scripts/verify-release-auth.sh"' "$script" >/dev/null ||
+    fail 'verifier does not load authentication handling'
+grep -F 'verify_release_capture_privileged "$output" capture_pre_takeover_drm_owner' "$script" >/dev/null ||
+    fail 'stage 6 does not classify privileged capture failures'
+grep -F 'owner_status == VERIFY_RELEASE_AUTH_REQUIRED' "$script" >/dev/null ||
+    fail 'stage 6 does not keep authentication timeouts resumable'
+grep -F 'ROLLBACK_ATTEMPTED' "$script" >/dev/null ||
+    fail 'rollback attempt state is not persisted'
+
+# Authentication failures before an objective check must be retryable. A real
+# ownership failure must still return an ordinary failure status, and a second
+# automatic rollback must not be attempted after the first one was recorded.
+# shellcheck disable=SC1091
+source "$root/scripts/verify-release-auth.sh"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-verify-release-auth.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+cat > "$tmp/auth-timeout" <<'EOF'
+sudo: timed out reading password
+sudo: a password is required
+EOF
+cat > "$tmp/ownership-failure" <<'EOF'
+fuser: cannot open /dev/dri/card2
+EOF
+verify_release_authentication_error "$tmp/auth-timeout" || fail 'sudo authentication timeout was not classified as retryable'
+if verify_release_authentication_error "$tmp/ownership-failure"; then
+    fail 'ordinary ownership command failure was classified as authentication'
+fi
+set +e
+verify_release_capture_privileged "$tmp/capture-timeout" bash -c 'cat "$1"; exit 1' _ "$tmp/auth-timeout"
+status=$?
+set -e
+[[ "$status" == "$VERIFY_RELEASE_AUTH_REQUIRED" ]] || fail "authentication capture returned $status, expected $VERIFY_RELEASE_AUTH_REQUIRED"
+set +e
+verify_release_capture_privileged "$tmp/capture-failure" bash -c 'cat "$1"; exit 1' _ "$tmp/ownership-failure"
+status=$?
+set -e
+[[ "$status" == 1 ]] || fail "ownership capture returned $status, expected ordinary failure"
+set +e
+verify_release_capture_privileged "$tmp/capture-status-75" bash -c 'exit 75'
+status=$?
+set -e
+[[ "$status" == 1 ]] || fail "unclassified status-75 capture returned $status, expected ordinary failure"
+if verify_release_should_auto_rollback 1 1 0 0 1 0; then
+    fail 'authentication pause still schedules automatic rollback'
+fi
+if verify_release_should_auto_rollback 1 0 1 0 1 0; then
+    fail 'previous rollback attempt still schedules duplicate automatic rollback'
+fi
+verify_release_should_auto_rollback 1 0 0 0 1 0 || fail 'ordinary failure did not schedule rollback'
 
 echo 'verify-release contract tests passed'

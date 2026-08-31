@@ -5,6 +5,8 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MANIFEST="$ROOT/packaging/fedora/release-manifest.txt"
 # shellcheck source=verify-release-ownership.sh
 source "$ROOT/scripts/verify-release-ownership.sh"
+# shellcheck source=verify-release-auth.sh
+source "$ROOT/scripts/verify-release-auth.sh"
 STATE_VERSION=3
 TOTAL_STAGES=12
 
@@ -95,7 +97,9 @@ HANDOFF_PENDING=0
 BLOCKED=0
 ROLLBACK_IN_PROGRESS=0
 ROLLBACK_FAILED=0
+ROLLBACK_ATTEMPTED=0
 ROLLBACK_DONE=0
+AUTHENTICATION_REQUIRED=0
 SNAPSHOT_READY=0
 PACKAGE_INSTALLED_BY_RUN=0
 USER_GROUP_CHANGED=0
@@ -221,6 +225,7 @@ save_state() {
         printf 'CURRENT_STAGE=%q\n' "$CURRENT_STAGE"
         printf 'HANDOFF_PENDING=%q\n' "$HANDOFF_PENDING"
         printf 'BLOCKED=%q\n' "$BLOCKED"
+        printf 'ROLLBACK_ATTEMPTED=%q\n' "$ROLLBACK_ATTEMPTED"
         printf 'ROLLBACK_DONE=%q\n' "$ROLLBACK_DONE"
         printf 'SNAPSHOT_READY=%q\n' "$SNAPSHOT_READY"
         printf 'PACKAGE_INSTALLED_BY_RUN=%q\n' "$PACKAGE_INSTALLED_BY_RUN"
@@ -679,6 +684,7 @@ verify_service_restore() {
 
 restore_and_verify() {
     local mode=$1 rollback_owner_file rollback_tiny_pid
+    ROLLBACK_ATTEMPTED=1
     ROLLBACK_IN_PROGRESS=1
     ROLLBACK_FAILED=0
     save_state
@@ -844,12 +850,17 @@ restore_and_verify() {
 on_exit() {
     local status=$?
     trap - EXIT
-    if (( status != 0 && ! ROLLBACK_IN_PROGRESS && SNAPSHOT_READY && !ROLLBACK_DONE )); then
+    if verify_release_should_auto_rollback "$status" "$AUTHENTICATION_REQUIRED" \
+        "$ROLLBACK_ATTEMPTED" "$ROLLBACK_DONE" "$SNAPSHOT_READY" "$ROLLBACK_IN_PROGRESS"; then
         warn "Verification stopped. Starting automatic full rollback."
         if ! restore_and_verify full; then
             warn "Rollback was not verified. Use: $0 --rollback $VERIFY_DIR"
             status=1
         fi
+    elif (( status != 0 && AUTHENTICATION_REQUIRED )); then
+        warn "Verification paused before the objective check. Authenticate and resume $VERIFY_DIR."
+    elif (( status != 0 && SNAPSHOT_READY && !ROLLBACK_DONE && ROLLBACK_ATTEMPTED )); then
+        warn "Rollback was already attempted. Use: $0 --rollback $VERIFY_DIR"
     fi
     if (( status != 0 )); then
         warn "Verification stopped with status $status. Evidence: $VERIFY_DIR"
@@ -1246,6 +1257,13 @@ owner_stage() {
         tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
         pass_check pre_takeover_drm_owner "privileged evidence shows $PANEL_DRM_NODE is open only by tiny-dfr PID $tiny_pid"
     else
+        local owner_status=$?
+        if (( owner_status == VERIFY_RELEASE_AUTH_REQUIRED )); then
+            AUTHENTICATION_REQUIRED=1
+            say "Administrator authentication did not complete before the ownership check. No ownership result was recorded. Authenticate, then resume."
+            save_state
+            exit "$VERIFY_RELEASE_AUTH_REQUIRED"
+        fi
         fail_check pre_takeover_drm_owner "privileged evidence does not show tiny-dfr as the sole opener of $PANEL_DRM_NODE"
         exit 1
     fi
@@ -1279,12 +1297,17 @@ capture_pre_takeover_drm_owner() {
 }
 capture_drm_owner_to_file() {
     local output=$1
-    capture_pre_takeover_drm_owner > "$output" 2>&1
+    verify_release_capture_privileged "$output" capture_pre_takeover_drm_owner
 }
 verify_tiny_dfr_drm_owner() {
-    local evidence_file=$1 tiny_pid
+    local evidence_file=$1 tiny_pid status
     panel_drm_identity_matches_snapshot || return 1
-    capture_drm_owner_to_file "$evidence_file" || return 1
+    if capture_drm_owner_to_file "$evidence_file"; then
+        :
+    else
+        status=$?
+        return "$status"
+    fi
     tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
     owner_matches "$PANEL_DRM_NODE" "$tiny_pid" "$evidence_file"
 }
