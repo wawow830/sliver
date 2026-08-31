@@ -62,13 +62,26 @@ pub fn supervisor_main() -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let signal_running = running.clone();
     ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
+    run_supervisor_loop(&running, std::time::Duration::from_secs(1), || {
+        supervisor_main_inner(running.clone())
+    })
+}
+
+fn run_supervisor_loop<F>(
+    running: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    retry_delay: std::time::Duration,
+    mut start: F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<()>,
+{
     loop {
-        if !running.load(Ordering::Acquire) {
+        if !running.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(());
         }
-        let result = supervisor_main_inner(running.clone());
+        let result = start();
         if is_transient_supervisor_error(&result) {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(retry_delay);
             continue;
         }
         if let Err(error) = &result {
@@ -232,5 +245,30 @@ mod tests {
             Err(anyhow::anyhow!("claim was deferred").context(WaitForActiveSession));
 
         assert!(is_transient_supervisor_error(&result));
+    }
+
+    #[test]
+    fn supervisor_retries_a_transient_startup_failure() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let result = run_supervisor_loop(&running, std::time::Duration::ZERO, {
+            let attempts = attempts.clone();
+            let running = running.clone();
+            move || {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                if attempt == 0 {
+                    Err(anyhow::anyhow!("claim was deferred").context(WaitForActiveSession))
+                } else {
+                    running.store(false, std::sync::atomic::Ordering::Release);
+                    Ok(())
+                }
+            }
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(attempts.load(Ordering::Relaxed), 2);
     }
 }

@@ -1502,6 +1502,61 @@ mod tests {
     }
 
     #[test]
+    fn production_peer_rejection_is_returned_over_the_broker_protocol() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "peer-rejection-session".into(),
+                uid,
+            }),
+        );
+        let server_logind = logind.clone();
+        let server_state = directory.path().join("broker-state/config-path");
+        let server = thread::spawn(move || -> Result<()> {
+            let mut fallback = Supervisor::new_with_logind(
+                ThreadFakeHardware::new(),
+                server_state,
+                server_logind.clone(),
+            )?;
+            let (stream, _) = listener.accept()?;
+            let mut fallback_running = false;
+            let result = handle_client_with_connection_stop(
+                stream,
+                &mut fallback,
+                &SessionAuthorizer::new(server_logind),
+                &mut fallback_running,
+                SEAT,
+                PeerVerification::Production,
+                None,
+            );
+            let error = match result {
+                Ok(_) => {
+                    return Err(anyhow::anyhow!(
+                        "the test process was accepted as a production supervisor"
+                    ))
+                }
+                Err(error) => error,
+            };
+            assert!(format!("{error:#}").contains("not the Sliver user supervisor"));
+            fallback.shutdown()
+        });
+
+        let mut client = BrokerHardware::new_at(socket);
+        let error = client
+            .claim()
+            .expect_err("a production peer rejection closed the stream without a reply");
+        assert!(format!("{error:#}").contains("not the Sliver user supervisor"));
+
+        server.join().expect("broker server panicked")?;
+        Ok(())
+    }
+
+    #[test]
     fn real_supervisor_applies_a_lua_worker_through_the_broker_loop() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");
