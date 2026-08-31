@@ -1,6 +1,7 @@
 # Sliver's adapter only needs the tested M2 Touch Bar devices. Keep these
 # rules tied to udev identity and input class so event numbering and names may
-# change.
+# change. This file sorts after 99-touchbar-seat.rules, which supplies the
+# isolated Touch Bar seat used below.
 SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="adp", GROUP="sliver-drm", MODE="0660"
 SUBSYSTEM=="input", KERNEL=="event[0-9]*", ENV{ID_SEAT}=="seat-touchbar", \
   ENV{ID_INPUT_TOUCHSCREEN}=="1", GROUP="sliver-input", MODE="0660"

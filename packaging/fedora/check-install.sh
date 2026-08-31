@@ -11,7 +11,7 @@ x:/usr/libexec/sliver/sliver-lua-worker
 f:/usr/lib/systemd/system/sliver-broker.service
 f:/usr/lib/systemd/user/sliver-supervisor.service
 f:/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
-f:/usr/lib/udev/rules.d/70-sliver.rules
+f:/usr/lib/udev/rules.d/99-z-sliver.rules
 f:/usr/lib/sysusers.d/sliver.conf
 '
 for entry in $required; do
@@ -90,11 +90,16 @@ grep -F 'ConditionGroup=sliver-supervisors' \
     "$root/usr/lib/systemd/user/sliver-supervisor.service" >/dev/null
 grep -F 'PrivateDevices=yes' \
     "$root/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf" >/dev/null
-grep -F 'MODE="0660"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null
-grep -F 'ID_SEAT}=="seat-touchbar"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null
-grep -F 'ID_INPUT_TOUCHSCREEN}=="1"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null
-grep -F 'ID_INPUT_KEYBOARD}=="1"' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null
-if grep -F 'ATTRS{name}' "$root/usr/lib/udev/rules.d/70-sliver.rules" >/dev/null; then
+udev_rule=$root/usr/lib/udev/rules.d/99-z-sliver.rules
+test "$(basename "$udev_rule")" = 99-z-sliver.rules || {
+    printf 'Sliver udev rules must run after the Touch Bar seat rules\n' >&2
+    exit 1
+}
+grep -F 'MODE="0660"' "$udev_rule" >/dev/null
+grep -F 'ID_SEAT}=="seat-touchbar"' "$udev_rule" >/dev/null
+grep -F 'ID_INPUT_TOUCHSCREEN}=="1"' "$udev_rule" >/dev/null
+grep -F 'ID_INPUT_KEYBOARD}=="1"' "$udev_rule" >/dev/null
+if grep -F 'ATTRS{name}' "$udev_rule" >/dev/null; then
     printf 'udev rules must not depend on transport-specific input names\n' >&2
     exit 1
 fi

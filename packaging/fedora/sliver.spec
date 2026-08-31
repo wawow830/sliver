@@ -1,6 +1,6 @@
 Name:           sliver
 Version:        0.1.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Lua-scriptable Touch Bar service for Asahi Linux
 License:        MIT OR Apache-2.0
 URL:            https://github.com/wawow830/sliver
@@ -52,8 +52,8 @@ install -Dpm0644 systemd/user/sliver-supervisor.service \
     %{buildroot}%{_userunitdir}/sliver-supervisor.service
 install -Dpm0644 systemd/sliver-lua-worker-.service.d/50-defaults.conf \
     %{buildroot}%{_userunitdir}/sliver-lua-worker-.service.d/50-defaults.conf
-install -Dpm0644 packaging/fedora/70-sliver.rules \
-    %{buildroot}%{_udevrulesdir}/70-sliver.rules
+install -Dpm0644 packaging/fedora/99-z-sliver.rules \
+    %{buildroot}%{_udevrulesdir}/99-z-sliver.rules
 install -Dpm0644 packaging/fedora/sliver.sysusers \
     %{buildroot}%{_sysusersdir}/sliver.conf
 
@@ -101,9 +101,12 @@ printf 'sliver package check: exact install manifest passed\n'
 %{_unitdir}/sliver-broker.service
 %{_userunitdir}/sliver-supervisor.service
 %{_userunitdir}/sliver-lua-worker-.service.d/50-defaults.conf
-%{_udevrulesdir}/70-sliver.rules
+%{_udevrulesdir}/99-z-sliver.rules
 %{_sysusersdir}/sliver.conf
 
 %changelog
+* Mon Aug 31 2026 Sliver contributors - 0.1.0-2
+- Run Sliver's input permission rules after the Touch Bar seat rules.
+
 * Mon Aug 31 2026 Sliver contributors - 0.1.0-1
 - Package the broker, user supervisor, worker policy, and M2 udev rules.

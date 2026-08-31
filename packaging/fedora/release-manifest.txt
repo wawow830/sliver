@@ -3,7 +3,7 @@
 /usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
 /usr/lib/systemd/user/sliver-supervisor.service
 /usr/lib/sysusers.d/sliver.conf
-/usr/lib/udev/rules.d/70-sliver.rules
+/usr/lib/udev/rules.d/99-z-sliver.rules
 /usr/libexec/sliver
 /usr/libexec/sliver/sliver-broker
 /usr/libexec/sliver/sliver-lua-worker

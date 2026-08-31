@@ -479,7 +479,7 @@ capture_snapshot() {
         ORIGINAL_PACKAGE_PRESENT=1
         ORIGINAL_PACKAGE_NEVRA=$(rpm -q --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}' sliver)
     fi
-    if [[ -e /usr/lib/udev/rules.d/70-sliver.rules ]]; then ORIGINAL_UDEV_RULE_PRESENT=1; fi
+    if [[ -e /usr/lib/udev/rules.d/99-z-sliver.rules ]]; then ORIGINAL_UDEV_RULE_PRESENT=1; fi
     if getent passwd sliver >/dev/null 2>&1; then ORIGINAL_SLIVER_USER_PRESENT=1; fi
     if getent group sliver-supervisors >/dev/null 2>&1; then ORIGINAL_GROUP_SUPERVISORS_PRESENT=1; fi
     if getent group sliver-drm >/dev/null 2>&1; then ORIGINAL_GROUP_DRM_PRESENT=1; fi
