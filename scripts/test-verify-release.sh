@@ -41,6 +41,16 @@ grep -F 'pre_takeover_drm_owner' "$script" >/dev/null ||
     fail 'stage 6 does not record machine-verifiable DRM ownership'
 grep -F 'PANEL_DRM_CONNECTOR' "$script" >/dev/null ||
     fail 'stage 6 does not retain the exact DSI connector identity'
+grep -F 'sudo drm_info "$PANEL_DRM_NODE"' "$script" >/dev/null ||
+    fail 'stage 1 does not capture privileged DRM evidence for the exact panel node'
+grep -F 'panel_drm_probe_proves_geometry' "$script" >/dev/null ||
+    fail 'stage 1 does not objectively verify native mode and scanout geometry'
+grep -F 'logged_step drm_preflight "$VERIFY_DIR/drm-before.txt" capture_drm_preflight' "$script" >/dev/null ||
+    fail 'stage 1 does not save the privileged exact-node DRM probe'
+grep -F 'DRM evidence transform: logical 2008x60 -> scanout 60x2008 (quarter-turn)' "$script" >/dev/null ||
+    fail 'stage 1 does not record the required logical-to-scanout transform'
+grep -F 'privileged DRM evidence does not prove the exact connected native mode and scanout geometry' "$script" >/dev/null ||
+    fail 'stage 1 does not fail closed when DRM geometry evidence is incomplete'
 grep -F 'PANEL_DRM_SYSFS_DEVICE' "$script" >/dev/null ||
     fail 'stage 6 does not verify stable DRM device identity'
 grep -F 'pre_takeover_drm_identity' "$script" >/dev/null ||

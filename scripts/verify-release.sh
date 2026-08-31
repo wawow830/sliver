@@ -142,6 +142,7 @@ PANEL_DRM_NODE=""
 PANEL_DRM_CONNECTOR=""
 PANEL_DRM_SYSFS_DEVICE=""
 PANEL_DRM_DEV_MAJOR_MINOR=""
+DRM_TOOL=""
 SNAPSHOT_DIR=""
 CONFIG_DIR=""
 LOG_FILE=""
@@ -343,6 +344,28 @@ logged_step() {
     else
         fail_check "$id" "command failed; output saved at $output"
         exit 1
+    fi
+}
+
+capture_drm_preflight() {
+    local status mode driver
+    [[ -n "$PANEL_DRM_NODE" && -n "$PANEL_DRM_CONNECTOR" ]] || return 1
+    status=$(<"/sys/class/drm/$PANEL_DRM_CONNECTOR/status")
+    mode=$(tr -d '[:space:]' < "/sys/class/drm/$PANEL_DRM_CONNECTOR/modes")
+    [[ "$status" == connected && "$mode" == 60x2008 ]] || return 1
+    printf 'DRM evidence node: %s\n' "$PANEL_DRM_NODE"
+    printf 'DRM evidence connector: %s\n' "$PANEL_DRM_CONNECTOR"
+    printf 'DRM evidence status: %s\n' "$status"
+    printf 'DRM evidence mode: %s\n' "$mode"
+    printf 'DRM evidence transform: logical 2008x60 -> scanout 60x2008 (quarter-turn)\n'
+    if [[ "$DRM_TOOL" == drm_info ]]; then
+        printf 'DRM evidence command: sudo drm_info %s\n' "$PANEL_DRM_NODE"
+        sudo drm_info "$PANEL_DRM_NODE"
+    else
+        driver=$(basename "$(readlink -f "/sys/class/drm/${PANEL_DRM_NODE##*/}/device/driver")")
+        [[ "$driver" =~ ^[[:alnum:]_.-]+$ ]] || return 1
+        printf 'DRM evidence command: sudo modetest -M %s -c -p\n' "$driver"
+        sudo modetest -M "$driver" -c -p
     fi
 }
 
@@ -875,10 +898,10 @@ preflight_stage() {
         fi
     done
     if command -v drm_info >/dev/null 2>&1; then
-        DRM_COMMAND=(drm_info)
+        DRM_TOOL=drm_info
         pass_check drm_tool "drm_info available"
     elif command -v modetest >/dev/null 2>&1; then
-        DRM_COMMAND=(modetest -c)
+        DRM_TOOL=modetest
         pass_check drm_tool "modetest available"
     else
         fail_check drm_tool "drm_info or modetest is required"
@@ -954,16 +977,10 @@ preflight_stage() {
     else
         pass_check preexisting_sliver_process "no Sliver process exists before installation"
     fi
-    logged_step drm_preflight "$VERIFY_DIR/drm-before.txt" "${DRM_COMMAND[@]}"
-    if PANEL_DRM_NODE=$(panel_drm_node_from_info "$VERIFY_DIR/drm-before.txt") ||
-       PANEL_DRM_NODE=$(panel_drm_node_from_sysfs); then
-        [[ -c "$PANEL_DRM_NODE" ]] &&
-            pass_check drm_panel_node "connected DSI panel node is $PANEL_DRM_NODE" || {
-                fail_check drm_panel_node "identified panel node is not a DRM character device"
-                exit 1
-            }
+    if PANEL_DRM_NODE=$(panel_drm_node_from_sysfs); then
+        pass_check drm_panel_node "sysfs identifies the connected DSI panel node as $PANEL_DRM_NODE"
     else
-        fail_check drm_panel_node "could not identify exactly one connected DSI DRM node during preflight"
+        fail_check drm_panel_node "sysfs did not identify exactly one connected DSI DRM node during preflight"
         exit 1
     fi
     local panel_sysfs_link="/sys/class/drm/${PANEL_DRM_NODE##*/}/device"
@@ -975,6 +992,14 @@ preflight_stage() {
         pass_check drm_panel_identity "saved connected DSI connector $PANEL_DRM_CONNECTOR on $PANEL_DRM_NODE with $PANEL_DRM_SYSFS_DEVICE and device $PANEL_DRM_DEV_MAJOR_MINOR"
     else
         fail_check drm_panel_identity "could not save a connected DSI identity for $PANEL_DRM_NODE"
+        exit 1
+    fi
+    logged_step drm_preflight "$VERIFY_DIR/drm-before.txt" capture_drm_preflight
+    if panel_drm_probe_proves_geometry "$VERIFY_DIR/drm-before.txt" \
+        "$PANEL_DRM_NODE" "$PANEL_DRM_CONNECTOR"; then
+        pass_check drm_native_mode "privileged DRM evidence proves connected native 60x2008@60 and the quarter-turn scanout geometry"
+    else
+        fail_check drm_native_mode "privileged DRM evidence does not prove the exact connected native mode and scanout geometry"
         exit 1
     fi
     local input_count=0 device
