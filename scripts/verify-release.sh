@@ -141,6 +141,7 @@ CONFIG_DIR=""
 LOG_FILE=""
 EVIDENCE_FILE=""
 STATE_FILE=""
+INTERACTIVE_TTY=0
 
 if [[ "$MODE" == run ]]; then
     if [[ ! -f "$RPM_PATH" ]]; then
@@ -159,6 +160,8 @@ if [[ "$MODE" == run ]]; then
     STATE_FILE="$VERIFY_DIR/state.env"
     mkdir -p "$SNAPSHOT_DIR" "$CONFIG_DIR"
     chmod 700 "$VERIFY_DIR" "$SNAPSHOT_DIR" "$CONFIG_DIR"
+    INTERACTIVE_TTY=0
+    [[ -t 0 && -t 1 ]] && INTERACTIVE_TTY=1
     : > "$EVIDENCE_FILE"
     chmod 600 "$EVIDENCE_FILE"
 else
@@ -182,6 +185,7 @@ else
 fi
 
 umask 077
+[[ -t 0 && -t 1 ]] && INTERACTIVE_TTY=1
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 say()  { printf '  %s\n' "$*"; }
@@ -847,10 +851,10 @@ preflight_stage() {
     else
         fail_check drm_tool "drm_info or modetest is required"
     fi
-    [[ -t 0 && -t 1 ]] && pass_check local_tty "stdin and stdout are terminals" ||
+    [[ "$INTERACTIVE_TTY" == 1 ]] && pass_check local_tty "stdin is a terminal and stdout is captured from a terminal" ||
         fail_check local_tty "run from a local terminal, not a pipe or managed non-TTY shell"
 
-    local arch model type remote seat active session_id
+    local arch model product type remote seat active session_id
     arch=$(uname -m)
     [[ "$arch" == aarch64 ]] && pass_check host_arch "aarch64" || fail_check host_arch "expected aarch64, found $arch"
     if [[ -r /sys/firmware/devicetree/base/model ]]; then
@@ -858,8 +862,16 @@ preflight_stage() {
     else
         model=""
     fi
-    printf '  model: %s\n  architecture: %s\n' "${model:-unavailable}" "$arch"
-    [[ "$model" == Mac14,7 ]] && pass_check host_model "Mac14,7" || fail_check host_model "expected Mac14,7"
+    if [[ -r /sys/devices/virtual/dmi/id/product_name ]]; then
+        product=$(tr -d '\0' < /sys/devices/virtual/dmi/id/product_name)
+    else
+        product=""
+    fi
+    printf '  device-tree model: %s\n  DMI product: %s\n  architecture: %s\n' \
+        "${model:-unavailable}" "${product:-unavailable}" "$arch"
+    [[ "$product" == Mac14,7 || "$model" == Mac14,7 ]] &&
+        pass_check host_model "Mac14,7 (DMI or device-tree identity)" ||
+        fail_check host_model "expected an explicit Mac14,7 identity"
 
     session_id=${XDG_SESSION_ID:-}
     if [[ -n "$session_id" ]]; then
