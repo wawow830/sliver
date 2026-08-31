@@ -3,7 +3,9 @@ set -Eeuo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MANIFEST="$ROOT/packaging/fedora/release-manifest.txt"
-STATE_VERSION=2
+# shellcheck source=verify-release-ownership.sh
+source "$ROOT/scripts/verify-release-ownership.sh"
+STATE_VERSION=3
 TOTAL_STAGES=12
 
 BOLD=""; DIM=""; RESET=""; BLUE=""; GREEN=""; YELLOW=""; RED=""
@@ -136,6 +138,7 @@ SELECTED_PATH=""
 SELECTED_PATH_KIND="missing"
 SELECTED_PATH_MODE=""
 SELECTED_PATH_LINK=""
+PANEL_DRM_NODE=""
 SNAPSHOT_DIR=""
 CONFIG_DIR=""
 LOG_FILE=""
@@ -259,6 +262,7 @@ save_state() {
         printf 'SELECTED_PATH_KIND=%q\n' "$SELECTED_PATH_KIND"
         printf 'SELECTED_PATH_MODE=%q\n' "$SELECTED_PATH_MODE"
         printf 'SELECTED_PATH_LINK=%q\n' "$SELECTED_PATH_LINK"
+        printf 'PANEL_DRM_NODE=%q\n' "$PANEL_DRM_NODE"
         printf 'SNAPSHOT_DIR=%q\n' "$SNAPSHOT_DIR"
         printf 'CONFIG_DIR=%q\n' "$CONFIG_DIR"
         printf 'LOG_FILE=%q\n' "$LOG_FILE"
@@ -812,7 +816,7 @@ REQUIRED_CHECKS=(
     package_preinstall_supervisor_inactive package_not_started package_not_started_global
     package_not_started_user install_preserves_tiny
     broker_identity account_udev fresh_graphical_session fresh_group_membership
-    pre_takeover_owner takeover_services cli_help cli_version cli_valid_apply
+    pre_takeover_owner pre_takeover_drm_owner pre_takeover_sliver_absent takeover_services cli_help cli_version cli_valid_apply
     cli_invalid_retains cli_default_reset selected_path_default_reset
     lifecycle_second_session lifecycle_authorization lifecycle_valid_live_apply
     lifecycle_invalid_retention lifecycle_touch_mapping lifecycle_multitouch_cancel
@@ -923,6 +927,17 @@ preflight_stage() {
         pass_check preexisting_sliver_process "no Sliver process exists before installation"
     fi
     logged_step drm_preflight "$VERIFY_DIR/drm-before.txt" "${DRM_COMMAND[@]}"
+    if PANEL_DRM_NODE=$(panel_drm_node_from_info "$VERIFY_DIR/drm-before.txt") ||
+       PANEL_DRM_NODE=$(panel_drm_node_from_sysfs); then
+        [[ -c "$PANEL_DRM_NODE" ]] &&
+            pass_check drm_panel_node "connected DSI panel node is $PANEL_DRM_NODE" || {
+                fail_check drm_panel_node "identified panel node is not a DRM character device"
+                exit 1
+            }
+    else
+        fail_check drm_panel_node "could not identify exactly one connected DSI DRM node during preflight"
+        exit 1
+    fi
     local input_count=0 device
     : > "$VERIFY_DIR/input-before.txt"
     for device in /dev/input/event*; do
@@ -1147,19 +1162,39 @@ owner_stage() {
         exit 1
     fi
     : > "$VERIFY_DIR/device-owners-before-takeover.txt"
-    local device card
+    local device tiny_pid
     for device in /dev/dri/card* /dev/input/event* /dev/uinput; do
         [[ -e "$device" ]] && ls -l "$device" >> "$VERIFY_DIR/device-owners-before-takeover.txt"
     done
-    for card in /dev/dri/card*; do
-        [[ -e "$card" ]] && fuser -v "$card" >> "$VERIFY_DIR/device-owners-before-takeover.txt" 2>&1 || true
-    done
-    pass_check pre_takeover_device_owner "saved device owner evidence"
-    manual_check pre_takeover_owner \
-        "Does the saved evidence prove tiny-dfr owns the panel and Sliver is not running?" \
-        "Review tiny-dfr-before-takeover.txt, processes-before-takeover.txt, and device-owners-before-takeover.txt."
+    printf 'preflight panel DRM node: %s\n' "$PANEL_DRM_NODE" >> "$VERIFY_DIR/device-owners-before-takeover.txt"
+    pass_check pre_takeover_device_owner "saved device permission evidence and exact panel node"
+    if [[ -z "$PANEL_DRM_NODE" || ! -c "$PANEL_DRM_NODE" ]]; then
+        fail_check pre_takeover_drm_owner "preflight did not retain a valid exact panel DRM node"
+        exit 1
+    fi
+    logged_step pre_takeover_drm_owner "$VERIFY_DIR/drm-owner-before-takeover.txt" \
+        capture_pre_takeover_drm_owner
+    tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
+    if owner_matches "$PANEL_DRM_NODE" "$tiny_pid" "$VERIFY_DIR/drm-owner-before-takeover.txt"; then
+        pass_check pre_takeover_drm_owner "privileged evidence shows $PANEL_DRM_NODE is open only by tiny-dfr PID $tiny_pid"
+    else
+        fail_check pre_takeover_drm_owner "privileged evidence does not show tiny-dfr PID $tiny_pid as the sole owner of $PANEL_DRM_NODE"
+        exit 1
+    fi
+    if grep -E '(^|[[:space:]/])sliver-(broker|supervisor)([[:space:]]|$)' \
+        "$VERIFY_DIR/processes-before-takeover.txt" >/dev/null; then
+        fail_check pre_takeover_sliver_absent "saved process evidence contains a Sliver process"
+        exit 1
+    fi
+    pass_check pre_takeover_sliver_absent "saved process evidence contains no Sliver broker or supervisor"
+    pass_check pre_takeover_owner "machine-verified: tiny-dfr exclusively opened the exact preflight panel node and Sliver was absent"
     CURRENT_STAGE=6
     save_state
+}
+
+capture_pre_takeover_drm_owner() {
+    printf 'preflight panel DRM node: %s\n' "$PANEL_DRM_NODE"
+    sudo fuser -v "$PANEL_DRM_NODE"
 }
 
 takeover_stage() {

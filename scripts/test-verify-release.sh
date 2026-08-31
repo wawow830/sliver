@@ -33,6 +33,12 @@ fi
 if grep -F 'if (( TAKEOVER_ACTIVE )); then' "$script" >/dev/null; then
     fail 'rollback is still limited to takeover-active state'
 fi
+"$root/scripts/test-verify-release-ownership.sh" || fail 'ownership regression tests failed'
+grep -F 'PANEL_DRM_NODE' "$script" >/dev/null || fail 'preflight does not retain the exact panel DRM node'
+grep -F 'sudo fuser -v "$PANEL_DRM_NODE"' "$script" >/dev/null ||
+    fail 'stage 6 does not inspect the exact panel DRM node with privilege'
+grep -F 'pre_takeover_drm_owner' "$script" >/dev/null ||
+    fail 'stage 6 does not record machine-verifiable DRM ownership'
 
 grep -F 'record_check' "$script" >/dev/null || fail 'checks are not recorded individually'
 grep -F 'restore_and_verify' "$script" >/dev/null || fail 'rollback does not verify restoration'

@@ -12,6 +12,7 @@ fail() {
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+scripts/test-verify-release.sh
 
 audit_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-release-audit.XXXXXX")
 trap 'rm -rf -- "$audit_tmp"' EXIT
