@@ -2335,9 +2335,21 @@ mod tests {
         {
             thread::sleep(Duration::from_millis(1));
         }
+        let frames = shared.inspect(|hardware| {
+            hardware
+                .presented_frames()
+                .iter()
+                .map(|frame| frame.rgba_at(10, 10))
+                .collect::<Vec<_>>()
+        });
         assert_eq!(
-            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
-            [0, 255, 0, 255]
+            frames,
+            vec![
+                [255, 0, 0, 255],
+                [0, 0, 255, 255],
+                [255, 0, 0, 255],
+                [0, 255, 0, 255],
+            ]
         );
         running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;

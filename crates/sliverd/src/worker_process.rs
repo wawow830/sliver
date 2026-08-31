@@ -1837,7 +1837,18 @@ mod tests {
             "systemd user manager is required for this worker policy test"
         );
 
-        let _directory = tempfile::tempdir()?;
+        let directory = tempfile::tempdir()?;
+        let marker = directory.path().join("fallback-runtime");
+        let source = embedded(&format!(
+            r#"
+            local marker = assert(io.open({marker:?}, "w"))
+            marker:write(assert(os.getenv("XDG_RUNTIME_DIR")))
+            marker:close()
+            require("sliver.v1")
+            return {{ api_version = 1, render = function() end }}
+            "#,
+            marker = marker.to_string_lossy(),
+        ));
         let frame_path = frame_path_for_identity(WorkerIdentity::RestrictedFallback)?;
         let slots = FrameSlots::new_shared(
             &frame_path,
@@ -1846,12 +1857,7 @@ mod tests {
             crate::DISPLAY_WIDTH * 4,
         )?;
         let worker = ProcessWorker::stage_with_frames_systemd(
-            &embedded(
-                r#"
-                require("sliver.v1")
-                return { api_version = 1, render = function() end }
-                "#,
-            ),
+            &source,
             0.0,
             InputState::default(),
             &frame_path,
@@ -1868,6 +1874,20 @@ mod tests {
         assert!(properties.contains("TasksMax=64"));
         assert!(properties.contains("PrivateDevices=yes"));
         assert!(properties.contains("DevicePolicy=closed"));
+        assert_eq!(
+            std::fs::read_to_string(&marker)?,
+            fallback_runtime_directory(unsafe { libc::getuid() })
+                .display()
+                .to_string()
+        );
+        let status = std::fs::read_to_string(format!("/proc/{}/status", worker.pid))?;
+        let effective_uid = status
+            .lines()
+            .find(|line| line.starts_with("Uid:"))
+            .and_then(|line| line.split_whitespace().nth(2))
+            .context("worker status did not contain an effective UID")?
+            .parse::<libc::uid_t>()?;
+        assert_eq!(effective_uid, unsafe { libc::getuid() });
         worker.shutdown(StopReason::Shutdown)
     }
 
