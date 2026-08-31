@@ -43,7 +43,9 @@ sed \
     -e '\#^/usr/share/doc/sliver$#d' \
     -e '\#^/usr/share/doc/sliver/#d' \
     "$manifest" > "$expected"
-find "$root" -type f -printf '/%P\n' | sort > "$actual"
+find "$root" -type f -printf '/%P\n' |
+    sed -e '\#^/usr/lib/debug/#d' -e '\#^/usr/src/debug/#d' |
+    sort > "$actual"
 diff -u "$expected" "$actual"
 
 for path in \
