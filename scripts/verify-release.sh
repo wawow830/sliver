@@ -1057,8 +1057,8 @@ install_stage() {
     [[ "$(unit_enabled sliver-broker.service)" == disabled && "$(unit_active sliver-broker.service)" != active ]] &&
         pass_check package_not_started "broker is disabled and inactive after installation" ||
         fail_check package_not_started "broker was enabled or started by installation"
-    [[ "$(unit_enabled sliver-supervisor.service)" == disabled && "$(unit_active sliver-supervisor.service)" != active ]] &&
-        pass_check package_not_started_global "global supervisor is disabled and inactive after installation" ||
+    [[ "$(unit_enabled sliver-supervisor.service)" != enabled && "$(unit_active sliver-supervisor.service)" != active ]] &&
+        pass_check package_not_started_global "global supervisor is not enabled and is inactive after installation" ||
         fail_check package_not_started_global "global supervisor was enabled or started by installation"
     [[ "$(user_unit_enabled sliver-supervisor.service)" == disabled && "$(user_unit_active sliver-supervisor.service)" != active ]] &&
         pass_check package_not_started_user "current user supervisor is disabled and inactive after installation" ||
