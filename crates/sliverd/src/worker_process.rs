@@ -1007,10 +1007,12 @@ fn runtime_directory(identity: WorkerIdentity) -> PathBuf {
         WorkerIdentity::User => std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir),
-        WorkerIdentity::RestrictedFallback => {
-            PathBuf::from("/run/user").join(unsafe { libc::getuid() }.to_string())
-        }
+        WorkerIdentity::RestrictedFallback => fallback_runtime_directory(unsafe { libc::getuid() }),
     }
+}
+
+fn fallback_runtime_directory(uid: libc::uid_t) -> PathBuf {
+    PathBuf::from("/run/user").join(uid.to_string())
 }
 
 pub(super) fn frame_path_for_identity(identity: WorkerIdentity) -> Result<PathBuf> {
@@ -1815,10 +1817,13 @@ mod tests {
 
     #[test]
     fn restricted_fallback_runtime_is_derived_from_the_broker_uid() {
-        let expected = PathBuf::from("/run/user").join(unsafe { libc::getuid() }.to_string());
+        assert_eq!(
+            fallback_runtime_directory(976),
+            PathBuf::from("/run/user/976")
+        );
         assert_eq!(
             runtime_directory(WorkerIdentity::RestrictedFallback),
-            expected
+            fallback_runtime_directory(unsafe { libc::getuid() })
         );
     }
 
@@ -1833,7 +1838,7 @@ mod tests {
         );
 
         let _directory = tempfile::tempdir()?;
-        let frame_path = frame_path_for_identity(WorkerIdentity::User)?;
+        let frame_path = frame_path_for_identity(WorkerIdentity::RestrictedFallback)?;
         let slots = FrameSlots::new_shared(
             &frame_path,
             crate::DISPLAY_WIDTH,

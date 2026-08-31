@@ -2267,27 +2267,6 @@ mod tests {
             .synthetic_keys()
             .last()
             .is_some_and(|event| event.active)));
-        logind.set_active(SEAT, None);
-        assert!(first.poll(Duration::ZERO).is_err());
-        first.handoff_owner_with_reason(StopReason::Logout)?;
-        first.hardware_mut().logout_complete()?;
-        assert!(shared.inspect(|hardware| hardware
-            .synthetic_keys()
-            .last()
-            .is_some_and(|event| !event.active)));
-        first.shutdown()?;
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while shared.inspect(|hardware| hardware.presented_frames().len() < 2)
-            && Instant::now() < deadline
-        {
-            thread::sleep(Duration::from_millis(1));
-        }
-        assert_eq!(
-            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
-            [0, 255, 0, 255]
-        );
-
         logind.set_active(
             SEAT,
             Some(ActiveSession {
@@ -2295,6 +2274,15 @@ mod tests {
                 uid: second_uid,
             }),
         );
+        assert!(first.poll(Duration::ZERO).is_err());
+        first.handoff_owner_with_reason(StopReason::Replaced)?;
+        first.hardware_mut().logout_complete()?;
+        assert!(shared.inspect(|hardware| hardware
+            .synthetic_keys()
+            .last()
+            .is_some_and(|event| !event.active)));
+        first.shutdown()?;
+
         let mut second = Supervisor::new_with_startup_candidate_process(
             BrokerHardware::new_at_as(socket.clone(), second_uid),
             state_b.clone(),
@@ -2325,9 +2313,9 @@ mod tests {
         second.hardware_mut().logout_complete()?;
         second.shutdown()?;
 
-        let third = Supervisor::new_with_startup_candidate_process(
-            BrokerHardware::new_at(socket),
-            state_a,
+        let mut third = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at(socket.clone()),
+            state_a.clone(),
             FakeLogind::new(),
             None,
         )?;
@@ -2335,7 +2323,22 @@ mod tests {
             shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
             [255, 0, 0, 255]
         );
+
+        logind.set_active(SEAT, None);
+        assert!(third.poll(Duration::ZERO).is_err());
+        third.handoff_owner_with_reason(StopReason::Logout)?;
+        third.hardware_mut().logout_complete()?;
         third.shutdown()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 4)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [0, 255, 0, 255]
+        );
         running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;
         Ok(())
