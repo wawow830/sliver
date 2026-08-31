@@ -115,13 +115,18 @@ impl std::error::Error for WaitForActiveSession {}
 
 fn is_transient_supervisor_error(result: &Result<()>) -> bool {
     result.as_ref().err().is_some_and(|error| {
-        error.downcast_ref::<WaitForActiveSession>().is_some()
-            || error.downcast_ref::<WaitForHardware>().is_some()
-            || error.chain().any(|cause| {
-                cause.downcast_ref::<WaitForActiveSession>().is_some()
-                    || cause.downcast_ref::<WaitForHardware>().is_some()
-            })
+        is_wait_error::<WaitForActiveSession>(error) || is_wait_error::<WaitForHardware>(error)
     })
+}
+
+fn is_wait_error<T>(error: &anyhow::Error) -> bool
+where
+    T: std::error::Error + Send + Sync + 'static,
+{
+    error.downcast_ref::<T>().is_some()
+        || error
+            .chain()
+            .any(|cause| cause.downcast_ref::<T>().is_some())
 }
 
 fn supervisor_main_inner(running: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {

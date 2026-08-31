@@ -36,6 +36,10 @@ impl std::fmt::Display for SessionChanged {
 
 impl std::error::Error for SessionChanged {}
 
+fn session_changed(message: &'static str) -> anyhow::Error {
+    anyhow::Error::new(SessionChanged(message))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthorizationGrant {
     session_id: String,
@@ -95,9 +99,9 @@ impl<L: Logind> SessionAuthorizer<L> {
             .generation()
             .context("reading the logind session generation")?;
         if generation_before != generation_after {
-            return Err(anyhow::Error::new(SessionChanged(
+            return Err(session_changed(
                 "session changed while checking worker ownership",
-            )));
+            ));
         }
         Ok(AuthorizationGrant {
             session_id: session.id,
@@ -114,9 +118,9 @@ impl<L: Logind> SessionAuthorizer<L> {
     ) -> Result<()> {
         let current = self.authorize_active_uid(uid, &expected.seat)?;
         if current != *expected {
-            return Err(anyhow::Error::new(SessionChanged(
+            return Err(session_changed(
                 "worker session changed during broker request",
-            )));
+            ));
         }
         Ok(())
     }
@@ -163,9 +167,9 @@ impl<L: Logind> SessionAuthorizer<L> {
             .generation()
             .context("reading the logind session generation")?;
         if generation_before != generation_after {
-            return Err(anyhow::Error::new(SessionChanged(
+            return Err(session_changed(
                 "session changed while checking authorization",
-            )));
+            ));
         }
 
         Ok(AuthorizationGrant {
@@ -183,9 +187,9 @@ impl<L: Logind> SessionAuthorizer<L> {
     ) -> Result<()> {
         let current = self.authorize(peer)?;
         if current != *expected {
-            return Err(anyhow::Error::new(SessionChanged(
+            return Err(session_changed(
                 "caller session changed during config apply",
-            )));
+            ));
         }
         Ok(())
     }
