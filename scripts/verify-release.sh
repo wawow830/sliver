@@ -139,6 +139,7 @@ SELECTED_PATH_KIND="missing"
 SELECTED_PATH_MODE=""
 SELECTED_PATH_LINK=""
 PANEL_DRM_NODE=""
+PANEL_DRM_CONNECTOR=""
 PANEL_DRM_SYSFS_DEVICE=""
 PANEL_DRM_DEV_MAJOR_MINOR=""
 SNAPSHOT_DIR=""
@@ -265,6 +266,7 @@ save_state() {
         printf 'SELECTED_PATH_MODE=%q\n' "$SELECTED_PATH_MODE"
         printf 'SELECTED_PATH_LINK=%q\n' "$SELECTED_PATH_LINK"
         printf 'PANEL_DRM_NODE=%q\n' "$PANEL_DRM_NODE"
+        printf 'PANEL_DRM_CONNECTOR=%q\n' "$PANEL_DRM_CONNECTOR"
         printf 'PANEL_DRM_SYSFS_DEVICE=%q\n' "$PANEL_DRM_SYSFS_DEVICE"
         printf 'PANEL_DRM_DEV_MAJOR_MINOR=%q\n' "$PANEL_DRM_DEV_MAJOR_MINOR"
         printf 'SNAPSHOT_DIR=%q\n' "$SNAPSHOT_DIR"
@@ -676,22 +678,21 @@ restore_and_verify() {
         rollback_privileged restore_tiny_dfr_active sudo systemctl start tiny-dfr.service
     fi
 
-    if [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
+    if [[ "$ORIGINAL_TINY_ACTIVE" == active && -n "$PANEL_DRM_NODE" &&
+          -n "$PANEL_DRM_CONNECTOR" && -n "$PANEL_DRM_SYSFS_DEVICE" &&
+          -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
         rollback_owner_file="$VERIFY_DIR/drm-owner-after-rollback.txt"
-        if [[ -z "$PANEL_DRM_NODE" ]]; then
-            record_check rollback_drm_owner_verified fail "the preflight panel DRM node was not captured"
-            ROLLBACK_FAILED=1
+        rollback_privileged capture_drm_owner_after_rollback capture_drm_owner_to_file "$rollback_owner_file"
+        rollback_tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
+        if panel_drm_identity_matches_snapshot &&
+           owner_matches "$PANEL_DRM_NODE" "$rollback_tiny_pid" "$rollback_owner_file"; then
+            record_check rollback_drm_owner_verified pass "tiny-dfr reacquired the exact preflight panel node"
         else
-            rollback_privileged capture_drm_owner_after_rollback capture_drm_owner_to_file "$rollback_owner_file"
-            rollback_tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
-            if panel_drm_identity_matches_snapshot &&
-               owner_matches "$PANEL_DRM_NODE" "$rollback_tiny_pid" "$rollback_owner_file"; then
-                record_check rollback_drm_owner_verified pass "tiny-dfr reacquired the exact preflight panel node"
-            else
-                record_check rollback_drm_owner_verified fail "tiny-dfr did not reacquire the exact preflight panel node"
-                ROLLBACK_FAILED=1
-            fi
+            record_check rollback_drm_owner_verified fail "tiny-dfr did not reacquire the exact preflight panel node"
+            ROLLBACK_FAILED=1
         fi
+    elif [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
+        record_check rollback_drm_owner_verified pass "not applicable because failure preceded panel-node capture"
     else
         record_check rollback_drm_owner_verified pass "tiny-dfr was not active in the captured state"
     fi
@@ -963,11 +964,12 @@ preflight_stage() {
         exit 1
     fi
     local panel_sysfs_link="/sys/class/drm/${PANEL_DRM_NODE##*/}/device"
+    PANEL_DRM_CONNECTOR=$(panel_drm_connected_dsi_connector "$PANEL_DRM_NODE" 2>/dev/null || true)
     PANEL_DRM_SYSFS_DEVICE=$(readlink -f "$panel_sysfs_link" 2>/dev/null || true)
     PANEL_DRM_DEV_MAJOR_MINOR=$(stat -c '%t:%T' "$PANEL_DRM_NODE" 2>/dev/null || true)
-    if [[ -n "$PANEL_DRM_SYSFS_DEVICE" && -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]] &&
-       panel_drm_node_has_connected_dsi "$PANEL_DRM_NODE"; then
-        pass_check drm_panel_identity "saved $PANEL_DRM_SYSFS_DEVICE and device $PANEL_DRM_DEV_MAJOR_MINOR for connected $PANEL_DRM_NODE"
+    if [[ -n "$PANEL_DRM_CONNECTOR" && -n "$PANEL_DRM_SYSFS_DEVICE" &&
+          -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
+        pass_check drm_panel_identity "saved connected DSI connector $PANEL_DRM_CONNECTOR on $PANEL_DRM_NODE with $PANEL_DRM_SYSFS_DEVICE and device $PANEL_DRM_DEV_MAJOR_MINOR"
     else
         fail_check drm_panel_identity "could not save a connected DSI identity for $PANEL_DRM_NODE"
         exit 1
@@ -1231,14 +1233,15 @@ owner_stage() {
 }
 
 panel_drm_identity_matches_snapshot() {
-    local current_panel_sysfs_device current_panel_dev_major_minor
-    [[ -n "$PANEL_DRM_NODE" && -n "$PANEL_DRM_SYSFS_DEVICE" &&
-       -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]] || return 1
+    local current_panel_connector current_panel_sysfs_device current_panel_dev_major_minor
+    [[ -n "$PANEL_DRM_NODE" && -n "$PANEL_DRM_CONNECTOR" &&
+       -n "$PANEL_DRM_SYSFS_DEVICE" && -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]] || return 1
+    current_panel_connector=$(panel_drm_connected_dsi_connector "$PANEL_DRM_NODE" 2>/dev/null || true)
     current_panel_sysfs_device=$(readlink -f "/sys/class/drm/${PANEL_DRM_NODE##*/}/device" 2>/dev/null || true)
     current_panel_dev_major_minor=$(stat -c '%t:%T' "$PANEL_DRM_NODE" 2>/dev/null || true)
-    [[ "$current_panel_sysfs_device" == "$PANEL_DRM_SYSFS_DEVICE" &&
-       "$current_panel_dev_major_minor" == "$PANEL_DRM_DEV_MAJOR_MINOR" ]] &&
-        panel_drm_node_has_connected_dsi "$PANEL_DRM_NODE"
+    [[ "$current_panel_connector" == "$PANEL_DRM_CONNECTOR" &&
+       "$current_panel_sysfs_device" == "$PANEL_DRM_SYSFS_DEVICE" &&
+       "$current_panel_dev_major_minor" == "$PANEL_DRM_DEV_MAJOR_MINOR" ]]
 }
 
 capture_pre_takeover_drm_owner() {
@@ -1252,6 +1255,7 @@ capture_drm_owner_to_file() {
 }
 verify_tiny_dfr_drm_owner() {
     local evidence_file=$1 tiny_pid
+    panel_drm_identity_matches_snapshot || return 1
     capture_drm_owner_to_file "$evidence_file" || return 1
     tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
     owner_matches "$PANEL_DRM_NODE" "$tiny_pid" "$evidence_file"

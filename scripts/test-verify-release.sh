@@ -39,6 +39,8 @@ grep -F 'sudo fuser -v "$PANEL_DRM_NODE"' "$script" >/dev/null ||
     fail 'stage 6 does not inspect the exact panel DRM node with privilege'
 grep -F 'pre_takeover_drm_owner' "$script" >/dev/null ||
     fail 'stage 6 does not record machine-verifiable DRM ownership'
+grep -F 'PANEL_DRM_CONNECTOR' "$script" >/dev/null ||
+    fail 'stage 6 does not retain the exact DSI connector identity'
 grep -F 'PANEL_DRM_SYSFS_DEVICE' "$script" >/dev/null ||
     fail 'stage 6 does not verify stable DRM device identity'
 grep -F 'pre_takeover_drm_identity' "$script" >/dev/null ||
@@ -47,6 +49,8 @@ grep -F 'takeover_drm_owner' "$script" >/dev/null ||
     fail 'takeover does not revalidate DRM ownership immediately before stopping tiny-dfr'
 grep -F 'rollback_drm_owner_verified' "$script" >/dev/null ||
     fail 'rollback does not verify restored DRM ownership'
+grep -F 'panel_drm_identity_matches_snapshot || return 1' "$script" >/dev/null ||
+    fail 'immediate takeover revalidation skips panel identity'
 
 grep -F 'record_check' "$script" >/dev/null || fail 'checks are not recorded individually'
 grep -F 'restore_and_verify' "$script" >/dev/null || fail 'rollback does not verify restoration'

@@ -27,11 +27,19 @@ EOF
 
 mkdir -p "$tmp/sys/card1-DSI-1"
 printf 'connected\n' > "$tmp/sys/card1-DSI-1/status"
+[[ "$(panel_drm_connected_dsi_connector /dev/dri/card1 "$tmp/sys")" == card1-DSI-1 ]] || {
+    printf 'ownership test failed: connected DSI connector identity was not captured\n' >&2
+    exit 1
+}
 panel_drm_node_has_connected_dsi /dev/dri/card1 "$tmp/sys" || {
     printf 'ownership test failed: connected DSI status was rejected\n' >&2
     exit 1
 }
 printf 'disconnected\n' > "$tmp/sys/card1-DSI-1/status"
+if panel_drm_connected_dsi_connector /dev/dri/card1 "$tmp/sys"; then
+    printf 'ownership test failed: disconnected DSI connector identity was accepted\n' >&2
+    exit 1
+fi
 if panel_drm_node_has_connected_dsi /dev/dri/card1 "$tmp/sys"; then
     printf 'ownership test failed: disconnected DSI status was accepted\n' >&2
     exit 1

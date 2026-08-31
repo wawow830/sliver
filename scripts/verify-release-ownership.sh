@@ -39,13 +39,23 @@ panel_drm_node_from_sysfs() {
     printf '%s\n' "${nodes[0]}"
 }
 
-panel_drm_node_has_connected_dsi() {
-    local node=$1 sysfs_root=${2:-/sys/class/drm} status
+panel_drm_connected_dsi_connector() {
+    local node=$1 sysfs_root=${2:-/sys/class/drm} status connector
+    local -a connectors=()
     [[ "$node" =~ ^/dev/dri/card[0-9]+$ ]] || return 1
     for status in "$sysfs_root/${node##*/}"-DSI-*/status; do
-        [[ -r "$status" ]] && [[ "$(<"$status")" == connected ]] && return 0
+        [[ -r "$status" ]] && [[ "$(<"$status")" == connected ]] || continue
+        connector=${status%/status}
+        connector=${connector##*/}
+        connectors+=("$connector")
     done
-    return 1
+    (( ${#connectors[@]} == 1 )) || return 1
+    printf '%s\n' "${connectors[0]}"
+}
+
+panel_drm_node_has_connected_dsi() {
+    local node=$1 sysfs_root=${2:-/sys/class/drm}
+    panel_drm_connected_dsi_connector "$node" "$sysfs_root" >/dev/null
 }
 
 owner_matches() {
