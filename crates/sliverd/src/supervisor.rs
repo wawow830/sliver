@@ -378,6 +378,8 @@ pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     fallback_worker: bool,
     #[cfg(test)]
     worker_process_backend: bool,
+    #[cfg(test)]
+    worker_systemd_backend: bool,
     active: Option<ActiveConfig>,
     recovery: Option<RecoverySession>,
     claimed: bool,
@@ -465,8 +467,42 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         logind: L,
         injected_default: Option<LuaSource>,
     ) -> Result<Self> {
+        Self::new_with_startup_candidate_backend(
+            hardware,
+            state_file,
+            logind,
+            injected_default,
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_startup_candidate_systemd(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+        injected_default: Option<LuaSource>,
+    ) -> Result<Self> {
+        Self::new_with_startup_candidate_backend(
+            hardware,
+            state_file,
+            logind,
+            injected_default,
+            true,
+        )
+    }
+
+    #[cfg(test)]
+    fn new_with_startup_candidate_backend(
+        hardware: H,
+        state_file: PathBuf,
+        logind: L,
+        injected_default: Option<LuaSource>,
+        systemd_backend: bool,
+    ) -> Result<Self> {
         let default_source = injected_default.unwrap_or_else(default_source::source);
         let mut supervisor = Self::new_with_logind_process(hardware, state_file.clone(), logind)?;
+        supervisor.worker_systemd_backend = systemd_backend;
         supervisor.default_source = default_source;
         let saved = read_selected_path(&state_file)?;
         let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
@@ -525,6 +561,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             fallback_worker: false,
             #[cfg(test)]
             worker_process_backend: false,
+            #[cfg(test)]
+            worker_systemd_backend: false,
             active: None,
             recovery: None,
             claimed,
@@ -825,7 +863,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         };
         #[cfg(test)]
         let staged_worker = if self.worker_process_backend {
-            LuaWorker::stage_source_with_identity_process(
+            let stage = if self.worker_systemd_backend {
+                LuaWorker::stage_source_with_identity_systemd
+            } else {
+                LuaWorker::stage_source_with_identity_process
+            };
+            stage(
                 source.clone(),
                 current_backlight,
                 self.input_state,
@@ -6880,6 +6923,41 @@ mod tests {
             .expect("canonical default did not present a frame");
         assert_eq!(frame.dimensions(), (2008, 60));
         assert!(frame_contains_rgb(frame, 0..2008, 0..60, [255, 255, 255]));
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_default_stays_healthy_through_systemd_worker_polling() -> Result<()> {
+        let available = std::process::Command::new("systemd-run")
+            .args(["--user", "--wait", "--quiet", "true"])
+            .status();
+        anyhow::ensure!(
+            available.is_ok_and(|status| status.success()),
+            "systemd user manager is required for this worker lifecycle test"
+        );
+
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _) = active_local_logind("systemd-default-session");
+        let mut supervisor = Supervisor::new_with_startup_candidate_systemd(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(default_source::bytes().to_vec())),
+        )?;
+        assert!(supervisor.has_active_worker());
+        assert!(!supervisor.has_recovery());
+
+        let deadline = Instant::now() + Duration::from_millis(2500);
+        while Instant::now() < deadline {
+            let now = supervisor.now_seconds();
+            supervisor.step_at(now)?;
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(supervisor.has_active_worker());
+        assert!(!supervisor.has_recovery());
         supervisor.shutdown()?;
         Ok(())
     }

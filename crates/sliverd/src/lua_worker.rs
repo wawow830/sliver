@@ -431,6 +431,23 @@ impl LuaWorker {
         )
     }
 
+    #[allow(clippy::needless_return)]
+    #[cfg(test)]
+    pub(crate) fn stage_source_with_identity_systemd(
+        source: LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        identity: WorkerIdentity,
+    ) -> Result<StagedLuaWorker> {
+        Self::stage_source_with_process_backend(
+            source,
+            initial_backlight,
+            initial_input,
+            identity,
+            worker_process::ProcessWorker::stage_with_frames_systemd,
+        )
+    }
+
     #[cfg(test)]
     fn stage_source_with_process_backend(
         source: LuaSource,
