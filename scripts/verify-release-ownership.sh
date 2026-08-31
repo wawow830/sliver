@@ -39,6 +39,15 @@ panel_drm_node_from_sysfs() {
     printf '%s\n' "${nodes[0]}"
 }
 
+panel_drm_node_has_connected_dsi() {
+    local node=$1 sysfs_root=${2:-/sys/class/drm} status
+    [[ "$node" =~ ^/dev/dri/card[0-9]+$ ]] || return 1
+    for status in "$sysfs_root/${node##*/}"-DSI-*/status; do
+        [[ -r "$status" ]] && [[ "$(<"$status")" == connected ]] && return 0
+    done
+    return 1
+}
+
 owner_matches() {
     local node=$1 expected_pid=$2 evidence_file=$3
     [[ "$node" =~ ^/dev/dri/card[0-9]+$ ]] || return 1

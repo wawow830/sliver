@@ -25,6 +25,18 @@ EOF
     exit 1
 }
 
+mkdir -p "$tmp/sys/card1-DSI-1"
+printf 'connected\n' > "$tmp/sys/card1-DSI-1/status"
+panel_drm_node_has_connected_dsi /dev/dri/card1 "$tmp/sys" || {
+    printf 'ownership test failed: connected DSI status was rejected\n' >&2
+    exit 1
+}
+printf 'disconnected\n' > "$tmp/sys/card1-DSI-1/status"
+if panel_drm_node_has_connected_dsi /dev/dri/card1 "$tmp/sys"; then
+    printf 'ownership test failed: disconnected DSI status was accepted\n' >&2
+    exit 1
+fi
+
 cat > "$tmp/fuser-valid.txt" <<'EOF'
                      USER        PID ACCESS COMMAND
 /dev/dri/card1:      root       1024 F.... tiny-dfr

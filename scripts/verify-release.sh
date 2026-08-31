@@ -653,7 +653,7 @@ verify_service_restore() {
 }
 
 restore_and_verify() {
-    local mode=$1
+    local mode=$1 rollback_owner_file rollback_tiny_pid
     ROLLBACK_IN_PROGRESS=1
     ROLLBACK_FAILED=0
     save_state
@@ -674,6 +674,26 @@ restore_and_verify() {
     fi
     if (( TINY_STOP_ATTEMPTED )) && [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
         rollback_privileged restore_tiny_dfr_active sudo systemctl start tiny-dfr.service
+    fi
+
+    if [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
+        rollback_owner_file="$VERIFY_DIR/drm-owner-after-rollback.txt"
+        if [[ -z "$PANEL_DRM_NODE" ]]; then
+            record_check rollback_drm_owner_verified fail "the preflight panel DRM node was not captured"
+            ROLLBACK_FAILED=1
+        else
+            rollback_privileged capture_drm_owner_after_rollback capture_drm_owner_to_file "$rollback_owner_file"
+            rollback_tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
+            if panel_drm_identity_matches_snapshot &&
+               owner_matches "$PANEL_DRM_NODE" "$rollback_tiny_pid" "$rollback_owner_file"; then
+                record_check rollback_drm_owner_verified pass "tiny-dfr reacquired the exact preflight panel node"
+            else
+                record_check rollback_drm_owner_verified fail "tiny-dfr did not reacquire the exact preflight panel node"
+                ROLLBACK_FAILED=1
+            fi
+        fi
+    else
+        record_check rollback_drm_owner_verified pass "tiny-dfr was not active in the captured state"
     fi
 
     # Do not remove the package while a service restoration failed. Leaving the
@@ -814,13 +834,13 @@ trap 'exit 130' INT TERM HUP
 
 REQUIRED_CHECKS=(
     host_arch host_model local_tty local_active_session local_nonremote_session
-    tiny_dfr_preflight drm_native_mode input_identity preexisting_sliver_absent
-    repository_suite release_suite package_nevra package_source_commit package_manifest
+    tiny_dfr_preflight drm_preflight drm_panel_node drm_panel_identity input_identity input_capabilities
+    drm_native_mode preexisting_sliver_absent repository_suite release_suite package_nevra package_source_commit package_manifest
     package_build_checks package_preinstall_disabled package_preinstall_broker_inactive
     package_preinstall_supervisor_inactive package_not_started package_not_started_global
     package_not_started_user install_preserves_tiny
     broker_identity account_udev fresh_graphical_session fresh_group_membership
-    pre_takeover_owner pre_takeover_drm_owner pre_takeover_drm_identity pre_takeover_sliver_absent takeover_services cli_help cli_version cli_valid_apply
+    pre_takeover_owner pre_takeover_drm_owner pre_takeover_drm_identity pre_takeover_sliver_absent takeover_drm_owner takeover_services cli_help cli_version cli_valid_apply
     cli_invalid_retains cli_default_reset selected_path_default_reset
     lifecycle_second_session lifecycle_authorization lifecycle_valid_live_apply
     lifecycle_invalid_retention lifecycle_touch_mapping lifecycle_multitouch_cancel
@@ -945,10 +965,11 @@ preflight_stage() {
     local panel_sysfs_link="/sys/class/drm/${PANEL_DRM_NODE##*/}/device"
     PANEL_DRM_SYSFS_DEVICE=$(readlink -f "$panel_sysfs_link" 2>/dev/null || true)
     PANEL_DRM_DEV_MAJOR_MINOR=$(stat -c '%t:%T' "$PANEL_DRM_NODE" 2>/dev/null || true)
-    if [[ -n "$PANEL_DRM_SYSFS_DEVICE" && -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
-        pass_check drm_panel_identity "saved $PANEL_DRM_SYSFS_DEVICE and device $PANEL_DRM_DEV_MAJOR_MINOR for $PANEL_DRM_NODE"
+    if [[ -n "$PANEL_DRM_SYSFS_DEVICE" && -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]] &&
+       panel_drm_node_has_connected_dsi "$PANEL_DRM_NODE"; then
+        pass_check drm_panel_identity "saved $PANEL_DRM_SYSFS_DEVICE and device $PANEL_DRM_DEV_MAJOR_MINOR for connected $PANEL_DRM_NODE"
     else
-        fail_check drm_panel_identity "could not save stable identity for $PANEL_DRM_NODE"
+        fail_check drm_panel_identity "could not save a connected DSI identity for $PANEL_DRM_NODE"
         exit 1
     fi
     local input_count=0 device
@@ -1185,22 +1206,17 @@ owner_stage() {
         fail_check pre_takeover_drm_owner "preflight did not retain a valid exact panel DRM node"
         exit 1
     fi
-    current_panel_sysfs_device=$(readlink -f "/sys/class/drm/${PANEL_DRM_NODE##*/}/device" 2>/dev/null || true)
-    current_panel_dev_major_minor=$(stat -c '%t:%T' "$PANEL_DRM_NODE" 2>/dev/null || true)
-    if [[ "$current_panel_sysfs_device" == "$PANEL_DRM_SYSFS_DEVICE" &&
-          "$current_panel_dev_major_minor" == "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
-        pass_check pre_takeover_drm_identity "exact panel node identity still matches preflight"
+    if panel_drm_identity_matches_snapshot; then
+        pass_check pre_takeover_drm_identity "exact connected DSI panel node identity still matches preflight"
     else
-        fail_check pre_takeover_drm_identity "exact panel node identity changed since preflight"
+        fail_check pre_takeover_drm_identity "exact panel node identity or connected DSI status changed since preflight"
         exit 1
     fi
-    logged_step pre_takeover_drm_owner "$VERIFY_DIR/drm-owner-before-takeover.txt" \
-        capture_pre_takeover_drm_owner
-    tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
-    if owner_matches "$PANEL_DRM_NODE" "$tiny_pid" "$VERIFY_DIR/drm-owner-before-takeover.txt"; then
+    if verify_tiny_dfr_drm_owner "$VERIFY_DIR/drm-owner-before-takeover.txt"; then
+        tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
         pass_check pre_takeover_drm_owner "privileged evidence shows $PANEL_DRM_NODE is open only by tiny-dfr PID $tiny_pid"
     else
-        fail_check pre_takeover_drm_owner "privileged evidence does not show tiny-dfr PID $tiny_pid as the sole owner of $PANEL_DRM_NODE"
+        fail_check pre_takeover_drm_owner "privileged evidence does not show tiny-dfr as the sole opener of $PANEL_DRM_NODE"
         exit 1
     fi
     if grep -E '(^|[[:space:]/])sliver-(broker|supervisor)([[:space:]]|$)' \
@@ -1214,9 +1230,31 @@ owner_stage() {
     save_state
 }
 
+panel_drm_identity_matches_snapshot() {
+    local current_panel_sysfs_device current_panel_dev_major_minor
+    [[ -n "$PANEL_DRM_NODE" && -n "$PANEL_DRM_SYSFS_DEVICE" &&
+       -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]] || return 1
+    current_panel_sysfs_device=$(readlink -f "/sys/class/drm/${PANEL_DRM_NODE##*/}/device" 2>/dev/null || true)
+    current_panel_dev_major_minor=$(stat -c '%t:%T' "$PANEL_DRM_NODE" 2>/dev/null || true)
+    [[ "$current_panel_sysfs_device" == "$PANEL_DRM_SYSFS_DEVICE" &&
+       "$current_panel_dev_major_minor" == "$PANEL_DRM_DEV_MAJOR_MINOR" ]] &&
+        panel_drm_node_has_connected_dsi "$PANEL_DRM_NODE"
+}
+
 capture_pre_takeover_drm_owner() {
     printf 'preflight panel DRM node: %s\n' "$PANEL_DRM_NODE"
+    printf 'tiny-dfr MainPID: %s\n' "$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)"
     sudo fuser -v "$PANEL_DRM_NODE"
+}
+capture_drm_owner_to_file() {
+    local output=$1
+    capture_pre_takeover_drm_owner > "$output" 2>&1
+}
+verify_tiny_dfr_drm_owner() {
+    local evidence_file=$1 tiny_pid
+    capture_drm_owner_to_file "$evidence_file" || return 1
+    tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
+    owner_matches "$PANEL_DRM_NODE" "$tiny_pid" "$evidence_file"
 }
 
 takeover_stage() {
@@ -1230,10 +1268,19 @@ takeover_stage() {
     TAKEOVER_ACTIVE=1
     save_state
     if [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
-        TINY_STOP_ATTEMPTED=1
-        save_state
-        privileged_step stop_tiny_dfr sudo systemctl stop tiny-dfr.service
+        if verify_tiny_dfr_drm_owner "$VERIFY_DIR/drm-owner-immediately-before-takeover.txt"; then
+            pass_check takeover_drm_owner "revalidated tiny-dfr on the exact panel node immediately before takeover"
+        else
+            fail_check takeover_drm_owner "tiny-dfr ownership changed before takeover"
+            exit 1
+        fi
+    else
+        fail_check takeover_drm_owner "tiny-dfr was not active before takeover"
+        exit 1
     fi
+    TINY_STOP_ATTEMPTED=1
+    save_state
+    privileged_step stop_tiny_dfr sudo systemctl stop tiny-dfr.service
     BROKER_CHANGED=1
     save_state
     privileged_step enable_start_broker sudo systemctl enable --now sliver-broker.service
