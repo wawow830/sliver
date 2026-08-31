@@ -49,6 +49,8 @@ grep -F 'takeover_drm_owner' "$script" >/dev/null ||
     fail 'takeover does not revalidate DRM ownership immediately before stopping tiny-dfr'
 grep -F 'rollback_drm_owner_verified' "$script" >/dev/null ||
     fail 'rollback does not verify restored DRM ownership'
+grep -F 'panel DRM identity capture was incomplete' "$script" >/dev/null ||
+    fail 'rollback treats incomplete panel identity as not applicable'
 grep -F 'panel_drm_identity_matches_snapshot || return 1' "$script" >/dev/null ||
     fail 'immediate takeover revalidation skips panel identity'
 

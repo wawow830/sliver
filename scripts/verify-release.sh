@@ -691,8 +691,11 @@ restore_and_verify() {
             record_check rollback_drm_owner_verified fail "tiny-dfr did not reacquire the exact preflight panel node"
             ROLLBACK_FAILED=1
         fi
-    elif [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
+    elif [[ "$ORIGINAL_TINY_ACTIVE" == active && -z "$PANEL_DRM_NODE" ]]; then
         record_check rollback_drm_owner_verified pass "not applicable because failure preceded panel-node capture"
+    elif [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
+        record_check rollback_drm_owner_verified fail "panel DRM identity capture was incomplete"
+        ROLLBACK_FAILED=1
     else
         record_check rollback_drm_owner_verified pass "tiny-dfr was not active in the captured state"
     fi
