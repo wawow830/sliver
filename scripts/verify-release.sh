@@ -139,6 +139,8 @@ SELECTED_PATH_KIND="missing"
 SELECTED_PATH_MODE=""
 SELECTED_PATH_LINK=""
 PANEL_DRM_NODE=""
+PANEL_DRM_SYSFS_DEVICE=""
+PANEL_DRM_DEV_MAJOR_MINOR=""
 SNAPSHOT_DIR=""
 CONFIG_DIR=""
 LOG_FILE=""
@@ -263,6 +265,8 @@ save_state() {
         printf 'SELECTED_PATH_MODE=%q\n' "$SELECTED_PATH_MODE"
         printf 'SELECTED_PATH_LINK=%q\n' "$SELECTED_PATH_LINK"
         printf 'PANEL_DRM_NODE=%q\n' "$PANEL_DRM_NODE"
+        printf 'PANEL_DRM_SYSFS_DEVICE=%q\n' "$PANEL_DRM_SYSFS_DEVICE"
+        printf 'PANEL_DRM_DEV_MAJOR_MINOR=%q\n' "$PANEL_DRM_DEV_MAJOR_MINOR"
         printf 'SNAPSHOT_DIR=%q\n' "$SNAPSHOT_DIR"
         printf 'CONFIG_DIR=%q\n' "$CONFIG_DIR"
         printf 'LOG_FILE=%q\n' "$LOG_FILE"
@@ -816,7 +820,7 @@ REQUIRED_CHECKS=(
     package_preinstall_supervisor_inactive package_not_started package_not_started_global
     package_not_started_user install_preserves_tiny
     broker_identity account_udev fresh_graphical_session fresh_group_membership
-    pre_takeover_owner pre_takeover_drm_owner pre_takeover_sliver_absent takeover_services cli_help cli_version cli_valid_apply
+    pre_takeover_owner pre_takeover_drm_owner pre_takeover_drm_identity pre_takeover_sliver_absent takeover_services cli_help cli_version cli_valid_apply
     cli_invalid_retains cli_default_reset selected_path_default_reset
     lifecycle_second_session lifecycle_authorization lifecycle_valid_live_apply
     lifecycle_invalid_retention lifecycle_touch_mapping lifecycle_multitouch_cancel
@@ -936,6 +940,15 @@ preflight_stage() {
             }
     else
         fail_check drm_panel_node "could not identify exactly one connected DSI DRM node during preflight"
+        exit 1
+    fi
+    local panel_sysfs_link="/sys/class/drm/${PANEL_DRM_NODE##*/}/device"
+    PANEL_DRM_SYSFS_DEVICE=$(readlink -f "$panel_sysfs_link" 2>/dev/null || true)
+    PANEL_DRM_DEV_MAJOR_MINOR=$(stat -c '%t:%T' "$PANEL_DRM_NODE" 2>/dev/null || true)
+    if [[ -n "$PANEL_DRM_SYSFS_DEVICE" && -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
+        pass_check drm_panel_identity "saved $PANEL_DRM_SYSFS_DEVICE and device $PANEL_DRM_DEV_MAJOR_MINOR for $PANEL_DRM_NODE"
+    else
+        fail_check drm_panel_identity "could not save stable identity for $PANEL_DRM_NODE"
         exit 1
     fi
     local input_count=0 device
@@ -1162,7 +1175,7 @@ owner_stage() {
         exit 1
     fi
     : > "$VERIFY_DIR/device-owners-before-takeover.txt"
-    local device tiny_pid
+    local device tiny_pid current_panel_sysfs_device current_panel_dev_major_minor
     for device in /dev/dri/card* /dev/input/event* /dev/uinput; do
         [[ -e "$device" ]] && ls -l "$device" >> "$VERIFY_DIR/device-owners-before-takeover.txt"
     done
@@ -1170,6 +1183,15 @@ owner_stage() {
     pass_check pre_takeover_device_owner "saved device permission evidence and exact panel node"
     if [[ -z "$PANEL_DRM_NODE" || ! -c "$PANEL_DRM_NODE" ]]; then
         fail_check pre_takeover_drm_owner "preflight did not retain a valid exact panel DRM node"
+        exit 1
+    fi
+    current_panel_sysfs_device=$(readlink -f "/sys/class/drm/${PANEL_DRM_NODE##*/}/device" 2>/dev/null || true)
+    current_panel_dev_major_minor=$(stat -c '%t:%T' "$PANEL_DRM_NODE" 2>/dev/null || true)
+    if [[ "$current_panel_sysfs_device" == "$PANEL_DRM_SYSFS_DEVICE" &&
+          "$current_panel_dev_major_minor" == "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
+        pass_check pre_takeover_drm_identity "exact panel node identity still matches preflight"
+    else
+        fail_check pre_takeover_drm_identity "exact panel node identity changed since preflight"
         exit 1
     fi
     logged_step pre_takeover_drm_owner "$VERIFY_DIR/drm-owner-before-takeover.txt" \

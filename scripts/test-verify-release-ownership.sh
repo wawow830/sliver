@@ -40,6 +40,12 @@ cat > "$tmp/fuser-wrong-process.txt" <<'EOF'
 /dev/dri/card1:      root       1024 F.... other-daemon
 EOF
 
+cat > "$tmp/fuser-competing-owner.txt" <<'EOF'
+                     USER        PID ACCESS COMMAND
+/dev/dri/card1:      root       1024 F.... tiny-dfr
+                     user       2048 F.... competing-daemon
+EOF
+
 owner_matches /dev/dri/card1 1024 "$tmp/fuser-valid.txt" || {
     printf 'ownership test failed: valid exact-node owner evidence was rejected\n' >&2
     exit 1
@@ -50,6 +56,10 @@ if owner_matches /dev/dri/card1 1024 "$tmp/fuser-wrong-node.txt"; then
 fi
 if owner_matches /dev/dri/card1 1024 "$tmp/fuser-wrong-process.txt"; then
     printf 'ownership test failed: evidence for another process was accepted\n' >&2
+    exit 1
+fi
+if owner_matches /dev/dri/card1 1024 "$tmp/fuser-competing-owner.txt"; then
+    printf 'ownership test failed: competing DRM owner was accepted\n' >&2
     exit 1
 fi
 

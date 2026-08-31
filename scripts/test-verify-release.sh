@@ -39,6 +39,10 @@ grep -F 'sudo fuser -v "$PANEL_DRM_NODE"' "$script" >/dev/null ||
     fail 'stage 6 does not inspect the exact panel DRM node with privilege'
 grep -F 'pre_takeover_drm_owner' "$script" >/dev/null ||
     fail 'stage 6 does not record machine-verifiable DRM ownership'
+grep -F 'PANEL_DRM_SYSFS_DEVICE' "$script" >/dev/null ||
+    fail 'stage 6 does not verify stable DRM device identity'
+grep -F 'pre_takeover_drm_identity' "$script" >/dev/null ||
+    fail 'stage 6 does not record stable DRM device identity'
 
 grep -F 'record_check' "$script" >/dev/null || fail 'checks are not recorded individually'
 grep -F 'restore_and_verify' "$script" >/dev/null || fail 'rollback does not verify restoration'

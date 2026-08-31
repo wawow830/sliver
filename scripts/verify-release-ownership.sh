@@ -44,18 +44,23 @@ owner_matches() {
     [[ "$node" =~ ^/dev/dri/card[0-9]+$ ]] || return 1
     [[ "$expected_pid" =~ ^[1-9][0-9]*$ ]] || return 1
     awk -v expected_node="$node" -v expected_pid="$expected_pid" '
-        {
-            observed_node = $1
-            sub(/:$/, "", observed_node)
-            if (observed_node != expected_node) next
+        function count_owner(pid, command) {
             owner_lines++
-            pid_found = 0
-            for (i = 2; i <= NF; i++) {
-                if ($i == expected_pid) pid_found = 1
-            }
-            command = $NF
             sub(/^.*\//, "", command)
-            if (pid_found && command == "tiny-dfr") expected_owner++
+            if (pid == expected_pid && command == "tiny-dfr") expected_owner++
+        }
+        {
+            if ($1 ~ /^\/dev\/dri\/card[0-9]+:$/) {
+                current_node = $1
+                sub(/:$/, "", current_node)
+                if (current_node == expected_node && $3 ~ /^[0-9]+$/) {
+                    count_owner($3, $NF)
+                }
+                next
+            }
+            if (current_node == expected_node && NF >= 4 && $2 ~ /^[0-9]+$/) {
+                count_owner($2, $NF)
+            }
         }
         END {
             exit !(owner_lines == 1 && expected_owner == 1)
