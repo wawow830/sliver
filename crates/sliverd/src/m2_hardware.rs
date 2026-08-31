@@ -429,7 +429,10 @@ where
     let Err(error) = result else {
         return;
     };
-    let error = error.into();
+    remember_release_error(first, error.into());
+}
+
+fn remember_release_error(first: &mut Option<anyhow::Error>, error: anyhow::Error) {
     // Releasing hardware may race with the device or the previous owner's
     // DRM objects disappearing. Those resources are already released.
     if error.chain().any(|cause| {
@@ -1770,12 +1773,16 @@ impl TouchBarHardware for M2TouchBar {
         if self.is_claimed() {
             match black_logical_frame().and_then(|frame| self.present_inner(&frame)) {
                 Ok(()) => {}
-                Err(error) => first_error = Some(error.context("painting black during release")),
+                Err(error) => remember_release_error(
+                    &mut first_error,
+                    error.context("painting black during release"),
+                ),
             }
             if let Err(error) = self.set_backlight(0.0) {
-                if first_error.is_none() {
-                    first_error = Some(error.context("turning off the Touch Bar during release"));
-                }
+                remember_release_error(
+                    &mut first_error,
+                    error.context("turning off the Touch Bar during release"),
+                );
             }
         }
         if let Err(error) = self.release_inner() {
@@ -1937,6 +1944,21 @@ mod tests {
         );
 
         assert!(first_error.is_none());
+
+        let mut first_error = None;
+        remember_release_error(
+            &mut first_error,
+            anyhow::anyhow!(io::Error::from_raw_os_error(libc::ENOENT))
+                .context("restoring the previous CRTC"),
+        );
+        assert!(first_error.is_none());
+
+        let mut first_error = None;
+        remember_release_error(
+            &mut first_error,
+            anyhow::anyhow!(io::Error::from_raw_os_error(libc::EIO)),
+        );
+        assert!(first_error.is_some());
     }
 
     #[test]
