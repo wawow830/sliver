@@ -924,7 +924,11 @@ fn broker_error_status(error: &anyhow::Error) -> u8 {
 }
 
 fn ensure_supervisor_peer(pid: libc::pid_t) -> Result<()> {
-    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+    ensure_supervisor_peer_at(pid, std::path::Path::new("/proc"))
+}
+
+fn ensure_supervisor_peer_at(pid: libc::pid_t, proc_root: &std::path::Path) -> Result<()> {
+    let cgroup = std::fs::read_to_string(proc_root.join(pid.to_string()).join("cgroup"))
         .with_context(|| format!("reading the supervisor cgroup for peer {pid}"))?;
     ensure!(
         cgroup
@@ -932,7 +936,10 @@ fn ensure_supervisor_peer(pid: libc::pid_t) -> Result<()> {
             .any(|line| line.ends_with("/sliver-supervisor.service")),
         "broker peer is not the Sliver user supervisor"
     );
-    ensure_supervisor_executable(pid)
+    // The broker is deliberately unprivileged. Linux protects
+    // /proc/<peer>/exe from a different UID, so the peer's kernel credentials
+    // and systemd cgroup are the production identity boundary.
+    Ok(())
 }
 
 #[cfg(test)]
@@ -946,15 +953,6 @@ fn ensure_supervisor_test_peer(pid: libc::pid_t) -> Result<()> {
             })
         }),
         "broker peer is not the test Sliver user supervisor"
-    );
-    ensure_supervisor_executable(pid)
-}
-
-fn ensure_supervisor_executable(pid: libc::pid_t) -> Result<()> {
-    let executable = std::fs::read_link(format!("/proc/{pid}/exe"))?;
-    ensure!(
-        executable.file_name() == Some(std::ffi::OsStr::new("sliver-supervisor")),
-        "broker peer executable is not sliver-supervisor"
     );
     Ok(())
 }
@@ -2417,6 +2415,22 @@ mod tests {
             "fallback did not return after production logout"
         );
         Ok(())
+    }
+
+    #[test]
+    fn production_peer_verification_does_not_require_proc_exe_access() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let pid = 1234;
+        let proc_pid = directory.path().join(pid.to_string());
+        std::fs::create_dir(&proc_pid)?;
+        std::fs::write(
+            proc_pid.join("cgroup"),
+            "0::/user.slice/user-1000.slice/user@1000.service/sliver-supervisor.service\n",
+        )?;
+
+        // There is intentionally no exe entry: the production broker cannot
+        // read it across UIDs, but the service cgroup is still verifiable.
+        ensure_supervisor_peer_at(pid, directory.path())
     }
 
     #[test]

@@ -1,6 +1,6 @@
 Name:           sliver
 Version:        0.1.0
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Lua-scriptable Touch Bar service for Asahi Linux
 License:        MIT OR Apache-2.0
 URL:            https://github.com/wawow830/sliver
@@ -105,6 +105,10 @@ printf 'sliver package check: exact install manifest passed\n'
 %{_sysusersdir}/sliver.conf
 
 %changelog
+* Mon Aug 31 2026 Sliver contributors - 0.1.0-3
+- Authorize the unprivileged broker's cross-UID supervisor peer by kernel
+  credentials and its systemd service cgroup.
+
 * Mon Aug 31 2026 Sliver contributors - 0.1.0-2
 - Run Sliver's input permission rules after the Touch Bar seat rules.
 

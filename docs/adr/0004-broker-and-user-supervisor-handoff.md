@@ -9,9 +9,12 @@ account's restricted user manager when no local seat session is active.
 Each logged-in user runs `sliver-supervisor` in that user's systemd user
 manager. The supervisor owns that user's selected-path state and Lua worker. It
 connects to the broker over one mode-0660 Unix socket. The broker verifies the
-peer executable and the `sliver-supervisor.service` cgroup, authorizes its UID
-against the active local seat session, and rechecks that ownership before every
-hardware request. The public CLI still talks only to the
+kernel peer credentials and the `sliver-supervisor.service` cgroup, authorizes
+its UID against the active local seat session, and rechecks that ownership
+before every hardware request. It does not inspect `/proc/<pid>/exe`: the
+deliberately unprivileged broker cannot read that link across UIDs, and the
+peer UID plus service cgroup are the production identity boundary. The public
+CLI still talks only to the
 user supervisor socket, where the CLI peer receives the full logind session
 check from ADR 0001.
 
