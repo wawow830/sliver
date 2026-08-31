@@ -464,7 +464,7 @@ impl LuaWorker {
         ) -> Result<worker_process::ProcessWorker>,
     ) -> Result<StagedLuaWorker> {
         validate_backlight_level(initial_backlight)?;
-        let frame_path = worker_process::frame_path()?;
+        let frame_path = worker_process::frame_path_for_identity(identity)?;
         let slots = FrameSlots::new_shared(
             &frame_path,
             crate::DISPLAY_WIDTH,
@@ -509,7 +509,7 @@ impl LuaWorker {
             crate::DISPLAY_WIDTH * 4,
         )?;
         #[cfg(not(test))]
-        let frame_path = worker_process::frame_path()?;
+        let frame_path = worker_process::frame_path_for_identity(identity)?;
         #[cfg(not(test))]
         let slots = FrameSlots::new_shared(
             &frame_path,

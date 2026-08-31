@@ -18,9 +18,12 @@ sudo loginctl enable-linger sliver
 The broker conflicts with `tiny-dfr.service`; stopping it does not start
 `tiny-dfr` again. The documented takeover command globally enables
 `sliver-supervisor.service`; `ConditionGroup=sliver-supervisors` keeps it
-inactive for users who were not granted access. Log out and back in after
-changing group membership. The supervisor keeps its apply socket in that
-user's `$XDG_RUNTIME_DIR` and starts workers with that user's user manager.
+inactive for users who were not granted access. The service is pulled in by
+`graphical-session.target` but is not part of that target, so it stays alive
+while a user is switched away and retries its broker claim for the next active
+seat session. Log out and back in after changing group membership. The
+supervisor keeps its apply socket in that user's `$XDG_RUNTIME_DIR` and starts
+workers with that user's user manager.
 
 The worker drop-in belongs under `/usr/lib/systemd/user/sliver-lua-worker-.service.d/`
 when installed from the package. The dash-truncated unit name applies the

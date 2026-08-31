@@ -88,7 +88,7 @@ impl ProcessWorker {
         initial_backlight: f64,
         initial_input: InputState,
     ) -> Result<Self> {
-        let path = frame_path()?;
+        let path = frame_path_for_identity(WorkerIdentity::User)?;
         let slots = FrameSlots::new_shared(
             &path,
             crate::DISPLAY_WIDTH,
@@ -273,9 +273,10 @@ fn spawn_direct(_identity: WorkerIdentity) -> Result<SpawnedWorker> {
 fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
     use std::os::unix::fs::PermissionsExt;
 
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+    // A system service's %U specifier resolves to UID 0 even when User= is
+    // set. The fallback must address the broker account's lingering manager,
+    // not the system manager's runtime directory.
+    let runtime = runtime_directory(identity);
     let directory = runtime.join("sliver");
     std::fs::create_dir_all(&directory)
         .with_context(|| format!("creating worker socket directory {}", directory.display()))?;
@@ -331,6 +332,12 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
             return Err(error);
         }
     };
+    if identity == WorkerIdentity::RestrictedFallback {
+        launcher.env("XDG_RUNTIME_DIR", &runtime).env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={}/bus", runtime.display()),
+        );
+    }
     launcher
         .arg(worker_path)
         .arg("--connect")
@@ -995,10 +1002,19 @@ fn descendants_of(pid: libc::pid_t) -> Vec<libc::pid_t> {
     descendants
 }
 
-pub(super) fn frame_path() -> Result<PathBuf> {
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+fn runtime_directory(identity: WorkerIdentity) -> PathBuf {
+    match identity {
+        WorkerIdentity::User => std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir),
+        WorkerIdentity::RestrictedFallback => {
+            PathBuf::from("/run/user").join(unsafe { libc::getuid() }.to_string())
+        }
+    }
+}
+
+pub(super) fn frame_path_for_identity(identity: WorkerIdentity) -> Result<PathBuf> {
+    let runtime = runtime_directory(identity);
     let directory = runtime.join("sliver");
     std::fs::create_dir_all(&directory)
         .with_context(|| format!("creating frame directory {}", directory.display()))?;
@@ -1798,6 +1814,15 @@ mod tests {
     }
 
     #[test]
+    fn restricted_fallback_runtime_is_derived_from_the_broker_uid() {
+        let expected = PathBuf::from("/run/user").join(unsafe { libc::getuid() }.to_string());
+        assert_eq!(
+            runtime_directory(WorkerIdentity::RestrictedFallback),
+            expected
+        );
+    }
+
+    #[test]
     fn systemd_worker_uses_the_declared_resource_and_device_policy() -> Result<()> {
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
@@ -1808,7 +1833,7 @@ mod tests {
         );
 
         let _directory = tempfile::tempdir()?;
-        let frame_path = frame_path()?;
+        let frame_path = frame_path_for_identity(WorkerIdentity::User)?;
         let slots = FrameSlots::new_shared(
             &frame_path,
             crate::DISPLAY_WIDTH,

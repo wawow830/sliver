@@ -2195,6 +2195,7 @@ mod tests {
         let state_a = directory.path().join("user-a-state/config-path");
         let state_b = directory.path().join("user-b-state/config-path");
         PreparedPathState::prepare(&state_a, &source_a)?.commit()?;
+        PreparedPathState::prepare(&state_b, &source_b)?.commit()?;
         let logind = FakeLogind::new();
         let uid = unsafe { libc::getuid() };
         let second_uid = uid.wrapping_add(1);
@@ -2266,15 +2267,9 @@ mod tests {
             .synthetic_keys()
             .last()
             .is_some_and(|event| event.active)));
-        logind.set_active(
-            SEAT,
-            Some(ActiveSession {
-                id: "user-b-session".into(),
-                uid: second_uid,
-            }),
-        );
+        logind.set_active(SEAT, None);
         assert!(first.poll(Duration::ZERO).is_err());
-        first.handoff_owner_with_reason(StopReason::Replaced)?;
+        first.handoff_owner_with_reason(StopReason::Logout)?;
         first.hardware_mut().logout_complete()?;
         assert!(shared.inspect(|hardware| hardware
             .synthetic_keys()
@@ -2282,12 +2277,30 @@ mod tests {
             .is_some_and(|event| !event.active)));
         first.shutdown()?;
 
-        let mut second = Supervisor::new_with_logind_process(
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 2)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [0, 255, 0, 255]
+        );
+
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "user-b-session".into(),
+                uid: second_uid,
+            }),
+        );
+        let mut second = Supervisor::new_with_startup_candidate_process(
             BrokerHardware::new_at_as(socket.clone(), second_uid),
             state_b.clone(),
             FakeLogind::new(),
+            None,
         )?;
-        second.apply(&source_b)?;
         assert_eq!(
             shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
             [0, 0, 255, 255]

@@ -1,7 +1,8 @@
 [Unit]
 Description=Sliver per-user Lua supervisor
 After=graphical-session.target
-PartOf=graphical-session.target
+# Keep the supervisor alive across fast user switches. It retries the broker
+# claim and reconnects when this user's seat session becomes active again.
 ConditionGroup=sliver-supervisors
 
 [Service]
