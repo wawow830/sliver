@@ -15,6 +15,11 @@ can start before login:
 sudo loginctl enable-linger sliver
 ```
 
+The broker is a system service, so its fallback worker runtime is derived from
+the broker account's UID. It does not use the system manager's `%U` value or
+`/run/user/0`; the fallback's worker sockets and frame slots belong to the
+lingering `sliver` user manager.
+
 The broker conflicts with `tiny-dfr.service`; stopping it does not start
 `tiny-dfr` again. The documented takeover command globally enables
 `sliver-supervisor.service`; `ConditionGroup=sliver-supervisors` keeps it
