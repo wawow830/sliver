@@ -707,18 +707,16 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     if connection_stop.is_some() {
         stream.set_read_timeout(Some(Duration::from_millis(10)))?;
     }
-    if matches!(peer_verification, PeerVerification::Production) {
-        if let Err(error) = ensure_supervisor_peer(peer.pid) {
-            write_message(&mut stream, ERROR, error.to_string().as_bytes())?;
-            return Err(error);
-        }
-    }
-    #[cfg(test)]
-    if matches!(peer_verification, PeerVerification::TestProduction) {
-        if let Err(error) = ensure_supervisor_test_peer(peer.pid) {
-            write_message(&mut stream, ERROR, error.to_string().as_bytes())?;
-            return Err(error);
-        }
+    let peer_check = match peer_verification {
+        PeerVerification::Production => ensure_supervisor_peer(peer.pid),
+        #[cfg(test)]
+        PeerVerification::Test => Ok(()),
+        #[cfg(test)]
+        PeerVerification::TestProduction => ensure_supervisor_test_peer(peer.pid),
+    };
+    if let Err(error) = peer_check {
+        write_message(&mut stream, ERROR, error.to_string().as_bytes())?;
+        return Err(error);
     }
     let request = read_message(&mut stream)?;
     let (operation, payload) = request.split_first().context("broker request is empty")?;
