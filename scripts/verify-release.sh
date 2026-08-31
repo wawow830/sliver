@@ -979,10 +979,27 @@ package_stage() {
 
     actual_manifest="$VERIFY_DIR/package-manifest.txt"
     rpm -qpl "$RPM_PATH" | LC_ALL=C sort > "$actual_manifest"
-    if diff -u "$MANIFEST" "$actual_manifest" > "$VERIFY_DIR/package-manifest.diff"; then
-        pass_check package_manifest "RPM file list exactly matches $MANIFEST"
+    local static_manifest="$VERIFY_DIR/package-manifest-static.txt"
+    grep -v '^/usr/lib/\.build-id\(/\|$\)' "$actual_manifest" > "$static_manifest"
+    if diff -u "$MANIFEST" "$static_manifest" > "$VERIFY_DIR/package-manifest.diff"; then
+        pass_check package_manifest "RPM static file list exactly matches $MANIFEST"
     else
         fail_check package_manifest "RPM file list differs; see $VERIFY_DIR/package-manifest.diff"
+    fi
+    local build_id_path build_id_count=0 malformed_build_ids=0
+    while IFS= read -r build_id_path; do
+        [[ -z "$build_id_path" ]] && continue
+        if [[ "$build_id_path" =~ ^/usr/lib/\.build-id/[0-9a-f]{2}/[0-9a-f]{38}$ ]]; then
+            build_id_count=$((build_id_count + 1))
+        elif [[ "$build_id_path" != /usr/lib/.build-id &&
+                ! "$build_id_path" =~ ^/usr/lib/\.build-id/[0-9a-f]{2}$ ]]; then
+            malformed_build_ids=1
+        fi
+    done < <(grep '^/usr/lib/.build-id' "$actual_manifest" || true)
+    if (( build_id_count == 4 && malformed_build_ids == 0 )); then
+        pass_check package_build_ids "four valid generated RPM build-id entries are present"
+    else
+        fail_check package_build_ids "RPM build-id entries are missing or malformed"
     fi
 
     local extract_dir

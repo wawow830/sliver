@@ -1,6 +1,5 @@
 /usr/bin/sliver
 /usr/lib/systemd/system/sliver-broker.service
-/usr/lib/systemd/user/sliver-lua-worker-.service.d
 /usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
 /usr/lib/systemd/user/sliver-supervisor.service
 /usr/lib/sysusers.d/sliver.conf
