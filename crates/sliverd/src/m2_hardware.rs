@@ -426,10 +426,21 @@ fn remember_error<T, E>(first: &mut Option<anyhow::Error>, result: std::result::
 where
     E: Into<anyhow::Error>,
 {
-    if let Err(error) = result {
-        if first.is_none() {
-            *first = Some(error.into());
-        }
+    let Err(error) = result else {
+        return;
+    };
+    let error = error.into();
+    // Releasing hardware may race with the device or the previous owner's
+    // DRM objects disappearing. Those resources are already released.
+    if error.chain().any(|cause| {
+        cause
+            .downcast_ref::<io::Error>()
+            .is_some_and(|error| error.raw_os_error() == Some(libc::ENOENT))
+    }) {
+        return;
+    }
+    if first.is_none() {
+        *first = Some(error);
     }
 }
 
@@ -1915,6 +1926,17 @@ mod tests {
 
         assert!(hardware.keyboard_emitter.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn release_treats_missing_resources_as_already_released() {
+        let mut first_error = None;
+        remember_error(
+            &mut first_error,
+            Err::<(), _>(io::Error::from_raw_os_error(libc::ENOENT)),
+        );
+
+        assert!(first_error.is_none());
     }
 
     #[test]
