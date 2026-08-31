@@ -10,6 +10,17 @@ verify_release_authentication_error() {
     grep -E -q '^sudo: (timed out reading password|a password is required|no password was provided|[0-9]+ incorrect password attempts?)$' "$output"
 }
 
+verify_release_require_authentication() {
+    local output=$1
+    if sudo -v > "$output" 2>&1; then
+        return 0
+    fi
+    if verify_release_authentication_error "$output"; then
+        return "$VERIFY_RELEASE_AUTH_REQUIRED"
+    fi
+    return 1
+}
+
 verify_release_capture_privileged() {
     local output=$1
     shift

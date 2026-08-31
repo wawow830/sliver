@@ -76,6 +76,8 @@ grep -F 'source "$ROOT/scripts/verify-release-auth.sh"' "$script" >/dev/null ||
     fail 'verifier does not load authentication handling'
 grep -F 'verify_release_capture_privileged "$output" capture_pre_takeover_drm_owner' "$script" >/dev/null ||
     fail 'stage 6 does not classify privileged capture failures'
+grep -F 'verify_release_require_authentication "$VERIFY_DIR/sudo-auth-before-takeover.txt"' "$script" >/dev/null ||
+    fail 'stage 6 does not acquire administrator authentication deliberately'
 grep -F 'owner_status == VERIFY_RELEASE_AUTH_REQUIRED' "$script" >/dev/null ||
     fail 'stage 6 does not keep authentication timeouts resumable'
 grep -F 'ROLLBACK_ATTEMPTED' "$script" >/dev/null ||
@@ -114,6 +116,25 @@ verify_release_capture_privileged "$tmp/capture-status-75" bash -c 'exit 75'
 status=$?
 set -e
 [[ "$status" == 1 ]] || fail "unclassified status-75 capture returned $status, expected ordinary failure"
+cat > "$tmp/sudo" <<'EOF'
+#!/usr/bin/env bash
+printf 'sudo: timed out reading password\n'
+printf 'sudo: a password is required\n'
+exit 1
+EOF
+chmod 700 "$tmp/sudo"
+set +e
+PATH="$tmp:$PATH" verify_release_require_authentication "$tmp/auth-gate-timeout"
+status=$?
+set -e
+[[ "$status" == "$VERIFY_RELEASE_AUTH_REQUIRED" ]] || fail "authentication gate returned $status, expected $VERIFY_RELEASE_AUTH_REQUIRED"
+cat > "$tmp/sudo" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod 700 "$tmp/sudo"
+PATH="$tmp:$PATH" verify_release_require_authentication "$tmp/auth-gate-success" ||
+    fail 'successful sudo authentication was rejected'
 if verify_release_should_auto_rollback 1 1 0 0 1 0; then
     fail 'authentication pause still schedules automatic rollback'
 fi

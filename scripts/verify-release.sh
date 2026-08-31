@@ -1228,6 +1228,20 @@ fresh_session_stage() {
 owner_stage() {
     stage 6 "Capture the pre-takeover owner"
     refuse_if_blocked
+    local auth_status
+    if verify_release_require_authentication "$VERIFY_DIR/sudo-auth-before-takeover.txt"; then
+        pass_check pre_takeover_authentication "administrator authentication acquired before the ownership check"
+    else
+        auth_status=$?
+        if (( auth_status == VERIFY_RELEASE_AUTH_REQUIRED )); then
+            AUTHENTICATION_REQUIRED=1
+            say "Administrator authentication did not complete before the ownership check. No ownership result was recorded. Authenticate, then resume."
+            save_state
+            exit "$VERIFY_RELEASE_AUTH_REQUIRED"
+        fi
+        fail_check pre_takeover_drm_owner "administrator authentication could not be established before the ownership check"
+        exit 1
+    fi
     logged_step pre_takeover_owner "$VERIFY_DIR/tiny-dfr-before-takeover.txt" \
         systemctl --no-pager --full status tiny-dfr.service
     if pgrep -a -f 'tiny-dfr|sliver-broker|sliver-supervisor' > "$VERIFY_DIR/processes-before-takeover.txt" 2>&1; then
