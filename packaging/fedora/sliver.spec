@@ -67,7 +67,7 @@ if systemd-run --user --wait --quiet true; then
 else
     echo 'Skipping user-manager integration tests: no systemd user manager' >&2
     SLIVER_LUA_WORKER=%{buildroot}%{_libexecdir}/sliver/sliver-lua-worker \
-        %cargo_test -- --package sliverd --lib -- --skip systemd_worker_uses_the_declared_resource_and_device_policy --skip production_peer_verification_accepts_a_real_supervisor_unit
+        %cargo_test -- --package sliverd --lib -- --skip systemd_worker_uses_the_declared_resource_and_device_policy --skip embedded_default_stays_healthy_through_systemd_worker_polling --skip production_peer_verification_accepts_a_real_supervisor_unit
 fi
 %cargo_test -- --package sliverd --test sliver_cli
 printf 'sliver package check: packaged worker and pure-Lua/C-module tests passed\n'
