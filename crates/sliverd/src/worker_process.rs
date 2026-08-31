@@ -533,10 +533,18 @@ impl ProcessWorker {
         if self.terminated.load(Ordering::Acquire) {
             return false;
         }
-        if let Err(error) = self.drain_packets() {
-            self.mark_failed(error.to_string());
-            self.terminate();
-            return false;
+        let packets = match self.drain_packets() {
+            Ok(packets) => packets,
+            Err(error) => {
+                self.mark_failed(error.to_string());
+                self.terminate();
+                return false;
+            }
+        };
+        for (kind, _) in packets {
+            if kind == HEARTBEAT {
+                self.note_heartbeat();
+            }
         }
         let exited = self
             .child
@@ -652,9 +660,16 @@ impl ProcessWorker {
                     return Err(error);
                 }
             };
+            // A command reply and the heartbeat sent after it may arrive in
+            // the same read. Observe heartbeats before returning the reply.
+            for (kind, _) in &packets {
+                if *kind == HEARTBEAT {
+                    self.note_heartbeat();
+                }
+            }
             for (kind, payload) in packets {
                 match kind {
-                    HEARTBEAT => self.note_heartbeat(),
+                    HEARTBEAT => {}
                     REPLY => {
                         if Instant::now() >= deadline {
                             return Err(self.deadline_failure(command, deadline));
