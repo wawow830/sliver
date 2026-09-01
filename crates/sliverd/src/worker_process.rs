@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -68,7 +68,7 @@ struct ProcessEffects {
 }
 
 pub(crate) struct ProcessWorker {
-    child: Mutex<Child>,
+    child: Arc<Mutex<Child>>,
     pidfd: std::fs::File,
     stream: Mutex<UnixStream>,
     input: Mutex<Vec<u8>>,
@@ -203,7 +203,7 @@ impl ProcessWorker {
             }
         };
         let worker = Self {
-            child: Mutex::new(spawned.child),
+            child: Arc::new(Mutex::new(spawned.child)),
             pidfd,
             stream: Mutex::new(stream),
             input: Mutex::new(Vec::new()),
@@ -610,7 +610,7 @@ impl ProcessWorker {
             return;
         }
         self.kill_unit();
-        loop {
+        let child_reaped = loop {
             self.kill_process_group();
             unsafe {
                 libc::syscall(
@@ -628,11 +628,26 @@ impl ProcessWorker {
                 .and_then(|mut child| child.try_wait().ok())
                 .flatten()
                 .is_some();
-            if exited || Instant::now() >= deadline {
-                break;
+            if exited {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
             }
             thread::sleep(WRITE_RETRY);
+        };
+        if !child_reaped {
+            self.reap_child();
         }
+    }
+
+    fn reap_child(&self) {
+        let child = Arc::clone(&self.child);
+        thread::spawn(move || {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.wait();
+            }
+        });
     }
 
     fn request(&self, command: u8, payload: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
@@ -1744,6 +1759,61 @@ mod tests {
         LuaSource::embedded(source.as_bytes().to_vec())
     }
 
+    fn spawn_waiting_launcher(_identity: WorkerIdentity) -> Result<SpawnedWorker> {
+        let (parent_fd, child_fd) = socket_pair()?;
+        let worker_path = worker_path()?;
+        let mut launcher = Command::new("sh");
+        launcher
+            .arg("-c")
+            .arg(r#""$1"; sleep 0.1"#)
+            .arg("sliver-test-launcher")
+            .arg(worker_path)
+            .stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(child_fd)) })
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env("SLIVER_LUA_WORKER_FD", WORKER_FD.to_string());
+        let child = match launcher.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                unsafe {
+                    libc::close(parent_fd);
+                }
+                return Err(error).context("starting the test worker launcher");
+            }
+        };
+        let stream = unsafe { UnixStream::from_raw_fd(parent_fd) };
+        Ok(SpawnedWorker {
+            child,
+            stream,
+            process_group: 0,
+            unit: None,
+        })
+    }
+
+    fn launcher_has_been_reaped(pid: u32) -> bool {
+        let path = format!("/proc/{pid}");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if !std::path::Path::new(&path).exists() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    fn cleanup_test_launcher(pid: u32) {
+        let mut status = 0;
+        unsafe {
+            if libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) == 0 {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                while libc::waitpid(pid as libc::pid_t, &mut status, 0) < 0
+                    && *libc::__errno_location() == libc::EINTR
+                {}
+            }
+        }
+    }
+
     #[test]
     fn truncated_worker_packet_is_rejected() -> Result<()> {
         use std::io::Write;
@@ -2087,6 +2157,48 @@ mod tests {
         assert!(started.elapsed() >= CALLBACK_DEADLINE);
         assert!(error.to_string().contains("two seconds"));
         assert!(!marker.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn a_hung_render_reaps_the_launcher_that_waits_for_the_worker() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let frame_path = directory.path().join("frame");
+        let slots = FrameSlots::new_shared(
+            &frame_path,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?;
+        let worker = ProcessWorker::stage_with_spawned(
+            &embedded(
+                r#"
+                require("sliver.v1")
+                return {
+                    api_version = 1,
+                    render = function()
+                        while true do end
+                    end,
+                }
+                "#,
+            ),
+            0.0,
+            InputState::default(),
+            &frame_path,
+            slots.broker(),
+            WorkerIdentity::User,
+            spawn_waiting_launcher,
+        )?;
+        let launcher_pid = lock(&worker.child, "test worker launcher")?.id();
+        let error = match worker.render(1.0, 0.0, InputState::default()) {
+            Ok(_) => bail!("hung Lua callback returned"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("two seconds"));
+        let reaped = launcher_has_been_reaped(launcher_pid);
+        drop(worker);
+        cleanup_test_launcher(launcher_pid);
+        assert!(reaped, "worker launcher {launcher_pid} was not reaped");
         Ok(())
     }
 
