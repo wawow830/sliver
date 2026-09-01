@@ -802,6 +802,9 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         fallback.handoff_owner_with_reason(StopReason::Replaced)?;
         *fallback_running = false;
     }
+    // Ownership has transferred to this authorized connection even before
+    // the claim reply is complete. Fence it on every later setup failure.
+    client_state.claimed = true;
     let (input_state, backlight) = {
         let hardware = fallback.hardware_mut();
         let input_state = hardware.input_state();
@@ -823,7 +826,6 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     let mut body = Vec::new();
     encode_input_state(&mut body, input_state);
     body.extend_from_slice(&backlight.to_bits().to_be_bytes());
-    client_state.claimed = true;
     write_message(&mut stream, OK, &body)?;
     let mut session_revoked = false;
     let mut logout_acknowledged = false;
