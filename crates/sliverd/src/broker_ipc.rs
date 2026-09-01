@@ -526,7 +526,7 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                     // its last frame in that case, so fence it before waiting
                     // for a replacement supervisor.
                     if !outcome.logout_acknowledged {
-                        if let Err(error) = fallback.enter_recovery() {
+                        if let Err(error) = fallback.fence_owner_output() {
                             crate::system_log::broker_error(format!(
                                 "failed to fence disconnected user frame: {error:#}"
                             ));
@@ -760,7 +760,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         write_message(&mut stream, status, error.to_string().as_bytes())?;
         return Err(error);
     }
-    if *fallback_running {
+    if *fallback_running || fallback.has_recovery() {
         fallback.handoff_owner_with_reason(StopReason::Replaced)?;
         *fallback_running = false;
     }
@@ -840,7 +840,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             // stops. Fence that frame before notifying the revoked
             // supervisor, so a replacement cannot inherit the old user's
             // pixels if its startup is delayed or fails.
-            if let Err(fence_error) = fallback.enter_recovery() {
+            if let Err(fence_error) = fallback.fence_owner_output() {
                 eprintln!("failed to fence revoked user frame: {fence_error:#}");
             }
             write_message(&mut stream, SESSION_REVOKED, &revocation)?;
@@ -2468,6 +2468,13 @@ mod tests {
             shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
             [255, 0, 0, 255],
             "the revoked user's frame remained visible before the replacement claimed the seat"
+        );
+        assert!(
+            shared.inspect(|hardware| {
+                let frame = hardware.presented_frames().last().unwrap();
+                (0..2008).any(|x| (0..60).any(|y| frame.rgba_at(x, y) == [255, 255, 255, 255]))
+            }),
+            "the handoff fence presented a blank frame instead of recovery controls"
         );
 
         // A supervisor started during the greeter interval must wait and

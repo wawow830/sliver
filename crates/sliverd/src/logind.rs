@@ -315,6 +315,7 @@ mod fake {
         default_session: Option<Session>,
         active: std::collections::HashMap<String, ActiveSession>,
         generation: u64,
+        pending_seat_event: bool,
         generation_reads: usize,
         generation_hook: Option<(usize, String, ActiveSession)>,
         clear_active_hook: Option<(usize, String)>,
@@ -351,10 +352,9 @@ mod fake {
             } else {
                 state.active.remove(seat);
             }
-            state.generation = state
-                .generation
-                .checked_add(1)
-                .expect("fake logind generation overflow");
+            // sd-login updates the passive snapshot first. The monitor's
+            // generation changes only when its descriptor is consumed.
+            state.pending_seat_event = true;
         }
 
         pub(crate) fn bump_generation(&self) {
@@ -409,6 +409,13 @@ mod fake {
             let (lock, condition) = &*self.state;
             let mut state = lock.lock().expect("fake logind mutex poisoned");
             state.generation_reads += 1;
+            if state.pending_seat_event {
+                state.pending_seat_event = false;
+                state.generation = state
+                    .generation
+                    .checked_add(1)
+                    .expect("fake logind generation overflow");
+            }
             if state
                 .generation_hook
                 .as_ref()

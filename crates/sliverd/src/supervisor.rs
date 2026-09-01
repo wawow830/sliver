@@ -1610,16 +1610,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.hardware.present(&frame)
     }
 
-    pub(crate) fn enter_recovery(&mut self) -> Result<()> {
+    fn enter_recovery(&mut self) -> Result<()> {
         if self.recovery.is_some() {
-            if !self.hardware_available || self.suspended {
-                return Ok(());
-            }
-            self.hardware
-                .set_backlight(0.75)
-                .context("setting recovery backlight")?;
-            self.backlight = 0.75;
-            return self.present_recovery();
+            return Ok(());
         }
         let now = self.now_seconds();
         let mut owner_is_healthy = false;
@@ -1659,6 +1652,23 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.fn_hold_started = None;
         self.worker_visible = false;
         self.recovery = Some(RecoverySession::new(owner_is_healthy));
+        if !self.hardware_available || self.suspended {
+            return Ok(());
+        }
+        self.hardware
+            .set_backlight(0.75)
+            .context("setting recovery backlight")?;
+        self.backlight = 0.75;
+        self.present_recovery()
+    }
+
+    /// Replace any retained user frame with the broker-owned recovery row.
+    /// This is also needed when recovery already exists, because the panel
+    /// may still contain a frame from the revoked owner.
+    pub(crate) fn fence_owner_output(&mut self) -> Result<()> {
+        if self.recovery.is_none() {
+            return self.enter_recovery();
+        }
         if !self.hardware_available || self.suspended {
             return Ok(());
         }
@@ -2162,6 +2172,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let stop_result = self.stop_active_worker(reason);
         let input_state = self.hardware.input_state();
         self.reset_owner_state(input_state);
+        self.recovery = None;
+        self.worker_visible = false;
+        self.resume_pending = false;
         if let Err(error) = stop_result {
             eprintln!("Lua worker logout cleanup failed during owner handoff: {error:#}");
         }
