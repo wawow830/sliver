@@ -2480,9 +2480,10 @@ mod tests {
             [255, 0, 0, 255]
         );
 
-        // logind reports the greeter while session 88 is being removed. There
-        // is no replacement supervisor yet, so the old frame must not remain
-        // visible while session 93 is created.
+        // logind removes session 88 and reports the greeter while session 93
+        // is being created. There is no replacement supervisor yet, so the
+        // old frame must not remain visible during that interval.
+        logind.set_active(SEAT, None);
         logind.set_active(
             SEAT,
             Some(ActiveSession {
