@@ -562,8 +562,9 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                         return Err(error);
                     }
                     crate::system_log::broker_error(format!("broker client failed: {error:#}"));
-                    fallback_attempted = true;
-                    last_active = authorizer.active_session(seat)?;
+                    let active = authorizer.active_session(seat)?;
+                    fallback_attempted = active.is_some();
+                    last_active = active;
                 }
             }
             if !fallback_running

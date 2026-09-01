@@ -1652,11 +1652,14 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.fn_hold_started = None;
         self.worker_visible = false;
         self.recovery = Some(RecoverySession::new(owner_is_healthy));
+        if !self.hardware_available || self.suspended {
+            return Ok(());
+        }
         self.show_recovery_frame()
     }
 
     fn show_recovery_frame(&mut self) -> Result<()> {
-        if !self.hardware_available || self.suspended {
+        if self.suspended {
             return Ok(());
         }
         self.hardware
