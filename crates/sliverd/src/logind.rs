@@ -321,6 +321,13 @@ mod fake {
         clear_active_hook: Option<(usize, String)>,
     }
 
+    fn advance_generation(state: &mut State) {
+        state.generation = state
+            .generation
+            .checked_add(1)
+            .expect("fake logind generation overflow");
+    }
+
     impl FakeLogind {
         pub(crate) fn new() -> Self {
             Self::default()
@@ -360,10 +367,7 @@ mod fake {
         pub(crate) fn bump_generation(&self) {
             let (lock, _) = &*self.state;
             let mut state = lock.lock().expect("fake logind mutex poisoned");
-            state.generation = state
-                .generation
-                .checked_add(1)
-                .expect("fake logind generation overflow");
+            advance_generation(&mut state);
         }
 
         pub(crate) fn switch_active_on_generation_read(
@@ -411,10 +415,7 @@ mod fake {
             state.generation_reads += 1;
             if state.pending_seat_event {
                 state.pending_seat_event = false;
-                state.generation = state
-                    .generation
-                    .checked_add(1)
-                    .expect("fake logind generation overflow");
+                advance_generation(&mut state);
             }
             if state
                 .generation_hook
@@ -426,10 +427,7 @@ mod fake {
                     .take()
                     .expect("generation hook was just checked");
                 state.active.insert(seat, active);
-                state.generation = state
-                    .generation
-                    .checked_add(1)
-                    .expect("fake logind generation overflow");
+                advance_generation(&mut state);
             }
             if state
                 .clear_active_hook

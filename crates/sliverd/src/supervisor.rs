@@ -1670,8 +1670,15 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     /// This is also needed when recovery already exists, because the panel
     /// may still contain a frame from the revoked owner.
     pub(crate) fn fence_owner_output(&mut self) -> Result<()> {
-        if self.recovery.is_none() {
-            return self.enter_recovery();
+        let was_missing = self.recovery.is_none();
+        if was_missing {
+            self.enter_recovery()?;
+            if self.suspended {
+                return Ok(());
+            }
+            if self.hardware_available {
+                return Ok(());
+            }
         }
         self.show_recovery_frame()
     }
