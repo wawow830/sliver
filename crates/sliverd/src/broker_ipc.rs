@@ -49,6 +49,31 @@ enum PeerVerification {
     TestProduction,
 }
 
+#[derive(Debug)]
+struct OwnerFenceFailed;
+
+impl std::fmt::Display for OwnerFenceFailed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("broker could not fence the previous owner's frame")
+    }
+}
+
+impl std::error::Error for OwnerFenceFailed {}
+
+fn fence_owner_output<H: TouchBarHardware, L: crate::logind::Logind>(
+    fallback: &mut Supervisor<H, L>,
+) -> Result<()> {
+    fallback
+        .fence_owner_output()
+        .map_err(|error| error.context(OwnerFenceFailed))
+}
+
+fn is_owner_fence_failure(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<OwnerFenceFailed>().is_some())
+}
+
 pub(crate) fn socket_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("SLIVER_BROKER_SOCKET") {
         return Ok(PathBuf::from(path));
@@ -526,17 +551,16 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                     // its last frame in that case, so fence it before waiting
                     // for a replacement supervisor.
                     if !outcome.logout_acknowledged {
-                        if let Err(error) = fallback.fence_owner_output() {
-                            crate::system_log::broker_error(format!(
-                                "failed to fence disconnected user frame: {error:#}"
-                            ));
-                        }
+                        fence_owner_output(&mut fallback)?;
                     }
                     let active = authorizer.active_session(seat)?;
                     fallback_attempted = !outcome.logout_acknowledged && active.is_some();
                     last_active = active;
                 }
                 Err(error) => {
+                    if is_owner_fence_failure(&error) {
+                        return Err(error);
+                    }
                     crate::system_log::broker_error(format!("broker client failed: {error:#}"));
                     fallback_attempted = true;
                     last_active = authorizer.active_session(seat)?;
@@ -597,6 +621,7 @@ struct HeldKeys {
 
 #[derive(Default)]
 struct ClientState {
+    claimed: bool,
     held_keys: HeldKeys,
     contacts: ActiveContacts,
 }
@@ -692,6 +717,19 @@ fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Log
         peer_verification,
         connection_stop,
     );
+    let fence_result = if client_state.claimed && result.is_err() {
+        fence_owner_output(fallback)
+    } else {
+        Ok(())
+    };
+    let result = match (result, fence_result) {
+        (Err(error), Err(fence_error)) => {
+            Err(error).context(format!("owner frame fencing also failed: {fence_error:#}"))
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Ok(_), Err(fence_error)) => Err(fence_error),
+    };
     let cleanup = client_state.held_keys.release(fallback.hardware_mut());
     match (result, cleanup) {
         (Err(error), Err(cleanup_error)) => {
@@ -785,6 +823,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     let mut body = Vec::new();
     encode_input_state(&mut body, input_state);
     body.extend_from_slice(&backlight.to_bits().to_be_bytes());
+    client_state.claimed = true;
     write_message(&mut stream, OK, &body)?;
     let mut session_revoked = false;
     let mut logout_acknowledged = false;
@@ -840,9 +879,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             // stops. Fence that frame before notifying the revoked
             // supervisor, so a replacement cannot inherit the old user's
             // pixels if its startup is delayed or fails.
-            if let Err(fence_error) = fallback.fence_owner_output() {
-                eprintln!("failed to fence revoked user frame: {fence_error:#}");
-            }
+            fence_owner_output(fallback)?;
             write_message(&mut stream, SESSION_REVOKED, &revocation)?;
             eprintln!("broker revoked user session: {error:#}");
             continue;

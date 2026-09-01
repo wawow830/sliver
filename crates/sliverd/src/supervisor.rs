@@ -1652,6 +1652,10 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.fn_hold_started = None;
         self.worker_visible = false;
         self.recovery = Some(RecoverySession::new(owner_is_healthy));
+        self.show_recovery_frame()
+    }
+
+    fn show_recovery_frame(&mut self) -> Result<()> {
         if !self.hardware_available || self.suspended {
             return Ok(());
         }
@@ -1669,14 +1673,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         if self.recovery.is_none() {
             return self.enter_recovery();
         }
-        if !self.hardware_available || self.suspended {
-            return Ok(());
-        }
-        self.hardware
-            .set_backlight(0.75)
-            .context("setting recovery backlight")?;
-        self.backlight = 0.75;
-        self.present_recovery()
+        self.show_recovery_frame()
     }
 
     fn exit_recovery(&mut self, now: f64) -> Result<()> {
