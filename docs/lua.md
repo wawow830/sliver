@@ -117,11 +117,11 @@ six-digit sRGB string such as `"#336699"` or four normalized components
 `text` positions the Pango layout from its top-left logical origin. The `y`
 argument is not a baseline. `measure_text` returns the layout's logical width
 and height, so keep `y + height` below the 60-pixel canvas edge and leave a
-small margin for font ink. For example:
+margin for font ink. For example, leave eight logical pixels below the layout:
 
 ```lua
 local _, height = canvas:measure_text(label, 24)
-canvas:text(20, 60 - height - 1, label, 24, "#ffffff")
+canvas:text(20, 60 - height - 8, label, 24, "#ffffff")
 ```
 
 Methods are:

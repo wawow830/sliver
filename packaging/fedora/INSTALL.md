@@ -83,9 +83,8 @@ The verifier creates named fixtures in the evidence directory:
 `valid.lua`, `invalid.lua`, `hung.lua`, and `video-2008x60.lua`. The last one
 redraws a complete native 2008 by 60 RGBA frame at 60 Hz. The text in the
 named drawing fixtures uses the canvas's top-origin coordinate, not a baseline;
-keep text above the bottom edge when adding or editing a fixture. The wizard
-asks for
-the real-panel interval, presented rate, misses, input-to-frame delay, and
+keep text above the bottom edge when adding or editing a fixture. The wizard asks
+for the real-panel interval, presented rate, misses, input-to-frame delay, and
 latency growth. Enter measured values only.
 
 A failed run automatically attempts a full rollback. It restores only state
