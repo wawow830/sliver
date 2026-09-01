@@ -72,10 +72,12 @@ grep -F 'invalid.lua' "$script" >/dev/null || fail 'invalid fixture is not named
 grep -F 'hung.lua' "$script" >/dev/null || fail 'watchdog fixture is not named'
 grep -F 'two-second physical Fn hold' "$script" >/dev/null || fail 'Fn recovery prompt does not name its two-second deadline'
 grep -F 'two-second Lua callback watchdog' "$script" >/dev/null || fail 'watchdog prompt does not distinguish its deadline'
-grep -F 'every physically present left/right modifier' "$script" >/dev/null ||
-    fail 'modifier prompt does not scope acceptance to physically present controls'
-grep -F 'hardware N/A' "$script" >/dev/null ||
-    fail 'modifier prompt does not record absent physical sides as hardware N/A'
+grep -F 'record_modifier_check' "$script" >/dev/null ||
+    fail 'modifier check does not use the structured evidence path'
+grep -F 'tested=left_ctrl,... hardware_na=right_ctrl,...' "$script" >/dev/null ||
+    fail 'modifier prompt does not require named tested and hardware-N/A sides'
+grep -F 'physical modifier evidence:' "$script" >/dev/null ||
+    fail 'modifier evidence is not recorded as structured detail'
 if grep -F 'three-second Fn hold' "$script" >/dev/null; then
     fail 'verifier still describes a three-second Fn recovery hold'
 fi
@@ -106,6 +108,22 @@ grep -F 'ROLLBACK_ATTEMPTED' "$script" >/dev/null ||
 # automatic rollback must not be attempted after the first one was recorded.
 # shellcheck disable=SC1091
 source "$root/scripts/verify-release-auth.sh"
+# shellcheck disable=SC1091
+source "$root/scripts/verify-release-evidence.sh"
+verify_release_modifier_evidence \
+    'tested=left_ctrl,right_alt,left_shift,right_super hardware_na=right_ctrl,left_alt,right_shift,left_super' ||
+    fail 'complete modifier evidence was rejected'
+if verify_release_modifier_evidence 'tested=left_ctrl hardware_na=right_ctrl'; then
+    fail 'incomplete modifier evidence was accepted'
+fi
+if verify_release_modifier_evidence \
+    'tested=left_ctrl hardware_na=right_ctrl,left_alt,left_shift,right_shift,left_super,right_super'; then
+    fail 'modifier evidence with an omitted side was accepted'
+fi
+if verify_release_modifier_evidence \
+    'tested=left_ctrl,right_alt,left_shift,right_super hardware_na=right_ctrl,left_alt,right_shift,left_super extra=field'; then
+    fail 'modifier evidence with an extra field was accepted'
+fi
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-verify-release-auth.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
 cat > "$tmp/auth-timeout" <<'EOF'

@@ -7,6 +7,8 @@ MANIFEST="$ROOT/packaging/fedora/release-manifest.txt"
 source "$ROOT/scripts/verify-release-ownership.sh"
 # shellcheck source=verify-release-auth.sh
 source "$ROOT/scripts/verify-release-auth.sh"
+# shellcheck source=verify-release-evidence.sh
+source "$ROOT/scripts/verify-release-evidence.sh"
 STATE_VERSION=3
 TOTAL_STAGES=12
 
@@ -579,6 +581,20 @@ manual_check() {
         fail_check "$id" "operator did not confirm: $detail"
         exit 1
     fi
+}
+record_modifier_check() {
+    local value=""
+    refuse_if_blocked
+    say "Test each physical left/right Ctrl, Alt, Shift, and Super side that exists."
+    say "Record every side exactly once as: tested=left_ctrl,... hardware_na=right_ctrl,..."
+    printf '  Modifier evidence: '
+    read -r value || true
+    if ! verify_release_modifier_evidence "$value"; then
+        fail_check lifecycle_modifier_uinput \
+            "modifier evidence must partition all eight named sides into tested= and hardware_na="
+        exit 1
+    fi
+    pass_check lifecycle_modifier_uinput "physical modifier evidence: $value"
 }
 record_metric() {
     local id=$1 prompt_text=$2 value="" interval fps misses input_delay growth
@@ -1451,9 +1467,7 @@ lifecycle_stage() {
     manual_check lifecycle_fn_recovery \
         "Did a continuous two-second physical Fn hold show the fixed F1-F12 row and deliver Fn-up recovery correctly?" \
         "Hold physical Fn continuously for exactly two seconds, then test recovery key activation and release."
-    manual_check lifecycle_modifier_uinput \
-        "Did every physically present left/right modifier bridge to generic uinput key delivery without stuck keys?" \
-        "Test every physically present left/right modifier with a recovery and Lua key action, then release every key. Record absent physical sides as hardware N/A; do not require controls the keyboard does not have."
+    record_modifier_check
     manual_check lifecycle_logout_handoff \
         "Did logout restore the pre-login default and login retain it until the new worker committed, without a blank interval?" \
         "Use a real local logout/login and review both service journals."
