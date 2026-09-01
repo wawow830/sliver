@@ -2357,6 +2357,121 @@ mod tests {
     }
 
     #[test]
+    fn a_revoked_owner_cannot_leave_its_frame_visible_while_the_next_session_starts() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let source_a = directory.path().join("user-a.lua");
+        let source_b = directory.path().join("user-b.lua");
+        std::fs::write(
+            &source_a,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }",
+        )?;
+        std::fs::write(
+            &source_b,
+            "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1) end }",
+        )?;
+        let state_a = directory.path().join("user-a-state/config-path");
+        let state_b = directory.path().join("user-b-state/config-path");
+        PreparedPathState::prepare(&state_a, &source_a)?.commit()?;
+        PreparedPathState::prepare(&state_b, &source_b)?.commit()?;
+
+        let logind = FakeLogind::new();
+        let uid_a = unsafe { libc::getuid() };
+        let uid_b = uid_a.wrapping_add(1);
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "session-88".into(),
+                uid: uid_a,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                directory.path().join("broker-state/config-path"),
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                PeerVerification::Test,
+            )
+        });
+
+        let mut first = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at_as(socket.clone(), uid_a),
+            state_a,
+            FakeLogind::new(),
+            None,
+        )?;
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [255, 0, 0, 255]
+        );
+
+        // logind reports the greeter while session 88 is being removed. There
+        // is no replacement supervisor yet, so the old frame must not remain
+        // visible while session 93 is created.
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "greeter-c404".into(),
+                uid: uid_b,
+            }),
+        );
+        assert!(first.poll(Duration::ZERO).is_err());
+        first.handoff_owner_with_reason(StopReason::Replaced)?;
+        first.hardware_mut().logout_complete()?;
+        first.shutdown()?;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 2)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_ne!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [255, 0, 0, 255],
+            "the revoked user's frame remained visible before the replacement claimed the seat"
+        );
+
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "session-93".into(),
+                uid: uid_b,
+            }),
+        );
+        let second = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at_as(socket, uid_b),
+            state_b,
+            FakeLogind::new(),
+            None,
+        )?;
+        assert_eq!(
+            shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
+            [0, 0, 255, 255]
+        );
+        second.shutdown()?;
+        running.store(false, Ordering::Release);
+        server.join().expect("broker server panicked")?;
+        Ok(())
+    }
+
+    #[test]
     fn service_files_keep_the_broker_and_worker_policy_explicit() {
         let broker = include_str!("../../../systemd/sliver-broker.service");
         let supervisor = include_str!("../../../systemd/user/sliver-supervisor.service");
