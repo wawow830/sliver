@@ -33,6 +33,18 @@ fn present_lua_once<H: TouchBarHardware>(source: &std::path::Path, hardware: &mu
     }
 }
 
+fn assert_bottom_band_is_solid(frame: &LogicalFrame, x_end: usize, message: &str) {
+    for y in 54..60 {
+        for x in 20..x_end {
+            assert_eq!(
+                frame.rgba_at(x, y),
+                [255, 59, 129, 255],
+                "{message} at ({x}, {y})"
+            );
+        }
+    }
+}
+
 #[test]
 fn lua_v1_frame_crosses_the_hardware_seam() -> Result<()> {
     let directory = tempfile::tempdir()?;
@@ -1608,15 +1620,11 @@ fn lua_canvas_text_y_is_a_layout_origin_not_a_baseline() -> Result<()> {
         unsafe_text_overlaps_band,
         "a y=36 text origin did not reproduce the clipped descender case"
     );
-    for y in 54..60 {
-        for x in 20..150 {
-            assert_eq!(
-                frames[1].rgba_at(x, y),
-                [255, 59, 129, 255],
-                "measure_text-based placement painted into the bottom band at ({x}, {y})"
-            );
-        }
-    }
+    assert_bottom_band_is_solid(
+        &frames[1],
+        150,
+        "measure_text-based placement painted into the bottom band",
+    );
     Ok(())
 }
 
@@ -1654,15 +1662,11 @@ fn lua_canvas_capture_keeps_safe_text_and_edge_bands_inside_the_frame() -> Resul
     }
     let text_pixels = (6..54).any(|y| (20..200).any(|x| frame.rgba_at(x, y) != [16, 32, 64, 255]));
     assert!(text_pixels, "safe text origin produced no text pixels");
-    for y in 54..60 {
-        for x in 20..200 {
-            assert_eq!(
-                frame.rgba_at(x, y),
-                [255, 59, 129, 255],
-                "safe text origin painted into the bottom edge band at ({x}, {y})"
-            );
-        }
-    }
+    assert_bottom_band_is_solid(
+        &frame,
+        200,
+        "safe text origin painted into the bottom edge band",
+    );
     Ok(())
 }
 
