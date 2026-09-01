@@ -717,27 +717,27 @@ fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Log
         peer_verification,
         connection_stop,
     );
-    let fence_result = if client_state.claimed && result.is_err() {
-        fence_owner_output(fallback)
-    } else {
-        Ok(())
-    };
-    let result = match (result, fence_result) {
-        (Err(error), Err(fence_error)) => {
-            Err(error).context(format!("owner frame fencing also failed: {fence_error:#}"))
-        }
-        (Err(error), Ok(())) => Err(error),
-        (Ok(outcome), Ok(())) => Ok(outcome),
-        (Ok(_), Err(fence_error)) => Err(fence_error),
-    };
     let cleanup = client_state.held_keys.release(fallback.hardware_mut());
-    match (result, cleanup) {
+    let result = match (result, cleanup) {
         (Err(error), Err(cleanup_error)) => {
             Err(error).context(format!("broker key cleanup also failed: {cleanup_error:#}"))
         }
         (Err(error), Ok(())) => Err(error),
         (Ok(_outcome), Err(error)) => Err(error).context("cleaning up broker client keys"),
         (Ok(outcome), Ok(())) => Ok(outcome),
+    };
+    let fence_result = if client_state.claimed && result.is_err() {
+        fence_owner_output(fallback)
+    } else {
+        Ok(())
+    };
+    match (result, fence_result) {
+        (Err(error), Err(fence_error)) => {
+            Err(fence_error).context(format!("client teardown also failed: {error:#}"))
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Ok(_), Err(fence_error)) => Err(fence_error),
     }
 }
 
