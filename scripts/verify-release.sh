@@ -1457,7 +1457,7 @@ lifecycle_stage() {
         "Use a real local logout/login and review both service journals."
     manual_check lifecycle_watchdog_child_key_cleanup \
         "Did hung.lua hit the two-second Lua callback watchdog, kill child processes, and release every synthetic key?" \
-        "Apply $CONFIG_DIR/hung.lua only as the named watchdog fixture, then verify no child or held key remains."
+        "Apply $CONFIG_DIR/hung.lua only as the named watchdog fixture. Verify the two-second Lua callback watchdog, then verify no child or held key remains."
     CURRENT_STAGE=9
     save_state
 }
