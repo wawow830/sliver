@@ -8075,7 +8075,8 @@ mod tests {
     }
 
     #[test]
-    fn healthy_worker_enters_recovery_at_exactly_two_seconds_and_returns_after_fn_up() -> Result<()> {
+    fn healthy_worker_enters_recovery_at_exactly_two_seconds_and_returns_after_fn_up() -> Result<()>
+    {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("healthy.lua");
         let log = directory.path().join("events");
