@@ -72,6 +72,10 @@ grep -F 'invalid.lua' "$script" >/dev/null || fail 'invalid fixture is not named
 grep -F 'hung.lua' "$script" >/dev/null || fail 'watchdog fixture is not named'
 grep -F 'two-second physical Fn hold' "$script" >/dev/null || fail 'Fn recovery prompt does not name its two-second deadline'
 grep -F 'two-second Lua callback watchdog' "$script" >/dev/null || fail 'watchdog prompt does not distinguish its deadline'
+grep -F 'every physically present left/right modifier' "$script" >/dev/null ||
+    fail 'modifier prompt does not scope acceptance to physically present controls'
+grep -F 'hardware N/A' "$script" >/dev/null ||
+    fail 'modifier prompt does not record absent physical sides as hardware N/A'
 if grep -F 'three-second Fn hold' "$script" >/dev/null; then
     fail 'verifier still describes a three-second Fn recovery hold'
 fi

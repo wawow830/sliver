@@ -70,9 +70,11 @@ awk '/^N: Name=/{name=$0}/^H: Handlers=/{print name; print}' \
 
 Holding physical Fn/Globe continuously for exactly two seconds should show the
 compiled F1–F12 recovery row. This physical-hold timer is separate from the
-Lua callback watchdog, which also has a two-second deadline. Physical Ctrl, Alt,
-Shift, and Super modifiers are bridged to virtual key taps. Synthetic keys are
-released whenever a worker fails or is replaced.
+Lua callback watchdog, which also has a two-second deadline. Every physically
+present left/right Ctrl, Alt, Shift, and Super modifier is bridged to virtual key
+taps. A missing physical side is recorded as hardware N/A rather than treated
+as a failed user action. Synthetic keys are released whenever a worker fails or
+is replaced.
 
 ## Suspend or device loss
 

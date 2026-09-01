@@ -96,10 +96,12 @@ One persistent uinput device named `Sliver Keyboard` advertises:
 Lua key taps and the fixed function row use this device. A continuous physical
 Fn hold for exactly two seconds switches a healthy worker to that fixed row.
 This physical-hold timer is separate from the Lua callback watchdog, which also
-allows two seconds. Modifiers physically held on the Apple keyboard are mirrored
-around a key event when inherited. This is required because Hyprland tracks
-modifiers per keyboard; without bridging, physical Ctrl+Alt and virtual F2 are
-not interpreted as one Ctrl+Alt+F2 chord.
+allows two seconds. Modifiers physically held on the Apple keyboard are
+mirrored around a key event when inherited. Each left/right modifier that is physically present is
+eligible; a missing physical side is hardware N/A, not a failed input action.
+This is required because Hyprland tracks modifiers per keyboard; without
+bridging, physical Ctrl+Alt and virtual F2 are not interpreted as one
+Ctrl+Alt+F2 chord.
 
 For a held Ctrl+Alt and F2 tap, Sliver emits from one virtual device:
 
@@ -113,7 +115,9 @@ LeftCtrl up
 ```
 
 The hardware seam receives each synthetic sequence as one ordered batch. The
-M2 adapter submits that batch once to `VirtualDevice::emit`. A partial device
+M2 adapter submits that batch once to `VirtualDevice::emit`. Physical modifier
+acceptance tests cover every left/right control present on the tested keyboard;
+unsupported physical sides are recorded as hardware N/A. A partial device
 write marks synthetic output unavailable, releases the device claim, and waits
 for the full contract to be discovered again. This path does not retry,
 recreate, or roll back a partially written device.

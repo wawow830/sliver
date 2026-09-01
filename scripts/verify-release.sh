@@ -1452,8 +1452,8 @@ lifecycle_stage() {
         "Did a continuous two-second physical Fn hold show the fixed F1-F12 row and deliver Fn-up recovery correctly?" \
         "Hold physical Fn continuously for exactly two seconds, then test recovery key activation and release."
     manual_check lifecycle_modifier_uinput \
-        "Did left/right modifier bridging and generic uinput key delivery work without stuck keys?" \
-        "Test physical modifiers with a recovery and Lua key action, then release every key."
+        "Did every physically present left/right modifier bridge to generic uinput key delivery without stuck keys?" \
+        "Test every physically present left/right modifier with a recovery and Lua key action, then release every key. Record absent physical sides as hardware N/A; do not require controls the keyboard does not have."
     manual_check lifecycle_logout_handoff \
         "Did logout restore the pre-login default and login retain it until the new worker committed, without a blank interval?" \
         "Use a real local logout/login and review both service journals."
