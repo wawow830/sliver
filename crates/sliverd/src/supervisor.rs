@@ -3217,9 +3217,9 @@ mod tests {
             Supervisor::new(FakeTouchBar::with_input_state(input_state), state_file)?;
         supervisor.apply(&source)?;
 
-        supervisor.step_at(2.9)?;
+        supervisor.step_at(1.9)?;
         assert!(supervisor.recovery.is_none());
-        supervisor.step_at(3.1)?;
+        supervisor.step_at(2.1)?;
         assert!(supervisor.recovery.is_some());
         supervisor.shutdown()?;
         Ok(())
@@ -3244,9 +3244,9 @@ mod tests {
         supervisor.origin = Instant::now() - Duration::from_secs(2);
         supervisor.apply(&source)?;
 
-        supervisor.step_at(3.9)?;
+        supervisor.step_at(2.9)?;
         assert!(supervisor.recovery.is_none());
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
         assert!(supervisor.recovery.is_some());
         supervisor.shutdown()?;
         Ok(())
@@ -3268,7 +3268,7 @@ mod tests {
                     file:write(value, "\n")
                     file:close()
                 end
-                sliver.timer.after(3.0, function()
+                sliver.timer.after(2.0, function()
                     record("timer")
                     sliver.redraw()
                 end)
@@ -3290,7 +3290,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(1.0)?;
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
 
         assert_eq!(
             std::fs::read_to_string(&log)?,
@@ -3337,7 +3337,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(1.0)?;
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
         assert!(supervisor.recovery.is_some());
         let frames_after_entry = supervisor.hardware().presented_frames().len();
         let count = |name: &str| -> Result<usize> {
@@ -3404,7 +3404,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(1.0)?;
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
 
         assert_eq!(supervisor.hardware().backlight_level(), 0.75);
 
@@ -3455,7 +3455,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(2.0)?;
-        supervisor.step_at(5.0)?;
+        supervisor.step_at(4.0)?;
 
         assert_eq!(
             supervisor.hardware().synthetic_keys(),
@@ -3489,20 +3489,20 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(1.0)?;
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
         assert!(supervisor.recovery.is_some());
 
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
-        supervisor.step_at(4.1)?;
+        supervisor.step_at(3.1)?;
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: false });
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Up)));
-        supervisor.step_at(5.0)?;
+        supervisor.step_at(4.0)?;
 
         assert!(supervisor.recovery.is_none());
         assert!(supervisor.hardware().synthetic_keys().is_empty());
@@ -4010,7 +4010,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(1.0)?;
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
         assert!(supervisor
             .recovery
             .as_ref()
@@ -4858,7 +4858,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(1.0)?;
-        supervisor.origin = Instant::now() - Duration::from_secs_f64(3.7);
+        supervisor.origin = Instant::now() - Duration::from_secs_f64(2.7);
         supervisor
             .hardware_mut()
             .inject_on_poll(5, HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
@@ -8055,12 +8055,12 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(1.0)?;
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
         assert!(supervisor.recovery.is_some());
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: false });
-        supervisor.step_at(5.0)?;
+        supervisor.step_at(4.0)?;
         assert!(supervisor.recovery.is_none());
         let renders_after_return = std::fs::read_to_string(&log)?.lines().count();
 
@@ -8075,7 +8075,7 @@ mod tests {
     }
 
     #[test]
-    fn healthy_worker_enters_recovery_at_three_seconds_and_returns_after_fn_up() -> Result<()> {
+    fn healthy_worker_enters_recovery_at_exactly_two_seconds_and_returns_after_fn_up() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("healthy.lua");
         let log = directory.path().join("events");
@@ -8115,15 +8115,18 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
         supervisor.step_at(2.0)?;
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(2.999)?;
+        assert!(supervisor.recovery.is_none());
+        supervisor.step_at(3.0)?;
+        assert!(supervisor.recovery.is_some());
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
-        supervisor.step_at(4.1)?;
+        supervisor.step_at(3.1)?;
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: false });
-        supervisor.step_at(5.0)?;
+        supervisor.step_at(4.0)?;
 
         let events = std::fs::read_to_string(&log)?;
         assert!(events.contains("touch:down"));
@@ -8204,7 +8207,7 @@ mod tests {
             .hardware_mut()
             .inject(HardwareEvent::Fn { active: true });
         supervisor.step_at(1.0)?;
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
 
         supervisor.apply(&candidate_source)?;
         assert_eq!(
@@ -8319,7 +8322,7 @@ mod tests {
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
 
         let log_contents = std::fs::read_to_string(&log)?;
         let events: Vec<_> = log_contents.lines().collect();
@@ -8407,7 +8410,7 @@ mod tests {
         supervisor
             .hardware_mut()
             .inject(HardwareEvent::Touch(overlap_touch(1, TouchPhase::Down)));
-        supervisor.step_at(4.0)?;
+        supervisor.step_at(3.0)?;
 
         assert!(!log.exists() || !std::fs::read_to_string(&log)?.contains("down"));
         assert_eq!(supervisor.recovery.as_ref().map(|_| true), Some(true));
