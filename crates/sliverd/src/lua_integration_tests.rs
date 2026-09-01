@@ -1663,7 +1663,7 @@ fn lua_canvas_capture_keeps_safe_text_and_edge_bands_inside_the_frame() -> Resul
     let text_pixels = (6..54).any(|y| (20..200).any(|x| frame.rgba_at(x, y) != [16, 32, 64, 255]));
     assert!(text_pixels, "safe text origin produced no text pixels");
     assert_bottom_band_is_solid(
-        &frame,
+        frame,
         200,
         "safe text origin painted into the bottom edge band",
     );
