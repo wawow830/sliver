@@ -513,7 +513,8 @@ return {
     api_version = 1,
     render = function(canvas)
         canvas:rectangle(0, 0, 2008, 60, "#000000")
-        canvas:text(20, 36, "release verifier", 24, "#ffffff")
+        -- canvas:text uses a top-origin layout coordinate, not a baseline.
+        canvas:text(20, 24, "release verifier", 24, "#ffffff")
     end,
 }
 LUA
@@ -559,7 +560,8 @@ return {
         canvas:raw_pixels(frame, "rgba8", 2008, 60, 2008 * 4,
             { x = 0, y = 0, width = 2008, height = 60 },
             { x = 0, y = 0, width = 2008, height = 60 }, "nearest")
-        canvas:text(20, 36, string.format("%0.3f", time), 24, "#ffffff")
+        -- canvas:text uses a top-origin layout coordinate, not a baseline.
+        canvas:text(20, 24, string.format("%0.3f", time), 24, "#ffffff")
     end,
 }
 LUA
@@ -1436,7 +1438,7 @@ lifecycle_stage() {
         "Use the named valid.lua and invalid.lua fixtures where appropriate. Do not treat a same-UID remote shell as local."
     manual_check lifecycle_valid_live_apply \
         "Did applying valid.lua from the active local session commit a new visible frame?" \
-        "Run sliver $CONFIG_DIR/valid.lua and wait for its first committed frame."
+        "Run sliver $CONFIG_DIR/valid.lua and wait for its first committed frame. Its text uses a safe top-origin y coordinate, not a baseline."
     manual_check lifecycle_invalid_retention \
         "Did applying invalid.lua retain the previously committed frame and report path, stage, and traceback text?" \
         "Run sliver $CONFIG_DIR/invalid.lua and inspect invalid.stderr without guessing."

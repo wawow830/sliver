@@ -2212,8 +2212,11 @@ mod tests {
             crate::DISPLAY_WIDTH as i32,
         )?;
         paint_logical_frame(&LogicalFrame::from_surface(&logical)?, &physical)?;
-        assert_eq!(rgba_at(&physical, 55, 1000)?, [255, 0, 0, 255]);
-        assert_eq!(rgba_at(&physical, 5, 1000)?, [0, 0, 255, 255]);
+        for scanline in 0..crate::DISPLAY_WIDTH {
+            assert_eq!(rgba_at(&physical, 55, scanline)?, [255, 0, 0, 255]);
+            assert_eq!(rgba_at(&physical, 5, scanline)?, [0, 0, 255, 255]);
+            assert_eq!(rgba_at(&physical, 30, scanline)?, [0, 0, 0, 255]);
+        }
         Ok(())
     }
 

@@ -1566,6 +1566,107 @@ fn lua_callbacks_are_fixed_serial_and_ignore_returns() -> Result<()> {
 }
 
 #[test]
+fn lua_canvas_text_y_is_a_layout_origin_not_a_baseline() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("text-origin.lua");
+    std::fs::write(
+        &source,
+        r##"
+        require("sliver.v1")
+        local frame = 0
+        return {
+            api_version = 1,
+            render = function(canvas)
+                frame = frame + 1
+                canvas:rectangle(0, 54, 2008, 6, "#ff3b81")
+                if frame == 1 then
+                    canvas:text(20, 36, "gjpqy", 24, "#ffffff")
+                else
+                    local _, height = canvas:measure_text("gjpqy", 24)
+                    canvas:text(20, 60 - height - 8, "gjpqy", 24, "#ffffff")
+                end
+            end,
+        }
+        "##,
+    )?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    let crate::lua_worker::StagedLuaWorker { worker } =
+        crate::lua_worker::LuaWorker::stage(&source)?;
+    let first = worker.render_at(0.0, 0.0)?;
+    hardware.present(&first.frame)?;
+    let second = worker.render_next()?;
+    hardware.present(&second)?;
+    worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+    hardware.release()?;
+
+    let frames = hardware.presented_frames();
+    assert_eq!(frames.len(), 2);
+    let unsafe_text_overlaps_band =
+        (20..150).any(|x| (54..60).any(|y| frames[0].rgba_at(x, y) != [255, 59, 129, 255]));
+    assert!(
+        unsafe_text_overlaps_band,
+        "a y=36 text origin did not reproduce the clipped descender case"
+    );
+    for y in 54..60 {
+        for x in 20..150 {
+            assert_eq!(
+                frames[1].rgba_at(x, y),
+                [255, 59, 129, 255],
+                "measure_text-based placement painted into the bottom band at ({x}, {y})"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn lua_canvas_capture_keeps_safe_text_and_edge_bands_inside_the_frame() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("text-bounds.lua");
+    std::fs::write(
+        &source,
+        r##"
+        require("sliver.v1")
+        return {
+            api_version = 1,
+            render = function(canvas)
+                canvas:rectangle(0, 0, 2008, 60, "#102040")
+                canvas:rectangle(0, 0, 2008, 6, "#00e5ff")
+                canvas:rectangle(0, 54, 2008, 6, "#ff3b81")
+                canvas:text(20, 24, "release verifier", 24, "#ffffff")
+            end,
+        }
+        "##,
+    )?;
+    let mut hardware = FakeTouchBar::new();
+
+    present_lua_once(&source, &mut hardware)?;
+
+    let frame = hardware
+        .presented_frames()
+        .first()
+        .context("worker did not present the text bounds fixture")?;
+    assert_eq!(frame.dimensions(), (2008, 60));
+    for x in [0, 1000, 2007] {
+        assert_eq!(frame.rgba_at(x, 0), [0, 229, 255, 255]);
+        assert_eq!(frame.rgba_at(x, 59), [255, 59, 129, 255]);
+    }
+    let text_pixels = (6..54).any(|y| (20..200).any(|x| frame.rgba_at(x, y) != [16, 32, 64, 255]));
+    assert!(text_pixels, "safe text origin produced no text pixels");
+    for y in 54..60 {
+        for x in 20..200 {
+            assert_eq!(
+                frame.rgba_at(x, y),
+                [255, 59, 129, 255],
+                "safe text origin painted into the bottom edge band at ({x}, {y})"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn lua_callbacks_cannot_yield() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let source = directory.path().join("yield.lua");

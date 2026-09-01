@@ -115,6 +115,16 @@ Canvas coordinates are logical floating-point pixels. Every color is either a
 six-digit sRGB string such as `"#336699"` or four normalized components
 `red, green, blue, alpha`.
 
+`text` positions the Pango layout from its top-left logical origin. The `y`
+argument is not a baseline. `measure_text` returns the layout's logical width
+and height, so keep `y + height` below the 60-pixel canvas edge and leave a
+margin for font ink. For example, leave eight logical pixels below the layout:
+
+```lua
+local _, height = canvas:measure_text(label, 24)
+canvas:text(20, 60 - height - 8, label, 24, "#ffffff")
+```
+
 Methods are:
 
 - `rectangle(x, y, width, height, color)`
