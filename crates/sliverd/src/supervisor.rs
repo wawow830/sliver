@@ -31,7 +31,7 @@ use crate::peer_credentials::PeerCredentials;
 use crate::recovery::{RecoverySession, RecoveryTouchResult};
 
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
-const RECOVERY_HOLD_SECONDS: f64 = 3.0;
+const RECOVERY_HOLD_SECONDS: f64 = 2.0;
 const REQUEST_QUEUE_CAPACITY: usize = 16;
 const TOUCH_QUEUE_CAPACITY: usize = 256;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
