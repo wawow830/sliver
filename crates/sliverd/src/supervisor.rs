@@ -31,7 +31,7 @@ use crate::peer_credentials::PeerCredentials;
 use crate::recovery::{RecoverySession, RecoveryTouchResult};
 
 const MAX_POLL_WAIT: Duration = Duration::from_millis(50);
-const RECOVERY_HOLD_SECONDS: f64 = 2.0;
+const PHYSICAL_FN_RECOVERY_HOLD_SECONDS: f64 = 2.0;
 const REQUEST_QUEUE_CAPACITY: usize = 16;
 const TOUCH_QUEUE_CAPACITY: usize = 256;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -1796,7 +1796,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             return None;
         }
         self.fn_hold_started
-            .map(|started| started + RECOVERY_HOLD_SECONDS)
+            .map(|started| started + PHYSICAL_FN_RECOVERY_HOLD_SECONDS)
     }
 
     fn recovery_due(&self, now: f64) -> bool {
