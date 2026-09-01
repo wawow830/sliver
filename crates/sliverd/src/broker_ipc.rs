@@ -521,6 +521,17 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
             );
             match result {
                 Ok(outcome) => {
+                    // A client can disappear without completing the broker's
+                    // revocation handshake. The command-mode panel retains
+                    // its last frame in that case, so fence it before waiting
+                    // for a replacement supervisor.
+                    if !outcome.logout_acknowledged {
+                        if let Err(error) = fallback.enter_recovery() {
+                            crate::system_log::broker_error(format!(
+                                "failed to fence disconnected user frame: {error:#}"
+                            ));
+                        }
+                    }
                     let active = authorizer.active_session(seat)?;
                     fallback_attempted = !outcome.logout_acknowledged && active.is_some();
                     last_active = active;
@@ -824,8 +835,15 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             };
             let mut revocation = vec![reason];
             revocation.extend(encode_events(&client_state.contacts.cancel())?);
-            write_message(&mut stream, SESSION_REVOKED, &revocation)?;
             session_revoked = true;
+            // The panel retains its last command-mode frame after scanout
+            // stops. Fence that frame before notifying the revoked
+            // supervisor, so a replacement cannot inherit the old user's
+            // pixels if its startup is delayed or fails.
+            if let Err(fence_error) = fallback.enter_recovery() {
+                eprintln!("failed to fence revoked user frame: {fence_error:#}");
+            }
+            write_message(&mut stream, SESSION_REVOKED, &revocation)?;
             eprintln!("broker revoked user session: {error:#}");
             continue;
         }
@@ -1701,7 +1719,7 @@ mod tests {
         user.shutdown()?;
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while shared.inspect(|hardware| hardware.presented_frames().len() < 3)
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 4)
             && Instant::now() < deadline
         {
             thread::sleep(Duration::from_millis(1));
@@ -1779,7 +1797,7 @@ mod tests {
         logind.set_active(SEAT, None);
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while shared.inspect(|hardware| hardware.presented_frames().len() < 2)
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 3)
             && Instant::now() < deadline
         {
             thread::sleep(Duration::from_millis(1));
@@ -1816,7 +1834,7 @@ mod tests {
         drop(raced_client);
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while shared.inspect(|hardware| hardware.presented_frames().len() < 3)
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 5)
             && Instant::now() < deadline
         {
             thread::sleep(Duration::from_millis(1));
@@ -2330,7 +2348,7 @@ mod tests {
         third.hardware_mut().logout_complete()?;
         third.shutdown()?;
         let deadline = Instant::now() + Duration::from_secs(2);
-        while shared.inspect(|hardware| hardware.presented_frames().len() < 4)
+        while shared.inspect(|hardware| hardware.presented_frames().len() < 7)
             && Instant::now() < deadline
         {
             thread::sleep(Duration::from_millis(1));
@@ -2346,8 +2364,11 @@ mod tests {
             frames,
             vec![
                 [255, 0, 0, 255],
+                [0, 0, 0, 255],
                 [0, 0, 255, 255],
+                [0, 0, 0, 255],
                 [255, 0, 0, 255],
+                [0, 0, 0, 255],
                 [0, 255, 0, 255],
             ]
         );
@@ -2428,7 +2449,7 @@ mod tests {
             SEAT,
             Some(ActiveSession {
                 id: "greeter-c404".into(),
-                uid: uid_b,
+                uid: uid_b.wrapping_add(1),
             }),
         );
         assert!(first.poll(Duration::ZERO).is_err());
@@ -2446,6 +2467,22 @@ mod tests {
             shared.inspect(|hardware| hardware.presented_frames().last().unwrap().rgba_at(10, 10)),
             [255, 0, 0, 255],
             "the revoked user's frame remained visible before the replacement claimed the seat"
+        );
+
+        // A supervisor started during the greeter interval must wait and
+        // retry. It must not claim the seat or inherit user A's frame.
+        let startup_error = match Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at_as(socket.clone(), uid_b),
+            state_b.clone(),
+            FakeLogind::new(),
+            None,
+        ) {
+            Ok(_) => anyhow::bail!("the second supervisor claimed the greeter session"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{startup_error:#}").contains("waiting for an active local user session"),
+            "greeter startup returned the wrong retryable error: {startup_error:#}"
         );
 
         logind.set_active(

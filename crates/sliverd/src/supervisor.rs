@@ -1610,9 +1610,16 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.hardware.present(&frame)
     }
 
-    fn enter_recovery(&mut self) -> Result<()> {
+    pub(crate) fn enter_recovery(&mut self) -> Result<()> {
         if self.recovery.is_some() {
-            return Ok(());
+            if !self.hardware_available || self.suspended {
+                return Ok(());
+            }
+            self.hardware
+                .set_backlight(0.75)
+                .context("setting recovery backlight")?;
+            self.backlight = 0.75;
+            return self.present_recovery();
         }
         let now = self.now_seconds();
         let mut owner_is_healthy = false;
