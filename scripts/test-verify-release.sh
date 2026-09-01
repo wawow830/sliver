@@ -71,6 +71,15 @@ grep -F 'valid.lua' "$script" >/dev/null || fail 'valid fixture is not named'
 grep -F 'invalid.lua' "$script" >/dev/null || fail 'invalid fixture is not named'
 grep -F 'hung.lua' "$script" >/dev/null || fail 'watchdog fixture is not named'
 grep -F 'video-2008x60.lua' "$script" >/dev/null || fail 'video workload is not named'
+grep -F 'canvas:text(20, 24, "release verifier", 24, "#ffffff")' "$script" >/dev/null ||
+    fail 'valid fixture does not keep top-origin text inside the frame'
+grep -F 'canvas:text(20, 24, string.format("%0.3f", time), 24, "#ffffff")' "$script" >/dev/null ||
+    fail 'video fixture does not keep top-origin text inside the frame'
+if grep -F 'canvas:text(20, 36, "release verifier", 24, "#ffffff")' "$script" >/dev/null; then
+    fail 'valid fixture still treats a top-origin y coordinate as a baseline'
+fi
+grep -F 'top-origin y coordinate, not a baseline' "$script" >/dev/null ||
+    fail 'valid fixture instructions omit text coordinate semantics'
 grep -F 'refuse_if_blocked' "$script" >/dev/null || fail 'failure gate is missing'
 grep -F 'source "$ROOT/scripts/verify-release-auth.sh"' "$script" >/dev/null ||
     fail 'verifier does not load authentication handling'

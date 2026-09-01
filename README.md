@@ -85,7 +85,7 @@ return {
     api_version = 1,
     render = function(canvas, time, delta)
         canvas:rectangle(0, 0, 2008, 60, "#000000")
-        canvas:text(20, 36, "Hello", 24, "#ffffff")
+        canvas:text(20, 24, "Hello", 24, "#ffffff")
     end,
 }
 ```
@@ -94,6 +94,10 @@ The allowed fields are `api_version`, `start`, `stop`, `visibility`, `touch`,
 `key`, and required `render`. Unknown fields and invalid callback values are
 rejected during apply. Callbacks run serially, cannot yield, and have no useful
 return value.
+
+The `text` y coordinate is the top of the Pango layout, not its baseline.
+Use `measure_text` and leave a small margin when placing text near the 60-pixel
+bottom edge.
 
 The module provides:
 

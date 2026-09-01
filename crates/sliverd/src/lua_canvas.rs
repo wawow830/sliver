@@ -584,6 +584,7 @@ impl UserData for Canvas {
             let color = Canvas::parse_color(&values[4..])?;
             let layout = Canvas::text_layout(&canvas.context, &text, font_size)?;
             canvas.set_source(color);
+            // Pango's current point is the layout origin, so y is not a baseline.
             canvas.context.move_to(x, y);
             pangocairo::functions::show_layout(&canvas.context, &layout);
             Canvas::status(&canvas.context, "text")
