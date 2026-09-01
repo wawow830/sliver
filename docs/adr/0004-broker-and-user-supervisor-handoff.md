@@ -21,10 +21,13 @@ check from ADR 0001.
 A user supervisor claims the broker before it stages a worker. The broker stops
 the fallback but leaves its last frame on the panel. The user supervisor can
 then stage and render without creating a blank interval. A complete presented
-frame transfers ownership. A broker-side session revocation cancels known contacts, releases tracked
-synthetic keys, and waits for a logout acknowledgement. The user supervisor
-runs its graceful logout callback before sending that acknowledgement, and the
-broker starts the fallback only after it receives it.
+frame transfers ownership. A broker-side session revocation cancels known contacts and presents the
+fixed recovery row before notifying the old supervisor. This fences a
+command-mode panel's retained frame without creating a blank interval. The
+broker releases tracked synthetic keys and waits for a logout acknowledgement.
+The user supervisor runs its graceful logout callback before sending that
+acknowledgement, and the broker starts the fallback only after it receives it.
+An unexpectedly disconnected client is fenced the same way.
 
 The broker accepts one user connection at a time. Its wire format carries only
 normalized hardware events, complete logical frames, normalized backlight

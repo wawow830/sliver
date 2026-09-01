@@ -184,9 +184,12 @@ The hardware broker starts the embedded worker when no local session owns the
 seat. When logind reports an active local session, it stops that fallback while
 leaving its last frame on the panel, stages the selected source for that user,
 and presents the new frame only after the candidate commits. A failed handoff
-stops the old worker and presents the fixed recovery row. On logout it runs the
-old worker's `logout` cleanup and stages the embedded default. The user's
-selected path remains available for the next login.
+stops the old worker and presents the fixed recovery row. A revoked or
+unexpectedly disconnected user is fenced with that row before the next
+supervisor can claim the seat, so a command-mode panel never exposes the old
+user's retained pixels while a replacement starts. On logout it runs the old
+worker's `logout` cleanup and stages the embedded default. The user's selected
+path remains available for the next login.
 
 The default lives in one `crates/sliverd/src/default.lua` source. The build
 embeds its exact bytes and installs no editable copy. An absent state file
