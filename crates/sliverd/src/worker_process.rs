@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -57,6 +57,7 @@ struct SpawnedWorker {
     stream: UnixStream,
     process_group: libc::pid_t,
     unit: Option<String>,
+    cgroup: Option<PathBuf>,
 }
 
 struct ProcessEffects {
@@ -68,7 +69,7 @@ struct ProcessEffects {
 }
 
 pub(crate) struct ProcessWorker {
-    child: Arc<Mutex<Child>>,
+    child: Mutex<Child>,
     pidfd: std::fs::File,
     stream: Mutex<UnixStream>,
     input: Mutex<Vec<u8>>,
@@ -78,6 +79,7 @@ pub(crate) struct ProcessWorker {
     pid: libc::pid_t,
     process_group: libc::pid_t,
     unit: Option<String>,
+    cgroup: Option<PathBuf>,
     broker: FrameBroker,
 }
 
@@ -174,38 +176,28 @@ impl ProcessWorker {
                 .context("enabling Lua worker child reaping");
         }
         let mut spawned = spawn(identity)?;
-        let mut stream = spawned.stream;
-        if let Err(error) = stream.set_nonblocking(true) {
-            if let Some(unit) = spawned.unit.as_deref() {
-                kill_systemd_unit(unit);
-            }
-            let _ = terminate_child(&mut spawned.child);
+        if let Err(error) = spawned.stream.set_nonblocking(true) {
+            terminate_spawned(&mut spawned);
             return Err(error).context("configuring Lua worker control socket");
         }
-        let worker_pid = match receive_hello(&mut stream, &mut Vec::new()) {
+        let worker_pid = match receive_hello(&mut spawned.stream, &mut Vec::new()) {
             Ok(pid) => pid,
             Err(error) => {
-                if let Some(unit) = spawned.unit.as_deref() {
-                    kill_systemd_unit(unit);
-                }
-                let _ = terminate_child(&mut spawned.child);
+                terminate_spawned(&mut spawned);
                 return Err(error);
             }
         };
         let pidfd = match open_pidfd(worker_pid) {
             Ok(pidfd) => pidfd,
             Err(error) => {
-                if let Some(unit) = spawned.unit.as_deref() {
-                    kill_systemd_unit(unit);
-                }
-                let _ = terminate_child(&mut spawned.child);
+                terminate_spawned(&mut spawned);
                 return Err(error).context("opening the Lua worker pidfd");
             }
         };
         let worker = Self {
-            child: Arc::new(Mutex::new(spawned.child)),
+            child: Mutex::new(spawned.child),
             pidfd,
-            stream: Mutex::new(stream),
+            stream: Mutex::new(spawned.stream),
             input: Mutex::new(Vec::new()),
             last_heartbeat: Mutex::new(Instant::now()),
             failure: Mutex::new(None),
@@ -217,6 +209,7 @@ impl ProcessWorker {
                 spawned.process_group
             },
             unit: spawned.unit,
+            cgroup: spawned.cgroup,
             broker,
         };
         worker.request_bootstrap(source, initial_backlight, initial_input, frame_path)?;
@@ -267,6 +260,7 @@ fn spawn_direct(_identity: WorkerIdentity) -> Result<SpawnedWorker> {
         stream,
         process_group: pid,
         unit: None,
+        cgroup: None,
     })
 }
 
@@ -352,22 +346,28 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
             return Err(error).context("starting the systemd Lua worker service");
         }
     };
+    let cgroup = match systemd_unit_cgroup(&unit) {
+        Ok(cgroup) => Some(cgroup),
+        Err(error) => {
+            terminate_spawned_parts(&mut child, 0, None, Some(&unit));
+            let _ = std::fs::remove_file(&socket_path);
+            return Err(error);
+        }
+    };
     let deadline = Instant::now() + CALLBACK_DEADLINE;
     let stream = loop {
         match listener.accept() {
             Ok((stream, _)) => break stream,
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    kill_systemd_unit(&unit);
-                    let _ = terminate_child(&mut child);
+                    terminate_spawned_parts(&mut child, 0, cgroup.as_deref(), Some(&unit));
                     let _ = std::fs::remove_file(&socket_path);
                     bail!("Lua worker service did not connect within two seconds")
                 }
                 thread::sleep(WRITE_RETRY);
             }
             Err(error) => {
-                kill_systemd_unit(&unit);
-                let _ = terminate_child(&mut child);
+                terminate_spawned_parts(&mut child, 0, cgroup.as_deref(), Some(&unit));
                 let _ = std::fs::remove_file(&socket_path);
                 return Err(error).context("accepting the Lua worker connection");
             }
@@ -375,27 +375,73 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
     };
     let _ = std::fs::remove_file(&socket_path);
     if let Err(error) = stream.set_nonblocking(true) {
-        kill_systemd_unit(&unit);
-        let _ = terminate_child(&mut child);
+        terminate_spawned_parts(&mut child, 0, cgroup.as_deref(), Some(&unit));
         return Err(error).context("configuring Lua worker control socket");
     }
     Ok(SpawnedWorker {
         child,
         stream,
         process_group: 0,
+        cgroup,
         unit: Some(unit),
     })
 }
 
-fn terminate_child(child: &mut Child) -> Result<()> {
+fn terminate_spawned(spawned: &mut SpawnedWorker) {
+    terminate_spawned_parts(
+        &mut spawned.child,
+        spawned.process_group,
+        spawned.cgroup.as_deref(),
+        spawned.unit.as_deref(),
+    );
+}
+
+fn terminate_spawned_parts(
+    child: &mut Child,
+    process_group: libc::pid_t,
+    cgroup: Option<&Path>,
+    unit: Option<&str>,
+) {
+    let mut descendants = cgroup.map(cgroup_processes).unwrap_or_default();
+    if process_group > 1 {
+        descendants.extend(descendants_of(child.id() as libc::pid_t));
+    }
+    if let Some(cgroup) = cgroup {
+        kill_cgroup(cgroup);
+    } else if let Some(unit) = unit {
+        kill_systemd_unit(unit);
+    }
+    kill_process_group_id(process_group);
     child.kill().ok();
     let deadline = Instant::now() + KILL_REAP_DEADLINE;
+    while child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+        thread::sleep(WRITE_RETRY);
+    }
+    reap_pids_until(descendants, deadline);
+}
+
+fn systemd_unit_cgroup(unit: &str) -> Result<PathBuf> {
+    let deadline = Instant::now() + CALLBACK_DEADLINE;
     loop {
-        if child.try_wait()?.is_some() || Instant::now() >= deadline {
-            return Ok(());
+        let output = Command::new("systemctl")
+            .args(["--user", "show", unit, "-p", "ControlGroup", "--value"])
+            .output()
+            .context("reading the Lua worker cgroup")?;
+        if output.status.success() {
+            let cgroup = String::from_utf8(output.stdout)?.trim().to_owned();
+            if !cgroup.is_empty() {
+                return Ok(PathBuf::from("/sys/fs/cgroup").join(cgroup.trim_start_matches('/')));
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!("Lua worker unit has no cgroup")
         }
         thread::sleep(WRITE_RETRY);
     }
+}
+
+fn kill_cgroup(cgroup: &Path) {
+    let _ = std::fs::write(cgroup.join("cgroup.kill"), b"1");
 }
 
 fn receive_hello(stream: &mut UnixStream, input: &mut Vec<u8>) -> Result<libc::pid_t> {
@@ -585,7 +631,9 @@ impl ProcessWorker {
     }
 
     fn kill_unit(&self) {
-        if let Some(unit) = self.unit.as_deref() {
+        if let Some(cgroup) = self.cgroup.as_deref() {
+            kill_cgroup(cgroup);
+        } else if let Some(unit) = self.unit.as_deref() {
             kill_systemd_unit(unit);
         }
     }
@@ -596,58 +644,43 @@ impl ProcessWorker {
                 libc::kill(descendant, libc::SIGKILL);
             }
         }
-        unsafe {
-            libc::kill(-self.process_group, libc::SIGKILL);
-        }
+        kill_process_group_id(self.process_group);
     }
 
     pub(crate) fn terminate(&self) {
         self.terminate_until(Instant::now() + KILL_REAP_DEADLINE);
     }
 
-    fn terminate_until(&self, deadline: Instant) {
+    fn terminate_until(&self, _deadline: Instant) {
         if self.terminated.swap(true, Ordering::AcqRel) {
             return;
         }
+        let cleanup_deadline = Instant::now() + KILL_REAP_DEADLINE;
         self.kill_unit();
-        let child_reaped = loop {
-            self.kill_process_group();
-            unsafe {
-                libc::syscall(
-                    libc::SYS_pidfd_send_signal,
-                    self.pidfd.as_raw_fd(),
-                    libc::SIGKILL,
-                    0,
-                    0,
-                );
+        let mut descendants = Vec::new();
+        loop {
+            let current_descendants = descendants_of(self.pid);
+            for descendant in &current_descendants {
+                unsafe {
+                    libc::kill(*descendant, libc::SIGKILL);
+                }
             }
-            let exited = self
-                .child
-                .lock()
-                .ok()
-                .and_then(|mut child| child.try_wait().ok())
-                .flatten()
-                .is_some();
-            if exited {
-                break true;
+            descendants.extend(current_descendants);
+            kill_process_group_id(self.process_group);
+            send_pidfd_signal(&self.pidfd, libc::SIGKILL);
+            if let Ok(mut child) = self.child.lock() {
+                let _ = child.kill();
+                if child.try_wait().ok().flatten().is_some() {
+                    reap_pids_until(descendants, cleanup_deadline);
+                    break;
+                }
             }
-            if Instant::now() >= deadline {
-                break false;
+            if Instant::now() >= cleanup_deadline {
+                reap_pids_until(descendants, cleanup_deadline);
+                break;
             }
             thread::sleep(WRITE_RETRY);
-        };
-        if !child_reaped {
-            self.reap_child();
         }
-    }
-
-    fn reap_child(&self) {
-        let child = Arc::clone(&self.child);
-        thread::spawn(move || {
-            if let Ok(mut child) = child.lock() {
-                let _ = child.wait();
-            }
-        });
     }
 
     fn request(&self, command: u8, payload: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
@@ -1070,13 +1103,77 @@ fn worker_command() -> Result<Command> {
     Ok(Command::new(worker_path()?))
 }
 
+fn kill_process_group_id(process_group: libc::pid_t) {
+    if process_group > 1 {
+        unsafe {
+            libc::kill(-process_group, libc::SIGKILL);
+        }
+    }
+}
+
+fn send_pidfd_signal(pidfd: &std::fs::File, signal: libc::c_int) {
+    unsafe {
+        libc::syscall(libc::SYS_pidfd_send_signal, pidfd.as_raw_fd(), signal, 0, 0);
+    }
+}
+
+fn cgroup_processes(cgroup: &Path) -> Vec<libc::pid_t> {
+    std::fs::read_to_string(cgroup.join("cgroup.procs"))
+        .map(|processes| {
+            processes
+                .split_whitespace()
+                .filter_map(|process| process.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn reap_pids_until(mut pids: Vec<libc::pid_t>, deadline: Instant) {
+    pids.sort_unstable();
+    pids.dedup();
+    while !pids.is_empty() {
+        pids.retain(|pid| loop {
+            let result = unsafe { libc::waitpid(*pid, std::ptr::null_mut(), libc::WNOHANG) };
+            if result == *pid {
+                return false;
+            }
+            if result < 0 && unsafe { *libc::__errno_location() } == libc::EINTR {
+                continue;
+            }
+            if result < 0 {
+                return false;
+            }
+            return true;
+        });
+        if pids.is_empty() || Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(WRITE_RETRY);
+    }
+}
+
 fn kill_systemd_unit(unit: &str) {
-    let _ = Command::new("systemctl")
+    let Ok(mut command) = Command::new("systemctl")
         .args(["--user", "kill", "--kill-who=all", "--signal=SIGKILL", unit])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn();
+        .spawn()
+    else {
+        return;
+    };
+    let deadline = Instant::now() + KILL_REAP_DEADLINE;
+    loop {
+        match command.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = command.kill();
+                let _ = command.wait();
+                return;
+            }
+            Ok(None) => thread::sleep(WRITE_RETRY),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1751,6 +1848,7 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
     use std::time::Instant;
 
     use super::*;
@@ -1765,13 +1863,22 @@ mod tests {
         let mut launcher = Command::new("sh");
         launcher
             .arg("-c")
-            .arg(r#""$1"; sleep 0.1"#)
+            .arg(r#""$1"; exec sleep 30"#)
             .arg("sliver-test-launcher")
             .arg(worker_path)
             .stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(child_fd)) })
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .env("SLIVER_LUA_WORKER_FD", WORKER_FD.to_string());
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            launcher.pre_exec(|| {
+                if libc::setpgid(0, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         let child = match launcher.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -1781,13 +1888,129 @@ mod tests {
                 return Err(error).context("starting the test worker launcher");
             }
         };
+        let process_group = child.id() as libc::pid_t;
+        let stream = unsafe { UnixStream::from_raw_fd(parent_fd) };
+        Ok(SpawnedWorker {
+            child,
+            stream,
+            process_group,
+            unit: None,
+            cgroup: None,
+        })
+    }
+
+    fn spawn_systemd_launcher_that_never_connects(
+        _identity: WorkerIdentity,
+    ) -> Result<SpawnedWorker> {
+        let (parent_fd, child_fd) = socket_pair()?;
+        let marker = std::env::var_os("SLIVER_TEST_SYSTEMD_DESCENDANT_MARKER")
+            .context("test descendant marker is not configured")?;
+        let launcher_marker = std::env::var_os("SLIVER_TEST_SYSTEMD_LAUNCHER_MARKER")
+            .context("test launcher marker is not configured")?;
+        let unit = format!("sliver-test-no-connect-{}.service", std::process::id());
+        let helper = PathBuf::from(&marker).with_extension("sh");
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\nsleep 30 &\nprintf '%s %s\\n' \"$$\" \"$!\" > {}\nwait\n",
+                marker.display(),
+            ),
+        )?;
+        let mut permissions = std::fs::metadata(&helper)?.permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&helper, permissions)?;
+        let mut launcher = Command::new("systemd-run");
+        launcher.args([
+            "--user",
+            "--unit",
+            &unit,
+            "--collect",
+            "--wait",
+            "--quiet",
+            "--service-type=exec",
+            "--property",
+            "KillMode=control-group",
+            "--property",
+            "Restart=no",
+        ]);
+        launcher.arg(&helper);
+        launcher.stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(child_fd)) });
+        launcher.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = match launcher.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                unsafe {
+                    libc::close(parent_fd);
+                }
+                return Err(error).context("starting the systemd no-connect test launcher");
+            }
+        };
+        std::fs::write(&launcher_marker, child.id().to_string())?;
+        let cgroup = systemd_unit_cgroup(&unit)?;
         let stream = unsafe { UnixStream::from_raw_fd(parent_fd) };
         Ok(SpawnedWorker {
             child,
             stream,
             process_group: 0,
-            unit: None,
+            unit: Some(unit),
+            cgroup: Some(cgroup),
         })
+    }
+
+    fn spawn_launcher_that_never_connects(_identity: WorkerIdentity) -> Result<SpawnedWorker> {
+        let (parent_fd, child_fd) = socket_pair()?;
+        let marker = std::env::var_os("SLIVER_TEST_DIRECT_DESCENDANT_MARKER")
+            .context("test descendant marker is not configured")?;
+        let mut launcher = Command::new("sh");
+        launcher
+            .arg("-c")
+            .arg(r#"sh -c 'echo "$PPID $$" > "$1"; exec sleep 30' child "$1" & exec sleep 30"#)
+            .arg("sliver-test-launcher")
+            .arg(marker)
+            .stdin(unsafe { Stdio::from(std::fs::File::from_raw_fd(child_fd)) })
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            launcher.pre_exec(|| {
+                if libc::setpgid(0, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = match launcher.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                unsafe {
+                    libc::close(parent_fd);
+                }
+                return Err(error).context("starting the non-connecting test launcher");
+            }
+        };
+        let process_group = child.id() as libc::pid_t;
+        let stream = unsafe { UnixStream::from_raw_fd(parent_fd) };
+        Ok(SpawnedWorker {
+            child,
+            stream,
+            process_group,
+            unit: None,
+            cgroup: None,
+        })
+    }
+
+    fn cgroup_is_empty(cgroup: &Path) -> bool {
+        std::fs::read_to_string(cgroup.join("cgroup.procs"))
+            .map(|processes| processes.trim().is_empty())
+            .unwrap_or(true)
+    }
+
+    fn wait_for_path_to_disappear(path: &Path, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while path.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        !path.exists()
     }
 
     fn launcher_has_been_reaped(pid: u32) -> bool {
@@ -2161,6 +2384,108 @@ mod tests {
     }
 
     #[test]
+    fn a_systemd_staging_error_kills_descendants_and_reaps_the_launcher() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let descendant_marker = directory.path().join("descendant-pids");
+        let launcher_marker = directory.path().join("launcher-pid");
+        unsafe {
+            std::env::set_var("SLIVER_TEST_SYSTEMD_DESCENDANT_MARKER", &descendant_marker);
+            std::env::set_var("SLIVER_TEST_SYSTEMD_LAUNCHER_MARKER", &launcher_marker);
+        }
+        let frame_path = directory.path().join("frame");
+        let slots = FrameSlots::new_shared(
+            &frame_path,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?;
+        let result = ProcessWorker::stage_with_spawned(
+            &embedded("return { api_version = 1, render = function() end }"),
+            0.0,
+            InputState::default(),
+            &frame_path,
+            slots.broker(),
+            WorkerIdentity::User,
+            spawn_systemd_launcher_that_never_connects,
+        );
+        unsafe {
+            std::env::remove_var("SLIVER_TEST_SYSTEMD_DESCENDANT_MARKER");
+            std::env::remove_var("SLIVER_TEST_SYSTEMD_LAUNCHER_MARKER");
+        }
+        let error = match result {
+            Ok(_) => bail!("a systemd launcher that never connects was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("identify itself"));
+        let descendant_pids = std::fs::read_to_string(&descendant_marker)?;
+        for pid in descendant_pids
+            .split_whitespace()
+            .map(|value| {
+                value
+                    .parse::<u32>()
+                    .with_context(|| format!("invalid descendant pid {value:?}"))
+            })
+            .collect::<Result<Vec<_>>>()?
+        {
+            assert!(wait_for_path_to_disappear(
+                Path::new(&format!("/proc/{pid}")),
+                KILL_REAP_DEADLINE,
+            ));
+        }
+        let launcher_pid_text = std::fs::read_to_string(&launcher_marker)?;
+        let launcher_pid = launcher_pid_text
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("invalid launcher pid {launcher_pid_text:?}"))?;
+        assert!(launcher_has_been_reaped(launcher_pid));
+        Ok(())
+    }
+
+    #[test]
+    fn a_staging_error_kills_descendants_and_reaps_the_launcher() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let marker = directory.path().join("descendant-pid");
+        unsafe {
+            std::env::set_var("SLIVER_TEST_DIRECT_DESCENDANT_MARKER", &marker);
+        }
+        let result = ProcessWorker::stage_with_spawned(
+            &embedded("return { api_version = 1, render = function() end }"),
+            0.0,
+            InputState::default(),
+            &directory.path().join("frame"),
+            FrameSlots::new_shared(
+                &directory.path().join("frame"),
+                crate::DISPLAY_WIDTH,
+                crate::DISPLAY_HEIGHT,
+                crate::DISPLAY_WIDTH * 4,
+            )?
+            .broker(),
+            WorkerIdentity::User,
+            spawn_launcher_that_never_connects,
+        );
+        unsafe {
+            std::env::remove_var("SLIVER_TEST_DIRECT_DESCENDANT_MARKER");
+        }
+        let error = match result {
+            Ok(_) => bail!("a launcher that never connects was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("identify itself"));
+        let pids: Vec<_> = std::fs::read_to_string(&marker)?
+            .split_whitespace()
+            .map(str::parse::<u32>)
+            .collect::<std::result::Result<_, _>>()?;
+        assert_eq!(pids.len(), 2);
+        for pid in pids {
+            assert!(wait_for_path_to_disappear(
+                Path::new(&format!("/proc/{pid}")),
+                Duration::from_millis(100)
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn a_hung_render_reaps_the_launcher_that_waits_for_the_worker() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let frame_path = directory.path().join("frame");
@@ -2199,6 +2524,94 @@ mod tests {
         drop(worker);
         cleanup_test_launcher(launcher_pid);
         assert!(reaped, "worker launcher {launcher_pid} was not reaped");
+        Ok(())
+    }
+
+    #[test]
+    fn a_systemd_hung_render_kills_descendants_and_releases_the_worker_cgroup() -> Result<()> {
+        let available = Command::new("systemd-run")
+            .args(["--user", "--wait", "--quiet", "true"])
+            .status();
+        ensure!(
+            available.is_ok_and(|status| status.success()),
+            "systemd user manager is required for this worker lifecycle test"
+        );
+
+        let directory = tempfile::tempdir()?;
+        let marker = directory.path().join("descendant-pid");
+        let helper = directory.path().join("descendant.sh");
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\necho \"$$\" > {}\ncat /proc/$$/cgroup >> {}\nexec sleep 30\n",
+                marker.display(),
+                marker.display(),
+            ),
+        )?;
+        let mut permissions = std::fs::metadata(&helper)?.permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&helper, permissions)?;
+        let source = format!(
+            r#"
+            local sliver = require("sliver.v1")
+            assert(os.execute({helper:?} .. " >/dev/null 2>&1 &"))
+            return {{
+                api_version = 1,
+                render = function()
+                    while true do end
+                end,
+            }}
+        "#,
+            helper = helper.to_string_lossy(),
+        );
+        let frame_path = directory.path().join("frame");
+        let slots = FrameSlots::new_shared(
+            &frame_path,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?;
+        let worker = ProcessWorker::stage_with_frames_systemd(
+            &embedded(&source),
+            0.0,
+            InputState::default(),
+            &frame_path,
+            slots.broker(),
+            WorkerIdentity::User,
+        )?;
+        let unit = worker.unit.as_ref().context("systemd worker had no unit")?;
+        let cgroup = systemd_unit_cgroup(unit)?;
+        let launcher_pid = lock(&worker.child, "systemd worker launcher")?.id();
+        let error = match worker.render(1.0, 0.0, InputState::default()) {
+            Ok(_) => bail!("hung Lua callback returned"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("two seconds"));
+        let marker_contents = std::fs::read_to_string(&marker)?;
+        let mut marker_lines = marker_contents.lines();
+        let descendant = marker_lines
+            .next()
+            .context("worker did not record its descendant")?
+            .parse::<u32>()?;
+        let descendant_cgroup = marker_lines
+            .next()
+            .context("descendant cgroup was not recorded")?;
+        let expected_cgroup = format!(
+            "0::/{}",
+            cgroup
+                .strip_prefix("/sys/fs/cgroup")
+                .context("worker cgroup is outside cgroup v2")?
+                .display()
+        );
+        assert_eq!(descendant_cgroup, expected_cgroup);
+        assert_ne!(descendant, 0, "worker did not record its descendant");
+        assert!(wait_for_path_to_disappear(
+            Path::new(&format!("/proc/{descendant}")),
+            KILL_REAP_DEADLINE,
+        ));
+        assert!(launcher_has_been_reaped(launcher_pid));
+        assert!(cgroup_is_empty(&cgroup));
+        drop(worker);
         Ok(())
     }
 
