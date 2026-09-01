@@ -2378,7 +2378,8 @@ mod tests {
     }
 
     #[test]
-    fn a_revoked_owner_cannot_leave_its_frame_visible_while_the_next_session_starts() -> Result<()> {
+    fn a_revoked_owner_cannot_leave_its_frame_visible_while_the_next_session_starts() -> Result<()>
+    {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");
         let listener = UnixListener::bind(&socket)?;
