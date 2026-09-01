@@ -244,10 +244,14 @@ reason and allow at most 500 milliseconds. A timed-out or exited worker is
 killed without sending another Lua callback.
 
 The worker starts a new process group, sets `PR_SET_PDEATHSIG`, enables the
-supervisor's child-subreaper mode, and opens a pidfd. The supervisor kills the
-pidfd and process group on failure, then drops the worker. It closes inherited
+supervisor's child-subreaper mode, and opens a pidfd. Production workers also
+retain their systemd cgroup path. On failure, the supervisor kills that cgroup,
+sends `SIGKILL` through the worker pidfd, kills the process group, and reaps the
+launcher within a separate bounded cleanup window. It closes inherited
 descriptors before Lua starts and sets `NoNewPrivileges`; device-node and
-resource policy comes from the systemd worker policy drop-in.
+resource policy comes from the systemd worker policy drop-in. Startup failures
+use the same cgroup and launcher cleanup path, so a candidate cannot leave a
+worker descendant behind.
 
 Input transitions and touch events have a fixed application queue. Move events
 coalesce by contact. A full queue rejects the worker instead of allocating an

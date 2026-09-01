@@ -406,10 +406,11 @@ fn terminate_spawned_parts(
     if process_group > 1 {
         descendants.extend(descendants_of(child.id() as libc::pid_t));
     }
-    if let Some(cgroup) = cgroup {
-        kill_cgroup(cgroup);
-    } else if let Some(unit) = unit {
-        kill_systemd_unit(unit);
+    let cgroup_killed = cgroup.is_some_and(kill_cgroup);
+    if !cgroup_killed {
+        if let Some(unit) = unit {
+            kill_systemd_unit(unit);
+        }
     }
     kill_process_group_id(process_group);
     child.kill().ok();
@@ -440,8 +441,8 @@ fn systemd_unit_cgroup(unit: &str) -> Result<PathBuf> {
     }
 }
 
-fn kill_cgroup(cgroup: &Path) {
-    let _ = std::fs::write(cgroup.join("cgroup.kill"), b"1");
+fn kill_cgroup(cgroup: &Path) -> bool {
+    std::fs::write(cgroup.join("cgroup.kill"), b"1").is_ok()
 }
 
 fn receive_hello(stream: &mut UnixStream, input: &mut Vec<u8>) -> Result<libc::pid_t> {
@@ -631,10 +632,11 @@ impl ProcessWorker {
     }
 
     fn kill_unit(&self) {
-        if let Some(cgroup) = self.cgroup.as_deref() {
-            kill_cgroup(cgroup);
-        } else if let Some(unit) = self.unit.as_deref() {
-            kill_systemd_unit(unit);
+        let cgroup_killed = self.cgroup.as_deref().is_some_and(kill_cgroup);
+        if !cgroup_killed {
+            if let Some(unit) = self.unit.as_deref() {
+                kill_systemd_unit(unit);
+            }
         }
     }
 

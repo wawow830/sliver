@@ -6,8 +6,8 @@ Status: accepted
 
 Lua runs in a separate process for every candidate and active configuration. The
 supervisor owns the worker control connection, a pidfd, the worker's shared
-three-slot frame mapping, and the worker systemd unit. The worker has no DRM,
-evdev, uinput, backlight, or broker file descriptor.
+three-slot frame mapping, and the worker systemd unit and cgroup. The worker has
+no DRM, evdev, uinput, backlight, or broker file descriptor.
 
 Production workers run as unique transient user services. The supervisor starts
 them with `MemoryMax=512M`, `TasksMax=64`, `OOMPolicy=kill`,
@@ -22,7 +22,9 @@ two-second wall-clock deadline around startup and each worker request. It
 allows 500 milliseconds for one graceful `stop` callback during replacement,
 logout, or shutdown. A timeout, process exit, malformed packet, or callback
 failure never receives another Lua callback. The supervisor kills the worker
-unit and releases broker-owned synthetic keys before entering fixed recovery.
+cgroup, sends `SIGKILL` through the worker pidfd, kills the process group, and
+reaps the systemd launcher within a separate bounded cleanup window before
+entering fixed recovery. Startup failures use the same cleanup path.
 
 Touch transitions and worker output are bounded. Repeated moves coalesce by
 contact. Down, up, cancel, Fn, and modifier transitions fail the worker when
