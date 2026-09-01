@@ -1447,8 +1447,8 @@ lifecycle_stage() {
         "Did independent multitouch contacts, cancel events, and replacement cancellation behave correctly?" \
         "Use real fingers and an ownership or config replacement to exercise cancellation."
     manual_check lifecycle_fn_recovery \
-        "Did a continuous three-second Fn hold show the fixed F1-F12 row and deliver Fn-up recovery correctly?" \
-        "Hold Fn for the full deadline, then test recovery key activation and release."
+        "Did a continuous two-second physical Fn hold show the fixed F1-F12 row and deliver Fn-up recovery correctly?" \
+        "Hold physical Fn continuously for exactly two seconds, then test recovery key activation and release."
     manual_check lifecycle_modifier_uinput \
         "Did left/right modifier bridging and generic uinput key delivery work without stuck keys?" \
         "Test physical modifiers with a recovery and Lua key action, then release every key."
@@ -1456,7 +1456,7 @@ lifecycle_stage() {
         "Did logout restore the pre-login default and login retain it until the new worker committed, without a blank interval?" \
         "Use a real local logout/login and review both service journals."
     manual_check lifecycle_watchdog_child_key_cleanup \
-        "Did hung.lua hit the two-second watchdog, kill child processes, and release every synthetic key?" \
+        "Did hung.lua hit the two-second Lua callback watchdog, kill child processes, and release every synthetic key?" \
         "Apply $CONFIG_DIR/hung.lua only as the named watchdog fixture, then verify no child or held key remains."
     CURRENT_STAGE=9
     save_state

@@ -118,13 +118,14 @@ See [the Lua interface reference](docs/lua.md) for the complete v1 surface.
 ## Safety and recovery
 
 Workers run as the applying user but cannot access DRM, evdev, uinput, or the
-backlight. A callback deadline is two seconds; graceful cleanup has a 500 ms
-deadline. Worker descendants are terminated on replacement or failure.
+backlight. The Lua callback watchdog allows two seconds; graceful cleanup has a
+500 ms deadline. Worker descendants are terminated on replacement or failure.
 
-Holding the physical Fn/Globe key for three seconds selects the compiled F1–F12
-recovery row. It is also shown when no worker is healthy. Recovery touches do
-not reach Lua, synthetic keys are released during replacement, and recovery
-uses 0.75 brightness.
+Holding the physical Fn/Globe key continuously for exactly two seconds selects
+the compiled F1–F12 recovery row. This physical-hold timer is separate from the
+Lua callback watchdog, even though both use a two-second deadline. Recovery
+touches stay out of Lua, synthetic keys are released during replacement, and
+recovery uses 0.75 brightness.
 
 Suspend hides the worker, cancels contacts, pauses timers, turns off the
 backlight, and restores the worker with one fresh frame after resume.

@@ -93,11 +93,13 @@ One persistent uinput device named `Sliver Keyboard` advertises:
 - left/right Meta/Super
 - Escape and consumer media, brightness, mute, and volume keys
 
-Lua key taps and the fixed function row use this device. Modifiers physically
-held on the Apple keyboard are mirrored around a key event when inherited.
-This is required because Hyprland tracks modifiers per keyboard; without
-bridging, physical Ctrl+Alt and virtual F2 are not interpreted as one
-Ctrl+Alt+F2 chord.
+Lua key taps and the fixed function row use this device. A continuous physical
+Fn hold for exactly two seconds switches a healthy worker to that fixed row.
+This physical-hold timer is separate from the Lua callback watchdog, which also
+allows two seconds. Modifiers physically held on the Apple keyboard are mirrored
+around a key event when inherited. This is required because Hyprland tracks
+modifiers per keyboard; without bridging, physical Ctrl+Alt and virtual F2 are
+not interpreted as one Ctrl+Alt+F2 chord.
 
 For a held Ctrl+Alt and F2 tap, Sliver emits from one virtual device:
 
@@ -229,8 +231,9 @@ control socket. The broker keeps hardware descriptors in its own process. The wo
 through bounded packets and returns complete frames and output requests. Frame
 pixels never cross the process boundary until a render has finished.
 
-The supervisor owns the callback deadline. It waits at most two seconds for
-startup, render, commit, and drive requests. The worker sends heartbeats only
+The supervisor owns the Lua callback watchdog. It waits at most two seconds for
+startup, render, commit, and drive requests. This watchdog is separate from the
+physical two-second Fn recovery hold. The worker sends heartbeats only
 while its command loop is idle, so a loop, native call, or process call cannot
 extend a callback deadline. Replacement, logout, and shutdown send one stop
 reason and allow at most 500 milliseconds. A timed-out or exited worker is

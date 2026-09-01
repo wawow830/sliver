@@ -68,10 +68,11 @@ awk '/^N: Name=/{name=$0}/^H: Handlers=/{print name; print}' \
   /proc/bus/input/devices
 ```
 
-Holding Fn/Globe continuously for three seconds should show the compiled F1–F12
-recovery row. Physical Ctrl, Alt, Shift, and Super modifiers are bridged to
-virtual key taps. Synthetic keys are released whenever a worker fails or is
-replaced.
+Holding physical Fn/Globe continuously for exactly two seconds should show the
+compiled F1–F12 recovery row. This physical-hold timer is separate from the
+Lua callback watchdog, which also has a two-second deadline. Physical Ctrl, Alt,
+Shift, and Super modifiers are bridged to virtual key taps. Synthetic keys are
+released whenever a worker fails or is replaced.
 
 ## Suspend or device loss
 

@@ -30,7 +30,8 @@ render callback returns.
 
 `start` runs while staging. Timers and synthetic keys become active only after
 commit. `stop(reason)` receives `replaced`, `logout`, or `shutdown` and has a
-500 ms cleanup deadline. A callback has a two-second deadline.
+500 ms cleanup deadline. The Lua callback watchdog allows two seconds. It is
+separate from the physical Fn recovery hold, which also lasts two seconds.
 
 The embedded default uses the same contract. It has no source metadata; an
 explicit file can read `sliver.source.path` and `sliver.source.directory`.
