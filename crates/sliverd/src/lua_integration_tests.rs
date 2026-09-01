@@ -4,8 +4,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::hardware::{
-    FakeAction, FakeTouchBar, InputState, LogicalFrame, ModifierState, TouchBarHardware,
-    TouchEvent, TouchPhase,
+    FakeAction, FakeTouchBar, FrameSnapshot, InputState, LogicalFrame, ModifierState,
+    TouchBarHardware, TouchEvent, TouchPhase,
 };
 use crate::supervisor::Supervisor;
 use anyhow::{Context, Result};
@@ -33,7 +33,7 @@ fn present_lua_once<H: TouchBarHardware>(source: &std::path::Path, hardware: &mu
     }
 }
 
-fn assert_bottom_band_is_solid(frame: &LogicalFrame, x_end: usize, message: &str) {
+fn assert_bottom_band_is_solid(frame: &FrameSnapshot, x_end: usize, message: &str) {
     for y in 54..60 {
         for x in 20..x_end {
             assert_eq!(
