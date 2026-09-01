@@ -70,6 +70,11 @@ grep -F 'HANDOFF_PENDING' "$script" >/dev/null || fail 'logout handoff is not re
 grep -F 'valid.lua' "$script" >/dev/null || fail 'valid fixture is not named'
 grep -F 'invalid.lua' "$script" >/dev/null || fail 'invalid fixture is not named'
 grep -F 'hung.lua' "$script" >/dev/null || fail 'watchdog fixture is not named'
+grep -F 'two-second physical Fn hold' "$script" >/dev/null || fail 'Fn recovery prompt does not name its two-second deadline'
+grep -F 'two-second Lua callback watchdog' "$script" >/dev/null || fail 'watchdog prompt does not distinguish its deadline'
+if grep -F 'three-second Fn hold' "$script" >/dev/null; then
+    fail 'verifier still describes a three-second Fn recovery hold'
+fi
 grep -F 'video-2008x60.lua' "$script" >/dev/null || fail 'video workload is not named'
 grep -F 'refuse_if_blocked' "$script" >/dev/null || fail 'failure gate is missing'
 grep -F 'source "$ROOT/scripts/verify-release-auth.sh"' "$script" >/dev/null ||
