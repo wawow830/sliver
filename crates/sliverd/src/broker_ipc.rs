@@ -794,7 +794,13 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         PeerVerification::TestProduction => ensure_supervisor_test_peer(peer.pid),
     };
     if let Err(error) = peer_check {
-        write_message(&mut stream, ERROR, error.to_string().as_bytes())?;
+        write_client_message(
+            &mut stream,
+            ERROR,
+            error.to_string().as_bytes(),
+            connection_stop,
+            running,
+        )?;
         return Err(error);
     }
     let request = if connection_stop.is_some() || running.is_some() {
@@ -828,7 +834,13 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         Ok(grant) => grant,
         Err(error) => {
             let status = broker_error_status(&error);
-            write_message(&mut stream, status, error.to_string().as_bytes())?;
+            write_client_message(
+                &mut stream,
+                status,
+                error.to_string().as_bytes(),
+                connection_stop,
+                running,
+            )?;
             return Err(error);
         }
     };
@@ -836,7 +848,13 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         // The session can change during this short claim transaction. Tell a
         // supervisor to retry instead of closing the stream with a raw reset.
         let status = broker_error_status(&error);
-        write_message(&mut stream, status, error.to_string().as_bytes())?;
+        write_client_message(
+            &mut stream,
+            status,
+            error.to_string().as_bytes(),
+            connection_stop,
+            running,
+        )?;
         return Err(error);
     }
     if *fallback_running || fallback.has_recovery() {
@@ -858,7 +876,13 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
                     .unwrap_or(HardwareCapability::Backlight)
                     .to_wire()];
                 body.extend_from_slice(error.to_string().as_bytes());
-                write_message(&mut stream, WAIT_FOR_HARDWARE, &body)?;
+                write_client_message(
+                    &mut stream,
+                    WAIT_FOR_HARDWARE,
+                    &body,
+                    connection_stop,
+                    running,
+                )?;
                 return Err(error);
             }
             Err(error) => return Err(error),
@@ -867,7 +891,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     let mut body = Vec::new();
     encode_input_state(&mut body, input_state);
     body.extend_from_slice(&backlight.to_bits().to_be_bytes());
-    write_message(&mut stream, OK, &body)?;
+    write_client_message(&mut stream, OK, &body, connection_stop, running)?;
     let mut session_revoked = false;
     let mut logout_acknowledged = false;
 
@@ -897,15 +921,15 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
                 );
                 fallback.hardware_mut().emit_key_events(&events)?;
                 client_state.held_keys.observe(&events);
-                write_message(&mut stream, OK, &[])?;
+                write_client_message(&mut stream, OK, &[], connection_stop, running)?;
                 continue;
             }
             if *operation != LOGOUT_COMPLETE {
-                write_message(&mut stream, SESSION_REVOKED, &[])?;
+                write_client_message(&mut stream, SESSION_REVOKED, &[], connection_stop, running)?;
                 continue;
             }
             ensure!(payload.is_empty(), "logout acknowledgement has a payload");
-            write_message(&mut stream, OK, &[])?;
+            write_client_message(&mut stream, OK, &[], connection_stop, running)?;
             logout_acknowledged = true;
             break;
         }
@@ -923,7 +947,13 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
             // supervisor, so a replacement cannot inherit the old user's
             // pixels if its startup is delayed or fails.
             fence_owner_output(fallback)?;
-            write_message(&mut stream, SESSION_REVOKED, &revocation)?;
+            write_client_message(
+                &mut stream,
+                SESSION_REVOKED,
+                &revocation,
+                connection_stop,
+                running,
+            )?;
             eprintln!("broker revoked user session: {error:#}");
             continue;
         }
@@ -984,7 +1014,7 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
                     payload.is_empty(),
                     "broker release has an unexpected payload"
                 );
-                write_message(&mut stream, OK, &[])?;
+                write_client_message(&mut stream, OK, &[], connection_stop, running)?;
                 break;
             }
             other => bail!("unknown broker request {other}"),
@@ -998,12 +1028,18 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
                     .unwrap_or(HardwareCapability::Display)
                     .to_wire()];
                 body.extend_from_slice(error.to_string().as_bytes());
-                write_message(&mut stream, HARDWARE_UNAVAILABLE, &body)?;
+                write_client_message(
+                    &mut stream,
+                    HARDWARE_UNAVAILABLE,
+                    &body,
+                    connection_stop,
+                    running,
+                )?;
                 continue;
             }
             Err(error) => return Err(error),
         };
-        write_message(&mut stream, OK, &response)?;
+        write_client_message(&mut stream, OK, &response, connection_stop, running)?;
     }
     Ok(ClientOutcome {
         logout_acknowledged,
@@ -1068,14 +1104,73 @@ fn is_disconnect(error: &anyhow::Error) -> bool {
     })
 }
 
-fn write_message(stream: &mut UnixStream, operation: u8, payload: &[u8]) -> Result<()> {
+fn encode_message(operation: u8, payload: &[u8]) -> Result<Vec<u8>> {
     let length = 1usize
         .checked_add(payload.len())
         .context("broker message length overflow")?;
     ensure!(length <= MAX_MESSAGE_BYTES, "broker message is too large");
-    stream.write_all(&u32::try_from(length)?.to_be_bytes())?;
-    stream.write_all(&[operation])?;
-    stream.write_all(payload)?;
+    let mut message = Vec::with_capacity(4 + length);
+    message.extend_from_slice(&u32::try_from(length)?.to_be_bytes());
+    message.push(operation);
+    message.extend_from_slice(payload);
+    Ok(message)
+}
+
+fn write_message(stream: &mut UnixStream, operation: u8, payload: &[u8]) -> Result<()> {
+    stream.write_all(&encode_message(operation, payload)?)?;
+    Ok(())
+}
+
+fn write_client_message(
+    stream: &mut UnixStream,
+    operation: u8,
+    payload: &[u8],
+    connection_stop: Option<&AtomicBool>,
+    running: Option<&AtomicBool>,
+) -> Result<()> {
+    if connection_stop.is_none() && running.is_none() {
+        return write_message(stream, operation, payload);
+    }
+    let message = encode_message(operation, payload)?;
+    let mut written = 0;
+    while written < message.len() {
+        if connection_stop.is_some_and(|stop| stop.load(Ordering::Acquire))
+            || running.is_some_and(|running| !running.load(Ordering::Acquire))
+        {
+            bail!("broker shutdown interrupted a client response");
+        }
+        let sent = unsafe {
+            libc::send(
+                stream.as_raw_fd(),
+                message[written..].as_ptr().cast(),
+                message.len() - written,
+                libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+            )
+        };
+        if sent > 0 {
+            written += sent as usize;
+            continue;
+        }
+        if sent == 0 {
+            bail!("broker connection closed while writing a response");
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        if error.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(error.into());
+        }
+        let mut pollfd = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut pollfd, 1, 10) };
+        if result < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
     Ok(())
 }
 
@@ -1466,8 +1561,8 @@ mod tests {
     use std::time::Instant;
 
     use crate::hardware::{
-        FakeTouchBar, HardwareEvent, InputState, LogicalFrame, ModifierState, SyntheticKeyEvent,
-        TouchBarHardware,
+        FakeAction, FakeTouchBar, HardwareEvent, InputState, KeyboardKey, LogicalFrame,
+        ModifierState, OutputKey, SyntheticKeyEvent, TouchBarHardware, TouchEvent, TouchPhase,
     };
     use crate::logind::{ActiveSession, FakeLogind, Logind, Session};
     use crate::lua_worker::LuaSource;
@@ -2285,6 +2380,10 @@ mod tests {
 
         let mut client = BrokerHardware::new_at(socket);
         client.claim()?;
+        client.emit_key_events(&[SyntheticKeyEvent {
+            key: OutputKey::Keyboard(KeyboardKey::F2),
+            active: true,
+        }])?;
         running.store(false, Ordering::Release);
         let stopped_while_idle = done_receiver
             .recv_timeout(Duration::from_millis(250))
@@ -2294,6 +2393,99 @@ mod tests {
         assert!(
             stopped_while_idle,
             "broker remained blocked in an idle client connection after shutdown"
+        );
+        let actions = shared.inspect(|hardware| hardware.actions().to_vec());
+        let key_up = actions
+            .iter()
+            .position(|action| {
+                matches!(
+                    action,
+                    FakeAction::SyntheticKey(event) if !event.active
+                )
+            })
+            .expect("broker did not release the client's held key");
+        let hardware_release = actions
+            .iter()
+            .position(|action| matches!(action, FakeAction::Release))
+            .expect("broker did not release fake hardware");
+        assert!(
+            key_up < hardware_release,
+            "broker released hardware before releasing client keys"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn broker_shutdown_interrupts_an_unread_large_client_response() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "unread-response-session".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let (done_sender, done_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let result = (|| -> Result<()> {
+                let fallback = Supervisor::new_fallback_with_logind(
+                    server_shared,
+                    directory.path().join("broker-state/config-path"),
+                    server_logind.clone(),
+                    Some(LuaSource::embedded(
+                        b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                            .to_vec(),
+                    )),
+                )?;
+                run_broker(
+                    listener,
+                    fallback,
+                    SessionAuthorizer::new(server_logind),
+                    server_running,
+                    SEAT,
+                    PeerVerification::Test,
+                )
+            })();
+            let _ = done_sender.send(result.is_ok());
+            result
+        });
+
+        let mut client = UnixStream::connect(&socket)?;
+        write_message(&mut client, CLAIM, &[])?;
+        assert_eq!(read_message(&mut client)?.first(), Some(&OK));
+        for id in 0..4096 {
+            shared.inject(HardwareEvent::Touch(TouchEvent {
+                phase: TouchPhase::Move,
+                id,
+                time: f64::from(id),
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: Some(0.5),
+                width: Some(0.5),
+                height: Some(0.5),
+            }));
+        }
+        write_message(&mut client, POLL, &0u64.to_be_bytes())?;
+        thread::sleep(Duration::from_millis(20));
+        running.store(false, Ordering::Release);
+        let stopped_while_response_was_unread = done_receiver
+            .recv_timeout(Duration::from_millis(500))
+            .is_ok();
+        drop(client);
+        server.join().expect("broker server panicked")?;
+        assert!(
+            stopped_while_response_was_unread,
+            "broker remained blocked writing an unread client response"
         );
         Ok(())
     }
@@ -2342,19 +2534,66 @@ mod tests {
             )
         });
 
-        let mut supervisor = Supervisor::new_with_logind(
+        let source = directory.path().join("held.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            return {
+                api_version = 1,
+                touch = function(event)
+                    if event.phase == "down" then
+                        sliver.input.key.down(sliver.input.keys.keyboard.f2)
+                    end
+                end,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let mut supervisor = Supervisor::new_with_logind_process(
             BrokerHardware::new_at(socket),
             user_state,
             FakeLogind::new(),
         )?;
+        supervisor.apply(&source)?;
+        shared.inject(HardwareEvent::Touch(TouchEvent {
+            phase: TouchPhase::Down,
+            id: 1,
+            time: 0.0,
+            x: 1.0,
+            y: 1.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        }));
+        supervisor.poll(Duration::ZERO)?;
+        assert!(shared.inspect(|hardware| {
+            hardware
+                .synthetic_keys()
+                .last()
+                .is_some_and(|event| event.active)
+        }));
         connection_stop.store(true, Ordering::Release);
         let deadline = Instant::now() + Duration::from_secs(2);
-        while supervisor.poll(Duration::ZERO).is_ok() && Instant::now() < deadline {
+        while !supervisor.hardware().connection_lost() && Instant::now() < deadline {
+            let _ = supervisor.poll(Duration::ZERO);
             thread::sleep(Duration::from_millis(1));
         }
+        anyhow::ensure!(
+            supervisor.hardware().connection_lost(),
+            "broker connection did not close after the stop request"
+        );
         running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;
-        supervisor.shutdown()
+        supervisor.shutdown()?;
+        assert!(shared.inspect(|hardware| {
+            hardware
+                .synthetic_keys()
+                .last()
+                .is_some_and(|event| !event.active)
+        }));
+        Ok(())
     }
 
     #[test]
@@ -2937,7 +3176,7 @@ mod tests {
     }
 
     #[test]
-    fn systemd_supervisor_restart_reloads_the_saved_source_once() -> Result<()> {
+    fn systemd_supervisor_restart_keeps_a_persisted_hung_source_in_recovery() -> Result<()> {
         let _systemd_tests = crate::lock_systemd_tests();
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
@@ -2972,8 +3211,8 @@ mod tests {
                 require("sliver.v1")
                 return {{
                     api_version = 1,
-                    render = function(canvas)
-                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    render = function()
+                        while true do end
                     end,
                 }}
                 "#,
@@ -3036,6 +3275,12 @@ mod tests {
             "--collect",
             "--quiet",
             "--service-type=exec",
+            "--property",
+            "KillSignal=SIGINT",
+            "--property",
+            "Restart=on-failure",
+            "--property",
+            "TimeoutStopSec=5s",
             "--setenv",
         ]);
         launcher.arg(format!("SLIVER_BROKER_SOCKET={}", socket.display()));
@@ -3058,31 +3303,21 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(read_attempts()?.lines().count(), 1);
+        let recovery_visible = || {
+            shared.inspect(|hardware| {
+                hardware.presented_frames().last().is_some_and(|frame| {
+                    (0..2008).any(|x| (0..60).any(|y| frame.rgba_at(x, y) == [255, 255, 255, 255]))
+                })
+            })
+        };
         let frame_deadline = Instant::now() + Duration::from_secs(5);
-        while !shared.inspect(|hardware| {
-            hardware
-                .presented_frames()
-                .last()
-                .is_some_and(|frame| frame.rgba_at(10, 10) == [255, 0, 0, 255])
-        }) && Instant::now() < frame_deadline
-        {
+        while !recovery_visible() && Instant::now() < frame_deadline {
             thread::sleep(Duration::from_millis(10));
         }
-        assert!(shared.inspect(|hardware| {
-            hardware
-                .presented_frames()
-                .last()
-                .is_some_and(|frame| frame.rgba_at(10, 10) == [255, 0, 0, 255])
-        }));
-        let first_pid = String::from_utf8(
-            std::process::Command::new("systemctl")
-                .args(["--user", "show", &unit, "-p", "MainPID", "--value"])
-                .output()?
-                .stdout,
-        )?
-        .trim()
-        .to_owned();
-
+        assert!(
+            recovery_visible(),
+            "persisted hung source did not enter recovery"
+        );
         let restart = std::process::Command::new("systemctl")
             .args(["--user", "restart", &unit])
             .status()?;
@@ -3094,20 +3329,38 @@ mod tests {
         assert_eq!(read_attempts()?.lines().count(), 2);
         thread::sleep(Duration::from_millis(100));
         assert_eq!(read_attempts()?.lines().count(), 2);
-        let worker_units = std::process::Command::new("systemctl")
-            .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
-            .output()?;
-        anyhow::ensure!(
-            worker_units.status.success(),
-            "listing Lua worker units failed"
-        );
-        let old_worker_prefix = format!("sliver-lua-worker-{first_pid}-");
-        let worker_units = String::from_utf8(worker_units.stdout)?;
+        let worker_units_deadline = Instant::now() + Duration::from_secs(2);
+        let worker_units = loop {
+            let worker_units = std::process::Command::new("systemctl")
+                .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
+                .output()?;
+            anyhow::ensure!(
+                worker_units.status.success(),
+                "listing Lua worker units failed"
+            );
+            let worker_units = String::from_utf8(worker_units.stdout)?;
+            if !worker_units
+                .lines()
+                .any(|line| line.starts_with("sliver-lua-worker-"))
+                || Instant::now() >= worker_units_deadline
+            {
+                break worker_units;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
         assert!(
             !worker_units
                 .lines()
-                .any(|line| line.starts_with(&old_worker_prefix)),
-            "the previous supervisor's Lua worker unit survived restart"
+                .any(|line| line.starts_with("sliver-lua-worker-")),
+            "a failed persisted source left a Lua worker unit behind"
+        );
+        assert_eq!(
+            std::process::Command::new("systemctl")
+                .args(["--user", "show", &unit, "-p", "ActiveState", "--value"])
+                .output()?
+                .stdout
+                .as_slice(),
+            b"active\n"
         );
         assert_eq!(
             std::process::Command::new("systemctl")

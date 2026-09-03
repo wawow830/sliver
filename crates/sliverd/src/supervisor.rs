@@ -1164,7 +1164,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn release_synthetic_keys(&mut self) -> Result<()> {
         let (empty, events) = self.synthetic.release();
-        let result = if events.is_empty() {
+        let result = if events.is_empty() || self.hardware.connection_lost() {
             Ok(())
         } else {
             self.hardware.emit_key_events(&events)
