@@ -713,6 +713,7 @@ impl HeldKeys {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind>(
     stream: UnixStream,
     fallback: &mut Supervisor<H, L>,
@@ -746,7 +747,7 @@ fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Log
     };
     let fence_result = if client_state.claimed
         && result.is_err()
-        && !running.is_some_and(|running| !running.load(Ordering::Acquire))
+        && running.is_none_or(|running| running.load(Ordering::Acquire))
     {
         fence_owner_output(fallback)
     } else {

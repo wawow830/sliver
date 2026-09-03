@@ -8163,11 +8163,22 @@ mod tests {
                 "worker cgroup still contains a process"
             );
         }
-        let units = std::process::Command::new("systemctl")
-            .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
-            .output()?;
-        anyhow::ensure!(units.status.success(), "listing user worker units failed");
-        let units = String::from_utf8(units.stdout)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let units = loop {
+            let units = std::process::Command::new("systemctl")
+                .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
+                .output()?;
+            anyhow::ensure!(units.status.success(), "listing user worker units failed");
+            let units = String::from_utf8(units.stdout)?;
+            if !units
+                .lines()
+                .any(|line| line.starts_with("sliver-lua-worker-"))
+                || Instant::now() >= deadline
+            {
+                break units;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
         assert!(
             !units
                 .lines()
