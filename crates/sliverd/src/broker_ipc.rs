@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -179,37 +180,48 @@ impl BrokerHardware {
     }
 
     fn request(&mut self, operation: u8, payload: &[u8]) -> Result<Vec<u8>> {
-        let stream = self
-            .stream
-            .as_mut()
-            .context("broker connection is not open")?;
-        write_message(stream, operation, payload)?;
-        let response = read_message(stream)?;
-        let (status, body) = response.split_first().context("broker response is empty")?;
-        match *status {
-            OK => Ok(body.to_vec()),
-            ERROR => bail!("{}", String::from_utf8_lossy(body)),
-            SESSION_REVOKED => {
-                self.session_revoked = true;
-                self.record_revocation(body)?;
-                bail!("broker revoked the user session")
-            }
-            HARDWARE_UNAVAILABLE => {
-                self.hardware_available = false;
-                self.unavailable_capability = body
-                    .first()
-                    .copied()
-                    .and_then(|value| HardwareCapability::from_wire(value).ok());
-                if let Some(capability) = self.unavailable_capability {
-                    self.missing_capabilities.insert(capability);
+        let result = (|| {
+            let stream = self
+                .stream
+                .as_mut()
+                .context("broker connection is not open")?;
+            write_message(stream, operation, payload)?;
+            let response = read_message(stream)?;
+            let (status, body) = response.split_first().context("broker response is empty")?;
+            match *status {
+                OK => Ok(body.to_vec()),
+                ERROR => bail!("{}", String::from_utf8_lossy(body)),
+                SESSION_REVOKED => {
+                    self.session_revoked = true;
+                    self.record_revocation(body)?;
+                    bail!("broker revoked the user session")
                 }
-                bail!(
-                    "{}",
-                    self.unavailable_error(&body[usize::from(!body.is_empty())..])
-                )
+                HARDWARE_UNAVAILABLE => {
+                    self.hardware_available = false;
+                    self.unavailable_capability = body
+                        .first()
+                        .copied()
+                        .and_then(|value| HardwareCapability::from_wire(value).ok());
+                    if let Some(capability) = self.unavailable_capability {
+                        self.missing_capabilities.insert(capability);
+                    }
+                    bail!(
+                        "{}",
+                        self.unavailable_error(&body[usize::from(!body.is_empty())..])
+                    )
+                }
+                other => bail!("broker returned unknown status {other}"),
             }
-            other => bail!("broker returned unknown status {other}"),
+        })();
+        if result.as_ref().err().is_some_and(is_disconnect) {
+            // The broker owns the hardware. Once its socket disappears, this
+            // supervisor claim is already gone and teardown must not try to
+            // paint or release it again.
+            self.stream = None;
+            self.claimed = false;
+            self.hardware_available = false;
         }
+        result
     }
 }
 
@@ -482,7 +494,7 @@ fn run_broker<H: TouchBarHardware, L: crate::logind::Logind>(
         listener,
         fallback,
         authorizer,
-        running,
+        running.clone(),
         seat,
         peer_verification,
         None,
@@ -543,14 +555,16 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                 seat,
                 peer_verification,
                 connection_stop.as_deref(),
+                Some(running.as_ref()),
             );
             match result {
                 Ok(outcome) => {
                     // A client can disappear without completing the broker's
                     // revocation handshake. The command-mode panel retains
                     // its last frame in that case, so fence it before waiting
-                    // for a replacement supervisor.
-                    if !outcome.logout_acknowledged {
+                    // for a replacement supervisor. During broker shutdown,
+                    // go straight to the adapter's final black/release path.
+                    if !outcome.logout_acknowledged && running.load(Ordering::Acquire) {
                         fence_owner_output(&mut fallback)?;
                     }
                     let active = authorizer.active_session(seat)?;
@@ -567,7 +581,8 @@ fn run_broker_with_connection_stop<H: TouchBarHardware, L: crate::logind::Logind
                     last_active = active;
                 }
             }
-            if !fallback_running
+            if running.load(Ordering::Acquire)
+                && !fallback_running
                 && !fallback_attempted
                 && authorizer.active_session(seat)?.is_none()
             {
@@ -706,6 +721,7 @@ fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Log
     seat: &str,
     peer_verification: PeerVerification,
     connection_stop: Option<&AtomicBool>,
+    running: Option<&AtomicBool>,
 ) -> Result<ClientOutcome> {
     let mut client_state = ClientState::default();
     let result = handle_client_inner(
@@ -717,6 +733,7 @@ fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Log
         seat,
         peer_verification,
         connection_stop,
+        running,
     );
     let cleanup = client_state.held_keys.release(fallback.hardware_mut());
     let result = match (result, cleanup) {
@@ -727,7 +744,10 @@ fn handle_client_with_connection_stop<H: TouchBarHardware, L: crate::logind::Log
         (Ok(_outcome), Err(error)) => Err(error).context("cleaning up broker client keys"),
         (Ok(outcome), Ok(())) => Ok(outcome),
     };
-    let fence_result = if client_state.claimed && result.is_err() {
+    let fence_result = if client_state.claimed
+        && result.is_err()
+        && !running.is_some_and(|running| !running.load(Ordering::Acquire))
+    {
         fence_owner_output(fallback)
     } else {
         Ok(())
@@ -752,11 +772,10 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     seat: &str,
     peer_verification: PeerVerification,
     connection_stop: Option<&AtomicBool>,
+    running: Option<&AtomicBool>,
 ) -> Result<ClientOutcome> {
     let peer = crate::peer_credentials::read(&stream)?;
-    if connection_stop.is_some() {
-        stream.set_read_timeout(Some(Duration::from_millis(10)))?;
-    }
+    let mut stop_input = Vec::new();
     let peer_check = match peer_verification {
         PeerVerification::Production => ensure_supervisor_peer(peer.pid),
         #[cfg(test)]
@@ -768,7 +787,18 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         write_message(&mut stream, ERROR, error.to_string().as_bytes())?;
         return Err(error);
     }
-    let request = read_message(&mut stream)?;
+    let request = if connection_stop.is_some() || running.is_some() {
+        match read_message_until_stop(&mut stream, &mut stop_input, connection_stop, running)? {
+            Some(request) => request,
+            None => {
+                return Ok(ClientOutcome {
+                    logout_acknowledged: false,
+                })
+            }
+        }
+    } else {
+        read_message(&mut stream)?
+    };
     let (operation, payload) = request.split_first().context("broker request is empty")?;
     ensure!(*operation == CLAIM, "broker expected a claim request");
     let production_peer = matches!(peer_verification, PeerVerification::Production);
@@ -832,17 +862,17 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
     let mut logout_acknowledged = false;
 
     loop {
-        let request = match read_message(&mut stream) {
-            Ok(request) => request,
-            Err(error) if is_disconnect(&error) => break,
-            Err(error)
-                if is_timeout(&error)
-                    && connection_stop.is_some_and(|stop| stop.load(Ordering::Acquire)) =>
-            {
-                break
+        let request = if connection_stop.is_some() || running.is_some() {
+            match read_message_until_stop(&mut stream, &mut stop_input, connection_stop, running)? {
+                Some(request) => request,
+                None => break,
             }
-            Err(error) if is_timeout(&error) => continue,
-            Err(error) => return Err(error),
+        } else {
+            match read_message(&mut stream) {
+                Ok(request) => request,
+                Err(error) if is_disconnect(&error) => break,
+                Err(error) => return Err(error),
+            }
         };
         let (operation, payload) = request.split_first().context("broker request is empty")?;
         if session_revoked {
@@ -1028,17 +1058,6 @@ fn is_disconnect(error: &anyhow::Error) -> bool {
     })
 }
 
-fn is_timeout(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
-            matches!(
-                error.kind(),
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            )
-        })
-    })
-}
-
 fn write_message(stream: &mut UnixStream, operation: u8, payload: &[u8]) -> Result<()> {
     let length = 1usize
         .checked_add(payload.len())
@@ -1048,6 +1067,79 @@ fn write_message(stream: &mut UnixStream, operation: u8, payload: &[u8]) -> Resu
     stream.write_all(&[operation])?;
     stream.write_all(payload)?;
     Ok(())
+}
+
+fn read_message_until_stop(
+    stream: &mut UnixStream,
+    input: &mut Vec<u8>,
+    connection_stop: Option<&AtomicBool>,
+    running: Option<&AtomicBool>,
+) -> Result<Option<Vec<u8>>> {
+    let mut bytes = [0u8; 8192];
+    loop {
+        if connection_stop.is_some_and(|stop| stop.load(Ordering::Acquire))
+            || running.is_some_and(|running| !running.load(Ordering::Acquire))
+        {
+            return Ok(None);
+        }
+        if let Some(message) = take_message(input)? {
+            return Ok(Some(message));
+        }
+        let received = unsafe {
+            libc::recv(
+                stream.as_raw_fd(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+                libc::MSG_DONTWAIT,
+            )
+        };
+        if received > 0 {
+            input.extend_from_slice(&bytes[..received as usize]);
+            ensure!(
+                input.len() <= MAX_MESSAGE_BYTES + 4,
+                "broker message buffer is full"
+            );
+            continue;
+        }
+        if received == 0 {
+            if input.is_empty() {
+                return Ok(None);
+            }
+            bail!("broker connection closed in the middle of a message");
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        if error.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(error.into());
+        }
+        let mut pollfd = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut pollfd, 1, 10) };
+        if result < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+}
+
+fn take_message(input: &mut Vec<u8>) -> Result<Option<Vec<u8>>> {
+    if input.len() < 4 {
+        return Ok(None);
+    }
+    let length = u32::from_be_bytes(input[..4].try_into()?) as usize;
+    ensure!(
+        length > 0 && length <= MAX_MESSAGE_BYTES,
+        "invalid broker message length"
+    );
+    if input.len() < 4 + length {
+        return Ok(None);
+    }
+    let packet: Vec<_> = input.drain(..4 + length).collect();
+    Ok(Some(packet[4..].to_vec()))
 }
 
 fn read_message(stream: &mut UnixStream) -> Result<Vec<u8>> {
@@ -1359,7 +1451,7 @@ mod tests {
     use std::io::Write;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{mpsc, Arc, Mutex};
     use std::thread;
     use std::time::Instant;
 
@@ -1650,6 +1742,7 @@ mod tests {
                 &mut fallback_running,
                 SEAT,
                 PeerVerification::Production,
+                None,
                 None,
             );
             let error = match result {
@@ -2137,6 +2230,124 @@ mod tests {
     }
 
     #[test]
+    fn broker_shutdown_finishes_with_an_idle_supervisor_connection() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "shutdown-session".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let (done_sender, done_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let result = (|| -> Result<()> {
+                let fallback = Supervisor::new_fallback_with_logind(
+                    server_shared,
+                    directory.path().join("broker-state/config-path"),
+                    server_logind.clone(),
+                    Some(LuaSource::embedded(
+                        b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                            .to_vec(),
+                    )),
+                )?;
+                run_broker(
+                    listener,
+                    fallback,
+                    SessionAuthorizer::new(server_logind),
+                    server_running,
+                    SEAT,
+                    PeerVerification::Test,
+                )
+            })();
+            let _ = done_sender.send(result.is_ok());
+            result
+        });
+
+        let mut client = BrokerHardware::new_at(socket);
+        client.claim()?;
+        running.store(false, Ordering::Release);
+        let stopped_while_idle = done_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .is_ok();
+        drop(client);
+        server.join().expect("broker server panicked")?;
+        assert!(
+            stopped_while_idle,
+            "broker remained blocked in an idle client connection after shutdown"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn supervisor_shutdown_accepts_a_broker_disconnect() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "disconnect-session".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let connection_stop = Arc::new(AtomicBool::new(false));
+        let broker_state = directory.path().join("broker-state/config-path");
+        let user_state = directory.path().join("user-state/config-path");
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let server_connection_stop = connection_stop.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                broker_state,
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker_for_test_with_connection_stop(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                PeerVerification::Test,
+                server_connection_stop,
+            )
+        });
+
+        let mut supervisor = Supervisor::new_with_logind(
+            BrokerHardware::new_at(socket),
+            user_state,
+            FakeLogind::new(),
+        )?;
+        connection_stop.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while supervisor.poll(Duration::ZERO).is_ok() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        running.store(false, Ordering::Release);
+        server.join().expect("broker server panicked")?;
+        supervisor.shutdown()
+    }
+
+    #[test]
     fn real_supervisor_failed_login_enters_recovery_through_the_broker_loop() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");
@@ -2568,11 +2779,13 @@ mod tests {
             "User=sliver",
             "SupplementaryGroups=sliver-drm sliver-input sliver-backlight",
             "Restart=on-failure",
+            "TimeoutStopSec=5s",
         ] {
             assert!(broker.contains(setting), "broker service lacks {setting}");
         }
         assert!(supervisor.contains("WantedBy=graphical-session.target"));
         assert!(supervisor.contains("ConditionGroup=sliver-supervisors"));
+        assert!(supervisor.contains("TimeoutStopSec=5s"));
         assert!(!supervisor.contains("PartOf=graphical-session.target"));
         assert!(!broker.contains("XDG_RUNTIME_DIR=/run/user/%U"));
         assert!(!broker.contains("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"));
@@ -2590,6 +2803,7 @@ mod tests {
 
     #[test]
     fn production_peer_verification_accepts_a_real_supervisor_unit() -> Result<()> {
+        let _systemd_tests = crate::lock_systemd_tests();
         let supervisor = std::env::current_exe()?
             .parent()
             .and_then(|path| path.parent())
@@ -2709,6 +2923,202 @@ mod tests {
             }),
             "fallback did not return after production logout"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn systemd_supervisor_restart_reloads_the_saved_source_once() -> Result<()> {
+        let _systemd_tests = crate::lock_systemd_tests();
+        let available = std::process::Command::new("systemd-run")
+            .args(["--user", "--wait", "--quiet", "true"])
+            .status();
+        anyhow::ensure!(
+            available.is_ok_and(|status| status.success()),
+            "systemd user manager is required for this test"
+        );
+
+        let supervisor_binary = std::env::current_exe()?
+            .parent()
+            .and_then(|path| path.parent())
+            .map(|path| path.join("sliver-supervisor"))
+            .context("supervisor binary is required for this test")?;
+        anyhow::ensure!(
+            supervisor_binary.exists(),
+            "supervisor binary is required for this test"
+        );
+
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let source = directory.path().join("saved.lua");
+        let attempts = directory.path().join("attempts");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local attempts = assert(io.open({attempts:?}, "a"))
+                attempts:write("loaded\n")
+                attempts:close()
+                require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    render = function(canvas)
+                        canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1)
+                    end,
+                }}
+                "#,
+                attempts = attempts.to_string_lossy(),
+            ),
+        )?;
+        let state_home = directory.path().join("state");
+        let state_file = state_home.join("sliver/config-path");
+        PreparedPathState::prepare(&state_file, &source)?.commit()?;
+
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "systemd-restart-session".into(),
+                uid,
+            }),
+        );
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_shared = shared.clone();
+        let server_running = running.clone();
+        let broker_state = directory.path().join("broker-state/config-path");
+        let server = thread::spawn(move || -> Result<()> {
+            let fallback = Supervisor::new_fallback_with_logind(
+                server_shared,
+                broker_state,
+                server_logind.clone(),
+                Some(LuaSource::embedded(
+                    b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                        .to_vec(),
+                )),
+            )?;
+            run_broker(
+                listener,
+                fallback,
+                SessionAuthorizer::new(server_logind),
+                server_running,
+                SEAT,
+                PeerVerification::TestProduction,
+            )
+        });
+
+        let unit = format!(
+            "sliver-supervisor-test-restart-{}.service",
+            std::process::id()
+        );
+        let supervisor_socket = directory.path().join("supervisor.sock");
+        let worker_binary = supervisor_binary
+            .parent()
+            .context("supervisor binary has no parent")?
+            .join("sliver-lua-worker");
+        let mut launcher = std::process::Command::new("systemd-run");
+        launcher.args([
+            "--user",
+            "--unit",
+            &unit,
+            "--collect",
+            "--quiet",
+            "--service-type=exec",
+            "--setenv",
+        ]);
+        launcher.arg(format!("SLIVER_BROKER_SOCKET={}", socket.display()));
+        launcher.args(["--setenv"]);
+        launcher.arg(format!(
+            "SLIVER_SUPERVISOR_SOCKET={}",
+            supervisor_socket.display()
+        ));
+        launcher.args(["--setenv"]);
+        launcher.arg(format!("XDG_STATE_HOME={}", state_home.display()));
+        launcher.args(["--setenv"]);
+        launcher.arg(format!("SLIVER_LUA_WORKER={}", worker_binary.display()));
+        launcher.arg(&supervisor_binary);
+        let mut launcher_child = launcher.spawn()?;
+
+        let read_attempts =
+            || -> Result<String> { Ok(std::fs::read_to_string(&attempts).unwrap_or_default()) };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while read_attempts()?.lines().count() < 1 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(read_attempts()?.lines().count(), 1);
+        let frame_deadline = Instant::now() + Duration::from_secs(5);
+        while !shared.inspect(|hardware| {
+            hardware
+                .presented_frames()
+                .last()
+                .is_some_and(|frame| frame.rgba_at(10, 10) == [255, 0, 0, 255])
+        }) && Instant::now() < frame_deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(shared.inspect(|hardware| {
+            hardware
+                .presented_frames()
+                .last()
+                .is_some_and(|frame| frame.rgba_at(10, 10) == [255, 0, 0, 255])
+        }));
+        let first_pid = String::from_utf8(
+            std::process::Command::new("systemctl")
+                .args(["--user", "show", &unit, "-p", "MainPID", "--value"])
+                .output()?
+                .stdout,
+        )?
+        .trim()
+        .to_owned();
+
+        let restart = std::process::Command::new("systemctl")
+            .args(["--user", "restart", &unit])
+            .status()?;
+        anyhow::ensure!(restart.success(), "supervisor systemd restart failed");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while read_attempts()?.lines().count() < 2 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(read_attempts()?.lines().count(), 2);
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(read_attempts()?.lines().count(), 2);
+        let worker_units = std::process::Command::new("systemctl")
+            .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
+            .output()?;
+        anyhow::ensure!(
+            worker_units.status.success(),
+            "listing Lua worker units failed"
+        );
+        let old_worker_prefix = format!("sliver-lua-worker-{first_pid}-");
+        let worker_units = String::from_utf8(worker_units.stdout)?;
+        assert!(
+            !worker_units
+                .lines()
+                .any(|line| line.starts_with(&old_worker_prefix)),
+            "the previous supervisor's Lua worker unit survived restart"
+        );
+        assert_eq!(
+            std::process::Command::new("systemctl")
+                .args(["--user", "show", &unit, "-p", "NRestarts", "--value"])
+                .output()?
+                .stdout
+                .as_slice(),
+            b"0\n"
+        );
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+
+        let stop = std::process::Command::new("systemctl")
+            .args(["--user", "stop", &unit])
+            .status()?;
+        anyhow::ensure!(stop.success(), "supervisor systemd stop failed");
+        let _ = launcher_child.wait();
+        running.store(false, Ordering::Release);
+        server.join().expect("systemd broker server panicked")?;
         Ok(())
     }
 

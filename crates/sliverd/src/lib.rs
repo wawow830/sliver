@@ -21,6 +21,14 @@ mod system_log;
 
 use anyhow::{bail, Context, Result};
 
+#[cfg(test)]
+pub(crate) fn lock_systemd_tests() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 pub(crate) const DISPLAY_WIDTH: usize = 2008;
 pub(crate) const DISPLAY_HEIGHT: usize = 60;
 pub(crate) const DISPLAY_WIDTH_F64: f64 = DISPLAY_WIDTH as f64;

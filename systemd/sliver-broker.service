@@ -17,6 +17,7 @@ Environment=SLIVER_BROKER_SOCKET=/run/sliver/broker.sock
 ExecStart=/usr/libexec/sliver/sliver-broker
 Restart=on-failure
 RestartSec=1s
+TimeoutStopSec=5s
 
 [Install]
 WantedBy=multi-user.target

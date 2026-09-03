@@ -2124,6 +2124,7 @@ mod tests {
 
     #[test]
     fn systemd_worker_uses_the_declared_resource_and_device_policy() -> Result<()> {
+        let _systemd_tests = crate::lock_systemd_tests();
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
             .status();
@@ -2387,6 +2388,7 @@ mod tests {
 
     #[test]
     fn a_systemd_staging_error_kills_descendants_and_reaps_the_launcher() -> Result<()> {
+        let _systemd_tests = crate::lock_systemd_tests();
         let directory = tempfile::tempdir()?;
         let descendant_marker = directory.path().join("descendant-pids");
         let launcher_marker = directory.path().join("launcher-pid");
@@ -2531,6 +2533,7 @@ mod tests {
 
     #[test]
     fn a_systemd_hung_render_kills_descendants_and_releases_the_worker_cgroup() -> Result<()> {
+        let _systemd_tests = crate::lock_systemd_tests();
         let available = Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
             .status();

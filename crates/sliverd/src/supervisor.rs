@@ -2257,6 +2257,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 }
             }
         }
+        if !self.hardware.is_available() {
+            // The broker owns the device. If it disappeared first, its
+            // release path has already run or systemd is killing it now.
+            // A stale supervisor must not turn that expected disconnect into
+            // a restart loop.
+            hardware_error = None;
+        }
         let worker_result = stop_result.and(synthetic_result);
         match (worker_result, hardware_error) {
             (Err(error), Some(hardware_error)) => {
@@ -6956,6 +6963,7 @@ mod tests {
 
     #[test]
     fn embedded_default_stays_healthy_through_systemd_worker_polling() -> Result<()> {
+        let _systemd_tests = crate::lock_systemd_tests();
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
             .status();
@@ -8020,6 +8028,157 @@ mod tests {
             saved.as_os_str().as_encoded_bytes()
         );
         second.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_hung_source_is_attempted_once_and_keeps_recovery_ownership() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let source = directory.path().join("hung.lua");
+        let attempts = directory.path().join("attempts");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local attempts = assert(io.open({attempts:?}, "a"))
+                attempts:write("loaded\n")
+                attempts:close()
+                require("sliver.v1")
+                return {{
+                    api_version = 1,
+                    render = function()
+                        while true do end
+                    end,
+                }}
+                "#,
+                attempts = attempts.to_string_lossy(),
+            ),
+        )?;
+        PreparedPathState::prepare(&state_file, &source)?.commit()?;
+        let (logind, _) = active_local_logind("persisted-hung-session");
+        let supervisor = Supervisor::new_with_startup_candidate_process(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            None,
+        )?;
+
+        assert!(!supervisor.has_active_worker());
+        assert!(supervisor.has_recovery());
+        assert_eq!(std::fs::read_to_string(&attempts)?, "loaded\n");
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_hung_source_releases_its_systemd_cgroup_before_recovery() -> Result<()> {
+        let _systemd_tests = crate::lock_systemd_tests();
+        let available = std::process::Command::new("systemd-run")
+            .args(["--user", "--wait", "--quiet", "true"])
+            .status();
+        anyhow::ensure!(
+            available.is_ok_and(|status| status.success()),
+            "systemd user manager is required for this worker lifecycle test"
+        );
+
+        let directory = tempfile::tempdir()?;
+        let attempts = directory.path().join("attempts");
+        let descendant_marker = directory.path().join("descendant");
+        let helper = directory.path().join("descendant.sh");
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\nprintf '%s\n' \"$$\" > {}\ncat /proc/$$/cgroup >> {}\nexec sleep 30\n",
+                descendant_marker.display(),
+                descendant_marker.display(),
+            ),
+        )?;
+        let mut permissions = std::fs::metadata(&helper)?.permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&helper, permissions)?;
+        let source = directory.path().join("hung.lua");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local attempts = assert(io.open({attempts:?}, "a"))
+                attempts:write("loaded\n")
+                attempts:close()
+                local sliver = require("sliver.v1")
+                assert(os.execute({helper:?} .. " >/dev/null 2>&1 &"))
+                return {{
+                    api_version = 1,
+                    render = function()
+                        while true do end
+                    end,
+                }}
+                "#,
+                attempts = attempts.to_string_lossy(),
+                helper = helper.to_string_lossy(),
+            ),
+        )?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        PreparedPathState::prepare(&state_file, &source)?.commit()?;
+        let (logind, _) = active_local_logind("systemd-persisted-hung-session");
+        let supervisor = Supervisor::new_with_startup_candidate_systemd(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            None,
+        )?;
+
+        assert!(!supervisor.has_active_worker());
+        assert!(supervisor.has_recovery());
+        assert_eq!(std::fs::read_to_string(&attempts)?, "loaded\n");
+        let descendant_contents = std::fs::read_to_string(&descendant_marker)?;
+        let mut descendant_lines = descendant_contents.lines();
+        let descendant = descendant_lines.next().context("missing descendant PID")?;
+        let cgroup_line = descendant_lines
+            .find(|line| line.starts_with("0::"))
+            .context("missing descendant cgroup")?;
+        let cgroup = std::path::PathBuf::from("/sys/fs/cgroup").join(
+            cgroup_line
+                .trim_start_matches("0::")
+                .trim_start_matches('/'),
+        );
+        let descendant_proc = std::path::PathBuf::from("/proc").join(descendant);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while descendant_proc.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            !descendant_proc.exists(),
+            "worker child {descendant} survived cleanup"
+        );
+        if cgroup.exists() {
+            assert!(
+                std::fs::read_to_string(cgroup.join("cgroup.procs"))
+                    .map(|processes| processes.trim().is_empty())
+                    .unwrap_or(true),
+                "worker cgroup still contains a process"
+            );
+        }
+        let units = std::process::Command::new("systemctl")
+            .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
+            .output()?;
+        anyhow::ensure!(units.status.success(), "listing user worker units failed");
+        let units = String::from_utf8(units.stdout)?;
+        assert!(
+            !units
+                .lines()
+                .any(|line| line.starts_with("sliver-lua-worker-")),
+            "a transient Lua worker unit survived recovery"
+        );
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
         Ok(())
     }
 
