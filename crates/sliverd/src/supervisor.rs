@@ -2257,7 +2257,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 }
             }
         }
-        if !self.hardware.is_available() {
+        if self.hardware.connection_lost() {
             // The broker owns the device. If it disappeared first, its
             // release path has already run or systemd is killing it now.
             // A stale supervisor must not turn that expected disconnect into

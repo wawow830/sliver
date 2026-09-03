@@ -89,6 +89,7 @@ pub(crate) struct BrokerHardware {
     claimed: bool,
     session_revoked: bool,
     hardware_available: bool,
+    connection_lost: bool,
     missing_capabilities: BTreeSet<HardwareCapability>,
     unavailable_capability: Option<HardwareCapability>,
     revoked_reason: Option<StopReason>,
@@ -105,6 +106,7 @@ impl BrokerHardware {
             claimed: false,
             session_revoked: false,
             hardware_available: true,
+            connection_lost: false,
             missing_capabilities: BTreeSet::new(),
             unavailable_capability: None,
             revoked_reason: None,
@@ -122,6 +124,7 @@ impl BrokerHardware {
             claimed: false,
             session_revoked: false,
             hardware_available: true,
+            connection_lost: false,
             missing_capabilities: BTreeSet::new(),
             unavailable_capability: None,
             revoked_reason: None,
@@ -220,6 +223,7 @@ impl BrokerHardware {
             self.stream = None;
             self.claimed = false;
             self.hardware_available = false;
+            self.connection_lost = true;
         }
         result
     }
@@ -269,6 +273,7 @@ impl TouchBarHardware for BrokerHardware {
         self.input_state = input_state;
         self.claimed = true;
         self.hardware_available = true;
+        self.connection_lost = false;
         self.missing_capabilities.clear();
         self.unavailable_capability = None;
         let _ = backlight;
@@ -295,6 +300,10 @@ impl TouchBarHardware for BrokerHardware {
 
     fn session_revoked(&self) -> bool {
         self.session_revoked
+    }
+
+    fn connection_lost(&self) -> bool {
+        self.connection_lost
     }
 
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {

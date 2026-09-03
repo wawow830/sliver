@@ -492,6 +492,10 @@ pub(crate) trait TouchBarHardware {
     fn session_revoked(&self) -> bool {
         false
     }
+    /// True when the owner connection disappeared before local teardown.
+    fn connection_lost(&self) -> bool {
+        false
+    }
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>>;
     fn input_state(&self) -> InputState;
     fn present(&mut self, frame: &LogicalFrame) -> Result<()>;
