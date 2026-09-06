@@ -15,8 +15,11 @@ sudo loginctl enable-linger sliver
 ```
 
 Installation does not enable either unit. Reload udev rules after an install or
-upgrade, log out and back in after changing group membership, then perform the
-takeover explicitly:
+upgrade. After changing group membership, log out and back in. If your user
+manager has linger enabled, save your work and reboot instead. A lingering
+manager survives logout with its old groups and can skip the supervisor's
+`ConditionGroup` check even when the new login has the right groups. Then
+perform the takeover explicitly:
 
 ```sh
 sudo udevadm control --reload-rules
@@ -70,8 +73,11 @@ service restart, suspend, and rollback.
 scripts/verify-release.sh --build-log "$HOME/sliver-rpmbuild.log" "$rpm"
 ```
 
-The account and udev stage stops before logout. After logging out and back in
-locally, continue from a new terminal using the printed command:
+The account and udev stage stops before logout. Reboot instead if your user
+manager lingers. After the new local login, continue from a fresh terminal using
+the printed command. The verifier checks both its own kernel group credentials
+and those of the running user manager before takeover. If either is stale, it
+pauses with setup installed so you can reboot and resume the same transaction:
 
 ```sh
 scripts/verify-release.sh --resume "$HOME/sliver-release-verification/YYYYMMDD-HHMMSS"

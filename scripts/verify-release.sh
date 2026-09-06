@@ -9,6 +9,8 @@ source "$ROOT/scripts/verify-release-ownership.sh"
 source "$ROOT/scripts/verify-release-auth.sh"
 # shellcheck source=verify-release-evidence.sh
 source "$ROOT/scripts/verify-release-evidence.sh"
+# shellcheck source=verify-release-session.sh
+source "$ROOT/scripts/verify-release-session.sh"
 STATE_VERSION=4
 TOTAL_STAGES=12
 
@@ -1300,7 +1302,7 @@ account_stage() {
     CURRENT_STAGE=4
     save_state
     printf '\n'
-    say "Setup is complete. Do not continue in this session. Log out locally, log back in, open a terminal, and run:"
+    say "Setup is complete. Do not continue in this session. Save your work and reboot if your user manager lingers; otherwise log out and back in locally. Open a fresh terminal and run:"
     say "$0 --resume $VERIFY_DIR"
     exit 0
 }
@@ -1308,7 +1310,7 @@ account_stage() {
 fresh_session_stage() {
     stage 5 "Verify the fresh local graphical session"
     refuse_if_blocked
-    local current_session=${XDG_SESSION_ID:-} type remote seat active groups manager_state
+    local current_session=${XDG_SESSION_ID:-} type remote seat active manager_state
     [[ -n "$current_session" && "$current_session" != "$INITIAL_SESSION_ID" ]] && pass_check fresh_graphical_session "new session $current_session replaced $INITIAL_SESSION_ID" ||
         fail_check fresh_graphical_session "resume from a new local login session"
     type=$(loginctl show-session "$current_session" -p Type --value 2>/dev/null || true)
@@ -1317,9 +1319,15 @@ fresh_session_stage() {
     active=$(loginctl show-session "$current_session" -p Active --value 2>/dev/null || true)
     [[ "$type" == wayland || "$type" == x11 ]] && [[ "$remote" == no ]] && [[ "$seat" == seat0 ]] && [[ "$active" == yes ]] ||
         fail_check fresh_graphical_session "new session is not an active local graphical seat0 session"
-    groups=$(id -nG "$INITIAL_USER")
-    grep -qw sliver-supervisors <<< "$groups" && pass_check fresh_group_membership "new process sees sliver-supervisors membership" ||
-        fail_check fresh_group_membership "new session did not acquire sliver-supervisors membership"
+    if verify_release_session_groups_ready; then
+        pass_check fresh_group_membership "verifier and running user manager both have sliver-supervisors in their kernel credentials"
+    else
+        warn "Setup is paused before takeover: the verifier or user manager has stale group credentials."
+        say "Save your work, reboot, log in locally, then resume this same run:"
+        say "$0 --resume $VERIFY_DIR"
+        say "No group check passed and no takeover occurred. The installed package and setup remain pending."
+        exit 0
+    fi
     manager_state=$(systemctl --user is-system-running 2>/dev/null || true)
     [[ "$manager_state" == running || "$manager_state" == degraded || "$manager_state" == starting ]] &&
         pass_check fresh_user_manager "user manager is $manager_state" || fail_check fresh_user_manager "user manager is not available"

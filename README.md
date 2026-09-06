@@ -165,8 +165,9 @@ scripts/verify-release.sh --build-log "$HOME/sliver-rpmbuild.log" \
   /path/to/sliver-0.1.0-1.aarch64.rpm
 ```
 
-The verifier is a resumable wizard. Account setup ends before logout, and the
-next local graphical session continues with:
+The verifier is a resumable wizard. Account setup ends before logout. If your
+user manager has linger enabled, save your work and reboot instead, so it
+acquires the new groups. The next local graphical session continues with:
 
 ```sh
 scripts/verify-release.sh --resume "$HOME/sliver-release-verification/YYYYMMDD-HHMMSS"
