@@ -97,6 +97,28 @@ grep -F 'frame-trace' "$script" >/dev/null || fail 'frame trace artifact is not 
 grep -F 'input-trace' "$script" >/dev/null || fail 'input trace artifact is not required'
 grep -F 'latency-trace' "$script" >/dev/null || fail 'latency trace artifact is not required'
 grep -F 'measurement-notes' "$script" >/dev/null || fail 'measurement notes artifact is not required'
+grep -F 'STATE_VERSION=4' "$script" >/dev/null || fail 'old verifier state schema remains resumable'
+if grep -F 'STATE_VERSION=3' "$script" >/dev/null; then
+    fail 'verifier still accepts the old state schema'
+fi
+grep -F 'TSV schema: frame-trace = presentation_s<TAB>frame_index' "$script" >/dev/null ||
+    fail 'frame trace TSV schema is not documented in the wizard'
+grep -F 'TSV schema: input-trace = input_id<TAB>input_s' "$script" >/dev/null ||
+    fail 'input trace TSV schema is not documented in the wizard'
+grep -F 'TSV schema: latency-trace = input_id<TAB>presented_s<TAB>latency_ms' "$script" >/dev/null ||
+    fail 'latency trace TSV schema is not documented in the wizard'
+grep -F 'Metadata: schema=sliver-performance-v1, workload=video-2008x60.lua, source=real-panel, host=Mac14,7, and a non-empty method= line.' "$script" >/dev/null ||
+    fail 'performance metadata guidance is missing'
+grep -F 'All trace timestamps use one CLOCK_MONOTONIC clock, the same observation interval, and six decimal places.' "$script" >/dev/null ||
+    fail 'trace clock and precision guidance is missing'
+grep -F 'frame_index identifies an actual broker-presented frame; presented_s must copy a timestamp from frame-trace.' "$script" >/dev/null ||
+    fail 'actual presented-frame linkage guidance is missing'
+grep -F 'Derive interval_s from last minus first frame time, fps from (frame count - 1) / interval, misses from frame-index gaps, input_to_frame_ms from mean latency_ms, and latency_growth_ms from last minus first latency.' "$script" >/dev/null ||
+    fail 'metric derivation guidance is missing'
+grep -F 'Capture these rows from the real Mac14,7 panel while video-2008x60.lua is running with an existing host-level measurement method; do not invent rows or reuse fake-test output.' "$script" >/dev/null ||
+    fail 'physical trace capture guidance is missing'
+grep -F 'The verifier does not generate physical traces; leave the check incomplete if the host cannot capture them.' "$script" >/dev/null ||
+    fail 'non-fabrication guidance is missing'
 if grep -F 'input_delay >= 0' "$script" >/dev/null; then
     fail 'performance evidence invents a lower latency threshold'
 fi

@@ -9,7 +9,7 @@ source "$ROOT/scripts/verify-release-ownership.sh"
 source "$ROOT/scripts/verify-release-auth.sh"
 # shellcheck source=verify-release-evidence.sh
 source "$ROOT/scripts/verify-release-evidence.sh"
-STATE_VERSION=3
+STATE_VERSION=4
 TOTAL_STAGES=12
 
 BOLD=""; DIM=""; RESET=""; BLUE=""; GREEN=""; YELLOW=""; RED=""
@@ -1648,6 +1648,15 @@ suspend_performance_stage() {
     say "The fake workload is software-only and does not satisfy physical FPS evidence."
     say "The reproducible real-panel workload is $CONFIG_DIR/video-2008x60.lua."
     say "It redraws a complete native 2008x60 RGBA frame every 1/60 second."
+    say "Metadata: schema=sliver-performance-v1, workload=video-2008x60.lua, source=real-panel, host=Mac14,7, and a non-empty method= line."
+    say "TSV schema: frame-trace = presentation_s<TAB>frame_index"
+    say "TSV schema: input-trace = input_id<TAB>input_s"
+    say "TSV schema: latency-trace = input_id<TAB>presented_s<TAB>latency_ms"
+    say "All trace timestamps use one CLOCK_MONOTONIC clock, the same observation interval, and six decimal places."
+    say "frame_index identifies an actual broker-presented frame; presented_s must copy a timestamp from frame-trace."
+    say "Derive interval_s from last minus first frame time, fps from (frame count - 1) / interval, misses from frame-index gaps, input_to_frame_ms from mean latency_ms, and latency_growth_ms from last minus first latency."
+    say "Capture these rows from the real Mac14,7 panel while video-2008x60.lua is running with an existing host-level measurement method; do not invent rows or reuse fake-test output."
+    say "The verifier does not generate physical traces; leave the check incomplete if the host cannot capture them."
     manual_check real_video_workload \
         "Did video-2008x60.lua run on the real panel for the agreed observation interval?" \
         "Apply sliver $CONFIG_DIR/video-2008x60.lua and keep the named workload and panel visible while measuring."
