@@ -143,30 +143,42 @@ for artifact in frame-trace input-trace latency-trace measurement-notes; do
     printf 'artifact\n' > "$performance_tmp/$artifact"
 done
 cat > "$performance_tmp/measurement-notes" <<'EOF'
+schema=sliver-performance-v1
 workload=video-2008x60.lua
 source=real-panel
 host=Mac14,7
 method=operator-captured raw traces
 EOF
-verify_release_performance_artifacts "$performance_tmp" ||
+if verify_release_performance_artifacts "$performance_tmp" 2 1 0 18 0; then
+    fail 'placeholder performance artifacts were accepted'
+fi
+printf 'presentation_s\tframe_index\n0.000000\t0\n1.000000\t1\n2.000000\t2\n' > "$performance_tmp/frame-trace"
+printf 'input_id\tinput_s\n1\t0.250000\n2\t1.250000\n' > "$performance_tmp/input-trace"
+printf 'input_id\tpresented_s\tlatency_ms\n1\t0.268000\t18.000000\n2\t1.268000\t18.000000\n' > "$performance_tmp/latency-trace"
+verify_release_performance_artifacts "$performance_tmp" 2 1 0 18 0 ||
     fail 'complete physical performance artifacts were rejected'
+if verify_release_performance_artifacts "$performance_tmp" 3 1 0 18 0; then
+    fail 'inconsistent entered interval was accepted'
+fi
 cat > "$performance_tmp/measurement-notes" <<'EOF'
+schema=sliver-performance-v1
 workload=video-2008x60.lua
 source=fake-hardware
 host=Mac14,7
 method=operator-captured raw traces
 EOF
-if verify_release_performance_artifacts "$performance_tmp"; then
+if verify_release_performance_artifacts "$performance_tmp" 2 1 0 18 0; then
     fail 'fake-hardware performance artifacts were accepted as physical evidence'
 fi
 cat > "$performance_tmp/measurement-notes" <<'EOF'
+schema=sliver-performance-v1
 workload=video-2008x60.lua
 source=real-panel
 host=Mac14,7
 method=operator-captured raw traces
 EOF
 rm "$performance_tmp/latency-trace"
-if verify_release_performance_artifacts "$performance_tmp"; then
+if verify_release_performance_artifacts "$performance_tmp" 2 1 0 18 0; then
     fail 'incomplete physical performance artifacts were accepted'
 fi
 rm -rf "$performance_tmp"

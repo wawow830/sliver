@@ -661,12 +661,13 @@ record_modifier_check() {
     pass_check lifecycle_modifier_uinput "physical modifier evidence: $value"
 }
 record_metric() {
-    local id=$1 prompt_text=$2 value="" interval fps misses input_delay growth
+    local id=$1 prompt_text=$2 artifact_dir=${3:-} value=""
+    local interval fps misses input_delay growth
     local -a fields=()
     refuse_if_blocked
     printf '  %s ' "$prompt_text"
     read -r value || true
-    if [[ ! "$value" =~ ^interval_s=[0-9]+([.][0-9]+)?\ fps=[0-9]+([.][0-9]+)?\ misses=[0-9]+\ input_to_frame_ms=[0-9]+([.][0-9]+)?\ latency_growth_ms=[0-9]+([.][0-9]+)?$ ]]; then
+    if [[ ! "$value" =~ ^interval_s=[0-9]+([.][0-9]+)?\ fps=[0-9]+([.][0-9]+)?\ misses=[0-9]+\ input_to_frame_ms=[0-9]+([.][0-9]+)?\ latency_growth_ms=-?[0-9]+([.][0-9]+)?$ ]]; then
         fail_check "$id" "measurement must use the named numeric fields"
         exit 1
     fi
@@ -678,6 +679,12 @@ record_metric() {
     growth=${fields[4]#latency_growth_ms=}
     # input_to_frame_ms is recorded for auditability, not compared with an
     # invented latency bound. The no-growth condition is the requirement.
+    if [[ -n "$artifact_dir" ]] && ! verify_release_performance_artifacts \
+        "$artifact_dir" "$interval" "$fps" "$misses" "$input_delay" "$growth"; then
+        fail_check performance_artifacts \
+            "performance traces are missing, malformed, or inconsistent with the entered metrics"
+        exit 1
+    fi
     if ! awk -v interval="$interval" -v fps="$fps" -v misses="$misses" \
         -v growth="$growth" \
         'BEGIN { exit !(interval >= 30 && fps >= 59.5 && misses == 0 && growth <= 0) }'; then
@@ -1660,15 +1667,9 @@ suspend_performance_stage() {
     manual_check performance_artifacts \
         "Are raw real-panel frame, input, and latency traces plus measurement notes present in $performance_dir?" \
         "Review frame-trace, input-trace, latency-trace, and measurement-notes there. The fake workload is software-only and does not satisfy physical FPS evidence."
-    if ! verify_release_performance_artifacts "$performance_dir"; then
-        fail_check performance_artifacts \
-            "physical performance evidence must contain four non-empty artifacts with real-panel provenance"
-        exit 1
-    fi
-    pass_check performance_artifacts \
-        "raw real-panel traces and provenance notes are present in $performance_dir"
     record_metric performance_measurement \
-        "Enter metrics as interval_s=30 fps=59.8 misses=0 input_to_frame_ms=18 latency_growth_ms=0 (requires >=30s, >=59.5 FPS, zero misses, and no-growing latency; input-to-frame delay is reported, not thresholded):"
+        "Enter metrics as interval_s=30 fps=59.8 misses=0 input_to_frame_ms=18 latency_growth_ms=0 (requires >=30s, >=59.5 FPS, zero misses, and no-growing latency; input-to-frame delay is reported, not thresholded):" \
+        "$performance_dir"
     CURRENT_STAGE=11
     save_state
 }
