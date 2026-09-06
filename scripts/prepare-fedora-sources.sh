@@ -27,6 +27,7 @@ git -C "$root" archive \
     --output="$main_archive" \
     "$commit"
 
+cd "$root"
 cargo vendor --locked "$vendor_dir" > "$tmp/cargo-vendor.log"
 tar --sort=name --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner \
     --directory="$tmp" --create --file=- vendor | gzip -n > "$vendor_archive"

@@ -71,17 +71,10 @@ for crate in \
     'mlua-sys v0.11.0'; do
     grep -Fx "$crate" cargo-vendor.txt >/dev/null
 done
-# The production service tests exercise the transient user-service boundary.
-# Fedora mock builds without a user manager may opt out explicitly, but an
-# installed Fedora Asahi validation must run the complete suite.
-if systemd-run --user --wait --quiet true; then
-    SLIVER_LUA_WORKER=%{buildroot}%{_libexecdir}/sliver/sliver-lua-worker \
-        %cargo_test -- --package sliverd --lib -- --test-threads=1
-else
-    echo 'Skipping user-manager integration tests: no systemd user manager' >&2
-    SLIVER_LUA_WORKER=%{buildroot}%{_libexecdir}/sliver/sliver-lua-worker \
-        %cargo_test -- --package sliverd --lib -- --skip systemd_worker_uses_the_declared_resource_and_device_policy --skip embedded_default_stays_healthy_through_systemd_worker_polling --skip production_peer_verification_accepts_a_real_supervisor_unit --test-threads=1
-fi
+# The release package requires the complete transient user-service suite.
+systemd-run --user --wait --quiet true
+SLIVER_LUA_WORKER=%{buildroot}%{_libexecdir}/sliver/sliver-lua-worker \
+    %cargo_test -- --package sliverd --lib -- --test-threads=1
 %cargo_test -- --package sliverd --test sliver_cli
 printf 'sliver package check: packaged worker and pure-Lua/C-module tests passed\n'
 packaging/fedora/check-install.sh %{buildroot}

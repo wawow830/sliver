@@ -29,6 +29,12 @@ grep -Fx '/usr/share/licenses/sliver/cargo-vendor.txt' "$manifest" >/dev/null ||
 if grep -F '%cargo_generate_buildrequires' "$spec" >/dev/null; then
     fail 'spec still generates unavailable Fedora crate BuildRequires'
 fi
+grep -F 'systemd-run --user --wait --quiet true' "$spec" >/dev/null ||
+    fail 'package check does not require a user manager'
+if grep -F 'Skipping user-manager integration tests' "$spec" >/dev/null ||
+   grep -F -- '--skip ' "$spec" >/dev/null; then
+    fail 'package check permits incomplete user-manager coverage'
+fi
 if grep -F -- '--skip-unavailable' "$spec" "$prepare" >/dev/null; then
     fail 'packaging bypasses missing dependencies with --skip-unavailable'
 fi
