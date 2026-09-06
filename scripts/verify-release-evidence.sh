@@ -59,3 +59,15 @@ verify_release_modifier_evidence() {
         fi
     done
 }
+
+verify_release_performance_artifacts() {
+    local directory=$1 artifact
+    [[ -d "$directory" ]] || return 1
+    for artifact in frame-trace input-trace latency-trace measurement-notes; do
+        [[ -f "$directory/$artifact" && ! -L "$directory/$artifact" && -s "$directory/$artifact" ]] || return 1
+    done
+    grep -Fx 'workload=video-2008x60.lua' "$directory/measurement-notes" >/dev/null || return 1
+    grep -Fx 'source=real-panel' "$directory/measurement-notes" >/dev/null || return 1
+    grep -Fx 'host=Mac14,7' "$directory/measurement-notes" >/dev/null || return 1
+    grep -E '^method=.+$' "$directory/measurement-notes" >/dev/null || return 1
+}

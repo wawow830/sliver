@@ -78,10 +78,31 @@ grep -F 'tested=left_ctrl,... hardware_na=right_ctrl,...' "$script" >/dev/null |
     fail 'modifier prompt does not require named tested and hardware-N/A sides'
 grep -F 'physical modifier evidence:' "$script" >/dev/null ||
     fail 'modifier evidence is not recorded as structured detail'
+grep -F 'Touch Bar on seat-touchbar and the keyboard on the default local seat' "$script" >/dev/null ||
+    fail 'input guidance does not distinguish seat-touchbar from the default keyboard seat'
+if grep -F 'the Touch Bar and keyboard on seat0 with the required capabilities' "$script" >/dev/null; then
+    fail 'input guidance still assigns the Touch Bar to seat0'
+fi
 if grep -F 'three-second Fn hold' "$script" >/dev/null; then
     fail 'verifier still describes a three-second Fn recovery hold'
 fi
 grep -F 'video-2008x60.lua' "$script" >/dev/null || fail 'video workload is not named'
+grep -F 'fake workload is software-only and does not satisfy physical FPS evidence' "$script" >/dev/null ||
+    fail 'verifier does not distinguish fake video from physical FPS evidence'
+grep -F 'performance_artifacts' "$script" >/dev/null ||
+    fail 'verifier does not require an explicit performance artifact check'
+grep -F 'verify_release_performance_artifacts' "$script" >/dev/null ||
+    fail 'performance artifact validation is missing'
+grep -F 'frame-trace' "$script" >/dev/null || fail 'frame trace artifact is not required'
+grep -F 'input-trace' "$script" >/dev/null || fail 'input trace artifact is not required'
+grep -F 'latency-trace' "$script" >/dev/null || fail 'latency trace artifact is not required'
+grep -F 'measurement-notes' "$script" >/dev/null || fail 'measurement notes artifact is not required'
+if grep -F 'input_delay >= 0' "$script" >/dev/null; then
+    fail 'performance evidence invents a lower latency threshold'
+fi
+if grep -F 'numeric bounded latency' "$script" >/dev/null; then
+    fail 'performance prompt claims an unsupported numeric latency bound'
+fi
 grep -F 'assert_restart_journal' "$script" >/dev/null || fail 'restart journal assertions are missing'
 grep -F 'restart_default_worker' "$script" >/dev/null || fail 'restart does not require a healthy default worker'
 grep -F 'selected_path_restart' "$script" >/dev/null || fail 'restart does not assert selected-path retention'
@@ -116,6 +137,39 @@ grep -F 'ROLLBACK_ATTEMPTED' "$script" >/dev/null ||
 source "$root/scripts/verify-release-auth.sh"
 # shellcheck disable=SC1091
 source "$root/scripts/verify-release-evidence.sh"
+performance_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-performance-artifacts.XXXXXX")
+trap 'rm -rf -- "$performance_tmp"' EXIT
+for artifact in frame-trace input-trace latency-trace measurement-notes; do
+    printf 'artifact\n' > "$performance_tmp/$artifact"
+done
+cat > "$performance_tmp/measurement-notes" <<'EOF'
+workload=video-2008x60.lua
+source=real-panel
+host=Mac14,7
+method=operator-captured raw traces
+EOF
+verify_release_performance_artifacts "$performance_tmp" ||
+    fail 'complete physical performance artifacts were rejected'
+cat > "$performance_tmp/measurement-notes" <<'EOF'
+workload=video-2008x60.lua
+source=fake-hardware
+host=Mac14,7
+method=operator-captured raw traces
+EOF
+if verify_release_performance_artifacts "$performance_tmp"; then
+    fail 'fake-hardware performance artifacts were accepted as physical evidence'
+fi
+cat > "$performance_tmp/measurement-notes" <<'EOF'
+workload=video-2008x60.lua
+source=real-panel
+host=Mac14,7
+method=operator-captured raw traces
+EOF
+rm "$performance_tmp/latency-trace"
+if verify_release_performance_artifacts "$performance_tmp"; then
+    fail 'incomplete physical performance artifacts were accepted'
+fi
+rm -rf "$performance_tmp"
 verify_release_modifier_evidence \
     'tested=left_ctrl,right_alt,left_shift,right_super hardware_na=right_ctrl,left_alt,right_shift,left_super' ||
     fail 'complete modifier evidence was rejected'

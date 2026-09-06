@@ -676,13 +676,15 @@ record_metric() {
     misses=${fields[2]#misses=}
     input_delay=${fields[3]#input_to_frame_ms=}
     growth=${fields[4]#latency_growth_ms=}
+    # input_to_frame_ms is recorded for auditability, not compared with an
+    # invented latency bound. The no-growth condition is the requirement.
     if ! awk -v interval="$interval" -v fps="$fps" -v misses="$misses" \
-        -v input_delay="$input_delay" -v growth="$growth" \
-        'BEGIN { exit !(interval >= 30 && fps >= 59.5 && misses == 0 && input_delay >= 0 && growth == 0) }'; then
-        fail_check "$id" "measurement did not meet the native 60 FPS and bounded-latency threshold"
+        -v growth="$growth" \
+        'BEGIN { exit !(interval >= 30 && fps >= 59.5 && misses == 0 && growth <= 0) }'; then
+        fail_check "$id" "measurement did not meet the native 60 FPS, zero-miss, and no-growing-latency requirements"
         exit 1
     fi
-    pass_check "$id" "operator measurement: $value"
+    pass_check "$id" "operator measurement: $value (input-to-frame delay ${input_delay} ms is reported, not thresholded)"
 }
 
 # Rollback helpers intentionally do not call refuse_if_blocked. They are the
@@ -1126,8 +1128,8 @@ preflight_stage() {
         "Does drm-before.txt prove the connected native 60 by 2008 DSI panel and its rotation?" \
         "Review $VERIFY_DIR/drm-before.txt. Confirm the exact connector, native mode, and rotation from its output."
     manual_check input_identity \
-        "Do the saved udev and capability files identify the Touch Bar and keyboard on seat0 with the required capabilities?" \
-        "Review $VERIFY_DIR/input-before.txt and input-capabilities-before.txt. Do not infer identity from a transport name."
+        "Do the saved udev and capability files identify the Touch Bar on seat-touchbar and the keyboard on the default local seat (seat0 when explicitly tagged) with the required capabilities?" \
+        "Review $VERIFY_DIR/input-before.txt and $VERIFY_DIR/input-capabilities-before.txt. The Touch Bar must use ID_SEAT=seat-touchbar; the keyboard uses the default local seat and may omit ID_SEAT. Do not infer identity from a transport name."
     refuse_if_blocked
     CURRENT_STAGE=1
     save_state
@@ -1627,6 +1629,7 @@ suspend_performance_stage() {
     stage 11 "Suspend, resume, and named native workload"
     refuse_if_blocked
     local worker=${SLIVER_LUA_WORKER:-"$ROOT/target/release/sliver-lua-worker"}
+    local performance_dir="$VERIFY_DIR/performance"
     if [[ -x "$worker" ]]; then
         logged_step fake_video_workload "$VERIFY_DIR/fake-video-workload.txt" \
             env SLIVER_LUA_WORKER="$worker" cargo test --release --package sliverd --lib \
@@ -1635,6 +1638,7 @@ suspend_performance_stage() {
         fail_check fake_video_workload "release worker is missing"
         exit 1
     fi
+    say "The fake workload is software-only and does not satisfy physical FPS evidence."
     say "The reproducible real-panel workload is $CONFIG_DIR/video-2008x60.lua."
     say "It redraws a complete native 2008x60 RGBA frame every 1/60 second."
     manual_check real_video_workload \
@@ -1651,8 +1655,20 @@ suspend_performance_stage() {
     manual_check backlight_restore \
         "Did setting and restoring the Touch Bar backlight survive worker restart and suspend?" \
         "Record the before, changed, and restored normalized levels in the run log."
+    mkdir -p "$performance_dir"
+    chmod 700 "$performance_dir"
+    manual_check performance_artifacts \
+        "Are raw real-panel frame, input, and latency traces plus measurement notes present in $performance_dir?" \
+        "Review frame-trace, input-trace, latency-trace, and measurement-notes there. The fake workload is software-only and does not satisfy physical FPS evidence."
+    if ! verify_release_performance_artifacts "$performance_dir"; then
+        fail_check performance_artifacts \
+            "physical performance evidence must contain four non-empty artifacts with real-panel provenance"
+        exit 1
+    fi
+    pass_check performance_artifacts \
+        "raw real-panel traces and provenance notes are present in $performance_dir"
     record_metric performance_measurement \
-        "Enter metrics as interval_s=30 fps=59.8 misses=0 input_to_frame_ms=18 latency_growth_ms=0 (requires >=30s, >=59.5 FPS, zero misses, and numeric bounded latency):"
+        "Enter metrics as interval_s=30 fps=59.8 misses=0 input_to_frame_ms=18 latency_growth_ms=0 (requires >=30s, >=59.5 FPS, zero misses, and no-growing latency; input-to-frame delay is reported, not thresholded):"
     CURRENT_STAGE=11
     save_state
 }
