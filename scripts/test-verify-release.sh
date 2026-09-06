@@ -85,6 +85,8 @@ grep -F 'video-2008x60.lua' "$script" >/dev/null || fail 'video workload is not 
 grep -F 'assert_restart_journal' "$script" >/dev/null || fail 'restart journal assertions are missing'
 grep -F 'restart_default_worker' "$script" >/dev/null || fail 'restart does not require a healthy default worker'
 grep -F 'selected_path_restart' "$script" >/dev/null || fail 'restart does not assert selected-path retention'
+grep -F 'lifecycle_watchdog_source_state' "$script" >/dev/null || fail 'watchdog source failure state is not verified'
+grep -F 'rollback_failure_state_verified' "$script" >/dev/null || fail 'rollback does not restore watchdog source state'
 grep -F 'SIGABRT' "$script" >/dev/null || fail 'restart journal checks do not reject SIGABRT'
 grep -F 'canvas:text(20, 24, "release verifier", 24, "#ffffff")' "$script" >/dev/null ||
     fail 'valid fixture does not keep top-origin text inside the frame'

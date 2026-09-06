@@ -145,6 +145,10 @@ SELECTED_PATH=""
 SELECTED_PATH_KIND="missing"
 SELECTED_PATH_MODE=""
 SELECTED_PATH_LINK=""
+FAILURE_STATE_FILE=""
+FAILURE_STATE_KIND="missing"
+FAILURE_STATE_MODE=""
+FAILURE_STATE_LINK=""
 PANEL_DRM_NODE=""
 PANEL_DRM_CONNECTOR=""
 PANEL_DRM_SYSFS_DEVICE=""
@@ -194,6 +198,9 @@ else
         exit 1
     }
     BUILD_LOG="${BUILD_LOG:-}"
+    if [[ -z "$FAILURE_STATE_FILE" && -n "$STATE_HOME" ]]; then
+        FAILURE_STATE_FILE="$STATE_HOME/sliver/config-path.failure"
+    fi
     chmod 700 "$VERIFY_DIR" 2>/dev/null || true
     chmod 600 "$STATE_FILE" "$EVIDENCE_FILE" 2>/dev/null || true
 fi
@@ -274,6 +281,10 @@ save_state() {
         printf 'SELECTED_PATH_KIND=%q\n' "$SELECTED_PATH_KIND"
         printf 'SELECTED_PATH_MODE=%q\n' "$SELECTED_PATH_MODE"
         printf 'SELECTED_PATH_LINK=%q\n' "$SELECTED_PATH_LINK"
+        printf 'FAILURE_STATE_FILE=%q\n' "$FAILURE_STATE_FILE"
+        printf 'FAILURE_STATE_KIND=%q\n' "$FAILURE_STATE_KIND"
+        printf 'FAILURE_STATE_MODE=%q\n' "$FAILURE_STATE_MODE"
+        printf 'FAILURE_STATE_LINK=%q\n' "$FAILURE_STATE_LINK"
         printf 'PANEL_DRM_NODE=%q\n' "$PANEL_DRM_NODE"
         printf 'PANEL_DRM_CONNECTOR=%q\n' "$PANEL_DRM_CONNECTOR"
         printf 'PANEL_DRM_SYSFS_DEVICE=%q\n' "$PANEL_DRM_SYSFS_DEVICE"
@@ -429,6 +440,24 @@ snapshot_selected_path() {
         SELECTED_PATH_KIND=missing
     fi
     pass_check selected_path_snapshot "captured $SELECTED_PATH_KIND state without following a final symlink"
+    FAILURE_STATE_FILE="$STATE_HOME/sliver/config-path.failure"
+    local failure_snapshot="$SNAPSHOT_DIR/config-path.failure"
+    if [[ -L "$FAILURE_STATE_FILE" ]]; then
+        FAILURE_STATE_KIND=symlink
+        FAILURE_STATE_LINK=$(readlink "$FAILURE_STATE_FILE")
+        FAILURE_STATE_MODE=""
+    elif [[ -f "$FAILURE_STATE_FILE" ]]; then
+        FAILURE_STATE_KIND=file
+        FAILURE_STATE_MODE=$(stat -c '%a' "$FAILURE_STATE_FILE")
+        cp --preserve=mode,timestamps "$FAILURE_STATE_FILE" "$failure_snapshot"
+    elif [[ -e "$FAILURE_STATE_FILE" ]]; then
+        FAILURE_STATE_KIND=other
+        fail_check failure_state_shape "config-path.failure exists but is neither a regular file nor symlink"
+        return
+    else
+        FAILURE_STATE_KIND=missing
+    fi
+    pass_check failure_state_snapshot "captured $FAILURE_STATE_KIND saved-worker failure state"
 }
 restore_selected_path() {
     local parent tmp="$SNAPSHOT_DIR/config-path.restore"
@@ -461,6 +490,40 @@ selected_path_matches_snapshot() {
         symlink) [[ -L "$SELECTED_PATH" && "$(readlink "$SELECTED_PATH")" == "$SELECTED_PATH_LINK" ]] ;;
         file) [[ -f "$SELECTED_PATH" ]] && cmp -s "$SELECTED_PATH" "$SNAPSHOT_DIR/config-path" &&
             [[ "$(stat -c '%a' "$SELECTED_PATH")" == "$SELECTED_PATH_MODE" ]] ;;
+        *) return 1 ;;
+    esac
+}
+restore_failure_state() {
+    local parent tmp="$SNAPSHOT_DIR/config-path.failure.restore"
+    [[ -n "$FAILURE_STATE_FILE" ]] || return 0
+    parent=$(dirname "$FAILURE_STATE_FILE")
+    mkdir -p "$parent"
+    rm -f "$tmp"
+    case "$FAILURE_STATE_KIND" in
+        missing)
+            rm -f "$FAILURE_STATE_FILE"
+            ;;
+        symlink)
+            ln -s "$FAILURE_STATE_LINK" "$tmp"
+            rm -f "$FAILURE_STATE_FILE"
+            mv -f "$tmp" "$FAILURE_STATE_FILE"
+            ;;
+        file)
+            cp --preserve=mode,timestamps "$SNAPSHOT_DIR/config-path.failure" "$tmp"
+            chmod "$FAILURE_STATE_MODE" "$tmp"
+            rm -f "$FAILURE_STATE_FILE"
+            mv -f "$tmp" "$FAILURE_STATE_FILE"
+            ;;
+        *) return 1 ;;
+    esac
+}
+failure_state_matches_snapshot() {
+    [[ -n "$FAILURE_STATE_FILE" ]] || return 0
+    case "$FAILURE_STATE_KIND" in
+        missing) [[ ! -e "$FAILURE_STATE_FILE" && ! -L "$FAILURE_STATE_FILE" ]] ;;
+        symlink) [[ -L "$FAILURE_STATE_FILE" && "$(readlink "$FAILURE_STATE_FILE")" == "$FAILURE_STATE_LINK" ]] ;;
+        file) [[ -f "$FAILURE_STATE_FILE" ]] && cmp -s "$FAILURE_STATE_FILE" "$SNAPSHOT_DIR/config-path.failure" &&
+            [[ "$(stat -c '%a' "$FAILURE_STATE_FILE")" == "$FAILURE_STATE_MODE" ]] ;;
         *) return 1 ;;
     esac
 }
@@ -843,6 +906,13 @@ restore_and_verify() {
         record_check rollback_selected_path_verified pass "selected path was not changed by this run"
     fi
 
+    if restore_failure_state && failure_state_matches_snapshot; then
+        record_check rollback_failure_state_verified pass "saved-worker failure state restored"
+    else
+        record_check rollback_failure_state_verified fail "saved-worker failure state restoration did not match the snapshot"
+        ROLLBACK_FAILED=1
+    fi
+
     if (( ORIGINAL_SLIVER_USER_PRESENT == 0 )); then
         if getent passwd sliver >/dev/null 2>&1 || getent group sliver-supervisors >/dev/null 2>&1 ||
            getent group sliver-drm >/dev/null 2>&1 || getent group sliver-input >/dev/null 2>&1 ||
@@ -898,11 +968,11 @@ REQUIRED_CHECKS=(
     package_not_started_user install_preserves_tiny
     broker_identity account_udev fresh_graphical_session fresh_group_membership
     pre_takeover_owner pre_takeover_drm_owner pre_takeover_drm_identity pre_takeover_sliver_absent takeover_drm_owner takeover_services cli_help cli_version cli_valid_apply
-    cli_invalid_retains cli_default_reset selected_path_default_reset
+    cli_invalid_retains cli_default_reset selected_path_default_reset failure_state_snapshot
     lifecycle_second_session lifecycle_authorization lifecycle_valid_live_apply
     lifecycle_invalid_retention lifecycle_touch_mapping lifecycle_multitouch_cancel
     lifecycle_fn_recovery lifecycle_modifier_uinput lifecycle_logout_handoff
-    lifecycle_watchdog_child_key_cleanup service_restart restart_journals restart_default_worker selected_path_restart dirty_framebuffer
+    lifecycle_watchdog_child_key_cleanup lifecycle_watchdog_source_state service_restart restart_journals restart_default_worker selected_path_restart dirty_framebuffer
     backlight_restore suspend_resume fake_video_workload real_video_workload
     performance_measurement
 )
@@ -1475,6 +1545,13 @@ lifecycle_stage() {
     manual_check lifecycle_watchdog_child_key_cleanup \
         "Did hung.lua hit the two-second Lua callback watchdog, kill child processes, and release every synthetic key?" \
         "Apply $CONFIG_DIR/hung.lua only as the named watchdog fixture. Verify the two-second Lua callback watchdog, then verify no child or held key remains."
+    if [[ -f "$FAILURE_STATE_FILE" ]] &&
+       [[ "$(cat "$FAILURE_STATE_FILE")" == "$CONFIG_DIR/hung.lua" ]]; then
+        pass_check lifecycle_watchdog_source_state "hung.lua failure state recorded without changing selected path"
+    else
+        fail_check lifecycle_watchdog_source_state "hung.lua failure state was not recorded"
+        exit 1
+    fi
     CURRENT_STAGE=9
     save_state
 }
@@ -1520,6 +1597,7 @@ restart_stage() {
     assert_restart_journal restart_journals_broker "$VERIFY_DIR/broker-journal-restart.txt" \
         sliver-broker.service || exit 1
     local worker_units worker_count selected_after
+    sleep 1
     worker_units=$(systemctl --user list-units --type=service --state=active --no-legend --plain 2>/dev/null || true)
     worker_count=$(grep -c '^sliver-lua-worker-' <<< "$worker_units" || true)
     if [[ "$worker_count" == 1 ]]; then

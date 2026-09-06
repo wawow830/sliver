@@ -636,15 +636,56 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Ok(supervisor)
     }
 
+    fn failure_state_file(&self) -> PathBuf {
+        self.state_file.with_extension("failure")
+    }
+
+    fn saved_source_failure_matches(&self, selection: &ConfigSelection) -> Result<bool> {
+        let ConfigSelection::Path(path) = selection else {
+            return Ok(false);
+        };
+        let selected_path = absolute_lexical(path)?;
+        let failure = match std::fs::read(self.failure_state_file()) {
+            Ok(failure) => failure,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error).context("reading saved Lua worker failure state"),
+        };
+        Ok(failure == selected_path.as_os_str().as_encoded_bytes())
+    }
+
+    fn record_saved_source_failure(&self) -> Result<()> {
+        if self.fallback_worker {
+            return Ok(());
+        }
+        let Some(selected_path) = read_selected_path(&self.state_file)? else {
+            return Ok(());
+        };
+        PreparedPathState::prepare(&self.failure_state_file(), &selected_path)?.commit()
+    }
+
+    fn clear_saved_source_failure(&self) -> Result<()> {
+        PreparedPathState::prepare_clear(&self.failure_state_file())?.commit()
+    }
+
+    fn start_default_after_saved_source_failure(&mut self) -> Result<()> {
+        if let Err(default_error) = self.startup_candidate(ConfigSelection::Default) {
+            eprintln!("embedded default Lua worker entered recovery: {default_error:#}");
+            self.enter_recovery()?;
+        }
+        Ok(())
+    }
+
     fn startup_candidate_or_default(&mut self, selection: ConfigSelection) -> Result<()> {
         let saved_source = matches!(&selection, ConfigSelection::Path(_));
+        if saved_source && self.saved_source_failure_matches(&selection)? {
+            eprintln!("saved Lua worker previously failed; starting embedded default");
+            self.start_default_after_saved_source_failure()?;
+            return Ok(());
+        }
         if let Err(error) = self.startup_candidate(selection) {
             eprintln!("selected Lua worker failed during startup: {error:#}");
             if saved_source {
-                if let Err(default_error) = self.startup_candidate(ConfigSelection::Default) {
-                    eprintln!("embedded default Lua worker entered recovery: {default_error:#}");
-                    self.enter_recovery()?;
-                }
+                self.start_default_after_saved_source_failure()?;
             } else {
                 self.enter_recovery()?;
             }
@@ -927,6 +968,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         self.ensure_hardware_available()
             .map_err(CandidateFailure::Candidate)?;
         self.backlight = latest_backlight;
+        let clear_failure_state = !matches!(state_update, SelectionState::Keep);
         let (previous_path_state, path_state) = match state_update {
             SelectionState::Keep => (None, None),
             SelectionState::Set(path) => (
@@ -1093,6 +1135,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     },
                     error,
                 );
+            }
+        }
+        if clear_failure_state {
+            if let Err(error) = self.clear_saved_source_failure() {
+                eprintln!("clearing saved Lua worker failure state failed: {error:#}");
             }
         }
 
@@ -1977,6 +2024,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
 
     fn fail_active_worker(&mut self, error: anyhow::Error) -> Result<()> {
         eprintln!("Lua worker entered recovery: {error:#}");
+        if let Err(marker_error) = self.record_saved_source_failure() {
+            crate::system_log::supervisor_error(format!(
+                "recording saved Lua worker failure failed: {marker_error:#}"
+            ));
+        }
         #[cfg(test)]
         {
             self.worker_failure = Some(format!("{error:#}"));
@@ -8113,6 +8165,52 @@ mod tests {
             .recovery
             .as_ref()
             .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            std::fs::read(state_file.with_extension("failure"))?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_saved_source_is_not_retried_after_a_worker_restart() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let source = directory.path().join("failed.lua");
+        let attempts = directory.path().join("attempts");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+                local file = assert(io.open({attempts:?}, "w"))
+                file:close()
+                require("sliver.v1")
+                return {{ api_version = 1, render = function() end }}
+                "#,
+                attempts = attempts.to_string_lossy(),
+            ),
+        )?;
+        PreparedPathState::prepare(&state_file, &source)?.commit()?;
+        PreparedPathState::prepare(&state_file.with_extension("failure"), &source)?.commit()?;
+        let default = LuaSource::embedded(
+            b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
+        );
+        let (logind, _) = active_local_logind("failed-source-restart-session");
+        let supervisor = Supervisor::new_with_startup_candidate_process(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            logind,
+            Some(default),
+        )?;
+
+        assert!(!attempts.exists());
+        assert!(supervisor.has_active_worker());
+        assert!(!supervisor.has_recovery());
         assert_eq!(
             std::fs::read(&state_file)?,
             source.as_os_str().as_encoded_bytes()

@@ -72,8 +72,10 @@ systemctl --user enable --now sliver-supervisor.service
 The broker shows the embedded default before login. A local user's supervisor
 keeps that frame visible until its selected configuration commits. A saved
 path remains selected. If its startup attempt fails, the supervisor starts the
-embedded default once without changing the path. A live worker failure still
-shows the fixed recovery row.
+embedded default once without changing the path. A live worker failure shows
+the fixed recovery row and records the path, so the next supervisor startup
+starts the default once instead of retrying the known-bad source. A successful
+explicit apply or default reset clears that failure state.
 
 ## Lua v1
 

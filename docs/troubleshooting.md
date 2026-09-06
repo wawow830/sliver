@@ -40,7 +40,10 @@ journalctl --user -u sliver-supervisor.service -b
 `sliver FILE` reports load, validation, worker, authorization, and hardware
 errors on stderr. A saved path remains selected. If its startup attempt fails,
 the supervisor starts the embedded default once without changing that path. A
-live worker failure still goes straight to the fixed recovery row.
+live worker failure goes straight to the fixed recovery row and records the
+selected path, so the next supervisor startup starts the default once instead
+of retrying the known-bad source. A successful explicit apply or default reset
+clears that failure state.
 
 ## No frame or stale frame
 

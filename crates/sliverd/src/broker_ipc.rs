@@ -3312,12 +3312,13 @@ mod tests {
                 local attempts = assert(io.open({attempts:?}, "a"))
                 attempts:write("loaded\n")
                 attempts:close()
-                require("sliver.v1")
+                local sliver = require("sliver.v1")
+                sliver.timer.after(0.1, function()
+                    while true do end
+                end)
                 return {{
                     api_version = 1,
-                    render = function()
-                        while true do end
-                    end,
+                    render = function() end,
                 }}
                 "#,
                 attempts = attempts.to_string_lossy(),
@@ -3407,6 +3408,35 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(read_attempts()?.lines().count(), 1);
+        let failure_state = state_file.with_extension("failure");
+        let failure_deadline = Instant::now() + Duration::from_secs(5);
+        while !failure_state.exists() && Instant::now() < failure_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            failure_state.exists(),
+            "live hung worker did not record failure state"
+        );
+        let worker_units = || -> Result<usize> {
+            let output = std::process::Command::new("systemctl")
+                .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
+                .output()?;
+            anyhow::ensure!(output.status.success(), "listing Lua worker units failed");
+            let output = String::from_utf8(output.stdout)?;
+            Ok(output
+                .lines()
+                .filter(|line| line.starts_with("sliver-lua-worker-"))
+                .count())
+        };
+        let worker_deadline = Instant::now() + Duration::from_secs(5);
+        while worker_units()? != 0 && Instant::now() < worker_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            worker_units()?,
+            0,
+            "hung worker unit survived live recovery"
+        );
         let default_visible = || {
             shared.inspect(|hardware| {
                 hardware.presented_frames().last().is_some_and(|frame| {
@@ -3414,25 +3444,19 @@ mod tests {
                 })
             })
         };
-        let frame_deadline = Instant::now() + Duration::from_secs(5);
-        while !default_visible() && Instant::now() < frame_deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert!(
-            default_visible(),
-            "embedded default did not replace the failed startup source"
-        );
         let restart = std::process::Command::new("systemctl")
             .args(["--user", "restart", &unit])
             .status()?;
         anyhow::ensure!(restart.success(), "supervisor systemd restart failed");
         let deadline = Instant::now() + Duration::from_secs(5);
-        while read_attempts()?.lines().count() < 2 && Instant::now() < deadline {
+        while !default_visible() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
-        assert_eq!(read_attempts()?.lines().count(), 2);
-        thread::sleep(Duration::from_millis(100));
-        assert_eq!(read_attempts()?.lines().count(), 2);
+        assert!(
+            default_visible(),
+            "embedded default did not start after the known hung source failed"
+        );
+        assert_eq!(read_attempts()?.lines().count(), 1);
         let worker_units_deadline = Instant::now() + Duration::from_secs(2);
         let worker_units = loop {
             let worker_units = std::process::Command::new("systemctl")
