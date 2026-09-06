@@ -92,6 +92,9 @@ verify_release_performance_artifacts() {
         function same(left, right) {
             return sprintf("%.6f", left) == sprintf("%.6f", right)
         }
+        function timestamp_key(value) {
+            return sprintf("%.6f", value)
+        }
         FILENAME == frame {
             if (FNR == 1) {
                 if ($0 != "presentation_s\tframe_index") invalid = 1
@@ -111,6 +114,7 @@ verify_release_performance_artifacts() {
                 missed += $2 - previous_frame_index - 1
             }
             last_frame_time = $1
+            frame_time_key[timestamp_key($1)] = 1
             previous_frame_time = $1
             previous_frame_index = $2
             frame_count++
@@ -144,6 +148,8 @@ verify_release_performance_artifacts() {
             }
             if (latency_count + 1 != input_position[$1] ||
                 (latency_count > 0 && $2 <= previous_presented_time) ||
+                $2 < first_frame_time || $2 > last_frame_time ||
+                !(timestamp_key($2) in frame_time_key) ||
                 $2 < input_time[$1] ||
                 !same($3, ($2 - input_time[$1]) * 1000)) {
                 invalid = 1
@@ -157,6 +163,9 @@ verify_release_performance_artifacts() {
             next
         }
         END {
+            for (id in input_time) {
+                if (input_time[id] < first_frame_time || input_time[id] > last_frame_time) invalid = 1
+            }
             if (frame_count < 2 || input_count < 2 || latency_count != input_count || invalid) exit 1
             interval = last_frame_time - first_frame_time
             fps = (frame_count - 1) / interval

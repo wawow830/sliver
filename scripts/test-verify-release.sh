@@ -152,12 +152,23 @@ EOF
 if verify_release_performance_artifacts "$performance_tmp" 2 1 0 18 0; then
     fail 'placeholder performance artifacts were accepted'
 fi
-printf 'presentation_s\tframe_index\n0.000000\t0\n1.000000\t1\n2.000000\t2\n' > "$performance_tmp/frame-trace"
+printf 'presentation_s\tframe_index\n0.000000\t0\n0.268000\t1\n1.268000\t2\n2.000000\t3\n' > "$performance_tmp/frame-trace"
 printf 'input_id\tinput_s\n1\t0.250000\n2\t1.250000\n' > "$performance_tmp/input-trace"
 printf 'input_id\tpresented_s\tlatency_ms\n1\t0.268000\t18.000000\n2\t1.268000\t18.000000\n' > "$performance_tmp/latency-trace"
-verify_release_performance_artifacts "$performance_tmp" 2 1 0 18 0 ||
+verify_release_performance_artifacts "$performance_tmp" 2 1.5 0 18 0 ||
     fail 'complete physical performance artifacts were rejected'
-if verify_release_performance_artifacts "$performance_tmp" 3 1 0 18 0; then
+printf 'input_id\tinput_s\n1\t10.250000\n2\t11.250000\n' > "$performance_tmp/input-trace"
+printf 'input_id\tpresented_s\tlatency_ms\n1\t10.268000\t18.000000\n2\t11.268000\t18.000000\n' > "$performance_tmp/latency-trace"
+if verify_release_performance_artifacts "$performance_tmp" 2 1.5 0 18 0; then
+    fail 'disjoint input and latency windows were accepted'
+fi
+printf 'input_id\tinput_s\n1\t0.250000\n2\t1.250000\n' > "$performance_tmp/input-trace"
+printf 'input_id\tpresented_s\tlatency_ms\n1\t0.269000\t19.000000\n2\t1.269000\t19.000000\n' > "$performance_tmp/latency-trace"
+if verify_release_performance_artifacts "$performance_tmp" 2 1.5 0 19 0; then
+    fail 'unrecorded presentation timestamps were accepted'
+fi
+printf 'input_id\tpresented_s\tlatency_ms\n1\t0.268000\t18.000000\n2\t1.268000\t18.000000\n' > "$performance_tmp/latency-trace"
+if verify_release_performance_artifacts "$performance_tmp" 3 1.5 0 18 0; then
     fail 'inconsistent entered interval was accepted'
 fi
 cat > "$performance_tmp/measurement-notes" <<'EOF'
