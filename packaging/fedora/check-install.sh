@@ -44,6 +44,8 @@ sed \
     -e '\#^/usr/lib/systemd/user/sliver-lua-worker-.service.d$#d' \
     -e '\#^/usr/share/doc/sliver$#d' \
     -e '\#^/usr/share/doc/sliver/#d' \
+    -e '\#^/usr/share/licenses/sliver$#d' \
+    -e '\#^/usr/share/licenses/sliver/#d' \
     "$manifest" > "$expected"
 LC_ALL=C sort -o "$expected" "$expected"
 find "$root" -type f -printf '/%P\n' |
