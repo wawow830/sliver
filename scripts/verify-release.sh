@@ -384,7 +384,6 @@ capture_drm_preflight() {
     printf 'DRM evidence connector: %s\n' "$PANEL_DRM_CONNECTOR"
     printf 'DRM evidence status: %s\n' "$status"
     printf 'DRM evidence mode: %s\n' "$mode"
-    printf 'DRM evidence transform: logical 2008x60 -> scanout 60x2008 (quarter-turn)\n'
     if [[ "$DRM_TOOL" == drm_info ]]; then
         printf 'DRM evidence command: sudo drm_info %s\n' "$PANEL_DRM_NODE"
         sudo drm_info "$PANEL_DRM_NODE"
@@ -1114,7 +1113,7 @@ preflight_stage() {
     logged_step drm_preflight "$VERIFY_DIR/drm-before.txt" capture_drm_preflight
     if panel_drm_probe_proves_geometry "$VERIFY_DIR/drm-before.txt" \
         "$PANEL_DRM_NODE" "$PANEL_DRM_CONNECTOR"; then
-        pass_check drm_native_mode "privileged DRM evidence proves connected native 60x2008@60 and the quarter-turn scanout geometry"
+        pass_check drm_native_mode "privileged DRM evidence proves connected native 60x2008@60 and portrait scanout geometry; physical rotation remains unverified until the post-takeover check"
     else
         fail_check drm_native_mode "privileged DRM evidence does not prove the exact connected native mode and scanout geometry"
         exit 1
@@ -1139,9 +1138,7 @@ preflight_stage() {
     else
         fail_check input_capabilities "input capability data is unavailable"
     fi
-    manual_check drm_native_mode \
-        "Does drm-before.txt prove the connected native 60 by 2008 DSI panel and its rotation?" \
-        "Review $VERIFY_DIR/drm-before.txt. Confirm the exact connector, native mode, and rotation from its output."
+    say "Native DRM mode and portrait scanout geometry passed the objective check. Physical rotation will be checked on the panel after takeover."
     manual_check input_identity \
         "Do the saved udev and capability files identify the Touch Bar on seat-touchbar and the keyboard on the default local seat (seat0 when explicitly tagged) with the required capabilities?" \
         "Review $VERIFY_DIR/input-before.txt and $VERIFY_DIR/input-capabilities-before.txt. The Touch Bar must use ID_SEAT=seat-touchbar; the keyboard uses the default local seat and may omit ID_SEAT. Do not infer identity from a transport name."

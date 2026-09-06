@@ -71,8 +71,6 @@ panel_drm_probe_proves_geometry() {
     grep -Fx "DRM evidence connector: $expected_connector" "$info_file" >/dev/null || return 1
     grep -Fx 'DRM evidence status: connected' "$info_file" >/dev/null || return 1
     grep -Fx 'DRM evidence mode: 60x2008' "$info_file" >/dev/null || return 1
-    grep -Fx 'DRM evidence transform: logical 2008x60 -> scanout 60x2008 (quarter-turn)' \
-        "$info_file" >/dev/null || return 1
     grep -E '^DRM evidence command: sudo (drm_info|modetest)([[:space:]]|$)' \
         "$info_file" >/dev/null || return 1
 

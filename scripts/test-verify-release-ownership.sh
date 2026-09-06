@@ -50,7 +50,6 @@ DRM evidence node: /dev/dri/card2
 DRM evidence connector: card2-DSI-1
 DRM evidence status: connected
 DRM evidence mode: 60x2008
-DRM evidence transform: logical 2008x60 -> scanout 60x2008 (quarter-turn)
 DRM evidence command: sudo drm_info /dev/dri/card2
 Node: /dev/dri/card2
 ├───Framebuffer size

@@ -47,8 +47,14 @@ grep -F 'panel_drm_probe_proves_geometry' "$script" >/dev/null ||
     fail 'stage 1 does not objectively verify native mode and scanout geometry'
 grep -F 'logged_step drm_preflight "$VERIFY_DIR/drm-before.txt" capture_drm_preflight' "$script" >/dev/null ||
     fail 'stage 1 does not save the privileged exact-node DRM probe'
-grep -F 'DRM evidence transform: logical 2008x60 -> scanout 60x2008 (quarter-turn)' "$script" >/dev/null ||
-    fail 'stage 1 does not record the required logical-to-scanout transform'
+if grep -F 'DRM evidence transform:' "$script" >/dev/null; then
+    fail 'preflight labels an assumed transform as observed DRM evidence'
+fi
+if grep -F 'manual_check drm_native_mode' "$script" >/dev/null; then
+    fail 'preflight asks a human to re-certify machine-checked geometry and unobserved rotation'
+fi
+grep -F 'Did rotation and all four Touch Bar touch edges map to the expected logical 2008x60 coordinates?' "$script" >/dev/null ||
+    fail 'physical rotation and touch mapping must still be checked after takeover'
 grep -F 'privileged DRM evidence does not prove the exact connected native mode and scanout geometry' "$script" >/dev/null ||
     fail 'stage 1 does not fail closed when DRM geometry evidence is incomplete'
 grep -F 'PANEL_DRM_SYSFS_DEVICE' "$script" >/dev/null ||
