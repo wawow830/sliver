@@ -3127,12 +3127,14 @@ mod tests {
             "SupplementaryGroups=sliver-drm sliver-input sliver-backlight",
             "Restart=on-failure",
             "TimeoutStopSec=5s",
+            "FinalKillSignal=SIGKILL",
         ] {
             assert!(broker.contains(setting), "broker service lacks {setting}");
         }
         assert!(supervisor.contains("WantedBy=graphical-session.target"));
         assert!(supervisor.contains("ConditionGroup=sliver-supervisors"));
         assert!(supervisor.contains("TimeoutStopSec=5s"));
+        assert!(supervisor.contains("FinalKillSignal=SIGKILL"));
         assert!(!supervisor.contains("PartOf=graphical-session.target"));
         assert!(!broker.contains("XDG_RUNTIME_DIR=/run/user/%U"));
         assert!(!broker.contains("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus"));
