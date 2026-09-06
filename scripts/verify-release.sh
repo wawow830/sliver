@@ -45,6 +45,7 @@ MODE=run
 RPM_PATH=""
 BUILD_LOG=""
 VERIFY_DIR=""
+RESTART_STARTED=""
 while (($#)); do
     case "$1" in
         --resume|--rollback|--service-only)
@@ -901,7 +902,7 @@ REQUIRED_CHECKS=(
     lifecycle_second_session lifecycle_authorization lifecycle_valid_live_apply
     lifecycle_invalid_retention lifecycle_touch_mapping lifecycle_multitouch_cancel
     lifecycle_fn_recovery lifecycle_modifier_uinput lifecycle_logout_handoff
-    lifecycle_watchdog_child_key_cleanup service_restart dirty_framebuffer
+    lifecycle_watchdog_child_key_cleanup service_restart restart_journals restart_default_worker selected_path_restart dirty_framebuffer
     backlight_restore suspend_resume fake_video_workload real_video_workload
     performance_measurement
 )
@@ -1478,6 +1479,24 @@ lifecycle_stage() {
     save_state
 }
 
+capture_broker_restart_journal() {
+    sudo journalctl -u sliver-broker.service --since "$RESTART_STARTED" -n 100 --no-pager > "$VERIFY_DIR/broker-journal-restart.txt"
+}
+
+assert_restart_journal() {
+    local id=$1 journal=$2 unit=$3
+    if grep -E 'SIGABRT|status=6/ABRT|State .* timed out|Failed with result .timeout.|Broken pipe' \
+        "$journal" >/dev/null; then
+        fail_check "$id" "$unit restart journal contains an abort, timeout, or broken pipe"
+        return 1
+    fi
+    if ! grep -E "Stopped $unit|Deactivated successfully" "$journal" >/dev/null; then
+        fail_check "$id" "$unit restart journal has no clean stop record"
+        return 1
+    fi
+    pass_check "$id" "$unit restart journal has a clean bounded stop and no SIGABRT"
+}
+
 restart_stage() {
     stage 10 "Restart infrastructure and inspect journals"
     refuse_if_blocked
@@ -1485,6 +1504,7 @@ restart_stage() {
         fail_check service_restart_confirmed "restart was declined"
         exit 1
     fi
+    RESTART_STARTED=$(date --iso-8601=seconds)
     privileged_step restart_broker sudo systemctl restart sliver-broker.service
     user_step restart_user_supervisor systemctl --user restart sliver-supervisor.service
     [[ "$(unit_active sliver-broker.service)" == active && "$(user_unit_active sliver-supervisor.service)" == active ]] &&
@@ -1493,8 +1513,28 @@ restart_stage() {
             exit 1
         }
     logged_step user_journal_restart "$VERIFY_DIR/user-journal-restart.txt" \
-        journalctl --user -u sliver-supervisor.service -n 100 --no-pager
-    privileged_step capture_broker_journal sudo journalctl -u sliver-broker.service -n 100 --no-pager
+        journalctl --user -u sliver-supervisor.service --since "$RESTART_STARTED" -n 100 --no-pager
+    privileged_step capture_broker_journal capture_broker_restart_journal
+    assert_restart_journal restart_journals_user "$VERIFY_DIR/user-journal-restart.txt" \
+        sliver-supervisor.service || exit 1
+    assert_restart_journal restart_journals_broker "$VERIFY_DIR/broker-journal-restart.txt" \
+        sliver-broker.service || exit 1
+    local worker_units worker_count selected_after
+    worker_units=$(systemctl --user list-units --type=service --state=active --no-legend --plain 2>/dev/null || true)
+    worker_count=$(grep -c '^sliver-lua-worker-' <<< "$worker_units" || true)
+    if [[ "$worker_count" == 1 ]]; then
+        pass_check restart_default_worker "one healthy default Lua worker is active after restart"
+    else
+        fail_check restart_default_worker "expected one healthy default Lua worker after restart, found $worker_count"
+        exit 1
+    fi
+    selected_after=$(cat "$SELECTED_PATH" 2>/dev/null || true)
+    if [[ "$selected_after" == "$CONFIG_DIR/hung.lua" ]]; then
+        pass_check selected_path_restart "hung.lua remains selected while the default worker provides restart recovery"
+    else
+        fail_check selected_path_restart "restart changed the selected path to ${selected_after:-missing}"
+        exit 1
+    fi
     manual_check dirty_framebuffer \
         "Did a command-mode pixel/control update flush a dirty framebuffer after restart?" \
         "Change a visible value and confirm the real panel updates, then review the restart journal files."

@@ -8,6 +8,7 @@ ConditionGroup=sliver-supervisors
 [Service]
 Type=simple
 KillSignal=SIGINT
+FinalKillSignal=SIGKILL
 ExecStart=/usr/libexec/sliver/sliver-supervisor
 Restart=on-failure
 RestartSec=1s

@@ -7,6 +7,7 @@ Before=tiny-dfr.service
 Type=notify
 NotifyAccess=main
 KillSignal=SIGINT
+FinalKillSignal=SIGKILL
 User=sliver
 Group=sliver-supervisors
 SupplementaryGroups=sliver-drm sliver-input sliver-backlight
