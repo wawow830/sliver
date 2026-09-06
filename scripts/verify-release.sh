@@ -189,10 +189,17 @@ else
     # The state file was created by this script in a private directory.
     # shellcheck disable=SC1090
     source "$STATE_FILE"
-    [[ "${STATE_VERSION:-}" == "$expected_state_version" ]] || {
-        printf 'Unsupported verifier state version\n' >&2
-        exit 1
-    }
+    loaded_state_version=${STATE_VERSION:-}
+    if [[ "$loaded_state_version" != "$expected_state_version" ]]; then
+        if [[ "$loaded_state_version" == 3 &&
+            ( "$MODE" == rollback || "$MODE" == service-only ) ]]; then
+            printf 'Legacy verifier state accepted for cleanup-only mode; resume requires a new state ledger.\n' >&2
+            STATE_VERSION=$expected_state_version
+        else
+            printf 'Unsupported verifier state version\n' >&2
+            exit 1
+        fi
+    fi
     [[ -n "${LOG_FILE:-}" && -n "${EVIDENCE_FILE:-}" ]] || {
         printf 'Verifier state is incomplete\n' >&2
         exit 1

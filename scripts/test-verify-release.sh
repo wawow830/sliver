@@ -159,6 +159,24 @@ grep -F 'ROLLBACK_ATTEMPTED' "$script" >/dev/null ||
 source "$root/scripts/verify-release-auth.sh"
 # shellcheck disable=SC1091
 source "$root/scripts/verify-release-evidence.sh"
+legacy_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-legacy-state.XXXXXX")
+trap 'rm -rf -- "$legacy_tmp"' EXIT
+printf 'STATE_VERSION=3\nLOG_FILE=%q\nEVIDENCE_FILE=%q\n' \
+    "$legacy_tmp/run.log" "$legacy_tmp/evidence.tsv" > "$legacy_tmp/state.env"
+set +e
+printf 'n\n' | "$script" --rollback "$legacy_tmp" > "$legacy_tmp/rollback.out" 2>&1
+legacy_cleanup_status=$?
+"$script" --resume "$legacy_tmp" > "$legacy_tmp/resume.out" 2>&1
+legacy_resume_status=$?
+set -e
+[[ "$legacy_cleanup_status" != 0 ]] || fail 'legacy cleanup unexpectedly reported success after declining confirmation'
+if grep -F 'Unsupported verifier state version' "$legacy_tmp/rollback.out" >/dev/null; then
+    fail 'legacy cleanup was rejected before its confirmation gate'
+fi
+[[ "$legacy_resume_status" != 0 ]] || fail 'legacy resume unexpectedly succeeded'
+grep -F 'Unsupported verifier state version' "$legacy_tmp/resume.out" >/dev/null ||
+    fail 'legacy resume was not rejected'
+rm -rf "$legacy_tmp"
 performance_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-performance-artifacts.XXXXXX")
 trap 'rm -rf -- "$performance_tmp"' EXIT
 for artifact in frame-trace input-trace latency-trace measurement-notes; do
