@@ -1997,8 +1997,12 @@ mod tests {
         user.shutdown()?;
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while shared.inspect(|hardware| hardware.presented_frames().len() < 4)
-            && Instant::now() < deadline
+        while !shared.inspect(|hardware| {
+            hardware
+                .presented_frames()
+                .last()
+                .is_some_and(|frame| frame.rgba_at(10, 10) == [0, 255, 0, 255])
+        }) && Instant::now() < deadline
         {
             thread::sleep(Duration::from_millis(1));
         }

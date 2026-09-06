@@ -1068,7 +1068,7 @@ package_stage() {
     refuse_if_blocked
     logged_step repository_suite "$VERIFY_DIR/repository-suite.log" "$ROOT/scripts/check-release-surface.sh"
     logged_step release_suite "$VERIFY_DIR/release-suite.log" bash -c \
-        "cd '$ROOT' && cargo build --release --workspace && SLIVER_LUA_WORKER='$ROOT/target/release/sliver-lua-worker' cargo test --release --workspace"
+        "cd '$ROOT' && cargo build --release --workspace && SLIVER_LUA_WORKER='$ROOT/target/release/sliver-lua-worker' cargo test --release --workspace -- --test-threads=1"
 
     [[ -n "$BUILD_LOG" && -f "$BUILD_LOG" ]] && pass_check package_build_log_present "build log is $BUILD_LOG" ||
         fail_check package_build_checks "pass the complete rpmbuild log with --build-log"

@@ -10,7 +10,7 @@ fail() {
 }
 
 cargo fmt --all -- --check
-cargo test --workspace
+cargo test --workspace -- --test-threads=1
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 scripts/test-verify-release.sh
 
