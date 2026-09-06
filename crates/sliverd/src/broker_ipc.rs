@@ -2695,7 +2695,7 @@ mod tests {
     }
 
     #[test]
-    fn real_supervisor_failed_login_enters_recovery_through_the_broker_loop() -> Result<()> {
+    fn real_supervisor_failed_login_starts_default_through_the_broker_loop() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");
         let listener = UnixListener::bind(&socket)?;
@@ -2762,8 +2762,8 @@ mod tests {
             FakeLogind::new(),
             None,
         )?;
-        assert!(!user.has_active_worker());
-        assert!(user.has_recovery());
+        assert!(user.has_active_worker());
+        assert!(!user.has_recovery());
         assert_eq!(
             std::fs::read(&user_state)?,
             source.as_os_str().as_encoded_bytes()
@@ -3274,7 +3274,7 @@ mod tests {
     }
 
     #[test]
-    fn systemd_supervisor_restart_keeps_a_persisted_hung_source_in_recovery() -> Result<()> {
+    fn systemd_supervisor_restart_starts_default_after_persisted_hung_source() -> Result<()> {
         let _systemd_tests = crate::lock_systemd_tests();
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
@@ -3401,7 +3401,7 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(read_attempts()?.lines().count(), 1);
-        let recovery_visible = || {
+        let default_visible = || {
             shared.inspect(|hardware| {
                 hardware.presented_frames().last().is_some_and(|frame| {
                     (0..2008).any(|x| (0..60).any(|y| frame.rgba_at(x, y) == [255, 255, 255, 255]))
@@ -3409,12 +3409,12 @@ mod tests {
             })
         };
         let frame_deadline = Instant::now() + Duration::from_secs(5);
-        while !recovery_visible() && Instant::now() < frame_deadline {
+        while !default_visible() && Instant::now() < frame_deadline {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(
-            recovery_visible(),
-            "persisted hung source did not enter recovery"
+            default_visible(),
+            "embedded default did not replace the failed startup source"
         );
         let restart = std::process::Command::new("systemctl")
             .args(["--user", "restart", &unit])
@@ -3437,7 +3437,7 @@ mod tests {
                 "listing Lua worker units failed"
             );
             let worker_units = String::from_utf8(worker_units.stdout)?;
-            if !worker_units
+            if worker_units
                 .lines()
                 .any(|line| line.starts_with("sliver-lua-worker-"))
                 || Instant::now() >= worker_units_deadline
@@ -3446,11 +3446,13 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         };
-        assert!(
-            !worker_units
-                .lines()
-                .any(|line| line.starts_with("sliver-lua-worker-")),
-            "a failed persisted source left a Lua worker unit behind"
+        let worker_unit_count = worker_units
+            .lines()
+            .filter(|line| line.starts_with("sliver-lua-worker-"))
+            .count();
+        assert_eq!(
+            worker_unit_count, 1,
+            "healthy default worker unit was not started"
         );
         assert_eq!(
             std::process::Command::new("systemctl")
@@ -3478,6 +3480,20 @@ mod tests {
             .status()?;
         anyhow::ensure!(stop.success(), "supervisor systemd stop failed");
         let _ = launcher_child.wait();
+        let worker_units = std::process::Command::new("systemctl")
+            .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
+            .output()?;
+        anyhow::ensure!(
+            worker_units.status.success(),
+            "listing stopped worker units failed"
+        );
+        let worker_units = String::from_utf8(worker_units.stdout)?;
+        assert!(
+            !worker_units
+                .lines()
+                .any(|line| line.starts_with("sliver-lua-worker-")),
+            "default worker unit survived supervisor shutdown"
+        );
         running.store(false, Ordering::Release);
         server.join().expect("systemd broker server panicked")?;
         Ok(())

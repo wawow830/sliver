@@ -199,9 +199,11 @@ path remains available for the next login.
 
 The default lives in one `crates/sliverd/src/default.lua` source. The build
 embeds its exact bytes and installs no editable copy. An absent state file
-selects those bytes. A broken saved path remains selected and enters the fixed
-recovery row instead of falling back to the default. Embedded Lua keeps the
-ordinary runtime and `sliver.v1`, but receives no source path or default marker.
+selects those bytes. A saved path remains selected. If its one startup attempt
+fails, the supervisor starts the embedded default once without changing the
+saved path. If that default also fails, the fixed recovery row takes over.
+Embedded Lua keeps the ordinary runtime and `sliver.v1`, but receives no source
+path or default marker.
 
 The transaction covers only state owned by Sliver. Lua runs as trusted user
 code while staging. Filesystem writes, child processes, network requests, and

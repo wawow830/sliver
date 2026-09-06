@@ -38,8 +38,9 @@ journalctl --user -u sliver-supervisor.service -b
 ```
 
 `sliver FILE` reports load, validation, worker, authorization, and hardware
-errors on stderr. A missing or broken saved path remains selected and puts the
-fixed recovery row on the panel; it does not choose another source.
+errors on stderr. A saved path remains selected. If its startup attempt fails,
+the supervisor starts the embedded default once without changing that path. A
+live worker failure still goes straight to the fixed recovery row.
 
 ## No frame or stale frame
 

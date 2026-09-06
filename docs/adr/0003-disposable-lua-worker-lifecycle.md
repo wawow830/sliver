@@ -24,7 +24,10 @@ logout, or shutdown. A timeout, process exit, malformed packet, or callback
 failure never receives another Lua callback. The supervisor kills the worker
 cgroup, sends `SIGKILL` through the worker pidfd, kills the process group, and
 reaps the systemd launcher within a separate bounded cleanup window before
-entering fixed recovery. Startup failures use the same cleanup path.
+entering fixed recovery. A failed saved source on supervisor startup is tried
+once, then the embedded default is started once without changing the selected
+path; if that also fails, recovery takes over. Live worker failures use fixed
+recovery and do not start a replacement automatically.
 
 Touch transitions and worker output are bounded. Repeated moves coalesce by
 contact. Down, up, cancel, Fn, and modifier transitions fail the worker when

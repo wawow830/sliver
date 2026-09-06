@@ -586,8 +586,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     /// Build the running supervisor and make one startup attempt. A saved path
-    /// is tried once; absent state selects the embedded source and never writes
-    /// a path to state.
+    /// is tried once, then a failed saved source gets one embedded-default
+    /// attempt without changing the path. Absent state selects the embedded
+    /// source and never writes a path to state.
     #[cfg(test)]
     pub(crate) fn new_with_startup_candidate(
         hardware: H,
@@ -7755,12 +7756,14 @@ mod tests {
         assert!(!state_file.exists());
         assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         assert!(!supervisor.hardware().presented_frames().is_empty());
+        assert!(supervisor.active.is_none());
+        assert!(supervisor.recovery.is_some());
         supervisor.shutdown()?;
         Ok(())
     }
 
     #[test]
-    fn saved_startup_failure_keeps_path_and_enters_fixed_recovery() -> Result<()> {
+    fn saved_startup_failure_keeps_path_and_starts_the_default() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
         let missing = directory.path().join("missing.lua");
@@ -7779,12 +7782,14 @@ mod tests {
         );
         assert_eq!(supervisor.hardware().backlight_level(), 0.75);
         assert!(!supervisor.hardware().presented_frames().is_empty());
+        assert!(supervisor.active.is_some());
+        assert!(supervisor.recovery.is_none());
         supervisor.shutdown()?;
         Ok(())
     }
 
     #[test]
-    fn rejected_default_reset_after_saved_startup_failure_restores_recovery_frame() -> Result<()> {
+    fn rejected_default_reset_after_saved_startup_failure_restores_default_frame() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("supervisor.sock");
         let listener = UnixListener::bind(&socket)?;
@@ -7798,11 +7803,8 @@ mod tests {
             logind,
             Some(LuaSource::embedded(default_source::bytes().to_vec())),
         )?;
-        assert!(supervisor.active.is_none());
-        assert!(supervisor
-            .recovery
-            .as_ref()
-            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert!(supervisor.active.is_some());
+        assert!(supervisor.recovery.is_none());
         let recovery_frame = supervisor
             .hardware()
             .inner
@@ -7826,18 +7828,15 @@ mod tests {
             std::fs::read(&state_file)?,
             missing.as_os_str().as_encoded_bytes()
         );
-        assert!(supervisor.active.is_none());
-        assert!(supervisor
-            .recovery
-            .as_ref()
-            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert!(supervisor.active.is_some());
+        assert!(supervisor.recovery.is_none());
         assert_eq!(
             supervisor
                 .hardware()
                 .inner
                 .presented_frames()
                 .last()
-                .expect("recovery frame disappeared after rejected reset"),
+                .expect("default frame disappeared after rejected reset"),
             &recovery_frame
         );
         supervisor.shutdown()?;
@@ -7845,7 +7844,7 @@ mod tests {
     }
 
     #[test]
-    fn all_startup_worker_failures_use_the_same_recovery_row() -> Result<()> {
+    fn all_saved_startup_failures_start_the_default_without_resetting_path() -> Result<()> {
         let cases = [
             ("missing", None),
             ("invalid", Some("return {}")),
@@ -7879,6 +7878,8 @@ mod tests {
             );
             assert_eq!(supervisor.hardware().backlight_level(), 0.75);
             assert!(!supervisor.hardware().presented_frames().is_empty());
+            assert!(supervisor.active.is_some());
+            assert!(supervisor.recovery.is_none());
             supervisor.shutdown()?;
         }
         Ok(())
@@ -8052,8 +8053,8 @@ mod tests {
             first_logind,
             None,
         )?;
-        assert!(first.active.is_none());
-        assert!(first.recovery.is_some());
+        assert!(first.active.is_some());
+        assert!(first.recovery.is_none());
         first.shutdown()?;
 
         std::fs::write(
@@ -8079,7 +8080,49 @@ mod tests {
     }
 
     #[test]
-    fn persisted_hung_source_is_attempted_once_and_keeps_recovery_ownership() -> Result<()> {
+    fn live_hung_worker_enters_fixed_recovery_without_resetting_path() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let source = directory.path().join("hung.lua");
+        std::fs::write(
+            &source,
+            r#"
+            local sliver = require("sliver.v1")
+            sliver.timer.after(0.1, function()
+                while true do end
+            end)
+            return {
+                api_version = 1,
+                render = function() end,
+            }
+            "#,
+        )?;
+        let mut supervisor = Supervisor::new_with_logind_process(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            FakeLogind::new(),
+        )?;
+        supervisor.apply(&source)?;
+
+        let error = supervisor
+            .step_at(1.0)
+            .expect_err("a hung live callback was not fenced");
+        assert!(error.to_string().contains("two seconds"));
+        assert!(supervisor.active.is_none());
+        assert!(supervisor
+            .recovery
+            .as_ref()
+            .is_some_and(|recovery| !recovery.owner_is_healthy()));
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_hung_source_is_attempted_once_before_default_start() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let state_file = directory.path().join("state/sliver/config-path");
         let source = directory.path().join("hung.lua");
@@ -8111,8 +8154,8 @@ mod tests {
             None,
         )?;
 
-        assert!(!supervisor.has_active_worker());
-        assert!(supervisor.has_recovery());
+        assert!(supervisor.has_active_worker());
+        assert!(!supervisor.has_recovery());
         assert_eq!(std::fs::read_to_string(&attempts)?, "loaded\n");
         assert_eq!(
             std::fs::read(&state_file)?,
@@ -8123,7 +8166,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_hung_source_releases_its_systemd_cgroup_before_recovery() -> Result<()> {
+    fn persisted_hung_source_releases_its_systemd_cgroup_before_default_start() -> Result<()> {
         let _systemd_tests = crate::lock_systemd_tests();
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
@@ -8179,8 +8222,8 @@ mod tests {
             None,
         )?;
 
-        assert!(!supervisor.has_active_worker());
-        assert!(supervisor.has_recovery());
+        assert!(supervisor.has_active_worker());
+        assert!(!supervisor.has_recovery());
         assert_eq!(std::fs::read_to_string(&attempts)?, "loaded\n");
         let descendant_contents = std::fs::read_to_string(&descendant_marker)?;
         let mut descendant_lines = descendant_contents.lines();
@@ -8217,7 +8260,7 @@ mod tests {
                 .output()?;
             anyhow::ensure!(units.status.success(), "listing user worker units failed");
             let units = String::from_utf8(units.stdout)?;
-            if !units
+            if units
                 .lines()
                 .any(|line| line.starts_with("sliver-lua-worker-"))
                 || Instant::now() >= deadline
@@ -8226,11 +8269,14 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         };
-        assert!(
-            !units
-                .lines()
-                .any(|line| line.starts_with("sliver-lua-worker-")),
-            "a transient Lua worker unit survived recovery"
+        let worker_units: Vec<_> = units
+            .lines()
+            .filter(|line| line.starts_with("sliver-lua-worker-"))
+            .collect();
+        assert_eq!(
+            worker_units.len(),
+            1,
+            "healthy default worker unit was not started"
         );
         assert_eq!(
             std::fs::read(&state_file)?,
@@ -8668,11 +8714,11 @@ mod tests {
                     active: true,
                 },
                 FakeKeyEvent {
-                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
                     active: true,
                 },
                 FakeKeyEvent {
-                    key: FakeKey::Keyboard(KeyboardKey::F1),
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
                     active: false,
                 },
                 FakeKeyEvent {
@@ -8692,8 +8738,14 @@ mod tests {
         let missing = directory.path().join("missing.lua");
         PreparedPathState::prepare(&state_file, &missing)?.commit()?;
         let (logind, _) = active_local_logind("recovery-session");
-        let mut supervisor =
-            Supervisor::new_with_startup_candidate(FakeTouchBar::new(), state_file, logind, None)?;
+        let mut supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file,
+            logind,
+            Some(LuaSource::embedded(
+                b"require('sliver.v1'); error('embedded default failed')".to_vec(),
+            )),
+        )?;
         supervisor.hardware_mut().inject(HardwareEvent::Modifier {
             modifier: Modifier::LeftCtrl,
             active: true,
