@@ -15,3 +15,4 @@
 /usr/share/doc/sliver/lua.md
 /usr/share/doc/sliver/release-commit
 /usr/share/doc/sliver/troubleshooting.md
+/usr/share/licenses/sliver/cargo-vendor.txt

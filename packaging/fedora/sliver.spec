@@ -1,12 +1,13 @@
 Name:           sliver
 Version:        0.1.0
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        Lua-scriptable Touch Bar service for Asahi Linux
 License:        MIT OR Apache-2.0
 URL:            https://github.com/wawow830/sliver
 ExclusiveArch:  aarch64
 Source0:        sliver-%{version}.tar.gz
-Source1:        sliver.sysusers
+Source1:        sliver-%{version}-vendor.tar.gz
+Source2:        sliver.sysusers
 
 BuildRequires:  cargo
 BuildRequires:  cargo-rpm-macros >= 24
@@ -29,10 +30,12 @@ Lua workers, but does not enable them or take over the Touch Bar during install.
 
 %prep
 %autosetup -n sliver-%{version}
-%cargo_prep
-
-%generate_buildrequires
-%cargo_generate_buildrequires -t
+mkdir vendor
+/usr/bin/tar -xzf %{SOURCE1} --strip-components=1 -C vendor
+# evdev and mlua are not available as Fedora Rust crates on the target host.
+# The locked vendor archive is the offline source input for this application.
+%cargo_prep -v vendor
+%cargo_vendor_manifest > cargo-vendor.txt
 
 %build
 %cargo_build -- --package sliverd --bin sliver --bin sliver-broker --bin sliver-supervisor --bin sliver-lua-worker
@@ -58,6 +61,16 @@ install -Dpm0644 packaging/fedora/sliver.sysusers \
     %{buildroot}%{_sysusersdir}/sliver.conf
 
 %check
+for crate in evdev mlua mlua-sys ctrlc lua-src; do
+    test -d "vendor/$crate"
+done
+for crate in \
+    'ctrlc v3.5.2' \
+    'evdev v0.12.2' \
+    'mlua v0.12.0' \
+    'mlua-sys v0.11.0'; do
+    grep -Fx "$crate" cargo-vendor.txt >/dev/null
+done
 # The production service tests exercise the transient user-service boundary.
 # Fedora mock builds without a user manager may opt out explicitly, but an
 # installed Fedora Asahi validation must run the complete suite.
@@ -75,7 +88,7 @@ packaging/fedora/check-install.sh %{buildroot}
 printf 'sliver package check: exact install manifest passed\n'
 
 %pre
-%sysusers_create_package %{name} %SOURCE1
+%sysusers_create_package %{name} %SOURCE2
 
 %post
 %systemd_post sliver-broker.service
@@ -93,6 +106,7 @@ printf 'sliver package check: exact install manifest passed\n'
 
 %files
 %doc README.md packaging/fedora/INSTALL.md docs/lua.md docs/architecture.md docs/troubleshooting.md release-commit
+%license cargo-vendor.txt
 %{_bindir}/sliver
 %dir %{_libexecdir}/sliver
 %{_libexecdir}/sliver/sliver-broker
@@ -105,6 +119,10 @@ printf 'sliver package check: exact install manifest passed\n'
 %{_sysusersdir}/sliver.conf
 
 %changelog
+* Sun Sep 06 2026 Sliver contributors - 0.1.0-4
+- Build offline from a reproducible Cargo vendor source archive for crates
+  unavailable in Fedora's Rust registry.
+
 * Mon Aug 31 2026 Sliver contributors - 0.1.0-3
 - Authorize the unprivileged broker's cross-UID supervisor peer by kernel
   credentials and its systemd service cgroup.

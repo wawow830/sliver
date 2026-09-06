@@ -44,17 +44,15 @@ expands `release-commit` to that commit, and the verifier rejects a package
 with a different identity.
 
 ```sh
-mkdir -p ~/rpmbuild/SOURCES
-version=$(awk '$1 == "Version:" { print $2 }' packaging/fedora/sliver.spec)
-git archive --format=tar.gz --prefix="sliver-${version}/" \
-  -o "$HOME/rpmbuild/SOURCES/sliver-${version}.tar.gz" HEAD
-cp packaging/fedora/sliver.sysusers ~/rpmbuild/SOURCES/
+scripts/prepare-fedora-sources.sh "$HOME/rpmbuild/SOURCES"
 rpmbuild -ba packaging/fedora/sliver.spec 2>&1 | tee "$HOME/sliver-rpmbuild.log"
 rpm=$(find ~/rpmbuild/RPMS -name 'sliver-*.rpm' -type f | sort | tail -n1)
 rpm -qlp "$rpm"
 ```
 
-The build must run the complete `%check`, including the packaged worker's
+`prepare-fedora-sources.sh` creates the main source archive and a locked
+Cargo vendor archive from `Cargo.lock`. The build must run the complete
+`%check`, including the packaged worker's
 pure-Lua and compiled Lua 5.4 module checks, and must end with the exact
 manifest checks. Do not use a build log that says the user-manager tests were
 skipped. `packaging/fedora/check-install.sh` is the buildroot-side manifest

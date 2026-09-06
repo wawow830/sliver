@@ -14,6 +14,7 @@ f:/usr/share/doc/sliver/lua.md
 f:/usr/share/doc/sliver/architecture.md
 f:/usr/share/doc/sliver/troubleshooting.md
 f:/usr/share/doc/sliver/release-commit
+f:/usr/share/licenses/sliver/cargo-vendor.txt
 f:/usr/lib/systemd/system/sliver-broker.service
 f:/usr/lib/systemd/user/sliver-supervisor.service
 f:/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
@@ -52,7 +53,8 @@ sed \
 LC_ALL=C sort -o "$expected" "$expected"
 find "$root" -type f -printf '/%P\n' |
     sed -e '\#^/usr/lib/debug/#d' -e '\#^/usr/src/debug/#d' \
-        -e '\#^/usr/share/doc/sliver$#d' -e '\#^/usr/share/doc/sliver/#d' |
+        -e '\#^/usr/share/doc/sliver$#d' -e '\#^/usr/share/doc/sliver/#d' \
+        -e '\#^/usr/share/licenses/sliver$#d' -e '\#^/usr/share/licenses/sliver/#d' |
     LC_ALL=C sort > "$actual"
 diff -u "$expected" "$actual"
 
