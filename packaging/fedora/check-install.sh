@@ -3,18 +3,13 @@ set -eu
 
 root=${1:?usage: check-install.sh BUILDROOT}
 
+# RPM stages %doc and %license after %check. The exact RPM manifest check
+# verifies those files after packaging; this buildroot check covers install-time files.
 required='
 x:/usr/bin/sliver
 x:/usr/libexec/sliver/sliver-broker
 x:/usr/libexec/sliver/sliver-supervisor
 x:/usr/libexec/sliver/sliver-lua-worker
-f:/usr/share/doc/sliver/README.md
-f:/usr/share/doc/sliver/INSTALL.md
-f:/usr/share/doc/sliver/lua.md
-f:/usr/share/doc/sliver/architecture.md
-f:/usr/share/doc/sliver/troubleshooting.md
-f:/usr/share/doc/sliver/release-commit
-f:/usr/share/licenses/sliver/cargo-vendor.txt
 f:/usr/lib/systemd/system/sliver-broker.service
 f:/usr/lib/systemd/user/sliver-supervisor.service
 f:/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
