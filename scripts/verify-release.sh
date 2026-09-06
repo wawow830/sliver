@@ -194,7 +194,8 @@ else
         if [[ "$loaded_state_version" == 3 &&
             ( "$MODE" == rollback || "$MODE" == service-only ) ]]; then
             printf 'Legacy verifier state accepted for cleanup-only mode; resume requires a new state ledger.\n' >&2
-            STATE_VERSION=$expected_state_version
+            # Preserve the legacy version if cleanup saves this ledger. A later
+            # normal resume must still reject it until a new run creates v4.
         else
             printf 'Unsupported verifier state version\n' >&2
             exit 1

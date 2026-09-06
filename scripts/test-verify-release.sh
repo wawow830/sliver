@@ -177,6 +177,37 @@ fi
 grep -F 'Unsupported verifier state version' "$legacy_tmp/resume.out" >/dev/null ||
     fail 'legacy resume was not rejected'
 rm -rf "$legacy_tmp"
+legacy_success_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-legacy-success.XXXXXX")
+fake_bin="$legacy_success_tmp/bin"
+mkdir -p "$fake_bin"
+cat > "$fake_bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1:-} == --user ]]; then shift; fi
+case "${1:-}" in
+    is-active) printf 'inactive\n' ;;
+    is-enabled) printf 'disabled\n' ;;
+    show) printf 'not-found\n' ;;
+    *) exit 0 ;;
+esac
+EOF
+chmod 700 "$fake_bin/systemctl"
+printf 'STATE_VERSION=3\nCURRENT_STAGE=11\nLOG_FILE=%q\nEVIDENCE_FILE=%q\nORIGINAL_TINY_ACTIVE=inactive\nORIGINAL_TINY_ENABLED=disabled\nORIGINAL_BROKER_LOAD=not-found\nORIGINAL_GLOBAL_SUPERVISOR_ENABLED=not-found\nORIGINAL_USER_SUPERVISOR_LOAD=not-found\n' \
+    "$legacy_success_tmp/run.log" "$legacy_success_tmp/evidence.tsv" > "$legacy_success_tmp/state.env"
+set +e
+printf 'y\n' | env PATH="$fake_bin:$PATH" "$script" --service-only "$legacy_success_tmp" > "$legacy_success_tmp/service.out" 2>&1
+legacy_service_status=$?
+env PATH="$fake_bin:$PATH" "$script" --resume "$legacy_success_tmp" > "$legacy_success_tmp/resume.out" 2>&1
+legacy_service_resume_status=$?
+set -e
+[[ "$legacy_service_status" == 0 ]] || fail 'legacy service-only cleanup did not complete successfully'
+grep -Fx 'STATE_VERSION=3' "$legacy_success_tmp/state.env" >/dev/null ||
+    fail 'successful legacy cleanup promoted the ledger to the current schema'
+grep -Fx 'CURRENT_STAGE=11' "$legacy_success_tmp/state.env" >/dev/null ||
+    fail 'successful legacy cleanup did not save the existing stage'
+[[ "$legacy_service_resume_status" != 0 ]] || fail 'legacy resume succeeded after cleanup'
+grep -F 'Unsupported verifier state version' "$legacy_success_tmp/resume.out" >/dev/null ||
+    fail 'legacy resume was not rejected after cleanup'
+rm -rf "$legacy_success_tmp"
 performance_tmp=$(mktemp -d "${TMPDIR:-/tmp}/sliver-performance-artifacts.XXXXXX")
 trap 'rm -rf -- "$performance_tmp"' EXIT
 for artifact in frame-trace input-trace latency-trace measurement-notes; do
