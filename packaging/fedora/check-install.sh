@@ -8,6 +8,12 @@ x:/usr/bin/sliver
 x:/usr/libexec/sliver/sliver-broker
 x:/usr/libexec/sliver/sliver-supervisor
 x:/usr/libexec/sliver/sliver-lua-worker
+f:/usr/share/doc/sliver/README.md
+f:/usr/share/doc/sliver/INSTALL.md
+f:/usr/share/doc/sliver/lua.md
+f:/usr/share/doc/sliver/architecture.md
+f:/usr/share/doc/sliver/troubleshooting.md
+f:/usr/share/doc/sliver/release-commit
 f:/usr/lib/systemd/system/sliver-broker.service
 f:/usr/lib/systemd/user/sliver-supervisor.service
 f:/usr/lib/systemd/user/sliver-lua-worker-.service.d/50-defaults.conf
@@ -45,7 +51,8 @@ sed \
     "$manifest" > "$expected"
 LC_ALL=C sort -o "$expected" "$expected"
 find "$root" -type f -printf '/%P\n' |
-    sed -e '\#^/usr/lib/debug/#d' -e '\#^/usr/src/debug/#d' |
+    sed -e '\#^/usr/lib/debug/#d' -e '\#^/usr/src/debug/#d' \
+        -e '\#^/usr/share/doc/sliver$#d' -e '\#^/usr/share/doc/sliver/#d' |
     LC_ALL=C sort > "$actual"
 diff -u "$expected" "$actual"
 
@@ -63,6 +70,10 @@ for path in \
     }
 done
 
+grep -F 'FinalKillSignal=SIGKILL' \
+    "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
+grep -F 'FinalKillSignal=SIGKILL' \
+    "$root/usr/lib/systemd/user/sliver-supervisor.service" >/dev/null
 grep -F 'Type=notify' \
     "$root/usr/lib/systemd/system/sliver-broker.service" >/dev/null
 grep -F 'NotifyAccess=main' \
