@@ -82,6 +82,10 @@ if grep -F 'three-second Fn hold' "$script" >/dev/null; then
     fail 'verifier still describes a three-second Fn recovery hold'
 fi
 grep -F 'video-2008x60.lua' "$script" >/dev/null || fail 'video workload is not named'
+grep -F 'assert_restart_journal' "$script" >/dev/null || fail 'restart journal assertions are missing'
+grep -F 'restart_default_worker' "$script" >/dev/null || fail 'restart does not require a healthy default worker'
+grep -F 'selected_path_restart' "$script" >/dev/null || fail 'restart does not assert selected-path retention'
+grep -F 'SIGABRT' "$script" >/dev/null || fail 'restart journal checks do not reject SIGABRT'
 grep -F 'canvas:text(20, 24, "release verifier", 24, "#ffffff")' "$script" >/dev/null ||
     fail 'valid fixture does not keep top-origin text inside the frame'
 grep -F 'canvas:text(20, 24, string.format("%0.3f", time), 24, "#ffffff")' "$script" >/dev/null ||
