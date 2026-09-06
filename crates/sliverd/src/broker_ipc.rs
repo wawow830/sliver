@@ -22,6 +22,7 @@ use crate::m2_hardware::M2TouchBar;
 use crate::supervisor::Supervisor;
 
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_HARDWARE_POLL_WAIT: Duration = Duration::from_millis(50);
 const CLAIM: u8 = 1;
 const POLL: u8 = 2;
 const PRESENT: u8 = 3;
@@ -960,9 +961,11 @@ fn handle_client_inner<H: TouchBarHardware, L: crate::logind::Logind>(
         let response = match *operation {
             POLL => {
                 ensure!(payload.len() == 8, "broker poll request is malformed");
-                let timeout = u64::from_be_bytes(payload.try_into()?).min(u64::from(u32::MAX));
+                let timeout = u64::from_be_bytes(payload.try_into()?);
+                let timeout =
+                    Duration::from_millis(timeout.min(MAX_HARDWARE_POLL_WAIT.as_millis() as u64));
                 let was_available = fallback.is_hardware_available();
-                let mut events = fallback.poll_events(Duration::from_millis(timeout))?;
+                let mut events = fallback.poll_events(timeout)?;
                 if !was_available && fallback.is_hardware_available() {
                     let already_reported = events.iter().any(|event| {
                         matches!(
@@ -1643,6 +1646,43 @@ mod tests {
                 .lock()
                 .expect("test hardware mutex poisoned")
                 .release()
+        }
+    }
+
+    struct SlowPollHardware(FakeTouchBar);
+
+    impl TouchBarHardware for SlowPollHardware {
+        fn claim(&mut self) -> Result<()> {
+            self.0.claim()
+        }
+
+        fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+            thread::sleep(timeout.min(Duration::from_millis(500)));
+            self.0.poll(Duration::ZERO)
+        }
+
+        fn input_state(&self) -> InputState {
+            self.0.input_state()
+        }
+
+        fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
+            self.0.present(frame)
+        }
+
+        fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
+            self.0.emit_key_events(events)
+        }
+
+        fn get_backlight(&mut self) -> Result<f64> {
+            self.0.get_backlight()
+        }
+
+        fn set_backlight(&mut self, level: f64) -> Result<()> {
+            self.0.set_backlight(level)
+        }
+
+        fn release(&mut self) -> Result<()> {
+            self.0.release()
         }
     }
 
@@ -2486,6 +2526,64 @@ mod tests {
         assert!(
             stopped_while_response_was_unread,
             "broker remained blocked writing an unread client response"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn broker_clamps_client_hardware_poll_before_shutdown() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let logind = FakeLogind::new();
+        let uid = unsafe { libc::getuid() };
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "bounded-poll-session".into(),
+                uid,
+            }),
+        );
+        let running = Arc::new(AtomicBool::new(true));
+        let server_logind = logind.clone();
+        let server_running = running.clone();
+        let (done_sender, done_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let result = (|| -> Result<()> {
+                let fallback = Supervisor::new_fallback_with_logind(
+                    SlowPollHardware(FakeTouchBar::new()),
+                    directory.path().join("broker-state/config-path"),
+                    server_logind.clone(),
+                    Some(LuaSource::embedded(
+                        b"require('sliver.v1'); return { api_version = 1, render = function() end }"
+                            .to_vec(),
+                    )),
+                )?;
+                run_broker(
+                    listener,
+                    fallback,
+                    SessionAuthorizer::new(server_logind),
+                    server_running,
+                    SEAT,
+                    PeerVerification::Test,
+                )
+            })();
+            let _ = done_sender.send(result.is_ok());
+            result
+        });
+
+        let mut client = UnixStream::connect(&socket)?;
+        write_message(&mut client, CLAIM, &[])?;
+        assert_eq!(read_message(&mut client)?.first(), Some(&OK));
+        write_message(&mut client, POLL, &u64::MAX.to_be_bytes())?;
+        running.store(false, Ordering::Release);
+        let stopped = done_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .is_ok();
+        server.join().expect("broker server panicked")?;
+        assert!(
+            stopped,
+            "broker allowed a client poll timeout to exceed its shutdown bound"
         );
         Ok(())
     }
