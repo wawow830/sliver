@@ -7805,7 +7805,7 @@ mod tests {
         )?;
         assert!(supervisor.active.is_some());
         assert!(supervisor.recovery.is_none());
-        let recovery_frame = supervisor
+        let default_frame = supervisor
             .hardware()
             .inner
             .presented_frames()
@@ -7837,7 +7837,7 @@ mod tests {
                 .presented_frames()
                 .last()
                 .expect("default frame disappeared after rejected reset"),
-            &recovery_frame
+            &default_frame
         );
         supervisor.shutdown()?;
         Ok(())
