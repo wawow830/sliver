@@ -506,10 +506,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         supervisor.default_source = default_source;
         let saved = read_selected_path(&state_file)?;
         let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
-        if let Err(error) = supervisor.startup_candidate(selection) {
-            eprintln!("selected Lua worker entered recovery: {error:#}");
-            supervisor.enter_recovery()?;
-        }
+        supervisor.startup_candidate_or_default(selection)?;
         Ok(supervisor)
     }
 
@@ -634,11 +631,24 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         )?;
         let saved = read_selected_path(&state_file)?;
         let selection = saved.map_or(ConfigSelection::Default, ConfigSelection::Path);
-        if let Err(error) = supervisor.startup_candidate(selection) {
-            eprintln!("selected Lua worker entered recovery: {error:#}");
-            supervisor.enter_recovery()?;
-        }
+        supervisor.startup_candidate_or_default(selection)?;
         Ok(supervisor)
+    }
+
+    fn startup_candidate_or_default(&mut self, selection: ConfigSelection) -> Result<()> {
+        let saved_source = matches!(&selection, ConfigSelection::Path(_));
+        if let Err(error) = self.startup_candidate(selection) {
+            eprintln!("selected Lua worker failed during startup: {error:#}");
+            if saved_source {
+                if let Err(default_error) = self.startup_candidate(ConfigSelection::Default) {
+                    eprintln!("embedded default Lua worker entered recovery: {default_error:#}");
+                    self.enter_recovery()?;
+                }
+            } else {
+                self.enter_recovery()?;
+            }
+        }
+        Ok(())
     }
 
     fn now_seconds(&self) -> f64 {
@@ -7987,6 +7997,43 @@ mod tests {
         assert_eq!(
             std::fs::read(&state_file)?,
             healthy.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn service_restart_starts_the_default_after_saved_source_failure_without_resetting_path(
+    ) -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let saved = directory.path().join("saved.lua");
+        let default = LuaSource::embedded(
+            b"require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 1, 0, 1) end }".to_vec(),
+        );
+        PreparedPathState::prepare(&state_file, &saved)?.commit()?;
+        let (first_logind, _) = active_local_logind("failed-restart-session");
+        let supervisor = Supervisor::new_with_startup_candidate(
+            FakeTouchBar::new(),
+            state_file.clone(),
+            first_logind,
+            Some(default.clone()),
+        )?;
+
+        assert!(supervisor.active.is_some());
+        assert!(supervisor.recovery.is_none());
+        assert_eq!(
+            supervisor
+                .hardware()
+                .presented_frames()
+                .last()
+                .expect("default worker did not present a frame")
+                .rgba_at(10, 10),
+            [0, 255, 0, 255]
+        );
+        assert_eq!(
+            std::fs::read(&state_file)?,
+            saved.as_os_str().as_encoded_bytes()
         );
         supervisor.shutdown()?;
         Ok(())
