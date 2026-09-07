@@ -1712,8 +1712,8 @@ mod tests {
             self.inner.generation()
         }
 
-        fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>> {
-            self.inner.session_for_pid(pid)
+        fn session_for_pid(&self, pid: libc::pid_t, uid: libc::uid_t) -> Result<Option<Session>> {
+            self.inner.session_for_pid(pid, uid)
         }
 
         fn active_session(&self, seat: &str) -> Result<Option<ActiveSession>> {

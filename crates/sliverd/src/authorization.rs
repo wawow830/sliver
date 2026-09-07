@@ -136,7 +136,7 @@ impl<L: Logind> SessionAuthorizer<L> {
             .context("reading the logind session generation")?;
         let session = self
             .logind
-            .session_for_pid(peer.pid)
+            .session_for_pid(peer.pid, peer.uid)
             .context("looking up the caller's logind session")?
             .context("caller does not belong to a logind session")?;
 

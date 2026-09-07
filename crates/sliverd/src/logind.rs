@@ -22,7 +22,7 @@ pub(crate) struct ActiveSession {
 
 pub(crate) trait Logind: Clone + Send + Sync + 'static {
     fn generation(&self) -> Result<u64>;
-    fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>>;
+    fn session_for_pid(&self, pid: libc::pid_t, uid: libc::uid_t) -> Result<Option<Session>>;
     fn active_session(&self, seat: &str) -> Result<Option<ActiveSession>>;
 }
 
@@ -131,18 +131,8 @@ impl Drop for LoginMonitor {
     }
 }
 
-impl Logind for RealLogind {
-    fn generation(&self) -> Result<u64> {
-        self.monitor_generation()
-    }
-
-    fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>> {
-        let id = match systemd_string("sd_pid_get_session", |output| unsafe {
-            ffi::sd_pid_get_session(pid, output)
-        })? {
-            Some(id) => id,
-            None => return Ok(None),
-        };
+impl RealLogind {
+    fn session(&self, id: String) -> Result<Option<Session>> {
         let c_id = CString::new(id.as_str()).context("logind returned an invalid session ID")?;
         let uid = match systemd_uid(&c_id, |session, output| unsafe {
             ffi::sd_session_get_uid(session, output)
@@ -165,7 +155,6 @@ impl Logind for RealLogind {
             Some(active) => active,
             None => return Ok(None),
         };
-
         Ok(Some(Session {
             id,
             uid,
@@ -173,6 +162,45 @@ impl Logind for RealLogind {
             remote,
             active,
         }))
+    }
+
+    fn session_for_audit_identity(
+        &self,
+        pid: libc::pid_t,
+        uid: libc::uid_t,
+    ) -> Result<Option<Session>> {
+        let peer_audit = audit_session_id(pid)?;
+        let Some(peer_audit) = peer_audit else {
+            return Ok(None);
+        };
+        for id in systemd_sessions(uid)? {
+            let c_id =
+                CString::new(id.as_str()).context("logind returned an invalid session ID")?;
+            let mut leader = 0;
+            let code = unsafe { ffi::sd_session_get_leader(c_id.as_ptr(), &mut leader) };
+            if code < 0 && missing_or_error::<()>("sd_session_get_leader", code)?.is_none() {
+                continue;
+            }
+            if audit_session_id(leader)? == Some(peer_audit) {
+                return self.session(id);
+            }
+        }
+        Ok(None)
+    }
+}
+
+impl Logind for RealLogind {
+    fn generation(&self) -> Result<u64> {
+        self.monitor_generation()
+    }
+
+    fn session_for_pid(&self, pid: libc::pid_t, uid: libc::uid_t) -> Result<Option<Session>> {
+        if let Some(id) = systemd_string("sd_pid_get_session", |output| unsafe {
+            ffi::sd_pid_get_session(pid, output)
+        })? {
+            return self.session(id);
+        }
+        self.session_for_audit_identity(pid, uid)
     }
 
     fn active_session(&self, seat: &str) -> Result<Option<ActiveSession>> {
@@ -183,6 +211,39 @@ impl Logind for RealLogind {
         })?;
         Ok(id.map(|id| ActiveSession { id, uid }))
     }
+}
+
+fn audit_session_id(pid: libc::pid_t) -> Result<Option<u32>> {
+    let value = std::fs::read_to_string(format!("/proc/{pid}/sessionid"))
+        .with_context(|| format!("reading audit session ID for PID {pid}"))?;
+    let id = value
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("parsing audit session ID for PID {pid}"))?;
+    Ok((id != u32::MAX).then_some(id))
+}
+
+fn systemd_sessions(uid: libc::uid_t) -> Result<Vec<String>> {
+    let mut output: *mut *mut c_char = ptr::null_mut();
+    let code = unsafe { ffi::sd_uid_get_sessions(uid, 0, &mut output) };
+    if code < 0 {
+        return missing_or_error("sd_uid_get_sessions", code)
+            .map(|sessions| sessions.unwrap_or_default());
+    }
+    if output.is_null() {
+        return Ok(Vec::new());
+    }
+    let mut sessions = Vec::new();
+    let mut cursor = output;
+    unsafe {
+        while !(*cursor).is_null() {
+            sessions.push(CStr::from_ptr(*cursor).to_string_lossy().into_owned());
+            libc::free((*cursor).cast());
+            cursor = cursor.add(1);
+        }
+        libc::free(output.cast());
+    }
+    Ok(sessions)
 }
 
 fn systemd_string<F>(name: &str, call: F) -> Result<Option<String>>
@@ -271,6 +332,15 @@ mod ffi {
             session: *const c_char,
             ret_uid: *mut libc::uid_t,
         ) -> libc::c_int;
+        pub(super) fn sd_session_get_leader(
+            session: *const c_char,
+            ret_pid: *mut libc::pid_t,
+        ) -> libc::c_int;
+        pub(super) fn sd_uid_get_sessions(
+            uid: libc::uid_t,
+            require_active: libc::c_int,
+            ret_sessions: *mut *mut *mut c_char,
+        ) -> libc::c_int;
         pub(super) fn sd_session_get_seat(
             session: *const c_char,
             ret_seat: *mut *mut c_char,
@@ -295,6 +365,32 @@ mod ffi {
 
 #[cfg(test)]
 pub(crate) use fake::FakeLogind;
+
+#[cfg(test)]
+mod real_tests {
+    use super::*;
+
+    #[test]
+    fn graphical_process_moved_to_a_user_scope_keeps_its_login_identity() -> Result<()> {
+        let pid = std::process::id() as libc::pid_t;
+        let direct = systemd_string("sd_pid_get_session", |output| unsafe {
+            ffi::sd_pid_get_session(pid, output)
+        })?;
+        if direct.is_some() || audit_session_id(pid)?.is_none() {
+            return Ok(());
+        }
+        let sessions = systemd_sessions(unsafe { libc::geteuid() })?;
+        if sessions.is_empty() {
+            return Ok(());
+        }
+        let session = RealLogind::default().session_for_pid(pid, unsafe { libc::geteuid() })?;
+        assert!(
+            session.is_some(),
+            "audit login identity did not recover a logind session for a user-scope process"
+        );
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod fake {
@@ -444,7 +540,7 @@ mod fake {
             Ok(state.generation)
         }
 
-        fn session_for_pid(&self, pid: libc::pid_t) -> Result<Option<Session>> {
+        fn session_for_pid(&self, pid: libc::pid_t, _uid: libc::uid_t) -> Result<Option<Session>> {
             let (lock, _) = &*self.state;
             let state = lock.lock().expect("fake logind mutex poisoned");
             Ok(state
