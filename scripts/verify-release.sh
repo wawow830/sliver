@@ -1311,8 +1311,15 @@ fresh_session_stage() {
     stage 5 "Verify the fresh local graphical session"
     refuse_if_blocked
     local current_session=${XDG_SESSION_ID:-} type remote seat active manager_state
-    [[ -n "$current_session" && "$current_session" != "$INITIAL_SESSION_ID" ]] && pass_check fresh_graphical_session "new session $current_session replaced $INITIAL_SESSION_ID" ||
+    local session_started_usec setup_finished_at
+    session_started_usec=$(loginctl show-session "$current_session" -p TimestampUSec --value 2>/dev/null || true)
+    setup_finished_at=$(awk -F '\t' '$2 == "account_udev" && $3 == "pass" { value=$1 } END { print value }' "$EVIDENCE_FILE")
+    if verify_release_session_is_fresh "$current_session" "$INITIAL_SESSION_ID" \
+        "$session_started_usec" "$setup_finished_at"; then
+        pass_check fresh_graphical_session "session $current_session started after account setup"
+    else
         fail_check fresh_graphical_session "resume from a new local login session"
+    fi
     type=$(loginctl show-session "$current_session" -p Type --value 2>/dev/null || true)
     remote=$(loginctl show-session "$current_session" -p Remote --value 2>/dev/null || true)
     seat=$(loginctl show-session "$current_session" -p Seat --value 2>/dev/null || true)
