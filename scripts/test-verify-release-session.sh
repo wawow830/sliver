@@ -12,8 +12,8 @@ verify_release_process_has_group 976 "$tmp/fresh"
 ! verify_release_process_has_group 976 "$tmp/missing"
 ! verify_release_process_has_group '' "$tmp/fresh"
 verify_release_session_is_fresh 9 5 0 ''
-verify_release_session_is_fresh 5 5 1788762458000000 '2026-09-07T16:27:37+10:00'
-! verify_release_session_is_fresh 5 5 1788730000000000 '2026-09-07T16:27:37+10:00'
+verify_release_session_is_fresh 5 5 'Mon 2026-09-07 23:06:44 AEST' '2026-09-07T16:27:37+10:00'
+! verify_release_session_is_fresh 5 5 'Mon 2026-09-07 15:00:00 AEST' '2026-09-07T16:27:37+10:00'
 ! verify_release_session_is_fresh 5 5 0 ''
 # Replay a fresh shell with a stale manager. Account lookup alone says yes.
 getent() { printf 'sliver-supervisors:x:976:wawow\n'; }
