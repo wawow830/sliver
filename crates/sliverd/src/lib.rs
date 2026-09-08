@@ -70,9 +70,7 @@ pub fn supervisor_main() -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let signal_running = running.clone();
     ctrlc::set_handler(move || signal_running.store(false, Ordering::Release))?;
-    run_supervisor_loop(&running, std::time::Duration::from_secs(1), || {
-        supervisor_main_inner(running.clone())
-    })
+    supervisor_main_inner(running)
 }
 
 fn run_supervisor_loop<F>(
@@ -89,7 +87,14 @@ where
         }
         let result = start();
         if is_transient_supervisor_error(&result) {
-            std::thread::sleep(retry_delay);
+            let deadline = std::time::Instant::now() + retry_delay;
+            while running.load(std::sync::atomic::Ordering::Acquire) {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(10)));
+            }
             continue;
         }
         if let Err(error) = &result {
@@ -174,20 +179,24 @@ fn supervisor_main_inner(running: std::sync::Arc<std::sync::atomic::AtomicBool>)
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
 
     let state_file = selected_path_state_file()?;
-    #[cfg(test)]
-    let mut supervisor = supervisor::Supervisor::new_with_startup_candidate(
-        broker_ipc::BrokerHardware::new(),
-        state_file.clone(),
-        crate::logind::RealLogind::default(),
-        Some(default_source::source()),
-    )?;
-    #[cfg(not(test))]
-    let mut supervisor = supervisor::Supervisor::new_with_startup_candidate(
-        broker_ipc::BrokerHardware::new(),
-        state_file,
-        crate::logind::RealLogind::default(),
-    )?;
-    let serve_result = supervisor::serve_until(listener, &mut supervisor, running);
+    let logind = crate::logind::RealLogind::default();
+    let result = supervisor::serve_user_until(listener, logind.clone(), running.clone(), || {
+        supervisor::Supervisor::new_with_startup_candidate(
+            broker_ipc::BrokerHardware::new().with_claim_cancellation(running.clone()),
+            state_file.clone(),
+            logind.clone(),
+            #[cfg(test)]
+            Some(default_source::source()),
+        )
+    });
+    let _ = std::fs::remove_file(&socket);
+    result
+}
+
+fn finish_user_session<L: logind::Logind>(
+    mut supervisor: supervisor::Supervisor<broker_ipc::BrokerHardware, L>,
+    serve_result: Result<()>,
+) -> Result<()> {
     let session_revoked = supervisor.hardware().session_revoked();
     let handoff_result = if session_revoked {
         let reason = supervisor.hardware().revoked_stop_reason();
@@ -215,7 +224,6 @@ fn supervisor_main_inner(running: std::sync::Arc<std::sync::atomic::AtomicBool>)
     } else {
         supervisor.shutdown()
     };
-    let _ = std::fs::remove_file(&socket);
     let service_result = match (service_result, handoff_result) {
         (Err(error), Err(handoff_error)) => {
             Err(error).context(format!("owner handoff also failed: {handoff_error:#}"))

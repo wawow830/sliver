@@ -94,6 +94,7 @@ pub(crate) struct BrokerHardware {
     missing_capabilities: BTreeSet<HardwareCapability>,
     unavailable_capability: Option<HardwareCapability>,
     revoked_reason: Option<StopReason>,
+    claim_running: Option<Arc<AtomicBool>>,
     #[cfg(test)]
     test_uid: Option<libc::uid_t>,
 }
@@ -111,6 +112,7 @@ impl BrokerHardware {
             missing_capabilities: BTreeSet::new(),
             unavailable_capability: None,
             revoked_reason: None,
+            claim_running: None,
             #[cfg(test)]
             test_uid: None,
         }
@@ -129,6 +131,7 @@ impl BrokerHardware {
             missing_capabilities: BTreeSet::new(),
             unavailable_capability: None,
             revoked_reason: None,
+            claim_running: None,
             test_uid: None,
         }
     }
@@ -140,6 +143,11 @@ impl BrokerHardware {
         let mut hardware = Self::new_at(socket);
         hardware.test_uid = Some(uid);
         hardware
+    }
+
+    pub(crate) fn with_claim_cancellation(mut self, running: Arc<AtomicBool>) -> Self {
+        self.claim_running = Some(running);
+        self
     }
 
     pub(crate) fn session_revoked(&self) -> bool {
@@ -234,16 +242,27 @@ impl TouchBarHardware for BrokerHardware {
     fn claim(&mut self) -> Result<()> {
         ensure!(!self.claimed, "broker hardware is already claimed");
         let path = self.socket.clone().unwrap_or(socket_path()?);
-        let mut stream = UnixStream::connect(&path)
-            .with_context(|| format!("connecting to hardware broker at {}", path.display()))?;
+        let mut stream = match &self.claim_running {
+            Some(running) => connect_until_stop(&path, running),
+            None => UnixStream::connect(&path).map_err(Into::into),
+        }
+        .with_context(|| format!("connecting to hardware broker at {}", path.display()))?;
         #[cfg(test)]
         let claim_payload = self
             .test_uid
             .map_or_else(Vec::new, |uid| uid.to_be_bytes().to_vec());
         #[cfg(not(test))]
         let claim_payload = Vec::new();
-        write_message(&mut stream, CLAIM, &claim_payload)?;
-        let response = read_message(&mut stream)?;
+        // Keep one queued claim rather than timing out and filling the broker
+        // backlog with stale connections. Both directions remain cancellable.
+        let response = if let Some(running) = &self.claim_running {
+            write_client_message(&mut stream, CLAIM, &claim_payload, None, Some(running))?;
+            read_message_until_stop(&mut stream, &mut Vec::new(), None, Some(running))?
+                .context("broker claim interrupted or connection closed")?
+        } else {
+            write_message(&mut stream, CLAIM, &claim_payload)?;
+            read_message(&mut stream)?
+        };
         let (status, body) = response
             .split_first()
             .context("broker claim response is empty")?;
@@ -1117,6 +1136,69 @@ fn encode_message(operation: u8, payload: &[u8]) -> Result<Vec<u8>> {
     message.push(operation);
     message.extend_from_slice(payload);
     Ok(message)
+}
+
+// UnixStream::connect can block too when the listener backlog is full. Linux
+// AF_UNIX nonblocking connect reports EAGAIN in that case; retry without ever
+// leaving a detached claiming thread behind at shutdown.
+fn connect_until_stop(path: &std::path::Path, running: &AtomicBool) -> Result<UnixStream> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = path.as_os_str().as_bytes();
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    ensure!(
+        bytes.len() < address.sun_path.len(),
+        "broker socket path is too long"
+    );
+    ensure!(
+        !bytes.contains(&0),
+        "broker socket path contains a NUL byte"
+    );
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (target, byte) in address.sun_path.iter_mut().zip(bytes) {
+        *target = *byte as libc::c_char;
+    }
+    let length =
+        (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
+    loop {
+        ensure!(
+            running.load(Ordering::Acquire),
+            "broker claim interrupted by shutdown"
+        );
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_UNIX,
+                libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+                0,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let connected = unsafe {
+            libc::connect(
+                fd.as_raw_fd(),
+                (&address as *const libc::sockaddr_un).cast(),
+                length,
+            )
+        };
+        if connected == 0 {
+            let stream = UnixStream::from(fd);
+            stream.set_nonblocking(false)?;
+            return Ok(stream);
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        ) {
+            return Err(error.into());
+        }
+        drop(fd);
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn write_message(stream: &mut UnixStream, operation: u8, payload: &[u8]) -> Result<()> {
@@ -3829,6 +3911,488 @@ mod tests {
         let broker_result = broker_server.join().expect("broker server panicked");
         result?;
         user_result?;
+        broker_result?;
+        Ok(())
+    }
+
+    // Unlike a missing-socket probe, this keeps a real broker owner alive while
+    // a second supervisor's claim queues behind it. The CLI peer is still read
+    // from SO_PEERCRED; only logind and the broker's second UID are simulated.
+    #[test]
+    fn inactive_public_cli_rejects_during_two_user_broker_contention() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let broker_socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&broker_socket)?;
+        let public_socket = directory.path().join("supervisor.sock");
+        let public_listener = UnixListener::bind(&public_socket)?;
+        let state = directory.path().join("user/config-path");
+        let source = directory.path().join("saved.lua");
+        std::fs::write(&source, "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1) end }")?;
+        PreparedPathState::prepare(&state, &source)?.commit()?;
+        let uid = unsafe { libc::getuid() };
+        let owner_uid = uid + 1;
+        let logind = FakeLogind::new();
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "owner".into(),
+                uid: owner_uid,
+            }),
+        );
+        logind.set_session_for_any_pid(Session {
+            id: "caller".into(),
+            uid,
+            seat: Some(SEAT.into()),
+            remote: false,
+            active: false,
+        });
+        let shared = ThreadFakeHardware::new();
+        let broker_running = Arc::new(AtomicBool::new(true));
+        let broker_server = {
+            let running = broker_running.clone();
+            let logind = logind.clone();
+            let shared = shared.clone();
+            let state = directory.path().join("broker/config-path");
+            thread::spawn(move || -> Result<()> {
+                let fallback = Supervisor::new_fallback_with_logind(
+                    shared,
+                    state,
+                    logind.clone(),
+                    Some(LuaSource::embedded(default_source_bytes())),
+                )?;
+                run_broker(
+                    listener,
+                    fallback,
+                    SessionAuthorizer::new(logind),
+                    running,
+                    SEAT,
+                    PeerVerification::Test,
+                )
+            })
+        };
+        let owner = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at_as(broker_socket.clone(), owner_uid),
+            directory.path().join("owner/config-path"),
+            FakeLogind::new(),
+            Some(LuaSource::embedded(default_source_bytes())),
+        )?;
+        let user_running = Arc::new(AtomicBool::new(true));
+        let user_server = {
+            let running = user_running.clone();
+            let logind = logind.clone();
+            let state = state.clone();
+            thread::spawn(move || -> Result<()> {
+                crate::supervisor::serve_user_until(
+                    public_listener,
+                    logind.clone(),
+                    running.clone(),
+                    || {
+                        Supervisor::new_with_startup_candidate_process(
+                            BrokerHardware::new_at(broker_socket.clone())
+                                .with_claim_cancellation(running.clone()),
+                            state.clone(),
+                            logind.clone(),
+                            Some(LuaSource::embedded(default_source_bytes())),
+                        )
+                    },
+                )
+            })
+        };
+        let cli = std::env::current_exe()?
+            .parent()
+            .and_then(|path| path.parent())
+            .context("test binary has no target directory")?
+            .join("sliver");
+        let frames_before = shared.inspect(|h| h.presented_frames().len());
+        let mut child = std::process::Command::new(cli)
+            .env("SLIVER_SUPERVISOR_SOCKET", &public_socket)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let prompt = loop {
+            if child.try_wait()?.is_some() {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                child.kill()?;
+                break false;
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
+        let output = child.wait_with_output()?;
+        let unchanged = std::fs::read(&state)? == source.as_os_str().as_encoded_bytes()
+            && shared.inspect(|h| h.presented_frames().len()) == frames_before;
+        // Shutdown must complete while the other owner is STILL connected.
+        // Release it only after recording the bounded verdict, even on failure.
+        user_running.store(false, Ordering::Release);
+        let stop_deadline = Instant::now() + Duration::from_millis(500);
+        while !user_server.is_finished() && Instant::now() < stop_deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let stopped_while_owned = user_server.is_finished();
+        owner.shutdown()?;
+        let user_result = user_server.join().expect("user supervisor panicked");
+        broker_running.store(false, Ordering::Release);
+        broker_server.join().expect("broker panicked")?;
+        ensure!(prompt, "inactive public CLI hung behind another user's broker claim (no authorization reply within 1s)");
+        ensure!(
+            output.status.code() == Some(1),
+            "wrong rejection: {output:?}"
+        );
+        ensure!(output.stdout.is_empty(), "rejection wrote stdout");
+        ensure!(
+            String::from_utf8_lossy(&output.stderr).contains("caller logind session is inactive"),
+            "not an authoritative authorization rejection: {output:?}"
+        );
+        ensure!(
+            unchanged,
+            "inactive request changed frame or selected source"
+        );
+        ensure!(
+            stopped_while_owned,
+            "claiming shutdown waited for the other owner to disconnect"
+        );
+        user_result?;
+        Ok(())
+    }
+
+    #[test]
+    fn broker_claim_shutdown_is_bounded_with_a_full_listener_backlog() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        // Linux permits one queued connection with backlog zero. Hold it open
+        // without accepting, so the next connect would block even before CLAIM.
+        ensure!(
+            unsafe { libc::listen(listener.as_raw_fd(), 0) } == 0,
+            "setting test backlog failed"
+        );
+        let queued = UnixStream::connect(&socket)?;
+        let running = Arc::new(AtomicBool::new(true));
+        let claimant = {
+            let running = running.clone();
+            thread::spawn(move || {
+                BrokerHardware::new_at(socket)
+                    .with_claim_cancellation(running)
+                    .claim()
+            })
+        };
+        thread::sleep(Duration::from_millis(50));
+        let waiting = !claimant.is_finished();
+        running.store(false, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !claimant.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let stopped = claimant.is_finished();
+        drop(queued);
+        drop(listener);
+        let result = claimant.join().expect("claimant panicked");
+        ensure!(waiting, "claim did not encounter the full backlog");
+        ensure!(
+            stopped && result.is_err(),
+            "full-backlog claim was not cancelled: {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn broker_claim_shutdown_is_bounded_with_a_partial_response() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let running = Arc::new(AtomicBool::new(true));
+        let claimant = {
+            let running = running.clone();
+            thread::spawn(move || {
+                BrokerHardware::new_at(socket)
+                    .with_claim_cancellation(running)
+                    .claim()
+            })
+        };
+        let (mut stream, _) = listener.accept()?;
+        ensure!(
+            read_message(&mut stream)? == [CLAIM],
+            "expected a broker claim"
+        );
+        stream.write_all(&[0, 0, 0, 21, OK])?;
+        thread::sleep(Duration::from_millis(20));
+        let waiting = !claimant.is_finished();
+        running.store(false, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !claimant.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let stopped = claimant.is_finished();
+        drop(stream);
+        let result = claimant.join().expect("claimant panicked");
+        ensure!(waiting, "claim did not wait for the partial response");
+        ensure!(
+            stopped && result.is_err(),
+            "partial-response claim was not cancelled: {result:?}"
+        );
+        Ok(())
+    }
+
+    fn public_cli_output(
+        socket: &std::path::Path,
+        source: Option<&std::path::Path>,
+    ) -> Result<std::process::Output> {
+        let cli = std::env::current_exe()?
+            .parent()
+            .and_then(|path| path.parent())
+            .context("test binary has no target directory")?
+            .join("sliver");
+        let mut command = std::process::Command::new(cli);
+        command
+            .env("SLIVER_SUPERVISOR_SOCKET", socket)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(source) = source {
+            command.arg(source);
+        }
+        let mut child = command.spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while child.try_wait()?.is_none() {
+            if Instant::now() >= deadline {
+                child.kill()?;
+                let output = child.wait_with_output()?;
+                bail!("public CLI did not reply within 1s: {output:?}");
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        Ok(child.wait_with_output()?)
+    }
+
+    fn set_cli_session(logind: &FakeLogind, id: &str, active: bool) {
+        // Both CLI children have the test process's real SO_PEERCRED UID.
+        // Independent fake login adapters model each graphical user's session;
+        // only the broker test transport substitutes a second kernel UID.
+        let uid = unsafe { libc::getuid() };
+        logind.set_session_for_any_pid(Session {
+            id: id.into(),
+            uid,
+            seat: Some(SEAT.into()),
+            remote: false,
+            active,
+        });
+        logind.set_active(SEAT, active.then(|| ActiveSession { id: id.into(), uid }));
+    }
+
+    fn wait_for_frame(shared: &ThreadFakeHardware, rgba: [u8; 4]) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if shared.inspect(|h| {
+                h.presented_frames()
+                    .last()
+                    .is_some_and(|f| f.rgba_at(10, 10) == rgba)
+            }) {
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "expected broker frame {rgba:?} was not restored"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn two_user_public_cli_contention_preserves_applies_and_restores_saved_sources() -> Result<()> {
+        use std::sync::atomic::AtomicUsize;
+
+        let directory = tempfile::tempdir()?;
+        let broker_socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&broker_socket)?;
+        let uid_a = unsafe { libc::getuid() };
+        let uid_b = uid_a + 1;
+        let broker_logind = FakeLogind::new();
+        broker_logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "a".into(),
+                uid: uid_a,
+            }),
+        );
+        let logind_a = FakeLogind::new();
+        let logind_b = FakeLogind::new();
+        set_cli_session(&logind_a, "a", true);
+        set_cli_session(&logind_b, "b", false);
+        let source_a = directory.path().join("red.lua");
+        let source_b = directory.path().join("blue.lua");
+        let started_b = directory.path().join("blue-started");
+        std::fs::write(&source_a, "require('sliver.v1'); return { api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 1, 0, 0, 1) end }")?;
+        std::fs::write(&source_b, format!("local f = assert(io.open({:?}, 'w')); f:close(); require('sliver.v1'); return {{ api_version = 1, render = function(canvas) canvas:rectangle(0, 0, 20, 20, 0, 0, 1, 1) end }}", started_b.to_string_lossy()))?;
+        let state_a = directory.path().join("a/config-path");
+        let state_b = directory.path().join("b/config-path");
+        PreparedPathState::prepare(&state_b, &source_b)?.commit()?;
+        let shared = ThreadFakeHardware::new();
+        let broker_running = Arc::new(AtomicBool::new(true));
+        let broker_server = {
+            let running = broker_running.clone();
+            let logind = broker_logind.clone();
+            let shared = shared.clone();
+            let state = directory.path().join("broker/config-path");
+            thread::spawn(move || -> Result<()> {
+                let fallback = Supervisor::new_fallback_with_logind(
+                    shared,
+                    state,
+                    logind.clone(),
+                    Some(LuaSource::embedded(default_source_bytes())),
+                )?;
+                run_broker(
+                    listener,
+                    fallback,
+                    SessionAuthorizer::new(logind),
+                    running,
+                    SEAT,
+                    PeerVerification::Test,
+                )
+            })
+        };
+        let spawn_user = |name: &str, uid, state: PathBuf, logind: FakeLogind| -> Result<_> {
+            let socket = directory.path().join(format!("{name}.sock"));
+            let listener = UnixListener::bind(&socket)?;
+            let running = Arc::new(AtomicBool::new(true));
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let server = {
+                let running = running.clone();
+                let attempts = attempts.clone();
+                let broker_socket = broker_socket.clone();
+                thread::spawn(move || {
+                    crate::supervisor::serve_user_until(
+                        listener,
+                        logind.clone(),
+                        running.clone(),
+                        || {
+                            attempts.fetch_add(1, Ordering::AcqRel);
+                            Supervisor::new_with_startup_candidate_process(
+                                BrokerHardware::new_at_as(broker_socket.clone(), uid)
+                                    .with_claim_cancellation(running.clone()),
+                                state.clone(),
+                                logind.clone(),
+                                Some(LuaSource::embedded(default_source_bytes())),
+                            )
+                        },
+                    )
+                })
+            };
+            Ok((socket, running, attempts, server))
+        };
+        let (socket_a, running_a, attempts_a, server_a) =
+            spawn_user("a", uid_a, state_a.clone(), logind_a.clone())?;
+        // Establish ownership before allowing the second constructor to claim.
+        wait_for_frame(&shared, [0, 255, 0, 255])?;
+        let (socket_b, running_b, attempts_b, server_b) =
+            spawn_user("b", uid_b, state_b.clone(), logind_b.clone())?;
+        let result = (|| -> Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while attempts_b.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(5));
+            }
+            // Cover both public commands. Neither may stage, clear the saved
+            // source, or disturb the still-active owner's frame.
+            for source in [None, Some(source_a.as_path())] {
+                let output = public_cli_output(&socket_b, source)?;
+                ensure!(
+                    output.status.code() == Some(1) && output.stdout.is_empty(),
+                    "inactive CLI status: {output:?}"
+                );
+                ensure!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("caller logind session is inactive"),
+                    "not authorization rejection: {output:?}"
+                );
+            }
+            ensure!(
+                !started_b.exists(),
+                "waiting supervisor staged Lua before claiming"
+            );
+            ensure!(
+                std::fs::read(&state_b)? == source_b.as_os_str().as_encoded_bytes(),
+                "inactive apply changed selected path"
+            );
+            wait_for_frame(&shared, [0, 255, 0, 255])?;
+            let output = public_cli_output(&socket_a, Some(&source_a))?;
+            ensure!(
+                output.status.success() && output.stdout.is_empty() && output.stderr.is_empty(),
+                "active apply failed during contention: {output:?}"
+            );
+            wait_for_frame(&shared, [255, 0, 0, 255])?;
+            // Longer than the retry interval: a blocked claim must remain one
+            // attempt, not a reconnect/restart loop accumulating stale claims.
+            thread::sleep(Duration::from_millis(1100));
+            ensure!(
+                attempts_a.load(Ordering::Acquire) == 1 && attempts_b.load(Ordering::Acquire) == 1,
+                "supervisor restarted while another owner was active"
+            );
+            ensure!(
+                !server_a.is_finished() && !server_b.is_finished(),
+                "a supervisor exited while inactive"
+            );
+            set_cli_session(&logind_a, "a", false);
+            set_cli_session(&logind_b, "b", true);
+            broker_logind.set_active(
+                SEAT,
+                Some(ActiveSession {
+                    id: "b".into(),
+                    uid: uid_b,
+                }),
+            );
+            wait_for_frame(&shared, [0, 0, 255, 255])?;
+            ensure!(
+                started_b.exists(),
+                "activation did not stage the saved source"
+            );
+            ensure!(
+                std::fs::read(&state_b)? == source_b.as_os_str().as_encoded_bytes(),
+                "activation changed saved source"
+            );
+            let output = public_cli_output(&socket_b, Some(&source_b))?;
+            ensure!(
+                output.status.success(),
+                "new active user's CLI failed: {output:?}"
+            );
+            // The old owner's socket must survive handoff AND its retry delay.
+            let output = public_cli_output(&socket_a, None)?;
+            ensure!(
+                output.status.code() == Some(1)
+                    && String::from_utf8_lossy(&output.stderr)
+                        .contains("caller logind session is inactive"),
+                "old owner's socket stopped authorizing: {output:?}"
+            );
+            set_cli_session(&logind_b, "b", false);
+            set_cli_session(&logind_a, "a", true);
+            broker_logind.set_active(
+                SEAT,
+                Some(ActiveSession {
+                    id: "a".into(),
+                    uid: uid_a,
+                }),
+            );
+            wait_for_frame(&shared, [255, 0, 0, 255])?;
+            ensure!(
+                std::fs::read(&state_a)? == source_a.as_os_str().as_encoded_bytes(),
+                "switch back lost explicit selected source"
+            );
+            Ok(())
+        })();
+        running_a.store(false, Ordering::Release);
+        running_b.store(false, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while (!server_a.is_finished() || !server_b.is_finished()) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let stopped = server_a.is_finished() && server_b.is_finished();
+        broker_running.store(false, Ordering::Release);
+        let result_a = server_a.join().expect("supervisor a panicked");
+        let result_b = server_b.join().expect("supervisor b panicked");
+        let broker_result = broker_server.join().expect("broker panicked");
+        result?;
+        ensure!(stopped, "user supervisor shutdown was not bounded");
+        result_a?;
+        result_b?;
         broker_result?;
         Ok(())
     }

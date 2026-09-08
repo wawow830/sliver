@@ -2439,6 +2439,28 @@ struct QueuedRequest {
     request: Result<AuthorizedRequest>,
 }
 
+/// Keep the public authorization socket alive before claiming hardware and
+/// across session handoffs. Only the serialized owner loop can stage/commit.
+pub(crate) fn serve_user_until<L: Logind>(
+    listener: UnixListener,
+    logind: L,
+    running: Arc<AtomicBool>,
+    mut start: impl FnMut() -> Result<Supervisor<crate::broker_ipc::BrokerHardware, L>>,
+) -> Result<()> {
+    with_request_queue(listener, SessionAuthorizer::new(logind), None, |receiver| {
+        crate::run_supervisor_loop(&running, Duration::from_secs(1), || {
+            let mut supervisor = match start() {
+                Ok(supervisor) => supervisor,
+                Err(_) if !running.load(Ordering::Acquire) => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            let result = serve_receiver(&mut supervisor, receiver, None, &running);
+            crate::finish_user_session(supervisor, result)
+        })
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn serve_until<H: TouchBarHardware, L: Logind>(
     listener: UnixListener,
     supervisor: &mut Supervisor<H, L>,
@@ -2456,21 +2478,56 @@ fn serve_for_test<H: TouchBarHardware, L: Logind>(
     serve_queue(listener, supervisor, Some(request_limit), None)
 }
 
+#[cfg(test)]
 fn serve_queue<H: TouchBarHardware, L: Logind>(
     listener: UnixListener,
     supervisor: &mut Supervisor<H, L>,
     request_limit: Option<usize>,
     external_stop: Option<Arc<AtomicBool>>,
 ) -> Result<()> {
-    let authorizer = supervisor.authorizer.clone();
-    let (sender, receiver) = mpsc::sync_channel(REQUEST_QUEUE_CAPACITY);
     let running = external_stop.unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
+    with_request_queue(
+        listener,
+        supervisor.authorizer.clone(),
+        request_limit,
+        |receiver| serve_receiver(supervisor, receiver, request_limit, &running),
+    )
+}
+
+fn with_request_queue<L: Logind>(
+    listener: UnixListener,
+    authorizer: SessionAuthorizer<L>,
+    request_limit: Option<usize>,
+    serve: impl FnOnce(&mpsc::Receiver<QueuedRequest>) -> Result<()>,
+) -> Result<()> {
+    let (sender, receiver) = mpsc::sync_channel(REQUEST_QUEUE_CAPACITY);
     let acceptor_stop = Arc::new(AtomicBool::new(false));
     let acceptor_stop_signal = acceptor_stop.clone();
     let acceptor = thread::spawn(move || {
         accept_requests(listener, authorizer, sender, request_limit, acceptor_stop)
     });
 
+    let service_result = serve(&receiver);
+    acceptor_stop_signal.store(true, Ordering::Release);
+    let acceptor_result = acceptor
+        .join()
+        .map_err(|_| anyhow::anyhow!("apply acceptor thread panicked"))?;
+    match (service_result, acceptor_result) {
+        (Err(error), Err(acceptor_error)) => {
+            Err(error).context(format!("apply acceptor failed also: {acceptor_error:#}"))
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn serve_receiver<H: TouchBarHardware, L: Logind>(
+    supervisor: &mut Supervisor<H, L>,
+    receiver: &mpsc::Receiver<QueuedRequest>,
+    request_limit: Option<usize>,
+    running: &AtomicBool,
+) -> Result<()> {
     let mut service_result = Ok(());
     let mut processed = 0;
     loop {
@@ -2500,18 +2557,7 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
         }
     }
 
-    acceptor_stop_signal.store(true, Ordering::Release);
-    let acceptor_result = acceptor
-        .join()
-        .map_err(|_| anyhow::anyhow!("apply acceptor thread panicked"))?;
-    match (service_result, acceptor_result) {
-        (Err(error), Err(acceptor_error)) => {
-            Err(error).context(format!("apply acceptor failed also: {acceptor_error:#}"))
-        }
-        (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-    }
+    service_result
 }
 
 fn accept_requests<L: Logind>(
@@ -2552,16 +2598,28 @@ fn accept_requests<L: Logind>(
             }
         }
 
-        if let Some(request) = ready.take() {
-            match sender.try_send(request) {
-                Ok(()) => {
-                    sent += 1;
-                    if request_limit.is_some_and(|limit| sent >= limit) {
-                        return Ok(());
+        if let Some(mut request) = ready.take() {
+            if let Err(error) = request.request {
+                // Authorization failures must never wait for a broker claim,
+                // worker callback, or space in the mutation queue.
+                let _ = crate::apply_ipc::write_reply(&mut request.stream, &Err(error));
+            } else {
+                match sender.try_send(request) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(mut request)) => {
+                        let _ = crate::apply_ipc::write_reply(
+                            &mut request.stream,
+                            &Err(anyhow::anyhow!(
+                                "supervisor apply queue is full; retry later"
+                            )),
+                        );
                     }
+                    Err(TrySendError::Disconnected(_)) => return Ok(()),
                 }
-                Err(TrySendError::Full(request)) => ready = Some(request),
-                Err(TrySendError::Disconnected(_)) => return Ok(()),
+            }
+            sent += 1;
+            if request_limit.is_some_and(|limit| sent >= limit) {
+                return Ok(());
             }
         }
 
