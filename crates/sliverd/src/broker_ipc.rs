@@ -3445,6 +3445,7 @@ mod tests {
             )
         });
 
+        let server = crate::test_support::TestBrokerThread::new(running, server);
         let unit = format!(
             "sliver-supervisor-test-restart-{}.service",
             std::process::id()
@@ -3481,7 +3482,9 @@ mod tests {
         launcher.args(["--setenv"]);
         launcher.arg(format!("SLIVER_LUA_WORKER={}", worker_binary.display()));
         launcher.arg(&supervisor_binary);
-        let mut launcher_child = launcher.spawn()?;
+        let mut service =
+            crate::test_support::TestSupervisorUnit::start(unit.clone(), &mut launcher)?;
+        let original_pid = service.main_pid()?;
 
         let read_attempts =
             || -> Result<String> { Ok(std::fs::read_to_string(&attempts).unwrap_or_default()) };
@@ -3499,17 +3502,8 @@ mod tests {
             failure_state.exists(),
             "live hung worker did not record failure state"
         );
-        let worker_units = || -> Result<usize> {
-            let output = std::process::Command::new("systemctl")
-                .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
-                .output()?;
-            anyhow::ensure!(output.status.success(), "listing Lua worker units failed");
-            let output = String::from_utf8(output.stdout)?;
-            Ok(output
-                .lines()
-                .filter(|line| line.starts_with("sliver-lua-worker-"))
-                .count())
-        };
+        let worker_units =
+            || -> Result<usize> { Ok(crate::test_support::worker_units(original_pid)?.len()) };
         let worker_deadline = Instant::now() + Duration::from_secs(5);
         while worker_units()? != 0 && Instant::now() < worker_deadline {
             thread::sleep(Duration::from_millis(10));
@@ -3530,6 +3524,8 @@ mod tests {
             .args(["--user", "restart", &unit])
             .status()?;
         anyhow::ensure!(restart.success(), "supervisor systemd restart failed");
+        let restarted_pid = service.main_pid()?;
+        assert_ne!(original_pid, restarted_pid, "supervisor did not restart");
         let deadline = Instant::now() + Duration::from_secs(5);
         while !default_visible() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
@@ -3540,28 +3536,17 @@ mod tests {
         );
         assert_eq!(read_attempts()?.lines().count(), 1);
         let worker_units_deadline = Instant::now() + Duration::from_secs(2);
-        let worker_units = loop {
-            let worker_units = std::process::Command::new("systemctl")
-                .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
-                .output()?;
-            anyhow::ensure!(
-                worker_units.status.success(),
-                "listing Lua worker units failed"
-            );
-            let worker_units = String::from_utf8(worker_units.stdout)?;
-            if worker_units
-                .lines()
-                .any(|line| line.starts_with("sliver-lua-worker-"))
-                || Instant::now() >= worker_units_deadline
-            {
-                break worker_units;
+        let worker_unit_count = loop {
+            let count = crate::test_support::worker_units(restarted_pid)?.len();
+            if count == 1 || Instant::now() >= worker_units_deadline {
+                break count;
             }
             thread::sleep(Duration::from_millis(10));
         };
-        let worker_unit_count = worker_units
-            .lines()
-            .filter(|line| line.starts_with("sliver-lua-worker-"))
-            .count();
+        assert!(
+            crate::test_support::worker_units(original_pid)?.is_empty(),
+            "old supervisor worker survived restart"
+        );
         assert_eq!(
             worker_unit_count, 1,
             "healthy default worker unit was not started"
@@ -3587,27 +3572,17 @@ mod tests {
             source.as_os_str().as_encoded_bytes()
         );
 
-        let stop = std::process::Command::new("systemctl")
-            .args(["--user", "stop", &unit])
-            .status()?;
-        anyhow::ensure!(stop.success(), "supervisor systemd stop failed");
-        let _ = launcher_child.wait();
-        let worker_units = std::process::Command::new("systemctl")
-            .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
-            .output()?;
-        anyhow::ensure!(
-            worker_units.status.success(),
-            "listing stopped worker units failed"
-        );
-        let worker_units = String::from_utf8(worker_units.stdout)?;
+        service.stop()?;
         assert!(
-            !worker_units
-                .lines()
-                .any(|line| line.starts_with("sliver-lua-worker-")),
+            crate::test_support::worker_units(restarted_pid)?.is_empty(),
             "default worker unit survived supervisor shutdown"
         );
-        running.store(false, Ordering::Release);
-        server.join().expect("systemd broker server panicked")?;
+        assert!(
+            crate::test_support::worker_units(original_pid)?.is_empty(),
+            "old supervisor worker survived shutdown"
+        );
+        drop(service);
+        server.finish()?;
         Ok(())
     }
 

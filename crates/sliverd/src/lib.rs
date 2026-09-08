@@ -18,6 +18,8 @@ mod peer_credentials;
 mod recovery;
 mod supervisor;
 mod system_log;
+#[cfg(test)]
+mod test_support;
 
 use anyhow::{bail, Context, Result};
 

@@ -8373,6 +8373,10 @@ mod tests {
     #[test]
     fn persisted_hung_source_releases_its_systemd_cgroup_before_default_start() -> Result<()> {
         let _systemd_tests = crate::lock_systemd_tests();
+        // All systemd workers in this process are serialized by the lock.
+        // This guard outlives the supervisor and also runs on assertion panic.
+        let owner_pid = std::process::id();
+        let _worker_cleanup = crate::test_support::TestWorkers::new(owner_pid);
         let available = std::process::Command::new("systemd-run")
             .args(["--user", "--wait", "--quiet", "true"])
             .status();
@@ -8459,25 +8463,13 @@ mod tests {
             );
         }
         let deadline = Instant::now() + Duration::from_secs(2);
-        let units = loop {
-            let units = std::process::Command::new("systemctl")
-                .args(["--user", "list-units", "--all", "--no-legend", "--plain"])
-                .output()?;
-            anyhow::ensure!(units.status.success(), "listing user worker units failed");
-            let units = String::from_utf8(units.stdout)?;
-            if units
-                .lines()
-                .any(|line| line.starts_with("sliver-lua-worker-"))
-                || Instant::now() >= deadline
-            {
+        let worker_units = loop {
+            let units = crate::test_support::worker_units(owner_pid)?;
+            if units.len() == 1 || Instant::now() >= deadline {
                 break units;
             }
             thread::sleep(Duration::from_millis(10));
         };
-        let worker_units: Vec<_> = units
-            .lines()
-            .filter(|line| line.starts_with("sliver-lua-worker-"))
-            .collect();
         assert_eq!(
             worker_units.len(),
             1,
@@ -8488,6 +8480,10 @@ mod tests {
             source.as_os_str().as_encoded_bytes()
         );
         supervisor.shutdown()?;
+        assert!(
+            crate::test_support::worker_units(owner_pid)?.is_empty(),
+            "healthy default worker survived supervisor shutdown"
+        );
         Ok(())
     }
 

@@ -1124,7 +1124,31 @@ fn initial_keyboard_events(key_state: &AttributeSet<Key>) -> Vec<HardwareEvent> 
 
 /// One virtual keyboard shared by the Lua worker and the fixed Fn row.
 struct KeyboardEmitter {
+    #[cfg(not(test))]
     device: VirtualDevice,
+    #[cfg(test)]
+    device: TestKeyboardDevice,
+}
+
+// Only tests substitute the uinput sink; event encoding and emitter ownership
+// still cross the real KeyboardEmitter and M2TouchBar::release_inner paths.
+#[cfg(test)]
+enum TestKeyboardDevice {
+    Real(VirtualDevice),
+    Recording(std::rc::Rc<std::cell::RefCell<Vec<InputEvent>>>),
+}
+
+#[cfg(test)]
+impl TestKeyboardDevice {
+    fn emit(&mut self, events: &[InputEvent]) -> io::Result<()> {
+        match self {
+            Self::Real(device) => device.emit(events),
+            Self::Recording(recorded) => {
+                recorded.borrow_mut().extend_from_slice(events);
+                Ok(())
+            }
+        }
+    }
 }
 
 impl KeyboardEmitter {
@@ -1138,7 +1162,12 @@ impl KeyboardEmitter {
             .with_keys(&keys)?
             .build()?;
         eprintln!("keyboard: virtual Sliver Keyboard ready");
-        Ok(Self { device })
+        Ok(Self {
+            #[cfg(not(test))]
+            device,
+            #[cfg(test)]
+            device: TestKeyboardDevice::Real(device),
+        })
     }
 
     fn emit(&mut self, events: &[SyntheticKeyEvent]) -> io::Result<()> {
@@ -1926,12 +1955,50 @@ mod tests {
 
     #[test]
     fn release_discards_keyboard_emitter_for_reclaim() -> Result<()> {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
         let mut hardware = M2TouchBar::new();
-        hardware.keyboard_emitter = Some(KeyboardEmitter::new()?);
-
+        let first = Rc::new(RefCell::new(Vec::new()));
+        hardware.keyboard_emitter = Some(KeyboardEmitter {
+            device: TestKeyboardDevice::Recording(first.clone()),
+        });
+        let event = SyntheticKeyEvent {
+            key: OutputKey::Keyboard(KeyboardKey::F1),
+            active: true,
+        };
+        hardware.keyboard_emitter.as_mut().unwrap().emit(&[event])?;
+        let assert_f1_down = |events: &[InputEvent]| {
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].event_type(), EventType::KEY);
+            assert_eq!(events[0].code(), Key::KEY_F1.code());
+            assert_eq!(events[0].value(), 1);
+        };
+        assert_f1_down(&first.borrow());
         hardware.release_inner()?;
-
         assert!(hardware.keyboard_emitter.is_none());
+        assert_eq!(
+            Rc::strong_count(&first),
+            1,
+            "release retained the old device"
+        );
+
+        // Supply a fresh sink as claim setup would, then verify output cannot
+        // reach the released device and a second release drops the new one too.
+        let second = Rc::new(RefCell::new(Vec::new()));
+        hardware.keyboard_emitter = Some(KeyboardEmitter {
+            device: TestKeyboardDevice::Recording(second.clone()),
+        });
+        hardware.keyboard_emitter.as_mut().unwrap().emit(&[event])?;
+        assert_eq!(first.borrow().len(), 1);
+        assert_f1_down(&second.borrow());
+        hardware.release_inner()?;
+        assert!(hardware.keyboard_emitter.is_none());
+        assert_eq!(
+            Rc::strong_count(&second),
+            1,
+            "release retained the replacement device"
+        );
         Ok(())
     }
 
