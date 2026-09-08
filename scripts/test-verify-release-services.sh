@@ -42,6 +42,10 @@ fi
 
 mock_global_enabled=disabled
 verify_service_restore || fail 'rollback rejected a disabled global supervisor'
+mock_global_enabled=unknown
+if verify_service_restore; then
+    fail 'rollback accepted an unknown global supervisor state'
+fi
 ORIGINAL_GLOBAL_SUPERVISOR_ENABLED=enabled
 mock_global_enabled=enabled
 verify_service_restore || fail 'rollback rejected restored global enablement'

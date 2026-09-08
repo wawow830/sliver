@@ -766,7 +766,7 @@ verify_service_restore() {
         [[ "$broker_enabled" == "$ORIGINAL_BROKER_ENABLED" ]] || ok=1
     fi
     if [[ "$ORIGINAL_GLOBAL_SUPERVISOR_ENABLED" == not-found ]]; then
-        [[ "$global_enabled" != enabled ]] || ok=1
+        [[ "$global_enabled" == disabled || "$global_enabled" == not-found ]] || ok=1
     else
         [[ "$global_enabled" == "$ORIGINAL_GLOBAL_SUPERVISOR_ENABLED" ]] || ok=1
     fi
@@ -1017,6 +1017,7 @@ preflight_stage() {
     else
         fail_check drm_tool "drm_info is required for the native geometry evidence parser"
     fi
+    refuse_if_blocked
     [[ "$INTERACTIVE_TTY" == 1 ]] && pass_check local_tty "stdin is a terminal and stdout is captured from a terminal" ||
         fail_check local_tty "run from a local terminal, not a pipe or managed non-TTY shell"
 

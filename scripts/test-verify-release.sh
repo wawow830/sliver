@@ -191,7 +191,7 @@ fake_bin="$legacy_success_tmp/bin"
 mkdir -p "$fake_bin"
 cat > "$fake_bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
-if [[ ${1:-} == --user ]]; then shift; fi
+if [[ ${1:-} == --user || ${1:-} == --global ]]; then shift; fi
 case "${1:-}" in
     is-active) printf 'inactive\n' ;;
     is-enabled) printf 'disabled\n' ;;
