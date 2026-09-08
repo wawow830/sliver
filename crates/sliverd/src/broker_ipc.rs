@@ -2867,6 +2867,173 @@ mod tests {
     }
 
     #[test]
+    fn replacement_cancel_keeps_broker_touch_time_with_different_start_origins() -> Result<()> {
+        touch_cancel_keeps_shared_clock("replacement")
+    }
+
+    #[test]
+    fn recovery_cancel_keeps_broker_touch_time_with_different_start_origins() -> Result<()> {
+        touch_cancel_keeps_shared_clock("recovery")
+    }
+
+    #[test]
+    fn suspend_cancel_keeps_broker_touch_time_with_different_start_origins() -> Result<()> {
+        touch_cancel_keeps_shared_clock("suspend")
+    }
+
+    fn touch_cancel_keeps_shared_clock(reason: &str) -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let source = directory.path().join("touch.lua");
+        let events_file = directory.path().join("events");
+        std::fs::write(
+            &source,
+            format!(
+                r#"
+            require('sliver.v1')
+            return {{ api_version = 1, render = function() end,
+                touch = function(event)
+                    local f = assert(io.open({:?}, 'a'))
+                    f:write(string.format('%s %.9f %d %.1f %.1f\n', event.phase, event.time, event.id, event.x, event.y))
+                    f:close()
+                end,
+            }}
+        "#,
+                events_file.to_string_lossy()
+            ),
+        )?;
+        let state = directory.path().join("user/config-path");
+        PreparedPathState::prepare(&state, &source)?.commit()?;
+        let logind = FakeLogind::new();
+        set_cli_session(&logind, "touch-session", true);
+        let shared = ThreadFakeHardware::new();
+        let running = Arc::new(AtomicBool::new(true));
+        let server = {
+            let running = running.clone();
+            let logind = logind.clone();
+            let hardware = shared.clone();
+            let state = directory.path().join("broker/config-path");
+            thread::spawn(move || -> Result<()> {
+                let fallback = Supervisor::new_fallback_with_logind(
+                    hardware,
+                    state,
+                    logind.clone(),
+                    Some(LuaSource::embedded(default_source_bytes())),
+                )?;
+                run_broker(
+                    listener,
+                    fallback,
+                    SessionAuthorizer::new(logind),
+                    running,
+                    SEAT,
+                    PeerVerification::Test,
+                )
+            })
+        };
+        let server = crate::test_support::TestBrokerThread::new(running, server);
+        // Hardware is already running before this supervisor is constructed.
+        // Use the hardware capture clock, not this new supervisor's uptime:
+        // broker and user worker lifetimes must never define touch time.
+        let mut user = Supervisor::new_with_startup_candidate_process(
+            BrokerHardware::new_at(socket),
+            state,
+            logind,
+            None,
+        )?;
+        let mut captured_times = Vec::new();
+        for phase in [TouchPhase::Down, TouchPhase::Move] {
+            let time = crate::clock::touch_seconds();
+            captured_times.push(time);
+            shared.inject(HardwareEvent::Touch(TouchEvent {
+                phase,
+                id: 57,
+                time,
+                x: 83.0,
+                y: 21.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+            user.poll(Duration::ZERO)?;
+        }
+        match reason {
+            "replacement" => user.apply(&source)?,
+            "recovery" => {
+                shared.inject(HardwareEvent::Fn { active: true });
+                user.poll(Duration::ZERO)?;
+                thread::sleep(Duration::from_millis(2050));
+                user.poll(Duration::ZERO)?;
+                ensure!(
+                    user.has_recovery(),
+                    "physical Fn hold did not enter recovery"
+                );
+                shared.inject(HardwareEvent::Fn { active: false });
+                user.poll(Duration::ZERO)?;
+                ensure!(
+                    !user.has_recovery(),
+                    "Fn release did not restore the worker"
+                );
+            }
+            "suspend" => {
+                shared.inject(HardwareEvent::Visibility { visible: false });
+                user.poll(Duration::ZERO)?;
+                shared.inject(HardwareEvent::Visibility { visible: true });
+                user.poll(Duration::ZERO)?;
+            }
+            _ => unreachable!(),
+        }
+        // Held contacts remain ignored after cancellation; only a fresh down
+        // may reach the new worker. Its timestamp must follow the old cancel.
+        for (phase, id) in [
+            (TouchPhase::Move, 57),
+            (TouchPhase::Up, 57),
+            (TouchPhase::Down, 58),
+            (TouchPhase::Up, 58),
+        ] {
+            shared.inject(HardwareEvent::Touch(TouchEvent {
+                phase,
+                id,
+                time: crate::clock::touch_seconds(),
+                x: 83.0,
+                y: 21.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            }));
+            user.poll(Duration::ZERO)?;
+        }
+        let events = std::fs::read_to_string(&events_file)?;
+        let rows: Vec<_> = events
+            .lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>())
+            .collect();
+        assert_eq!(
+            rows.iter().map(|row| row[0]).collect::<Vec<_>>(),
+            ["down", "move", "cancel", "down", "up"],
+            "{events}"
+        );
+        let times: Vec<f64> = rows.iter().map(|row| row[1].parse().unwrap()).collect();
+        assert!(
+            times.windows(2).all(|pair| pair[0] <= pair[1]),
+            "{reason} touch timestamps went backwards across broker/supervisor origins:\n{events}"
+        );
+        for (received, captured) in times.iter().zip(captured_times) {
+            assert!(
+                (received - captured).abs() < 0.000001,
+                "broker changed hardware capture time"
+            );
+        }
+        assert_eq!(&rows[2][2..], ["57", "83.0", "21.0"]);
+        assert_eq!(rows[3][2], "58");
+        user.shutdown()?;
+        server.finish()?;
+        Ok(())
+    }
+
+    #[test]
     fn broker_switches_multiple_supervisors_through_the_production_loop() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let socket = directory.path().join("broker.sock");

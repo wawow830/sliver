@@ -585,7 +585,6 @@ struct TouchState {
     slots: Vec<TouchSlot>,
     profile: TouchProfile,
     current_slot: usize,
-    started: std::time::Instant,
 }
 
 impl TouchState {
@@ -594,7 +593,6 @@ impl TouchState {
             slots: vec![TouchSlot::default(); profile.slot_count.max(1)],
             profile,
             current_slot: 0,
-            started: std::time::Instant::now(),
         }
     }
 
@@ -729,7 +727,7 @@ impl TouchState {
         output.push(crate::hardware::TouchEvent {
             phase,
             id,
-            time: self.started.elapsed().as_secs_f64(),
+            time: crate::clock::touch_seconds(),
             x: self.profile.x_range.normalize(slot.x) * crate::DISPLAY_WIDTH_F64,
             y: self.profile.y_range.normalize(slot.y) * crate::DISPLAY_HEIGHT_F64,
             modifiers,
@@ -2125,6 +2123,55 @@ mod tests {
         assert_eq!(output[2].phase, crate::hardware::TouchPhase::Up);
         assert!(output[2].time >= output[0].time);
         Ok(())
+    }
+
+    #[test]
+    fn reopened_touch_devices_keep_the_shared_monotonic_clock() {
+        use evdev::{AbsoluteAxisType as Axis, Synchronization};
+
+        let before = crate::clock::touch_seconds();
+        let mut output = Vec::new();
+        for _ in 0..2 {
+            let mut touch = TouchState::new(TouchProfile {
+                slot_min: 0,
+                slot_count: 1,
+                x_range: AxisRange::new(0, 100).unwrap(),
+                y_range: AxisRange::new(0, 10).unwrap(),
+                pressure_range: None,
+                width_range: None,
+                height_range: None,
+                single_touch_fallback: false,
+            });
+            for event in [
+                InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_TRACKING_ID.0, 9),
+                InputEvent::new(EventType::SYNCHRONIZATION, Synchronization::SYN_REPORT.0, 0),
+                InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_POSITION_X.0, 50),
+                InputEvent::new(EventType::SYNCHRONIZATION, Synchronization::SYN_REPORT.0, 0),
+                InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_TRACKING_ID.0, -1),
+                InputEvent::new(EventType::SYNCHRONIZATION, Synchronization::SYN_REPORT.0, 0),
+                InputEvent::new(EventType::ABSOLUTE, Axis::ABS_MT_TRACKING_ID.0, 10),
+                InputEvent::new(EventType::SYNCHRONIZATION, Synchronization::SYN_REPORT.0, 0),
+                InputEvent::new(
+                    EventType::SYNCHRONIZATION,
+                    Synchronization::SYN_DROPPED.0,
+                    0,
+                ),
+            ] {
+                touch.process(event, ModifierState::default(), &mut output);
+            }
+        }
+        let after = crate::clock::touch_seconds();
+        assert_eq!(output.len(), 10);
+        assert!(
+            output
+                .iter()
+                .all(|event| (before..=after).contains(&event.time)),
+            "touch capture used a device-relative clock: {output:?}"
+        );
+        assert!(
+            output.windows(2).all(|pair| pair[0].time <= pair[1].time),
+            "touch device reopen reset event time"
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod apply_ipc;
 mod authorization;
 mod broker_ipc;
+mod clock;
 mod config_selection;
 mod default_source;
 mod frame_canvas;

@@ -328,6 +328,8 @@ pub(crate) enum TouchPhase {
 pub(crate) struct TouchEvent {
     pub(crate) phase: TouchPhase,
     pub(crate) id: ContactId,
+    /// Linux CLOCK_MONOTONIC seconds, shared by capture and synthesized phases.
+    /// Never relative to a device, broker, supervisor, or worker start time.
     pub(crate) time: f64,
     pub(crate) x: f64,
     pub(crate) y: f64,

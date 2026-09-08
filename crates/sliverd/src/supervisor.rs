@@ -99,13 +99,11 @@ struct CandidateRollback<'a> {
 fn cancel_contacts(
     worker: &LuaWorker,
     contacts: &BTreeMap<ContactId, TouchEvent>,
-    now: f64,
     request: DriveRequest,
 ) -> Result<WorkerEffects> {
     cancel_contacts_until(
         worker,
         contacts,
-        now,
         request,
         Instant::now() + Duration::from_secs(2),
     )
@@ -114,10 +112,10 @@ fn cancel_contacts(
 fn cancel_contacts_until(
     worker: &LuaWorker,
     contacts: &BTreeMap<ContactId, TouchEvent>,
-    now: f64,
     request: DriveRequest,
     deadline: Instant,
 ) -> Result<WorkerEffects> {
+    let now = crate::clock::touch_seconds();
     let events = contacts
         .values()
         .map(|event| TouchEvent {
@@ -1204,7 +1202,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 if let Err(error) = cancel_contacts_until(
                     &replaced.worker,
                     &replaced.contacts,
-                    now,
                     DriveRequest::without_input(now, self.input_state),
                     stop_deadline,
                 ) {
@@ -1290,7 +1287,8 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         Err(CandidateFailure::Candidate(error))
     }
 
-    fn cancel_active_contacts_for_visibility(&mut self, now: f64) -> Vec<TouchEvent> {
+    fn cancel_active_contacts_for_visibility(&mut self) -> Vec<TouchEvent> {
+        let now = crate::clock::touch_seconds();
         self.ignored_contacts
             .extend(self.down_contacts.keys().copied());
         self.down_contacts.clear();
@@ -1313,7 +1311,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
     }
 
     fn hide_active_worker(&mut self, reason: VisibilityReason, now: f64) -> Result<()> {
-        let events = self.cancel_active_contacts_for_visibility(now);
+        let events = self.cancel_active_contacts_for_visibility();
         let should_notify = self.worker_visible || reason == VisibilityReason::Suspend;
         self.worker_visible = false;
         let mut request = DriveRequest::new(now, self.input_state, Vec::new(), 0.0, events);
@@ -1679,7 +1677,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             let hide_effects = cancel_contacts(
                 &active.worker,
                 &active.contacts,
-                now,
                 DriveRequest::without_input(now, self.input_state).with_visibility(
                     false,
                     VisibilityReason::Recovery,
@@ -2039,7 +2036,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 if let Err(cancel_error) = cancel_contacts(
                     &active.worker,
                     &active.contacts,
-                    now,
                     DriveRequest::without_input(now, self.input_state),
                 ) {
                     eprintln!(
@@ -2207,7 +2203,6 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             if let Err(error) = cancel_contacts_until(
                 &active.worker,
                 &active.contacts,
-                now,
                 DriveRequest::without_input(now, self.input_state),
                 stop_deadline,
             ) {
