@@ -1,6 +1,6 @@
 # AGENTS.md
 
-- Commit small, commit often, and sync with remote
+- Permission is not required for commit or push
 
 ## Workspace
 - Uses `gh`. See `docs/agents/issue-tracker.md`.
