@@ -407,6 +407,11 @@ unit_enabled() {
     value=$(systemctl is-enabled "$unit" 2>/dev/null || true)
     printf '%s' "${value:-unknown}"
 }
+global_unit_enabled() {
+    local unit=$1 value
+    value=$(systemctl --global is-enabled "$unit" 2>/dev/null || true)
+    printf '%s' "${value:-unknown}"
+}
 unit_load() {
     local unit=$1 value
     value=$(systemctl show "$unit" -p LoadState --value 2>/dev/null || true)
@@ -543,7 +548,7 @@ capture_snapshot() {
     ORIGINAL_BROKER_ACTIVE=$(unit_active sliver-broker.service)
     ORIGINAL_BROKER_ENABLED=$(unit_enabled sliver-broker.service)
     ORIGINAL_BROKER_LOAD=$(unit_load sliver-broker.service)
-    ORIGINAL_GLOBAL_SUPERVISOR_ENABLED=$(unit_enabled sliver-supervisor.service)
+    ORIGINAL_GLOBAL_SUPERVISOR_ENABLED=$(global_unit_enabled sliver-supervisor.service)
     ORIGINAL_USER_SUPERVISOR_ACTIVE=$(user_unit_active sliver-supervisor.service)
     ORIGINAL_USER_SUPERVISOR_ENABLED=$(user_unit_enabled sliver-supervisor.service)
     ORIGINAL_USER_SUPERVISOR_LOAD=$(user_unit_load sliver-supervisor.service)
@@ -759,7 +764,7 @@ verify_service_restore() {
     local ok=0 broker_active broker_enabled global_enabled user_active user_enabled
     broker_active=$(unit_active sliver-broker.service)
     broker_enabled=$(unit_enabled sliver-broker.service)
-    global_enabled=$(unit_enabled sliver-supervisor.service)
+    global_enabled=$(global_unit_enabled sliver-supervisor.service)
     user_active=$(user_unit_active sliver-supervisor.service)
     user_enabled=$(user_unit_enabled sliver-supervisor.service)
     if [[ "$ORIGINAL_BROKER_LOAD" == not-found ]]; then
@@ -1252,9 +1257,9 @@ install_stage() {
     [[ "$(unit_enabled sliver-broker.service)" == disabled && "$(unit_active sliver-broker.service)" != active ]] &&
         pass_check package_not_started "broker is disabled and inactive after installation" ||
         fail_check package_not_started "broker was enabled or started by installation"
-    [[ "$(unit_enabled sliver-supervisor.service)" != enabled && "$(unit_active sliver-supervisor.service)" != active ]] &&
-        pass_check package_not_started_global "global supervisor is not enabled and is inactive after installation" ||
-        fail_check package_not_started_global "global supervisor was enabled or started by installation"
+    [[ "$(global_unit_enabled sliver-supervisor.service)" == disabled ]] &&
+        pass_check package_not_started_global "global user supervisor is disabled after installation" ||
+        fail_check package_not_started_global "global user supervisor is not disabled after installation"
     [[ "$(user_unit_enabled sliver-supervisor.service)" == disabled && "$(user_unit_active sliver-supervisor.service)" != active ]] &&
         pass_check package_not_started_user "current user supervisor is disabled and inactive after installation" ||
         fail_check package_not_started_user "current user supervisor was enabled or started by installation"
