@@ -2479,10 +2479,7 @@ fn serve_queue<H: TouchBarHardware, L: Logind>(
         }
         match receiver.try_recv() {
             Ok(queued) => {
-                if let Err(error) = serve_queued_request(queued, supervisor) {
-                    service_result = Err(error);
-                    break;
-                }
+                serve_queued_request(queued, supervisor);
                 processed += 1;
                 if request_limit.is_some_and(|limit| processed >= limit) {
                     break;
@@ -2604,14 +2601,16 @@ fn read_authorized_request<L: Logind>(
 fn serve_queued_request<H: TouchBarHardware, L: Logind>(
     mut queued: QueuedRequest,
     supervisor: &mut Supervisor<H, L>,
-) -> Result<()> {
+) {
     let result = queued
         .request
         .and_then(|request| supervisor.apply_authorized(request));
     if let Err(error) = &result {
         crate::system_log::supervisor_error(format!("apply request failed: {error:#}"));
     }
-    crate::apply_ipc::write_reply(&mut queued.stream, &result).context("sending apply reply")
+    if let Err(error) = crate::apply_ipc::write_reply(&mut queued.stream, &result) {
+        crate::system_log::supervisor_error(format!("sending apply reply failed: {error:#}"));
+    }
 }
 
 #[cfg(test)]
@@ -2661,7 +2660,10 @@ mod tests {
     };
     use crate::logind::{ActiveSession, FakeLogind, Session};
 
-    use super::{serve_connection, serve_for_test, LuaSource, PreparedPathState, Supervisor};
+    use super::{
+        serve_connection, serve_for_test, LuaSource, PreparedPathState, Supervisor,
+        MAX_REQUEST_BYTES,
+    };
 
     fn active_local_logind(session_id: &str) -> (FakeLogind, libc::uid_t) {
         let uid = unsafe { libc::getuid() };
@@ -2938,6 +2940,53 @@ mod tests {
 
         server.join().expect("supervisor thread panicked")?;
         assert_eq!(reply.first(), Some(&1));
+        Ok(())
+    }
+
+    #[test]
+    fn an_unread_large_apply_reply_does_not_stop_the_supervisor() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("supervisor.sock");
+        let listener = UnixListener::bind(&socket)?;
+        let state_file = directory.path().join("state/sliver/config-path");
+        let (logind, _uid) = active_local_logind("large-reply-session");
+        let server_state = state_file.clone();
+        let server = thread::spawn(move || -> Result<()> {
+            let mut supervisor =
+                Supervisor::new_with_logind(FakeTouchBar::new(), server_state, logind)?;
+            serve_for_test(listener, &mut supervisor, 2)?;
+            supervisor.shutdown()
+        });
+
+        // A path at the protocol limit makes the metadata error larger than a
+        // local socket's send buffer. Keep the peer open and unread so the
+        // nonblocking reply write fails instead of draining.
+        let mut blocked = UnixStream::connect(&socket)?;
+        let mut payload = vec![b'x'; MAX_REQUEST_BYTES];
+        payload[0] = 0;
+        blocked.write_all(&(payload.len() as u32).to_be_bytes())?;
+        blocked.write_all(&payload)?;
+        blocked.shutdown(std::net::Shutdown::Write)?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !state_file.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        anyhow::ensure!(
+            state_file.exists(),
+            "large apply request was not processed before the reply test"
+        );
+
+        let mut next = UnixStream::connect(&socket)?;
+        next.set_read_timeout(Some(Duration::from_secs(1)))?;
+        next.write_all(&1u32.to_be_bytes())?;
+        next.write_all(&[1])?;
+        next.shutdown(std::net::Shutdown::Write)?;
+        let mut status = [0u8; 1];
+        next.read_exact(&mut status)?;
+        assert_eq!(status, [0]);
+
+        drop(blocked);
+        server.join().expect("supervisor thread panicked")?;
         Ok(())
     }
 
