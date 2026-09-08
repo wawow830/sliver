@@ -995,7 +995,7 @@ REQUIRED_CHECKS=(
     lifecycle_second_session lifecycle_authorization lifecycle_valid_live_apply
     lifecycle_invalid_retention lifecycle_touch_mapping lifecycle_multitouch_cancel
     lifecycle_fn_recovery lifecycle_modifier_uinput lifecycle_logout_handoff
-    lifecycle_watchdog_child_key_cleanup lifecycle_watchdog_source_state service_restart restart_journals restart_default_worker selected_path_restart dirty_framebuffer
+    lifecycle_watchdog_child_key_cleanup lifecycle_watchdog_source_state service_restart restart_journals_user restart_journals_broker restart_default_worker selected_path_restart dirty_framebuffer
     backlight_restore suspend_resume fake_video_workload real_video_workload
     performance_measurement
 )
