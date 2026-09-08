@@ -657,14 +657,25 @@ record_modifier_check() {
     refuse_if_blocked
     say "Test each physical left/right Ctrl, Alt, Shift, and Super side that exists."
     say "Record every side exactly once as: tested=left_ctrl,... hardware_na=right_ctrl,..."
-    printf '  Modifier evidence: '
-    read -r value || true
-    if ! verify_release_modifier_evidence "$value"; then
-        fail_check lifecycle_modifier_uinput \
-            "modifier evidence must partition all eight named sides into tested= and hardware_na="
-        exit 1
-    fi
-    pass_check lifecycle_modifier_uinput "physical modifier evidence: $value"
+    say "Within each list, use this order: ${VERIFY_RELEASE_MODIFIER_SIDES[*]}"
+    say "Use - for an empty list. Type fail if a physical modifier test failed."
+    while true; do
+        printf '  Modifier evidence: '
+        if ! read -r value; then
+            fail_check lifecycle_modifier_uinput "modifier evidence input ended before a valid entry"
+            return 1
+        fi
+        if [[ "$value" == fail ]]; then
+            fail_check lifecycle_modifier_uinput "operator reported a physical modifier test failure"
+            return 1
+        fi
+        if verify_release_modifier_evidence "$value"; then
+            pass_check lifecycle_modifier_uinput "physical modifier evidence: $value"
+            return 0
+        fi
+        warn "Invalid entry format: account for all eight sides exactly once, in the displayed order."
+        warn "No test result recorded. Correct the entry, or type fail if the hardware test failed."
+    done
 }
 record_metric() {
     local id=$1 prompt_text=$2 artifact_dir=${3:-} value=""
