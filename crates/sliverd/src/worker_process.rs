@@ -58,6 +58,7 @@ struct SpawnedWorker {
     process_group: libc::pid_t,
     unit: Option<String>,
     cgroup: Option<PathBuf>,
+    systemd_runtime: Option<PathBuf>,
 }
 
 struct ProcessEffects {
@@ -80,6 +81,7 @@ pub(crate) struct ProcessWorker {
     process_group: libc::pid_t,
     unit: Option<String>,
     cgroup: Option<PathBuf>,
+    systemd_runtime: Option<PathBuf>,
     broker: FrameBroker,
 }
 
@@ -210,6 +212,7 @@ impl ProcessWorker {
             },
             unit: spawned.unit,
             cgroup: spawned.cgroup,
+            systemd_runtime: spawned.systemd_runtime,
             broker,
         };
         worker.request_bootstrap(source, initial_backlight, initial_input, frame_path)?;
@@ -261,6 +264,7 @@ fn spawn_direct(_identity: WorkerIdentity) -> Result<SpawnedWorker> {
         process_group: pid,
         unit: None,
         cgroup: None,
+        systemd_runtime: None,
     })
 }
 
@@ -326,12 +330,8 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
             return Err(error);
         }
     };
-    if identity == WorkerIdentity::RestrictedFallback {
-        launcher.env("XDG_RUNTIME_DIR", &runtime).env(
-            "DBUS_SESSION_BUS_ADDRESS",
-            format!("unix:path={}/bus", runtime.display()),
-        );
-    }
+    let systemd_runtime = (identity == WorkerIdentity::RestrictedFallback).then(|| runtime.clone());
+    configure_systemd_user_environment(&mut launcher, systemd_runtime.as_deref());
     launcher
         .arg(worker_path)
         .arg("--connect")
@@ -346,10 +346,10 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
             return Err(error).context("starting the systemd Lua worker service");
         }
     };
-    let cgroup = match systemd_unit_cgroup(&unit) {
+    let cgroup = match systemd_unit_cgroup(&unit, systemd_runtime.as_deref()) {
         Ok(cgroup) => Some(cgroup),
         Err(error) => {
-            terminate_spawned_parts(&mut child, 0, None, Some(&unit));
+            terminate_spawned_parts(&mut child, 0, None, Some(&unit), systemd_runtime.as_deref());
             let _ = std::fs::remove_file(&socket_path);
             return Err(error);
         }
@@ -360,14 +360,26 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
             Ok((stream, _)) => break stream,
             Err(error) if error.kind() == ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    terminate_spawned_parts(&mut child, 0, cgroup.as_deref(), Some(&unit));
+                    terminate_spawned_parts(
+                        &mut child,
+                        0,
+                        cgroup.as_deref(),
+                        Some(&unit),
+                        systemd_runtime.as_deref(),
+                    );
                     let _ = std::fs::remove_file(&socket_path);
                     bail!("Lua worker service did not connect within two seconds")
                 }
                 thread::sleep(WRITE_RETRY);
             }
             Err(error) => {
-                terminate_spawned_parts(&mut child, 0, cgroup.as_deref(), Some(&unit));
+                terminate_spawned_parts(
+                    &mut child,
+                    0,
+                    cgroup.as_deref(),
+                    Some(&unit),
+                    systemd_runtime.as_deref(),
+                );
                 let _ = std::fs::remove_file(&socket_path);
                 return Err(error).context("accepting the Lua worker connection");
             }
@@ -375,7 +387,13 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
     };
     let _ = std::fs::remove_file(&socket_path);
     if let Err(error) = stream.set_nonblocking(true) {
-        terminate_spawned_parts(&mut child, 0, cgroup.as_deref(), Some(&unit));
+        terminate_spawned_parts(
+            &mut child,
+            0,
+            cgroup.as_deref(),
+            Some(&unit),
+            systemd_runtime.as_deref(),
+        );
         return Err(error).context("configuring Lua worker control socket");
     }
     Ok(SpawnedWorker {
@@ -384,6 +402,7 @@ fn spawn_systemd(identity: WorkerIdentity) -> Result<SpawnedWorker> {
         process_group: 0,
         cgroup,
         unit: Some(unit),
+        systemd_runtime,
     })
 }
 
@@ -393,6 +412,7 @@ fn terminate_spawned(spawned: &mut SpawnedWorker) {
         spawned.process_group,
         spawned.cgroup.as_deref(),
         spawned.unit.as_deref(),
+        spawned.systemd_runtime.as_deref(),
     );
 }
 
@@ -401,6 +421,7 @@ fn terminate_spawned_parts(
     process_group: libc::pid_t,
     cgroup: Option<&Path>,
     unit: Option<&str>,
+    systemd_runtime: Option<&Path>,
 ) {
     let mut descendants = cgroup.map(cgroup_processes).unwrap_or_default();
     if process_group > 1 {
@@ -409,7 +430,7 @@ fn terminate_spawned_parts(
     let cgroup_killed = cgroup.is_some_and(kill_cgroup);
     if !cgroup_killed {
         if let Some(unit) = unit {
-            kill_systemd_unit(unit);
+            kill_systemd_unit(unit, systemd_runtime);
         }
     }
     kill_process_group_id(process_group);
@@ -421,10 +442,21 @@ fn terminate_spawned_parts(
     reap_pids_until(descendants, deadline);
 }
 
-fn systemd_unit_cgroup(unit: &str) -> Result<PathBuf> {
+fn configure_systemd_user_environment(command: &mut Command, runtime: Option<&Path>) {
+    if let Some(runtime) = runtime {
+        command.env("XDG_RUNTIME_DIR", runtime).env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={}/bus", runtime.display()),
+        );
+    }
+}
+
+fn systemd_unit_cgroup(unit: &str, runtime: Option<&Path>) -> Result<PathBuf> {
     let deadline = Instant::now() + CALLBACK_DEADLINE;
     loop {
-        let output = Command::new("systemctl")
+        let mut command = Command::new("systemctl");
+        configure_systemd_user_environment(&mut command, runtime);
+        let output = command
             .args(["--user", "show", unit, "-p", "ControlGroup", "--value"])
             .output()
             .context("reading the Lua worker cgroup")?;
@@ -635,7 +667,7 @@ impl ProcessWorker {
         let cgroup_killed = self.cgroup.as_deref().is_some_and(kill_cgroup);
         if !cgroup_killed {
             if let Some(unit) = self.unit.as_deref() {
-                kill_systemd_unit(unit);
+                kill_systemd_unit(unit, self.systemd_runtime.as_deref());
             }
         }
     }
@@ -1154,8 +1186,10 @@ fn reap_pids_until(mut pids: Vec<libc::pid_t>, deadline: Instant) {
     }
 }
 
-fn kill_systemd_unit(unit: &str) {
-    let Ok(mut command) = Command::new("systemctl")
+fn kill_systemd_unit(unit: &str, runtime: Option<&Path>) {
+    let mut command = Command::new("systemctl");
+    configure_systemd_user_environment(&mut command, runtime);
+    let Ok(mut command) = command
         .args(["--user", "kill", "--kill-who=all", "--signal=SIGKILL", unit])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -1270,8 +1304,13 @@ fn read_packets(stream: &mut UnixStream, input: &mut Vec<u8>) -> Result<Vec<(u8,
         let packet: Vec<_> = input.drain(..4 + length).collect();
         packets.push((packet[4], packet[5..].to_vec()));
     }
-    if closed && !input.is_empty() {
-        bail!("Lua worker control socket closed in the middle of a packet");
+    if closed {
+        if !input.is_empty() {
+            bail!("Lua worker control socket closed in the middle of a packet");
+        }
+        if packets.is_empty() {
+            bail!("Lua worker control socket closed");
+        }
     }
     Ok(packets)
 }
@@ -1898,6 +1937,7 @@ mod tests {
             process_group,
             unit: None,
             cgroup: None,
+            systemd_runtime: None,
         })
     }
 
@@ -1948,7 +1988,7 @@ mod tests {
             }
         };
         std::fs::write(&launcher_marker, child.id().to_string())?;
-        let cgroup = systemd_unit_cgroup(&unit)?;
+        let cgroup = systemd_unit_cgroup(&unit, None)?;
         let stream = unsafe { UnixStream::from_raw_fd(parent_fd) };
         Ok(SpawnedWorker {
             child,
@@ -1956,6 +1996,7 @@ mod tests {
             process_group: 0,
             unit: Some(unit),
             cgroup: Some(cgroup),
+            systemd_runtime: None,
         })
     }
 
@@ -1998,6 +2039,7 @@ mod tests {
             process_group,
             unit: None,
             cgroup: None,
+            systemd_runtime: None,
         })
     }
 
@@ -2052,6 +2094,144 @@ mod tests {
             .expect_err("truncated worker packet was accepted");
         assert!(error.to_string().contains("middle of a packet"));
         Ok(())
+    }
+
+    #[test]
+    fn complete_worker_packet_precedes_eof_error() -> Result<()> {
+        let (mut sender, mut receiver) = UnixStream::pair()?;
+        write_packet_blocking(&mut sender, HELLO, &[1, 2, 3, 4])?;
+        sender.shutdown(std::net::Shutdown::Write)?;
+
+        let packets = read_packets(&mut receiver, &mut Vec::new())?;
+        assert_eq!(packets, vec![(HELLO, vec![1, 2, 3, 4])]);
+        let error = read_packets(&mut receiver, &mut Vec::new())
+            .expect_err("EOF was reported before the buffered packet was consumed");
+        assert!(error.to_string().contains("socket closed"));
+        Ok(())
+    }
+
+    #[test]
+    fn worker_exits_when_supervisor_disconnects_before_bootstrap() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket_path = directory.path().join("worker.sock");
+        let listener = UnixListener::bind(&socket_path)?;
+        let mut child = Command::new(worker_path()?)
+            .arg("--connect")
+            .arg(&socket_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let (mut peer, _) = listener.accept()?;
+        let mut header = [0u8; 4];
+        peer.read_exact(&mut header)?;
+        let length = u32::from_be_bytes(header) as usize;
+        let mut hello = vec![0u8; length];
+        peer.read_exact(&mut hello)?;
+        assert_eq!(hello.first(), Some(&HELLO));
+        drop(peer);
+        drop(listener);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("Lua worker stayed alive after its supervisor disconnected");
+            }
+            thread::sleep(WRITE_RETRY);
+        };
+        assert!(!status.success());
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_systemd_helpers_use_the_broker_user_manager_environment() {
+        let runtime = Path::new("/run/user/976");
+        let mut command = Command::new("systemctl");
+        configure_systemd_user_environment(&mut command, Some(runtime));
+
+        let environment = |name: &str| {
+            command
+                .get_envs()
+                .find(|(key, _)| *key == std::ffi::OsStr::new(name))
+                .and_then(|(_, value)| value)
+        };
+        assert_eq!(
+            environment("XDG_RUNTIME_DIR"),
+            Some(std::ffi::OsStr::new("/run/user/976"))
+        );
+        assert_eq!(
+            environment("DBUS_SESSION_BUS_ADDRESS"),
+            Some(std::ffi::OsStr::new("unix:path=/run/user/976/bus"))
+        );
+    }
+
+    #[test]
+    fn fallback_systemd_stage_works_without_inherited_user_bus_environment() -> Result<()> {
+        const CHILD: &str = "SLIVER_TEST_FALLBACK_ENV_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            ensure!(
+                std::env::var_os("XDG_RUNTIME_DIR").is_none(),
+                "fallback child unexpectedly inherited XDG_RUNTIME_DIR"
+            );
+            ensure!(
+                std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none(),
+                "fallback child unexpectedly inherited DBUS_SESSION_BUS_ADDRESS"
+            );
+            let directory = tempfile::tempdir()?;
+            let frame_path = directory.path().join("frame.bin");
+            let slots = FrameSlots::new_shared(
+                &frame_path,
+                crate::DISPLAY_WIDTH,
+                crate::DISPLAY_HEIGHT,
+                crate::DISPLAY_WIDTH * 4,
+            )?;
+            let worker = ProcessWorker::stage_with_frames_systemd(
+                &embedded(
+                    "require('sliver.v1'); return { api_version = 1, render = function() end }",
+                ),
+                0.0,
+                InputState::default(),
+                &frame_path,
+                slots.broker(),
+                WorkerIdentity::RestrictedFallback,
+            )?;
+            let frame = worker.render(1.0, 0.0, InputState::default())?;
+            ensure!(
+                (frame.frame.width(), frame.frame.height())
+                    == (crate::DISPLAY_WIDTH, crate::DISPLAY_HEIGHT),
+                "fallback worker returned an invalid frame"
+            );
+            worker.shutdown(StopReason::Shutdown)
+        } else {
+            let _systemd_tests = crate::lock_systemd_tests();
+            let available = std::process::Command::new("systemd-run")
+                .args(["--user", "--wait", "--quiet", "true"])
+                .status();
+            anyhow::ensure!(
+                available.is_ok_and(|status| status.success()),
+                "systemd user manager is required for this worker test"
+            );
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "lua_worker::worker_process::tests::fallback_systemd_stage_works_without_inherited_user_bus_environment",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env_remove("XDG_RUNTIME_DIR")
+                .env_remove("DBUS_SESSION_BUS_ADDRESS")
+                .status()?;
+            anyhow::ensure!(
+                status.success(),
+                "fallback worker failed without inherited user bus environment: {status}"
+            );
+            Ok(())
+        }
     }
 
     #[test]
@@ -2585,7 +2765,7 @@ mod tests {
             WorkerIdentity::User,
         )?;
         let unit = worker.unit.as_ref().context("systemd worker had no unit")?;
-        let cgroup = systemd_unit_cgroup(unit)?;
+        let cgroup = systemd_unit_cgroup(unit, None)?;
         let launcher_pid = lock(&worker.child, "systemd worker launcher")?.id();
         let error = match worker.render(1.0, 0.0, InputState::default()) {
             Ok(_) => bail!("hung Lua callback returned"),
