@@ -15,6 +15,13 @@ verify_release_session_is_fresh 9 5 0 ''
 verify_release_session_is_fresh 5 5 'Mon 2026-09-07 23:06:44 AEST' '2026-09-07T16:27:37+10:00'
 ! verify_release_session_is_fresh 5 5 'Mon 2026-09-07 15:00:00 AEST' '2026-09-07T16:27:37+10:00'
 ! verify_release_session_is_fresh 5 5 0 ''
+# A different session can already have existed when setup ran. Available
+# timestamps must prove freshness even when logind IDs differ.
+if verify_release_session_is_fresh 9 5 'Mon 2026-09-07 15:00:00 AEST' '2026-09-07T16:27:37+10:00'; then
+    echo 'an older session with a different ID was accepted as fresh' >&2
+    exit 1
+fi
+verify_release_session_is_fresh 9 5 'Mon 2026-09-07 23:06:44 AEST' '2026-09-07T16:27:37+10:00'
 # Replay a fresh shell with a stale manager. Account lookup alone says yes.
 getent() { printf 'sliver-supervisors:x:976:wawow\n'; }
 systemctl() { printf '963\n'; }

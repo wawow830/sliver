@@ -17,8 +17,10 @@ verify_release_process_has_group() {
 verify_release_session_is_fresh() {
     local current_id=$1 initial_id=$2 session_started_at=$3 setup_finished_at=$4
     [[ -n "$current_id" && -n "$initial_id" ]] || return 1
-    [[ "$current_id" != "$initial_id" ]] && return 0
-    [[ -n "$session_started_at" && -n "$setup_finished_at" ]] || return 1
+    if [[ -z "$session_started_at" || -z "$setup_finished_at" ]]; then
+        [[ "$current_id" != "$initial_id" ]]
+        return
+    fi
     local session_started_seconds setup_seconds
     session_started_seconds=$(date -d "$session_started_at" +%s) || return 1
     setup_seconds=$(date -d "$setup_finished_at" +%s) || return 1
