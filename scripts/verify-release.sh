@@ -155,7 +155,6 @@ PANEL_DRM_NODE=""
 PANEL_DRM_CONNECTOR=""
 PANEL_DRM_SYSFS_DEVICE=""
 PANEL_DRM_DEV_MAJOR_MINOR=""
-DRM_TOOL=""
 SNAPSHOT_DIR=""
 CONFIG_DIR=""
 LOG_FILE=""
@@ -377,7 +376,7 @@ logged_step() {
 }
 
 capture_drm_preflight() {
-    local status mode driver
+    local status mode
     [[ -n "$PANEL_DRM_NODE" && -n "$PANEL_DRM_CONNECTOR" ]] || return 1
     status=$(<"/sys/class/drm/$PANEL_DRM_CONNECTOR/status")
     mode=$(tr -d '[:space:]' < "/sys/class/drm/$PANEL_DRM_CONNECTOR/modes")
@@ -386,15 +385,8 @@ capture_drm_preflight() {
     printf 'DRM evidence connector: %s\n' "$PANEL_DRM_CONNECTOR"
     printf 'DRM evidence status: %s\n' "$status"
     printf 'DRM evidence mode: %s\n' "$mode"
-    if [[ "$DRM_TOOL" == drm_info ]]; then
-        printf 'DRM evidence command: sudo drm_info %s\n' "$PANEL_DRM_NODE"
-        sudo drm_info "$PANEL_DRM_NODE"
-    else
-        driver=$(basename "$(readlink -f "/sys/class/drm/${PANEL_DRM_NODE##*/}/device/driver")")
-        [[ "$driver" =~ ^[[:alnum:]_.-]+$ ]] || return 1
-        printf 'DRM evidence command: sudo modetest -M %s -c -p\n' "$driver"
-        sudo modetest -M "$driver" -c -p
-    fi
+    printf 'DRM evidence command: sudo drm_info %s\n' "$PANEL_DRM_NODE"
+    sudo drm_info "$PANEL_DRM_NODE"
 }
 
 unit_active() {
@@ -1021,13 +1013,9 @@ preflight_stage() {
         fi
     done
     if command -v drm_info >/dev/null 2>&1; then
-        DRM_TOOL=drm_info
         pass_check drm_tool "drm_info available"
-    elif command -v modetest >/dev/null 2>&1; then
-        DRM_TOOL=modetest
-        pass_check drm_tool "modetest available"
     else
-        fail_check drm_tool "drm_info or modetest is required"
+        fail_check drm_tool "drm_info is required for the native geometry evidence parser"
     fi
     [[ "$INTERACTIVE_TTY" == 1 ]] && pass_check local_tty "stdin is a terminal and stdout is captured from a terminal" ||
         fail_check local_tty "run from a local terminal, not a pipe or managed non-TTY shell"

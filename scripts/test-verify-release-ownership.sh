@@ -133,4 +133,36 @@ if owner_matches /dev/dri/card1 1024 "$tmp/fuser-competing-owner.txt"; then
     exit 1
 fi
 
+# Stop the real preflight at tool selection. No hardware probe or transaction
+# can run in these subprocesses. modetest cannot feed the drm_info parser.
+source <(awk '
+    /^preflight_stage\(\) \{/ { copying = 1 }
+    copying { print }
+    copying && /^}$/ { copying = 0 }
+' "$root/scripts/verify-release.sh")
+probe_tool_selection() (
+    stage() { :; }
+    say() { :; }
+    command() { [[ "$*" != '-v drm_info' || "$drm_info_available" == yes ]]; }
+    pass_check() { [[ "$1" != drm_tool ]] || exit 0; }
+    fail_check() { exit 42; }
+    preflight_stage
+    exit 99
+)
+# Use a separate variable because command() receives its own positional args.
+drm_info_available=no
+set +e
+probe_tool_selection
+status=$?
+set -e
+[[ "$status" == 42 ]] || {
+    printf 'ownership test failed: preflight accepted modetest without a supported parser\n' >&2
+    exit 1
+}
+drm_info_available=yes
+probe_tool_selection || {
+    printf 'ownership test failed: preflight rejected drm_info\n' >&2
+    exit 1
+}
+
 printf 'verify-release ownership tests passed\n'
