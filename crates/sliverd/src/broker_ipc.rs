@@ -2760,17 +2760,54 @@ mod tests {
         }));
         connection_stop.store(true, Ordering::Release);
         let deadline = Instant::now() + Duration::from_secs(2);
+        let mut disconnect_result = Ok(());
         while !supervisor.hardware().connection_lost() && Instant::now() < deadline {
-            let _ = supervisor.poll(Duration::ZERO);
+            disconnect_result = supervisor.poll(Duration::ZERO);
             thread::sleep(Duration::from_millis(1));
         }
         anyhow::ensure!(
             supervisor.hardware().connection_lost(),
             "broker connection did not close after the stop request"
         );
+        let disconnect_propagated = disconnect_result.is_err();
+        let finished = crate::finish_user_session(supervisor, disconnect_result);
+        // Reconnect through the normal claim path, not by reviving the stale
+        // worker/claim. The broker must still reject an inactive session.
+        connection_stop.store(false, Ordering::Release);
+        logind.set_active(SEAT, None);
+        let mut replacement = BrokerHardware::new_at(directory.path().join("broker.sock"));
+        let denied = replacement.claim();
+        logind.set_active(
+            SEAT,
+            Some(ActiveSession {
+                id: "disconnect-session".into(),
+                uid,
+            }),
+        );
+        let recovered = replacement.claim();
+        let recovered_poll = if recovered.is_ok() {
+            replacement.poll(Duration::ZERO).map(|_| ())
+        } else {
+            Ok(())
+        };
+        replacement.release()?;
         running.store(false, Ordering::Release);
         server.join().expect("broker server panicked")?;
-        supervisor.shutdown()?;
+        assert!(
+            disconnect_propagated,
+            "broker disconnect was swallowed: the owner loop will flood unclaimed hardware polls"
+        );
+        assert!(
+            crate::is_transient_supervisor_error(&finished),
+            "disconnect must reach the paced retry loop after worker cleanup: {finished:?}"
+        );
+        let denied = denied.expect_err("reconnect bypassed active-session authorization");
+        assert!(
+            crate::is_wait_error::<crate::WaitForActiveSession>(&denied),
+            "reconnect failed for a reason other than session authorization: {denied:#}"
+        );
+        recovered?;
+        recovered_poll?;
         assert!(shared.inspect(|hardware| {
             hardware
                 .synthetic_keys()

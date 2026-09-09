@@ -272,6 +272,58 @@ mod tests {
     }
 
     #[test]
+    fn hardware_retries_are_paced_and_wait_is_cancellable() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc, Arc,
+        };
+        use std::time::{Duration, Instant};
+
+        let running = Arc::new(AtomicBool::new(true));
+        let delay = Duration::from_millis(30);
+        let mut previous = None;
+        let mut attempts = 0;
+        run_supervisor_loop(&running, delay, || {
+            let now = Instant::now();
+            if let Some(previous) = previous {
+                assert!(
+                    now.duration_since(previous) >= delay,
+                    "hardware retry ignored the backoff"
+                );
+            }
+            previous = Some(now);
+            attempts += 1;
+            if attempts == 3 {
+                running.store(false, Ordering::Release);
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("broker disconnected").context(WaitForHardware))
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 3);
+
+        let running = Arc::new(AtomicBool::new(true));
+        let stop = running.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            let result = run_supervisor_loop(&running, Duration::from_secs(30), || {
+                entered_tx.send(()).unwrap();
+                Err(anyhow::anyhow!("broker disconnected").context(WaitForHardware))
+            });
+            done_tx.send(result).unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        stop.store(false, Ordering::Release);
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        owner.join().unwrap();
+    }
+
+    #[test]
     fn supervisor_retries_a_transient_startup_failure() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;

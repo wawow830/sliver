@@ -608,7 +608,10 @@ return {
         timer = sliver.timer.after(0.1, function()
             sliver.input.key.down(sliver.input.keys.keyboard.escape)
             os.execute("sleep 30 >/dev/null 2>&1 &")
-            while true do end
+            -- Return once so Escape-down reaches the broker before the hang.
+            sliver.timer.after(0.25, function()
+                while true do end
+            end)
         end)
     end,
     render = function(canvas)
@@ -1591,7 +1594,7 @@ lifecycle_stage() {
 }
 
 capture_broker_restart_journal() {
-    sudo journalctl -u sliver-broker.service --since "$RESTART_STARTED" -n 100 --no-pager > "$VERIFY_DIR/broker-journal-restart.txt"
+    sudo journalctl -u sliver-broker.service --since "$RESTART_STARTED" --no-pager > "$VERIFY_DIR/broker-journal-restart.txt"
 }
 
 assert_restart_journal() {
@@ -1624,7 +1627,7 @@ restart_stage() {
             exit 1
         }
     logged_step user_journal_restart "$VERIFY_DIR/user-journal-restart.txt" \
-        journalctl --user -u sliver-supervisor.service --since "$RESTART_STARTED" -n 100 --no-pager
+        journalctl --user -u sliver-supervisor.service --since "$RESTART_STARTED" --no-pager
     privileged_step capture_broker_journal capture_broker_restart_journal
     assert_restart_journal restart_journals_user "$VERIFY_DIR/user-journal-restart.txt" \
         sliver-supervisor.service || exit 1

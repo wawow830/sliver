@@ -37,6 +37,7 @@ fi
 bash "$root/scripts/test-verify-release-session.sh" || fail 'session credential regression tests failed'
 bash "$root/scripts/test-verify-release-services.sh" || fail 'service state regression tests failed'
 bash "$root/scripts/test-verify-release-ledger.sh" || fail 'acceptance ledger regression tests failed'
+bash "$root/scripts/test-verify-release-restart.sh" || fail 'restart evidence regression tests failed'
 grep -F 'PANEL_DRM_NODE' "$script" >/dev/null || fail 'preflight does not retain the exact panel DRM node'
 grep -F 'sudo fuser -v "$PANEL_DRM_NODE"' "$script" >/dev/null ||
     fail 'stage 6 does not inspect the exact panel DRM node with privilege'

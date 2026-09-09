@@ -1809,6 +1809,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
         let events = match self.hardware.poll(timeout) {
             Ok(events) => events,
+            // A lost broker socket invalidates ownership, unlike a device
+            // outage on a live claim. Stop this worker and let the paced
+            // startup loop obtain a newly authorized claim.
+            Err(error) if self.hardware.connection_lost() => {
+                return Err(error.context(crate::WaitForHardware));
+            }
             Err(error) if !self.hardware.is_available() => {
                 self.mark_hardware_unavailable(
                     self.hardware
@@ -1829,6 +1835,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let now = self.now_seconds();
         let events = match self.hardware.poll(timeout) {
             Ok(events) => events,
+            Err(error) if self.hardware.connection_lost() => {
+                return Err(error.context(crate::WaitForHardware));
+            }
             Err(error) if !self.hardware.is_available() => {
                 self.mark_hardware_unavailable(
                     self.hardware
@@ -8318,6 +8327,107 @@ mod tests {
             source.as_os_str().as_encoded_bytes()
         );
         supervisor.shutdown()?;
+        Ok(())
+    }
+
+    #[test]
+    fn release_verifier_hung_fixture_delivers_key_before_watchdog() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let script = include_str!("../../../scripts/verify-release.sh");
+        let function = script
+            .split("write_fixtures() {\n")
+            .nth(1)
+            .context("missing verifier fixture generator")?
+            .split("\n}\n\n")
+            .next()
+            .context("missing fixture generator end")?;
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "pass_check() {{ :; }}\nwrite_fixtures() {{\n{function}\n}}\nwrite_fixtures"
+            ))
+            .env("CONFIG_DIR", directory.path())
+            .status()?;
+        anyhow::ensure!(status.success(), "verifier fixture generation failed");
+        let source = directory.path().join("hung.lua");
+        let child_marker = directory.path().join("child-pid");
+        // Observe the background child's PID without changing callback/timer
+        // boundaries or the verifier's command and Lua behavior.
+        let fixture = std::fs::read_to_string(&source)?;
+        std::fs::write(&source, format!(
+            "local execute = os.execute\nos.execute = function(command) return execute(command .. {suffix:?}) end\n{fixture}",
+            suffix = format!(" echo $! > {}", child_marker.display()),
+        ))?;
+        let state = directory.path().join("state/config-path");
+        let mut supervisor = Supervisor::new_with_logind_process(
+            FakeTouchBar::new(),
+            state.clone(),
+            FakeLogind::new(),
+        )?;
+        supervisor.apply(&source)?;
+        let first = supervisor.step_at(1.0);
+        let delivered_before_watchdog = first.is_ok()
+            && supervisor.has_active_worker()
+            && supervisor.hardware().synthetic_keys()
+                == [FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true,
+                }];
+        let failure = if first.is_ok() {
+            supervisor.step_at(2.0)
+        } else {
+            first
+        };
+        let failure = failure.expect_err("fixture did not hit the callback watchdog");
+        assert!(format!("{failure:#}").contains("callback exceeded two seconds"));
+        assert!(supervisor.has_recovery());
+        let child: i32 = std::fs::read_to_string(child_marker)?.trim().parse()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let child_stopped = loop {
+            let stat = std::fs::read_to_string(format!("/proc/{child}/stat"));
+            if stat
+                .as_ref()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                || stat.as_ref().is_ok_and(|stat| {
+                    stat.split_once(") ")
+                        .is_some_and(|(_, rest)| rest.starts_with('Z'))
+                })
+            {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
+        let keys = supervisor.hardware().synthetic_keys().to_vec();
+        assert_eq!(
+            std::fs::read(&state)?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            std::fs::read(state.with_extension("failure"))?,
+            source.as_os_str().as_encoded_bytes()
+        );
+        supervisor.shutdown()?;
+        assert!(child_stopped, "fixture child survived watchdog cleanup");
+        assert!(
+            delivered_before_watchdog,
+            "verifier Escape-down never reached hardware before the hung callback"
+        );
+        assert_eq!(
+            keys,
+            vec![
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: true
+                },
+                FakeKeyEvent {
+                    key: FakeKey::Keyboard(KeyboardKey::Escape),
+                    active: false
+                },
+            ]
+        );
         Ok(())
     }
 
