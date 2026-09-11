@@ -793,8 +793,18 @@ verify_service_restore() {
     return "$ok"
 }
 
+capture_rollback_input_nodes() {
+    local output=$1
+    sudo python3 "$ROOT/scripts/verify-release-input.py" nodes > "$output" 2> "$output.errors"
+}
+capture_rollback_input_access() {
+    local pid=$1 output=$2
+    sudo python3 "$ROOT/scripts/verify-release-input.py" check --pid "$pid" > "$output" 2>&1
+}
+
 restore_and_verify() {
-    local mode=$1 rollback_owner_file rollback_tiny_pid
+    local mode=$1 rollback_owner_file rollback_tiny_pid input_nodes_file input_evidence node
+    local -a input_nodes=()
     ROLLBACK_ATTEMPTED=1
     ROLLBACK_IN_PROGRESS=1
     ROLLBACK_FAILED=0
@@ -904,12 +914,33 @@ restore_and_verify() {
         fi
     fi
 
-    if (( ROLLBACK_FAILED == 0 && UDEV_CHANGED )); then
+    if (( ROLLBACK_FAILED == 0 && (UDEV_CHANGED || PACKAGE_INSTALLED_BY_RUN) )); then
         rollback_privileged reload_udev_rules sudo udevadm control --reload-rules
+        # Fedora's default input GROUP rule is add-only; change preserves
+        # Sliver's numeric GID even after its rule and group disappear. Replay
+        # add only for the two identities affected by Sliver, not all inputs
+        # (and especially not DRM). Resolve current event numbers after removal.
+        input_nodes_file=$(mktemp "$VERIFY_DIR/input-nodes-after-uninstall.XXXXXX")
+        rollback_privileged discover_restored_inputs capture_rollback_input_nodes "$input_nodes_file"
+        if (( ROLLBACK_FAILED == 0 )); then
+            mapfile -t input_nodes < "$input_nodes_file"
+            if (( ${#input_nodes[@]} == 2 )) &&
+               [[ "${input_nodes[0]}" =~ ^/dev/input/event[0-9]+$ &&
+                  "${input_nodes[1]}" =~ ^/dev/input/event[0-9]+$ &&
+                  "${input_nodes[0]}" != "${input_nodes[1]}" ]]; then
+                for node in "${input_nodes[@]}"; do
+                    rollback_privileged "retrigger_${node##*/}" sudo udevadm trigger --action=add \
+                        --subsystem-match=input --name-match="$node"
+                done
+            else
+                record_check rollback_input_identity_verified fail "invalid input discovery; see $input_nodes_file"
+                ROLLBACK_FAILED=1
+            fi
+        fi
         rollback_privileged retrigger_drm sudo udevadm trigger --subsystem-match=drm
-        rollback_privileged retrigger_input sudo udevadm trigger --subsystem-match=input
         rollback_privileged retrigger_misc sudo udevadm trigger --subsystem-match=misc
         rollback_privileged retrigger_backlight sudo udevadm trigger --subsystem-match=backlight
+        rollback_privileged settle_udev sudo udevadm settle --timeout=30
     fi
 
     if (( ROLLBACK_FAILED == 0 && ORIGINAL_SLIVER_USER_PRESENT == 0 )) && getent passwd sliver >/dev/null 2>&1; then
@@ -928,6 +959,35 @@ restore_and_verify() {
                 rollback_privileged "remove_${group}_group" sudo groupdel "$group"
             fi
         done
+    fi
+
+    # The early service/DRM gate protects uninstall. It cannot certify the
+    # final state: tiny-dfr may have started while Sliver still owned input.
+    if (( ROLLBACK_FAILED == 0 && (UDEV_CHANGED || PACKAGE_INSTALLED_BY_RUN) )) && [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
+        rollback_privileged rediscover_tiny_dfr_input sudo systemctl restart tiny-dfr.service
+        if (( ROLLBACK_FAILED == 0 )); then
+            rollback_tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
+            input_evidence=$(mktemp "$VERIFY_DIR/input-after-rollback.XXXXXX.jsonl")
+            rollback_privileged capture_final_input capture_rollback_input_access "$rollback_tiny_pid" "$input_evidence"
+            if (( ROLLBACK_FAILED == 0 )) && [[ "$(unit_active tiny-dfr.service)" == active &&
+                "$(systemctl show tiny-dfr.service -p MainPID --value)" == "$rollback_tiny_pid" ]]; then
+                record_check rollback_input_access_verified pass "current keyboard and Touch Bar identities, daemon credentials, access and open descriptors verified; see $input_evidence"
+            else
+                record_check rollback_input_access_verified fail "final tiny-dfr input access/descriptors not verified; see $input_evidence"
+                ROLLBACK_FAILED=1
+            fi
+            rollback_owner_file=$(mktemp "$VERIFY_DIR/drm-owner-after-input-restore.XXXXXX.txt")
+            if verify_tiny_dfr_drm_owner "$rollback_owner_file" &&
+                [[ "$(systemctl show tiny-dfr.service -p MainPID --value)" == "$rollback_tiny_pid" &&
+                   "$(unit_active tiny-dfr.service)" == active &&
+                   "$(unit_enabled tiny-dfr.service)" == "$ORIGINAL_TINY_ENABLED" ]]; then
+                record_check rollback_final_drm_owner_verified pass "same tiny-dfr PID owns the strictly validated panel after input restoration; see $rollback_owner_file"
+            else
+                record_check rollback_final_drm_owner_verified fail "final tiny-dfr restart did not retain the validated panel; see $rollback_owner_file"
+                ROLLBACK_FAILED=1
+            fi
+            record_check rollback_physical_fn pending "objective input/DRM checks do not prove physical Fn handling; operator must confirm the restored row changes"
+        fi
     fi
 
     if (( SELECTED_PATH_CHANGED )); then
@@ -960,10 +1020,15 @@ restore_and_verify() {
     fi
 
     if (( ROLLBACK_FAILED == 0 )); then
-        record_check rollback_verified pass "full transaction restored the captured host state"
+        record_check rollback_verified pass "full transaction restored the captured host state; physical Fn behavior still requires operator confirmation"
         ROLLBACK_DONE=1
         TAKEOVER_ACTIVE=0
         save_state
+        say "Objective rollback checks passed. This does not change any failed release-acceptance evidence."
+        if [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
+            say "Physical check still required: press and release Fn and confirm the tiny-dfr row visibly changes."
+            say "Save that observation alongside $EVIDENCE_FILE; input access and open descriptors alone do not prove physical Fn handling."
+        fi
         return 0
     fi
     record_check rollback_verified fail "full restoration was not verified; inspect $VERIFY_DIR"
@@ -1025,7 +1090,7 @@ all_required_checks_pass() {
 preflight_stage() {
     stage 1 "Host, session, and pre-install state"
     say "This stage is read-only. It does not install, enable, stop, or trigger anything."
-    for command_name in awk cargo cut dnf fuser getent id journalctl loginctl pgrep rpm rpm2cpio cpio sudo systemctl udevadm; do
+    for command_name in awk cargo cut dnf fuser getent id journalctl loginctl pgrep python3 rpm rpm2cpio cpio sudo systemctl udevadm; do
         if command -v "$command_name" >/dev/null 2>&1; then
             pass_check "tool_$command_name" "available"
         else
@@ -1780,7 +1845,7 @@ final_stage() {
     fi
     CURRENT_STAGE=12
     save_state
-    printf '\n%s%sVerification passed and the host was restored.%s\n' "$BOLD" "$GREEN" "$RESET"
+    printf '\n%s%sRelease acceptance and objective rollback checks passed; physical Fn restoration still needs operator confirmation.%s\n' "$BOLD" "$GREEN" "$RESET"
     say "Evidence: $VERIFY_DIR"
 }
 

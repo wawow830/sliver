@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT=$root
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
 fail() { printf 'DRM rebinding test failed: %s\n' "$*" >&2; exit 1; }
@@ -13,7 +14,7 @@ load_functions() {
     definitions=$(<"$root/scripts/verify-release-ownership.sh")
     definitions+=$'\n'
     definitions+=$(awk '
-        /^(owner_stage|takeover_stage|panel_drm_identity_matches_snapshot|rebind_panel_drm_at_boundary|capture_pre_takeover_drm_owner|capture_drm_owner_to_file|verify_tiny_dfr_drm_owner|restore_and_verify|rollback_privileged|record_check|pass_check|fail_check|refuse_if_blocked)\(\) \{/ { copying = 1 }
+        /^(owner_stage|takeover_stage|panel_drm_identity_matches_snapshot|rebind_panel_drm_at_boundary|capture_pre_takeover_drm_owner|capture_drm_owner_to_file|verify_tiny_dfr_drm_owner|restore_and_verify|rollback_privileged|record_check|pass_check|fail_check|refuse_if_blocked|capture_rollback_input_nodes|capture_rollback_input_access|verify_tiny_dfr_drm_owner)\(\) \{/ { copying = 1 }
         copying { print }
         copying && /^}$/ { copying = 0 }
     ' "$root/scripts/verify-release.sh")
@@ -37,6 +38,10 @@ sudo() {
             printf '%s: root %s F.... tiny-dfr\n' "$tmp/dri/card2" "${owner_pid:-1017}"
             if [[ ${competing_owner:-no} == yes ]]; then printf 'user 2048 F.... competitor\n'; fi ;;
         'dnf remove -y --no-autoremove sliver') printf 'remove-package\n' >> "$VERIFY_DIR/actions"; package_present=0 ;;
+        "python3 $root/scripts/verify-release-input.py nodes") printf '%s/input/event7\n%s/input/event12\n' "$tmp" "$tmp" ;;
+        "python3 $root/scripts/verify-release-input.py check --pid 1017") printf '{"ok":true}\n' ;;
+        'udevadm control --reload-rules'|'udevadm settle --timeout=30'|'systemctl restart tiny-dfr.service') : ;;
+        udevadm\ trigger\ --subsystem-match=*|udevadm\ trigger\ --action=add\ --subsystem-match=input\ --name-match="$tmp"/input/event*) : ;;
         *) fail "unexpected sudo: $*" ;;
     esac
 }

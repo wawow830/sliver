@@ -39,6 +39,8 @@ bash "$root/scripts/test-verify-release-services.sh" || fail 'service state regr
 bash "$root/scripts/test-verify-release-ledger.sh" || fail 'acceptance ledger regression tests failed'
 bash "$root/scripts/test-verify-release-restart.sh" || fail 'restart evidence regression tests failed'
 bash "$root/scripts/test-verify-release-rebinding.sh" || fail 'DRM rebinding regression tests failed'
+bash "$root/scripts/test-verify-release-input-rollback.sh" || fail 'input rollback regression tests failed'
+python3 -B "$root/scripts/test-verify-release-input.py" || fail 'input access inspection tests failed'
 grep -F 'PANEL_DRM_NODE' "$script" >/dev/null || fail 'preflight does not retain the exact panel DRM node'
 grep -F 'sudo fuser -v "$PANEL_DRM_NODE"' "$script" >/dev/null ||
     fail 'stage 6 does not inspect the exact panel DRM node with privilege'
