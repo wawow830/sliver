@@ -36,6 +36,8 @@ Amend the M2 native-output contract to the intended **nominal 30 FPS**, while re
 2. Whether the native workload runs at the approved panel cadence or intentionally overproduces to test stale-frame dropping. Count intentional producer drops separately from missed presentation deadlines; the spec already requires dropping stale completed frames rather than building latency.
 3. The frame identity, observation point and causal input-response measurement. Successful dirtyfb calls may be delayed/coalesced by the UAPI and are not independent optical presentations.
 
+The [source observation audit](native-performance-observation-audit.md) now traces the identity, timer, clock and causality gaps through the current implementation. The [acceptance proposal](native-performance-acceptance-proposal.md) supplies explicit observation/accounting choices and an approval checklist; it is not an adopted contract.
+
 Only after that decision should the verifier, fixture/evidence contract, tests and parent requirements be updated coherently. Preserve old failures and require fresh evidence under the revised contract; do not relabel an old ledger as accepted. The committed input-access rollback fix also still needs a fresh full verification transaction before final release acceptance.
 
 ## Retired follow-up and evidence
