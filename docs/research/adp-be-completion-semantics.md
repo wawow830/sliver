@@ -66,9 +66,9 @@ The [binding](https://github.com/torvalds/linux/blob/08df884136f1c1197bab2a27814
 
 Coverage: driver patch/comments for all eight revisions, series cover letters, initial binding discussions, original Asahi and current upstream source/history, plus the m1n1/docs coverage above. Lore's direct raw endpoint returned HTTP 403 during this research; the original submitted patches/replies were read via the freedesktop Patchwork archive instead. Search failures and absent results are not proof that private notes or another public trace cannot exist.
 
-## Maintainer question: evidence-backed handoff, not submitted
+## Maintainer question: evidence-backed handoff
 
-Current [PRE-DCP MAINTAINERS entry](https://github.com/torvalds/linux/blob/08df884136f1c1197bab2a27814404fd329d9aac/MAINTAINERS#L8876-L8890): **Sasha Finkelstein `<k@chaosmail.tech>`**, reviewer **Janne Grunau `<j@jannau.net>`**; lists **`asahi@lists.linux.dev`**, **`dri-devel@lists.freedesktop.org`**; bug tracker **[AsahiLinux/linux/issues](https://github.com/AsahiLinux/linux/issues)**. The original submissions use Sasha's older `fnkl.kernel@gmail.com` address; prefer the current maintained contact entry. The [separate report draft](adp-completion-upstream-report.md) holds local trace details.
+Current [PRE-DCP MAINTAINERS entry](https://github.com/torvalds/linux/blob/08df884136f1c1197bab2a27814404fd329d9aac/MAINTAINERS#L8876-L8890): **Sasha Finkelstein `<k@chaosmail.tech>`**, reviewer **Janne Grunau `<j@jannau.net>`**; lists **`asahi@lists.linux.dev`**, **`dri-devel@lists.freedesktop.org`**; bug tracker **[AsahiLinux/linux/issues](https://github.com/AsahiLinux/linux/issues)**. The original submissions use Sasha's older `fnkl.kernel@gmail.com` address; prefer the current maintained contact entry. The [separate report](adp-completion-upstream-report.md) holds local trace details. A condensed version was submitted as [AsahiLinux/linux#613](https://github.com/AsahiLinux/linux/issues/613) on 2026-09-11; raw traces and kernel addresses were not uploaded.
 
 Suggested precise question:
 

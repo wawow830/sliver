@@ -1,10 +1,10 @@
-# Upstream report draft: ADP flip completion trails dirtyfb return by one FE
+# Upstream report: ADP flip completion trails dirtyfb return by one FE
 
-Status: **draft, not submitted upstream**. Diagnostic evidence only; Sliver release performance acceptance remains failed. Prepared 2026-09-11 for Sliver [#23](https://github.com/wawow830/sliver/issues/23).
+Status: submitted as [AsahiLinux/linux#613](https://github.com/AsahiLinux/linux/issues/613) on 2026-09-11, using a condensed version without raw kernel addresses. Diagnostic evidence only; Sliver release performance acceptance remains failed. Tracks Sliver [#23](https://github.com/wawow830/sliver/issues/23).
 
-## Suggested destination
+## Reporting destination
 
-The [installed-source MAINTAINERS entry](https://github.com/AsahiLinux/linux/blob/81d3924095fd017e473332a9b6dd6dd0e3d9a59b/MAINTAINERS#L8707-L8721) lists the Asahi Linux issue tracker, `asahi@lists.linux.dev` and `dri-devel@lists.freedesktop.org`, with Sasha Finkelstein as maintainer and Janne Grunau as reviewer. Check current reporting instructions before submission. No message has been sent by preparing this draft.
+The [installed-source MAINTAINERS entry](https://github.com/AsahiLinux/linux/blob/81d3924095fd017e473332a9b6dd6dd0e3d9a59b/MAINTAINERS#L8707-L8721) lists the Asahi Linux issue tracker, `asahi@lists.linux.dev` and `dri-devel@lists.freedesktop.org`, with Sasha Finkelstein as maintainer and Janne Grunau as reviewer. The report was filed in the listed Asahi Linux issue tracker; no email was sent.
 
 ## Environment and symptom
 
@@ -62,7 +62,7 @@ We have **not** removed the control gate, fabricated flip completion, changed sy
 
 ## Evidence handoff
 
-Raw captures remain local and are not implicitly attached to this draft:
+Raw captures remain local and were not attached to the upstream report:
 
 - `/home/wawow/sliver-release-verification/20260911-170920/`: continuous throughput and dependency/vblank capture, analyzers and original workload.
 - `/home/wawow/sliver-kernel-diagnosis/20260911/`: exact-source audit, BTF/module checks, passive completion capture, parser tests and cleanup records.
