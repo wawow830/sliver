@@ -1,6 +1,6 @@
 # Upstream report: ADP flip completion trails dirtyfb return by one FE
 
-Status: submitted as [AsahiLinux/linux#613](https://github.com/AsahiLinux/linux/issues/613) on 2026-09-11, using a condensed version without raw kernel addresses. Diagnostic evidence only; Sliver release performance acceptance remains failed. Tracks Sliver [#23](https://github.com/wawow830/sliver/issues/23).
+Status: submitted as [AsahiLinux/linux#613](https://github.com/AsahiLinux/linux/issues/613) on 2026-09-11, using a condensed version without raw kernel addresses, then **closed as not actionable**. The maintainer confirmed the panel is intended to run at **30 FPS** and requested no further LLM-authored issues. See [native-rate resolution](adp-native-rate-resolution.md). The original report below is preserved, not an outstanding driver-fix request. Sliver’s conflicting native 60 FPS acceptance requirement remains unresolved in [#23](https://github.com/wawow830/sliver/issues/23); no failed release evidence was relabeled accepted.
 
 ## Reporting destination
 

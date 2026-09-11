@@ -2,11 +2,13 @@
 
 Research date: 2026-09-11. Related: [Sliver #23](https://github.com/wawow830/sliver/issues/23).
 
+**Superseding response:** the ADP maintainer confirmed intended **30 FPS** operation and closed the upstream report as not actionable. See [native-rate resolution](adp-native-rate-resolution.md). Missing BE semantics are no longer a reason to pursue a presumed 60 FPS panel fix; the local release target needs an explicit decision.
+
 ## Conclusion
 
 **No independently supported BE completion/status/mask/acknowledgement register semantics were found in the examined public sources.** Linux names and uses FE registers, acquires a separate BE IRQ, and retains the BE-flush FIXME. Its binding explicitly calls the BE IRQ's function **unknown**. m1n1's playback example sleeps **0.033 seconds** without waiting for completion; it is not a measured 60-FPS precedent. Sources and limits follow below.
 
-This leaves the key discriminator unresolved: genuinely unfinished transfer versus completion between FE observations that is only noticed at the following FE. Neither the FIXME nor the demo establishes a safe earlier DMA-buffer retirement boundary. The source-backed next step is the maintainer question below, **not a speculative register probe or kernel patch**.
+This leaves the key discriminator unresolved: genuinely unfinished transfer versus completion between FE observations that is only noticed at the following FE. Neither the FIXME nor the demo establishes a safe earlier DMA-buffer retirement boundary. The maintainer question below records the historical handoff. It is **not a current request for further probes, kernel patches, or generated upstream messages**.
 
 Boundary: read `COMPLETION-RESULT.md` and `SOURCE-FINDINGS.md` in `/home/wawow/sliver-kernel-diagnosis/20260911/`. Their 15/15 tiny-dfr cycles show the FE gate delaying the same event beyond successful dirtyfb return, but no overlapping next-commit dependency wait in that slow workload. The separate archived Sliver throughput remains approximately 29.67 updates/s and unaccepted; neither observation measures optical presentation. This research used remote sources and `/tmp` downloads only: no root, tracing, services, packages, hardware access, execution of downloaded code, or external report submission.
 

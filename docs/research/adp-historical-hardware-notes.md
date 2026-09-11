@@ -2,6 +2,8 @@
 
 Date: 2026-09-11. Related: [Sliver #23](https://github.com/wawow830/sliver/issues/23), [earlier completion research](adp-be-completion-semantics.md).
 
+**Subsequent authoritative response:** the maintainer confirmed intended **30 FPS** operation and closed the upstream issue. See [native-rate resolution](adp-native-rate-resolution.md). The observations below remain historical context, not grounds for a 60 FPS driver fix or further generated upstream reports.
+
 ## Boundary and acquisition accounting
 
 **No proprietary binary acquisition or static analysis occurred.** Before the policy review, only an empty `vendor-static/` directory was created and tool availability checked. No IPSW, kernelcache, kext, Apple manifest, or disassembly was downloaded or viewed. No vendor bytes were acquired against the 250 MB allowance.
@@ -82,7 +84,7 @@ On **2023-04-24, 11:27**, marcan cautions that even though ADP is ostensibly the
 
 Thus old open-source register names/protocols can suggest questions, but their offsets, status meanings, clear semantics and completion boundaries cannot simply be transplanted to M2. No old or proprietary driver code was copied into this note.
 
-## Sharpened question for maintainers
+## Historical question prepared before the 30 FPS response
 
 > In April 2025, `0x2a13` was tentatively identified as “scanout in progress”, and `ADP_CTRL_FIFO_ON`/`ADBE_FIFO_SYNC` were described as selecting explicit FIFO-triggered scanout. Does any retained hardware trace/documentation establish which transition ends the framebuffer's last DMA read? How does that transition relate to the reported next-vblank application of queued register writes, the driver's `0x600` masked FE gate, and the intended BE-flush interrupt? Is there a documented BE cause/status/acknowledgement protocol and command-to-completion association, including disable/error/power-state behavior?
 

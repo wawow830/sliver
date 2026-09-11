@@ -1,6 +1,6 @@
 # ADP completion: phase constraints and passive status follow-up
 
-2026-09-11. Diagnostic only; [Sliver #23](https://github.com/wawow830/sliver/issues/23) and [upstream #613](https://github.com/AsahiLinux/linux/issues/613) remain unresolved. No kernel/driver changes, synchronization bypass, or Sliver takeover.
+2026-09-11. **Superseding finding:** upstream closed #613 after the maintainer confirmed intended **30 FPS** operation. See [native-rate resolution](adp-native-rate-resolution.md). [Sliver #23](https://github.com/wawow830/sliver/issues/23) now concerns the conflicting 60 FPS release target, not a proven driver regression. The diagnostic data below are retained; no kernel/driver changes, synchronization bypass, or Sliver takeover occurred.
 
 ## New result: not a fixed 33 ms from submission
 
@@ -82,4 +82,4 @@ All loss/miss counters are zero; the private instance and probe names are absent
 
 Independent review caught two follow-up tool defects, corrected before the next physical sample: post-capture ownership was checked after closing the raw file, and unrelated CRTCs' global send events could be mistaken for ADP events. New captures persist the required post-ownership result inside the failure-preserving path; analysis now identifies ADP's CRTC from its driver-specific probes before associating generic sends. The original empty baseline is retained unchanged: its separate post-capture ownership check succeeded, but that result is **not encoded in its raw file**, so replay reports `owner_after_recorded: false`. Tests cover both defects, missing post-checks, and wrong ADP layout.
 
-The remaining physical step has a local helper, `/home/wawow/sliver-kernel-diagnosis/20260911/check-fe-status.sh`: confirm normal Fn behavior, authorize the passive trace, then press/release Fn during its 30-second window. The helper passed `bash -n`; shellcheck is unavailable in this environment. It injects no input and does not transfer display ownership. Until that yields actual update samples, the extra-field experiment remains unanswered.
+A physical-Fn helper was prepared and passed `bash -n`; shellcheck is unavailable. **That request was withdrawn after the 30 FPS maintainer response.** `/home/wawow/sliver-kernel-diagnosis/20260911/check-fe-status.sh` now prints the superseding explanation and exits without tracing or input requests; the original wizard is retained as `check-fe-status.retired.sh`. The extra-field experiment remains unanswered, not an outstanding requirement for fixing presumed 60 FPS hardware operation.
