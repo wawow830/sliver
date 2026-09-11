@@ -1,6 +1,6 @@
 # Proposed native performance evidence contract
 
-**Status: discussion draft, not approved or implemented.** For [#23](https://github.com/wawow830/sliver/issues/23), following the [30 FPS premise correction](adp-native-rate-resolution.md). The ≥59.5 native release gate, parent requirements and failed ledgers remain unchanged. No hardware capture, takeover, kernel change or upstream contact is part of this work.
+**Status: nominal 30 FPS direction and offline implementation continuation approved; acceptance policy still incomplete.** On 2026-09-12 the user replied **“yes, don't stop”** to this planning continuation. That approves proceeding, but supplies neither numeric tolerance/latency budgets nor an explicit broker-return/optical selection. For [#23](https://github.com/wawow830/sliver/issues/23), following the [30 FPS premise correction](adp-native-rate-resolution.md). The ≥59.5 native release gate, parent requirements and failed ledgers remain unchanged pending a complete contract. No hardware capture, takeover, kernel change or upstream contact is part of this work.
 
 ## Decision to make
 
@@ -74,15 +74,19 @@ After the decision, implementation order is:
 
 ## Approval checklist
 
-- [ ] Nominal 30 FPS native target; existing 60-frame software benchmark retained with accurate scope.
+- [x] Nominal 30 FPS native direction; existing 60-frame software benchmark retained with accurate scope (2026-09-12 continuation approval).
 - [ ] Broker-return, optical, or both observation points, with precise claim names.
 - [ ] Absolute rate/deadline budget **or** independent reference-calibration protocol and relative budget.
 - [ ] Native/overproduction schedules and separate skipped-generation/supersession/deadline-miss rules.
 - [ ] Input origin, causal marker method, sampling and no-growth/jitter rule.
 
-Unchecked items mean **not ready for unattended acceptance implementation**. This proposal changes no accepted ADR, production interface, fixture, verifier, threshold, test or release verdict.
+Unchecked items mean **not ready for unattended acceptance implementation**. No accepted ADR, production interface, fixture, release verifier, threshold or release verdict has changed.
 
-## Safe work completed while the decision is pending
+## Offline implementation after continuation approval
+
+The [experimental v0 reader](native-performance-observation-format.md) and synthetic tests now exercise closed-cohort identity/disposition accounting, replay exclusion, declared causal input links, timeouts/late responses, and fixed-window latency summaries. It is included in the source audit, not the release verifier. It has no collector, marker decoder, schedule/deadline policy or release-pass mode; accepted diagnostic records can include failures. Unsupported optical claims, capture loss, partial cohorts and old schemas fail validation. This implements a policy-independent portion of the proposed single reader, not the full future acceptance contract.
+
+## Safe work completed while the decision was pending
 
 Existing software checks were rerun at source commit `d90dbe39cbd5bee89d3e4f99d38906722f3cac8e`; no source/test changes were needed:
 

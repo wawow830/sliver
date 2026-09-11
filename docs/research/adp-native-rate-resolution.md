@@ -28,7 +28,9 @@ This was not merely a verifier typo:
 
 The public 60 FPS hardware acceptance criterion therefore conflicts with the newly supplied hardware expectation. **No threshold, parent acceptance checkbox, test, or production code was changed to paper over the conflict.** [Sliver #23](https://github.com/wawow830/sliver/issues/23) is now a specification/acceptance decision, not an unattended driver-fix task.
 
-## Recommended decision, not yet adopted
+## Nominal direction approved; numeric acceptance still pending
+
+On 2026-09-12 the user approved continuing the nominal 30 FPS direction and offline evidence work. The complete acceptance contract remains undecided: that approval did not supply numeric tolerance, deadline or input-latency policy, nor choose broker-return versus optical evidence. An [experimental offline reader](native-performance-observation-format.md) now tests part of the observation-accounting contract without changing the release gate or touching hardware.
 
 Amend the M2 native-output contract to the intended **nominal 30 FPS**, while retaining the 60 FPS software benchmark as headroom/stale-frame-drop coverage. Approval must settle:
 
@@ -36,7 +38,7 @@ Amend the M2 native-output contract to the intended **nominal 30 FPS**, while re
 2. Whether the native workload runs at the approved panel cadence or intentionally overproduces to test stale-frame dropping. Count intentional producer drops separately from missed presentation deadlines; the spec already requires dropping stale completed frames rather than building latency.
 3. The frame identity, observation point and causal input-response measurement. Successful dirtyfb calls may be delayed/coalesced by the UAPI and are not independent optical presentations.
 
-The [source observation audit](native-performance-observation-audit.md) now traces the identity, timer, clock and causality gaps through the current implementation. The [acceptance proposal](native-performance-acceptance-proposal.md) supplies explicit observation/accounting choices and an approval checklist; it is not an adopted contract.
+The [source observation audit](native-performance-observation-audit.md) now traces the identity, timer, clock and causality gaps through the current implementation. The [acceptance proposal](native-performance-acceptance-proposal.md) supplies explicit observation/accounting choices and an approval checklist; it is not a complete adopted acceptance contract.
 
 Only after that decision should the verifier, fixture/evidence contract, tests and parent requirements be updated coherently. Preserve old failures and require fresh evidence under the revised contract; do not relabel an old ledger as accepted. The committed input-access rollback fix also still needs a fresh full verification transaction before final release acceptance.
 
