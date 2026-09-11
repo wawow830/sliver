@@ -53,6 +53,40 @@ panel_drm_connected_dsi_connector() {
     printf '%s\n' "${connectors[0]}"
 }
 
+# A saved binding must be complete even when its card number is now stale.
+# Never infer a missing persistent identity from whichever DSI happens to exist.
+panel_drm_snapshot_is_complete() {
+    local node=$1 connector=$2 device=$3 devnum=$4
+    [[ "$node" =~ ^/dev/dri/card[0-9]+$ &&
+       "$connector" =~ ^card[0-9]+-DSI-[0-9]+$ &&
+       "$connector" == "${node##*/}"-DSI-* &&
+       "$device" == /* && "$devnum" =~ ^[[:xdigit:]]+:[[:xdigit:]]+$ ]]
+}
+
+# Resolve only the previously captured physical device and connector suffix.
+# The caller may adopt the result at an explicit boundary, never during the
+# immediate-before-takeover ownership check.
+panel_drm_rediscover_snapshot() {
+    local node=$1 connector=$2 device=$3 devnum=$4
+    local candidate status current_device current_connector current_devnum
+    local -a matches=()
+    panel_drm_snapshot_is_complete "$node" "$connector" "$device" "$devnum" || return 1
+    for status in /sys/class/drm/card*-DSI-*/status; do
+        [[ -r "$status" && "$(<"$status")" == connected ]] || continue
+        candidate=${status#/sys/class/drm/}
+        candidate=/dev/dri/${candidate%%-*}
+        current_device=$(readlink -e "/sys/class/drm/${candidate##*/}/device") || continue
+        [[ "$current_device" == "$device" ]] || continue
+        [[ -c "$candidate" ]] || return 1
+        current_connector=$(panel_drm_connected_dsi_connector "$candidate") || return 1
+        [[ "${current_connector#*-}" == "${connector#*-}" ]] || return 1
+        current_devnum=$(stat -c '%t:%T' "$candidate") || return 1
+        matches+=("$candidate" "$current_connector" "$current_devnum")
+    done
+    (( ${#matches[@]} == 3 )) || return 1
+    printf '%s\n' "${matches[@]}"
+}
+
 panel_drm_node_has_connected_dsi() {
     local node=$1 sysfs_root=${2:-/sys/class/drm}
     panel_drm_connected_dsi_connector "$node" "$sysfs_root" >/dev/null

@@ -822,16 +822,22 @@ restore_and_verify() {
           -n "$PANEL_DRM_CONNECTOR" && -n "$PANEL_DRM_SYSFS_DEVICE" &&
           -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
         rollback_owner_file="$VERIFY_DIR/drm-owner-after-rollback.txt"
-        rollback_privileged capture_drm_owner_after_rollback capture_drm_owner_to_file "$rollback_owner_file"
+        if rebind_panel_drm_at_boundary rollback; then
+            rollback_privileged capture_drm_owner_after_rollback capture_drm_owner_to_file "$rollback_owner_file"
+        else
+            ROLLBACK_FAILED=1
+        fi
         rollback_tiny_pid=$(systemctl show tiny-dfr.service -p MainPID --value 2>/dev/null || true)
-        if panel_drm_identity_matches_snapshot &&
+        if (( ROLLBACK_FAILED == 0 )) && panel_drm_identity_matches_snapshot &&
            owner_matches "$PANEL_DRM_NODE" "$rollback_tiny_pid" "$rollback_owner_file"; then
-            record_check rollback_drm_owner_verified pass "tiny-dfr reacquired the exact preflight panel node"
+            record_check rollback_drm_owner_verified pass "tiny-dfr owns the strictly revalidated binding of the preflight panel"
         else
             record_check rollback_drm_owner_verified fail "tiny-dfr did not reacquire the exact preflight panel node"
             ROLLBACK_FAILED=1
         fi
-    elif [[ "$ORIGINAL_TINY_ACTIVE" == active && -z "$PANEL_DRM_NODE" ]]; then
+    elif [[ "$ORIGINAL_TINY_ACTIVE" == active && -z "$PANEL_DRM_NODE" &&
+            -z "$PANEL_DRM_CONNECTOR" && -z "$PANEL_DRM_SYSFS_DEVICE" &&
+            -z "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
         record_check rollback_drm_owner_verified pass "not applicable because failure preceded panel-node capture"
     elif [[ "$ORIGINAL_TINY_ACTIVE" == active ]]; then
         record_check rollback_drm_owner_verified fail "panel DRM identity capture was incomplete"
@@ -1368,6 +1374,10 @@ owner_stage() {
         fail_check pre_takeover_drm_owner "administrator authentication could not be established before the ownership check"
         exit 1
     fi
+    if ! rebind_panel_drm_at_boundary pre_owner; then
+        fail_check pre_takeover_drm_identity "no unique connected binding matches the saved persistent panel and connector"
+        exit 1
+    fi
     logged_step pre_takeover_owner "$VERIFY_DIR/tiny-dfr-before-takeover.txt" \
         systemctl --no-pager --full status tiny-dfr.service
     if pgrep -a -f 'tiny-dfr|sliver-broker|sliver-supervisor' > "$VERIFY_DIR/processes-before-takeover.txt" 2>&1; then
@@ -1388,7 +1398,7 @@ owner_stage() {
         exit 1
     fi
     if panel_drm_identity_matches_snapshot; then
-        pass_check pre_takeover_drm_identity "exact connected DSI panel node identity still matches preflight"
+        pass_check pre_takeover_drm_identity "exact connected DSI node matches the revalidated preflight panel binding"
     else
         fail_check pre_takeover_drm_identity "exact panel node identity or connected DSI status changed since preflight"
         exit 1
@@ -1418,10 +1428,44 @@ owner_stage() {
     save_state
 }
 
+# Only these two transaction boundaries may adopt a new volatile card number.
+# Keep the preflight artifacts and first state snapshot immutable, and append
+# every old/new binding before changing the working state (including rollback).
+rebind_panel_drm_at_boundary() {
+    local boundary=$1 binding
+    local -a fields=()
+    [[ "$boundary" == pre_owner || "$boundary" == rollback ]] || return 1
+    if ! binding=$(panel_drm_rediscover_snapshot "$PANEL_DRM_NODE" "$PANEL_DRM_CONNECTOR" \
+        "$PANEL_DRM_SYSFS_DEVICE" "$PANEL_DRM_DEV_MAJOR_MINOR"); then
+        record_check "${boundary}_drm_rebinding" fail "saved panel identity is incomplete, absent, disconnected, or ambiguous"
+        return 1
+    fi
+    mapfile -t fields <<< "$binding"
+    if [[ "${fields[0]}" == "$PANEL_DRM_NODE" && "${fields[1]}" == "$PANEL_DRM_CONNECTOR" &&
+          "${fields[2]}" == "$PANEL_DRM_DEV_MAJOR_MINOR" ]]; then
+        return 0
+    fi
+    if [[ ! -e "$VERIFY_DIR/drm-preflight-state.env" ]]; then
+        cp -- "$STATE_FILE" "$VERIFY_DIR/drm-preflight-state.env" || return 1
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$(date --iso-8601=seconds)" "$boundary" "$PANEL_DRM_SYSFS_DEVICE" \
+        "$PANEL_DRM_NODE" "$PANEL_DRM_CONNECTOR" "$PANEL_DRM_DEV_MAJOR_MINOR" \
+        "${fields[0]}" "${fields[1]}" "${fields[2]}" \
+        >> "$VERIFY_DIR/drm-rebindings.tsv" || return 1
+    record_check "${boundary}_drm_rebinding" pass \
+        "same persistent panel $PANEL_DRM_SYSFS_DEVICE: $PANEL_DRM_NODE $PANEL_DRM_CONNECTOR $PANEL_DRM_DEV_MAJOR_MINOR -> ${fields[*]}; see drm-rebindings.tsv and drm-preflight-state.env" || return 1
+    PANEL_DRM_NODE=${fields[0]}
+    PANEL_DRM_CONNECTOR=${fields[1]}
+    PANEL_DRM_DEV_MAJOR_MINOR=${fields[2]}
+    save_state
+}
+
 panel_drm_identity_matches_snapshot() {
     local current_panel_connector current_panel_sysfs_device current_panel_dev_major_minor
-    [[ -n "$PANEL_DRM_NODE" && -n "$PANEL_DRM_CONNECTOR" &&
-       -n "$PANEL_DRM_SYSFS_DEVICE" && -n "$PANEL_DRM_DEV_MAJOR_MINOR" ]] || return 1
+    panel_drm_snapshot_is_complete "$PANEL_DRM_NODE" "$PANEL_DRM_CONNECTOR" \
+        "$PANEL_DRM_SYSFS_DEVICE" "$PANEL_DRM_DEV_MAJOR_MINOR" || return 1
+    [[ -c "$PANEL_DRM_NODE" ]] || return 1
     current_panel_connector=$(panel_drm_connected_dsi_connector "$PANEL_DRM_NODE" 2>/dev/null || true)
     current_panel_sysfs_device=$(readlink -f "/sys/class/drm/${PANEL_DRM_NODE##*/}/device" 2>/dev/null || true)
     current_panel_dev_major_minor=$(stat -c '%t:%T' "$PANEL_DRM_NODE" 2>/dev/null || true)
