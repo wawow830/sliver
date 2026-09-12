@@ -198,6 +198,416 @@ fn diagnostic_pixel_marker_rejects_ambiguous_identities_before_presenting() -> R
 }
 
 #[test]
+fn private_diagnostic_capture_observes_real_render_and_complete_fake_present() -> Result<()> {
+    use crate::diagnostic_observer::{Capture, EventKind};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("observed.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    std::fs::write(
+        &source,
+        r#"
+        require("sliver.v1")
+        local marker = require("native_marker")
+        return { api_version = 1, render = function(canvas)
+            marker.draw(canvas, {run_id="r", generation="g", frame_id=1})
+        end }
+    "#,
+    )?;
+    let capture = Capture::new(64)?;
+    let before = capture.monotonic_ns()?;
+    let worker = crate::lua_worker::LuaWorker::stage_observed(&source, capture.clone())?.worker;
+    // Deliberately unrelated intended time must never become an observation.
+    let frame = worker.render_at(987654321.0, 0.0)?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    capture.present(&mut hardware, &frame.frame)?;
+    worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+    hardware.release()?;
+    let after = capture.monotonic_ns()?;
+    let report = capture.close();
+    assert_eq!(report.lost, 0);
+    assert_eq!(report.clock_failures, 0);
+    assert!(report.closed);
+    assert!(report.clock_resolution_ns > 0);
+    assert!(report
+        .records
+        .iter()
+        .all(|r| (before..=after).contains(&r.at_ns)));
+    assert!(report
+        .records
+        .windows(2)
+        .all(|r| r[0].sequence + 1 == r[1].sequence));
+    assert!(matches!(
+        report.records[0].kind,
+        EventKind::RenderAllocated { attempt: 1 }
+    ));
+    let returned = report
+        .records
+        .iter()
+        .find_map(|r| match &r.kind {
+            EventKind::PresentEntered {
+                marker: Ok(marker), ..
+            } => Some(marker),
+            _ => None,
+        })
+        .context("missing independently decoded broker-entry pixels")?;
+    assert_eq!(returned.run_id(), b"r");
+    assert_eq!(returned.generation(), b"g");
+    assert_eq!(returned.frame_id(), 1);
+    assert_eq!(returned.input_id(), None);
+    assert!(report
+        .records
+        .iter()
+        .any(|r| matches!(r.kind, EventKind::Published { sequence: 1, .. })));
+    assert!(report
+        .records
+        .iter()
+        .any(|r| matches!(r.kind, EventKind::Selected { sequence: 1 })));
+    assert!(matches!(
+        report.records.last().unwrap().kind,
+        EventKind::PresentReturned {
+            call: 1,
+            success: true
+        }
+    ));
+    assert_eq!(hardware.presented_frames().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_accounts_for_three_slot_reclamation_and_selection() -> Result<()> {
+    use crate::diagnostic_observer::{Capture, EventKind};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("observed.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    std::fs::write(
+        &source,
+        r#"
+        require("sliver.v1")
+        local marker = require("native_marker")
+        local id = 0
+        return { api_version = 1, render = function(canvas)
+            id = id + 1
+            marker.draw(canvas, {run_id="r", generation="g", frame_id=id})
+        end }
+    "#,
+    )?;
+    for shared in [false, true] {
+        let capture = Capture::new(64)?;
+        let worker = if shared {
+            crate::lua_worker::LuaWorker::stage_observed_shared(
+                &source,
+                &directory.path().join("frames"),
+                capture.clone(),
+            )?
+            .worker
+        } else {
+            crate::lua_worker::LuaWorker::stage_observed(&source, capture.clone())?.worker
+        };
+        for _ in 0..5 {
+            worker.render_to_slots_at(0.0, 0.0)?;
+        }
+        let frame = worker
+            .broker_for_test()
+            .take_newest()?
+            .context("newest frame missing")?;
+        let (frame, _) = LogicalFrame::from_completed(frame);
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        capture.present(&mut hardware, &frame)?;
+        worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+        hardware.release()?;
+        let report = capture.close();
+        let mut discarded: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|r| match r.kind {
+                EventKind::Discarded { sequence, .. } => Some(sequence),
+                _ => None,
+            })
+            .collect();
+        let reasons: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|r| match r.kind {
+                EventKind::Discarded { reason, .. } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        use crate::diagnostic_observer::DiscardReason;
+        assert_eq!(
+            reasons,
+            [
+                DiscardReason::ProducerReclaim,
+                DiscardReason::ProducerReclaim,
+                DiscardReason::ConsumerSuperseded,
+                DiscardReason::ConsumerSuperseded
+            ]
+        );
+        discarded.sort_unstable();
+        assert_eq!(discarded, [1, 2, 3, 4]);
+        let selected: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|r| match r.kind {
+                EventKind::Selected { sequence } => Some(sequence),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selected, [5]);
+        assert_eq!(
+            crate::diagnostic_observer::decode(&frame)
+                .unwrap()
+                .frame_id(),
+            5
+        );
+        assert_eq!(report.lost, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_links_normalized_touch_delivery_to_fixture_pixels() -> Result<()> {
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::hardware::HardwareEvent;
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("observed.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    std::fs::write(
+        &source,
+        include_str!("../../../scripts/native-performance-observer-smoke.lua"),
+    )?;
+    let capture = Capture::new(64)?;
+    let worker = crate::lua_worker::LuaWorker::stage_observed(&source, capture.clone())?.worker;
+    worker.commit(0.0, InputState::default())?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    let initial = worker.render_at(0.0, 0.0)?;
+    capture.present(&mut hardware, &initial.frame)?;
+    let touch = TouchEvent {
+        phase: TouchPhase::Down,
+        id: 42,
+        time: 123.0,
+        x: 0.0,
+        y: 30.0,
+        modifiers: ModifierState::default(),
+        pressure: None,
+        width: None,
+        height: None,
+    };
+    hardware.inject(HardwareEvent::Touch(touch));
+    let events = capture.poll(&mut hardware, Duration::ZERO)?;
+    assert_eq!(events, [HardwareEvent::Touch(touch)]);
+    let response = worker.drive(
+        crate::lua_worker::DriveRequest::without_input(0.0, InputState::default())
+            .with_events(vec![touch]),
+    )?;
+    capture.present(
+        &mut hardware,
+        &response.frame.context("missing causal frame")?.frame,
+    )?;
+    // A repeated presentation remains a separate call, not a new identity.
+    capture.present(&mut hardware, &initial.frame)?;
+    worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+    hardware.release()?;
+    let report = capture.close();
+    let received = report
+        .records
+        .iter()
+        .position(
+            |r| matches!(r.kind, EventKind::InputReceived(HardwareEvent::Touch(e)) if e == touch),
+        )
+        .context("missing normalized receipt")?;
+    let delivered = report
+        .records
+        .iter()
+        .position(|r| matches!(r.kind, EventKind::TouchCallbackEntered(e) if e == touch))
+        .context("missing worker delivery")?;
+    let returned = report
+        .records
+        .iter()
+        .position(|r| {
+            matches!(
+                r.kind,
+                EventKind::TouchCallbackReturned {
+                    contact: 42,
+                    success: true
+                }
+            )
+        })
+        .context("missing callback outcome")?;
+    let decoded: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match &r.kind {
+            EventKind::PresentEntered {
+                marker: Ok(marker), ..
+            } => Some((marker.frame_id(), marker.input_id())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(decoded, [(1, None), (2, Some(b"1".as_slice())), (1, None)]);
+    assert!(received < delivered && delivered < returned);
+    assert_eq!(report.lost, 0);
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_retains_pending_replacement_and_shutdown_dispositions() -> Result<()>
+{
+    use crate::diagnostic_observer::{Capture, EventKind};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("observed.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    std::fs::write(
+        &source,
+        include_str!("../../../scripts/native-performance-observer-smoke.lua"),
+    )?;
+    let capture = Capture::new(64)?;
+    let worker = crate::lua_worker::LuaWorker::stage_observed(&source, capture.clone())?.worker;
+    let held = worker.hold_slots_for_test();
+    worker.render_to_slots_at(0.0, 0.0)?;
+    worker.render_to_slots_at(0.0, 0.0)?;
+    drop(held);
+    worker.render_to_slots_at(0.0, 0.0)?;
+    worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+    let report = capture.close();
+    let pending: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match &r.kind {
+            EventKind::PendingDiscarded { marker: Ok(marker) } => Some(marker.frame_id()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pending, [1, 2]);
+    let discarded: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::Discarded { sequence, .. } => Some(sequence),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        discarded,
+        [1],
+        "unselected published frame must resolve on teardown"
+    );
+    assert_eq!(report.lost, 0);
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_is_bounded_and_retains_overflow_and_late_writes() -> Result<()> {
+    use crate::diagnostic_observer::Capture;
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("observed.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    std::fs::write(
+        &source,
+        include_str!("../../../scripts/native-performance-observer-smoke.lua"),
+    )?;
+    assert!(Capture::new(0).is_err());
+    assert!(Capture::new(65_537).is_err());
+    let capture = Capture::new(1)?;
+    let worker = crate::lua_worker::LuaWorker::stage_observed(&source, capture.clone())?.worker;
+    let frame = worker.render_at(0.0, 0.0)?;
+    worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+    let first = capture.close();
+    assert_eq!(first.records.len(), 1);
+    assert_eq!(first.capacity, 1);
+    assert_eq!(first.attempted_records, 4);
+    assert_eq!(first.lost, 3);
+    assert_eq!(first.after_close, 0);
+    assert!(
+        first.record_bytes <= 512,
+        "fixed-size record storage grew unexpectedly"
+    );
+    assert_eq!(first.clock_read_samples_ns.len(), 32);
+    // A mistakenly live source cannot mutate already closed records or silently
+    // turn its writes into evidence. Its hardware behaviour is unchanged.
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    capture.present(&mut hardware, &frame.frame)?;
+    hardware.release()?;
+    let last = capture.close();
+    assert_eq!(last.records.len(), 1);
+    assert_eq!(last.lost, 5);
+    assert_eq!(last.after_close, 2);
+    assert_eq!(last.closed_at_ns, first.closed_at_ns);
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_retains_decode_render_and_complete_present_failures() -> Result<()> {
+    use crate::diagnostic_observer::{Capture, DecodeError, EventKind};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("failure.lua");
+    std::fs::write(
+        &source,
+        r#"
+        require("sliver.v1")
+        local count = 0
+        return { api_version=1, render=function(canvas)
+            count = count + 1
+            if count == 2 then error("deliberate render failure") end
+            -- No marker: this must remain an undecodable actual frame.
+        end }
+    "#,
+    )?;
+    let capture = Capture::new(32)?;
+    let worker = crate::lua_worker::LuaWorker::stage_observed(&source, capture.clone())?.worker;
+    let frame = worker.render_at(0.0, 0.0)?;
+    let mut hardware = FakeTouchBar::new(); // Intentionally unclaimed.
+    assert!(capture.present(&mut hardware, &frame.frame).is_err());
+    assert!(worker.render_at(0.0, 0.0).is_err());
+    worker.shutdown(crate::lua_worker::StopReason::Shutdown)?;
+    let report = capture.close();
+    assert_eq!(report.failed_operations, 2);
+    assert_eq!(report.decode_failures, 3); // render, publication, adapter entry
+    assert!(report.records.iter().any(|r| matches!(
+        r.kind,
+        EventKind::PresentEntered {
+            marker: Err(DecodeError::Packet),
+            ..
+        }
+    )));
+    assert!(report.records.iter().any(|r| matches!(
+        r.kind,
+        EventKind::PresentReturned {
+            call: 1,
+            success: false
+        }
+    )));
+    assert!(report.records.iter().any(|r| matches!(
+        r.kind,
+        EventKind::RenderFinished {
+            attempt: 2,
+            marker: None
+        }
+    )));
+    assert_eq!(report.lost, 0);
+    assert!(hardware.presented_frames().is_empty());
+    Ok(())
+}
+
+#[test]
 fn lua_v1_frame_crosses_the_hardware_seam() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let source = directory.path().join("config.lua");

@@ -1,5 +1,11 @@
 # Offline native observation reader (experimental v0)
 
+**Current policy status:** [P1 is approved](native-performance-policy-approval.md).
+The separate [P1 evaluator](native-performance-policy-evaluator.md) now applies
+its limits to supplied observations. This v0 reader remains unchanged,
+policy-independent and non-release-gating; the earlier approval history below
+is preserved.
+
 Implemented after the user's **2026-09-12 “yes, don't stop”** to the acceptance-planning continuation. This permits progress on the nominal 30 FPS direction and offline evidence plumbing; it does **not** supply missing numeric budgets or select broker-return versus optical release acceptance. The existing 60-frame software benchmark is retained. See the [proposal and outstanding decisions](native-performance-acceptance-proposal.md).
 
 ## Scope and interface
@@ -107,7 +113,7 @@ The `schedule` report retains the declaration and epoch, counts opportunities/at
 
 ## Remaining work before release measurement
 
-1. Select the acceptance observation point and approve rate/deadline/latency/sampling policy; nominal 30 FPS is not a numeric tolerance.
+1. **Completed:** P1 explicitly approves the observation point and rate/deadline/latency/sampling policy. The new offline evaluator exercises those rules, but cannot authenticate a native run.
 2. Complete the schema for authenticated schedule predeclaration, edge cohorts, exact build/fixture provenance, capture closure/loss attestation and instrumentation-overhead comparison. The current v0 is intentionally not a release-evidence revision.
 3. Integrate the offline-tested pixel identity format with actual fixture drawing and bounded observers at the existing production seams. The reference codec is not a live collector; caller-supplied JSON correlation alone is not proof of independently observed causality.
 4. Test approved native-cadence deadlines and overproduction separately. Offline declared skip/residence/disposition accounting is implemented, but actual pending-frame replacement, lifecycle provenance, latest-complete/slot bounds and native instrumentation overhead still need production-seam evidence.

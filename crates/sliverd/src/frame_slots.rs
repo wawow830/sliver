@@ -107,6 +107,7 @@ struct Slot {
 }
 
 struct SharedSlots {
+    observer: Option<crate::diagnostic_observer::Capture>,
     storage: Mutex<MmapMut>,
     slot_bytes: usize,
     width: usize,
@@ -162,6 +163,7 @@ const SHARED_SLOT_META_BYTES: usize = 32;
 const SHARED_PIXEL_OFFSET: usize = SHARED_HEADER_BYTES + SLOT_COUNT * SHARED_SLOT_META_BYTES;
 
 struct SharedFrameMap {
+    observer: Option<crate::diagnostic_observer::Capture>,
     storage: Mutex<MmapMut>,
     path: Option<PathBuf>,
     slot_bytes: usize,
@@ -206,6 +208,7 @@ impl SharedFrameMap {
         storage.flush()?;
         Ok(Self {
             storage: Mutex::new(storage),
+            observer: None,
             path: Some(path.to_path_buf()),
             slot_bytes,
             width,
@@ -253,6 +256,7 @@ impl SharedFrameMap {
         );
         Ok(Self {
             storage: Mutex::new(storage),
+            observer: None,
             path: None,
             slot_bytes,
             width,
@@ -292,6 +296,18 @@ impl SharedFrameMap {
                 slot_offset(index) + 24,
                 timing.delta.to_bits(),
             );
+            if let Some(observer) = &self.observer {
+                let frame = crate::hardware::LogicalFrame::from_wire(
+                    self.width,
+                    self.height,
+                    self.stride,
+                    pixels.to_vec(),
+                );
+                observer.record(crate::diagnostic_observer::EventKind::Published {
+                    sequence,
+                    marker: crate::diagnostic_observer::decode(&frame),
+                });
+            }
             write_slot_state(&storage, index, READY);
         }
         Ok(true)
@@ -326,6 +342,14 @@ impl SharedFrameMap {
                     continue;
                 }
                 if compare_slot_state(&storage, index, state, WRITING) {
+                    if state == READY {
+                        if let Some(observer) = &self.observer {
+                            observer.record(crate::diagnostic_observer::EventKind::Discarded {
+                                sequence: read_u64(&storage, slot_offset(index) + 8)?,
+                                reason: crate::diagnostic_observer::DiscardReason::ProducerReclaim,
+                            });
+                        }
+                    }
                     return Ok(Some(index));
                 }
             }
@@ -365,6 +389,11 @@ impl SharedFrameMap {
                 .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
             read_u64(&storage, slot_offset(index) + 8)?
         };
+        if let Some(observer) = &self.observer {
+            observer.record(crate::diagnostic_observer::EventKind::Selected {
+                sequence: selected_sequence,
+            });
+        }
         let (pixels, timing) = {
             let storage = self
                 .storage
@@ -393,6 +422,12 @@ impl SharedFrameMap {
                 // freeing it. A producer in another process can no longer
                 // turn this slot into WRITING while we inspect its sequence.
                 if older_sequence < selected_sequence {
+                    if let Some(observer) = &self.observer {
+                        observer.record(crate::diagnostic_observer::EventKind::Discarded {
+                            sequence: older_sequence,
+                            reason: crate::diagnostic_observer::DiscardReason::ConsumerSuperseded,
+                        });
+                    }
                     write_slot_state(&storage, older, FREE);
                 } else {
                     write_slot_state(&storage, older, READY);
@@ -409,8 +444,37 @@ impl SharedFrameMap {
     }
 }
 
+impl Drop for SharedSlots {
+    fn drop(&mut self) {
+        if let Some(observer) = &self.observer {
+            for slot in &self.slots {
+                if slot.state.load(Ordering::Acquire) == READY {
+                    observer.record(crate::diagnostic_observer::EventKind::Discarded {
+                        sequence: slot.sequence.load(Ordering::Acquire),
+                        reason: crate::diagnostic_observer::DiscardReason::MappingClosed,
+                    });
+                }
+            }
+        }
+    }
+}
+
 impl Drop for SharedFrameMap {
     fn drop(&mut self) {
+        if let Some(observer) = &self.observer {
+            if let Ok(storage) = self.storage.lock() {
+                for index in 0..SLOT_COUNT {
+                    if read_slot_state(&storage, index) == READY {
+                        if let Ok(sequence) = read_u64(&storage, slot_offset(index) + 8) {
+                            observer.record(crate::diagnostic_observer::EventKind::Discarded {
+                                sequence,
+                                reason: crate::diagnostic_observer::DiscardReason::MappingClosed,
+                            });
+                        }
+                    }
+                }
+            }
+        }
         if let Some(path) = &self.path {
             let _ = std::fs::remove_file(path);
         }
@@ -488,6 +552,7 @@ fn make_inner(
         timing: Mutex::new(None),
     });
     Arc::new(SharedSlots {
+        observer: None,
         storage: Mutex::new(storage),
         slot_bytes,
         width,
@@ -508,6 +573,17 @@ fn make_inner(
 }
 
 impl FrameSlots {
+    #[cfg(test)]
+    pub(crate) fn with_observer(mut self, observer: crate::diagnostic_observer::Capture) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("unshared slots")
+            .observer = Some(observer.clone());
+        if let Some(shared) = &mut self.shared {
+            Arc::get_mut(shared).expect("unshared map").observer = Some(observer);
+        }
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn new(width: usize, height: usize, stride: usize) -> Result<Self> {
         let slot_bytes = validate_dimensions(width, height, stride)?;
@@ -614,6 +690,10 @@ impl FrameSlots {
 }
 
 impl FrameProducer {
+    pub(crate) fn observer(&self) -> Option<&crate::diagnostic_observer::Capture> {
+        self.inner.observer.as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn hold_slots_for_test(&self) -> Vec<FrameWriter> {
         (0..SLOT_COUNT).filter_map(|_| self.begin_write()).collect()
@@ -727,7 +807,15 @@ impl FrameProducer {
                         slot.state
                             .compare_exchange(READY, WRITING, Ordering::Acquire, Ordering::Relaxed)
                             .ok()
-                            .map(|_| index)
+                            .map(|_| {
+                                if let Some(observer) = &self.inner.observer {
+                                    observer.record(crate::diagnostic_observer::EventKind::Discarded {
+                                        sequence: slot.sequence.load(Ordering::Acquire),
+                                        reason: crate::diagnostic_observer::DiscardReason::ProducerReclaim,
+                                    });
+                                }
+                                index
+                            })
                     })
             })?;
         Some(FrameWriter {
@@ -774,6 +862,24 @@ impl FrameWriter {
             .lock()
             .map_err(|_| anyhow::anyhow!("shared frame metadata was poisoned"))? = Some(timing);
         slot.sequence.store(sequence, Ordering::Relaxed);
+        if let Some(observer) = &self.inner.observer {
+            let storage = self
+                .inner
+                .storage
+                .lock()
+                .map_err(|_| anyhow::anyhow!("shared frame storage was poisoned"))?;
+            let offset = self.index * self.inner.slot_bytes;
+            let frame = crate::hardware::LogicalFrame::from_wire(
+                self.inner.width,
+                self.inner.height,
+                self.inner.stride,
+                storage[offset..offset + self.inner.slot_bytes].to_vec(),
+            );
+            observer.record(crate::diagnostic_observer::EventKind::Published {
+                sequence,
+                marker: crate::diagnostic_observer::decode(&frame),
+            });
+        }
         slot.state.store(READY, Ordering::Release);
         self.inner.state_changed.notify_all();
         self.published = true;
@@ -827,6 +933,11 @@ impl FrameBroker {
             return Ok(None);
         }
         let selected_sequence = newest_slot.sequence.load(Ordering::Acquire);
+        if let Some(observer) = &self.inner.observer {
+            observer.record(crate::diagnostic_observer::EventKind::Selected {
+                sequence: selected_sequence,
+            });
+        }
 
         for (older_index, slot) in self.inner.slots.iter().enumerate() {
             if older_index == index {
@@ -850,6 +961,12 @@ impl FrameBroker {
                 }
             }
             if observed_sequence < selected_sequence {
+                if let Some(observer) = &self.inner.observer {
+                    observer.record(crate::diagnostic_observer::EventKind::Discarded {
+                        sequence: observed_sequence,
+                        reason: crate::diagnostic_observer::DiscardReason::ConsumerSuperseded,
+                    });
+                }
                 slot.state.store(FREE, Ordering::Release);
             } else {
                 slot.state.store(READY, Ordering::Release);

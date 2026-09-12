@@ -149,6 +149,14 @@ sudo systemctl start tiny-dfr.service
 
 ## Release verification
 
+Native performance acceptance is still incomplete. Approved
+[P1](https://github.com/wawow830/sliver/blob/cbe2b5da809eed7cc4b3406b222baf43e1e34a2d/docs/research/native-performance-policy-candidate.md)
+measures nominal 30 Hz successful broker updates, not optical FPS. Live
+collection/provenance and release-verifier integration remain pending in
+[#23](https://github.com/wawow830/sliver/issues/23). The existing legacy TSV
+performance step cannot establish P1 acceptance; wait for that integration
+before a new native acceptance capture and preserve old failed evidence.
+
 Run the repository-side audit before a release:
 
 ```sh

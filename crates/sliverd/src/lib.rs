@@ -4,6 +4,7 @@ mod broker_ipc;
 mod clock;
 mod config_selection;
 mod default_source;
+mod diagnostic_observer;
 mod frame_canvas;
 mod frame_slots;
 mod hardware;

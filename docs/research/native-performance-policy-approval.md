@@ -30,6 +30,14 @@ The full snapshot governs all details and equality/boundary rules. These are
 approved product budgets, **not newly measured panel tolerances**. The archived
 ~29.67/s evidence still falls below the approved floor and is not regraded.
 
+## Tested implementation slices
+
+The [offline P1 evaluator](native-performance-policy-evaluator.md) applies the
+approved rules to supplied observations without granting native acceptance.
+The [private Rust observer](native-performance-rust-observer.md) is tested through
+real Lua/canvas and fake hardware; production provisioning remains off. Both
+records name the remaining launcher/fixture/provenance/verifier integration.
+
 ## Implementation and release boundary
 
 #23 is now ready for agent implementation; #1 and #17 adopt P1 in place of

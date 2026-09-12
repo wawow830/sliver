@@ -492,22 +492,84 @@ impl LuaWorker {
         })
     }
 
-    #[allow(clippy::needless_return)]
     pub(crate) fn stage_source_with_identity(
         source: LuaSource,
         initial_backlight: f64,
         initial_input: InputState,
         identity: WorkerIdentity,
     ) -> Result<StagedLuaWorker> {
-        #[cfg(test)]
-        let _ = identity;
-        validate_backlight_level(initial_backlight)?;
-        #[cfg(test)]
+        Self::stage_source_inner(
+            source,
+            initial_backlight,
+            initial_input,
+            identity,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stage_observed(
+        source: &Path,
+        observer: crate::diagnostic_observer::Capture,
+    ) -> Result<StagedLuaWorker> {
         let slots = FrameSlots::new(
             crate::DISPLAY_WIDTH,
             crate::DISPLAY_HEIGHT,
             crate::DISPLAY_WIDTH * 4,
-        )?;
+        )?
+        .with_observer(observer);
+        Self::stage_source_inner(
+            LuaSource::file(source.to_path_buf()),
+            1.0,
+            InputState::default(),
+            WorkerIdentity::User,
+            Some(slots),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stage_observed_shared(
+        source: &Path,
+        frame_path: &Path,
+        observer: crate::diagnostic_observer::Capture,
+    ) -> Result<StagedLuaWorker> {
+        let slots = FrameSlots::new_shared(
+            frame_path,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?
+        .with_observer(observer);
+        Self::stage_source_inner(
+            LuaSource::file(source.to_path_buf()),
+            1.0,
+            InputState::default(),
+            WorkerIdentity::User,
+            Some(slots),
+        )
+    }
+
+    #[allow(clippy::needless_return)]
+    fn stage_source_inner(
+        source: LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        identity: WorkerIdentity,
+        #[cfg(test)] observed_slots: Option<FrameSlots>,
+    ) -> Result<StagedLuaWorker> {
+        #[cfg(test)]
+        let _ = identity;
+        validate_backlight_level(initial_backlight)?;
+        #[cfg(test)]
+        let slots = match observed_slots {
+            Some(slots) => slots,
+            None => FrameSlots::new(
+                crate::DISPLAY_WIDTH,
+                crate::DISPLAY_HEIGHT,
+                crate::DISPLAY_WIDTH * 4,
+            )?,
+        };
         #[cfg(not(test))]
         let frame_path = worker_process::frame_path_for_identity(identity)?;
         #[cfg(not(test))]
@@ -941,9 +1003,19 @@ impl Runtime {
             FrameTiming::new(presentation_time, delta).map_err(|error| error.to_string())?;
         self.controls.input_state.set(input_state);
         let frame = self.render_frame(presentation_time, delta)?;
-        self.pending_frame = Some(PendingFrame { frame, timing });
+        self.replace_pending(PendingFrame { frame, timing });
         self.try_publish_pending(presentation_time)?;
         Ok(())
+    }
+
+    fn replace_pending(&mut self, pending: PendingFrame) {
+        if let Some(previous) = self.pending_frame.replace(pending) {
+            if let Some(observer) = self.producer.observer() {
+                observer.record(crate::diagnostic_observer::EventKind::PendingDiscarded {
+                    marker: crate::diagnostic_observer::decode(&previous.frame),
+                });
+            }
+        }
     }
 
     fn try_publish_pending(
@@ -1056,7 +1128,7 @@ impl Runtime {
                 self.controls.redraw_pending.set(false);
                 if options.force_render || redraw_requested {
                     let frame = self.render_frame(now_seconds, delta)?;
-                    self.pending_frame = Some(PendingFrame { frame, timing });
+                    self.replace_pending(PendingFrame { frame, timing });
                 }
             }
             let frame = if self.visible {
@@ -1155,7 +1227,21 @@ impl Runtime {
         for event in events {
             let table = touch_event_table(&self._lua, &event)
                 .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
-            self.invoke_callback(touch, "touch", now_seconds, started, table)?;
+            if let Some(observer) = self.producer.observer() {
+                observer.record(crate::diagnostic_observer::EventKind::TouchCallbackEntered(
+                    event,
+                ));
+            }
+            let result = self.invoke_callback(touch, "touch", now_seconds, started, table);
+            if let Some(observer) = self.producer.observer() {
+                observer.record(
+                    crate::diagnostic_observer::EventKind::TouchCallbackReturned {
+                        contact: event.id,
+                        success: result.is_ok(),
+                    },
+                );
+            }
+            result?;
         }
         Ok(())
     }
@@ -1328,6 +1414,23 @@ impl Runtime {
         presentation_time: f64,
         delta: f64,
     ) -> std::result::Result<LogicalFrame, String> {
+        let observer = self.producer.observer();
+        let attempt = observer.map(|observer| observer.allocate_render());
+        let result = self.render_frame_inner(presentation_time, delta);
+        if let (Some(observer), Some(attempt)) = (observer, attempt) {
+            observer.record(crate::diagnostic_observer::EventKind::RenderFinished {
+                attempt,
+                marker: result.as_ref().ok().map(crate::diagnostic_observer::decode),
+            });
+        }
+        result
+    }
+
+    fn render_frame_inner(
+        &self,
+        presentation_time: f64,
+        delta: f64,
+    ) -> std::result::Result<LogicalFrame, String> {
         self.controls.redraw_pending.set(false);
         let frame = FrameCanvas::new()
             .map_err(|error| diagnostic("render", &self.source, format!("{error:#}")))?;
@@ -1355,6 +1458,16 @@ impl Runtime {
                 .map_err(|error| diagnostic("stop", &self.source, error.to_string()))?;
         }
         Ok(())
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        if let (Some(observer), Some(pending)) = (self.producer.observer(), &self.pending_frame) {
+            observer.record(crate::diagnostic_observer::EventKind::PendingDiscarded {
+                marker: crate::diagnostic_observer::decode(&pending.frame),
+            });
+        }
     }
 }
 
