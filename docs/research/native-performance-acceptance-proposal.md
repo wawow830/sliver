@@ -2,6 +2,10 @@
 
 **Status: nominal 30 FPS direction and offline implementation continuation approved; acceptance policy still incomplete.** On 2026-09-12 the user replied **“yes, don't stop”** to this planning continuation. That approves proceeding, but supplies neither numeric tolerance/latency budgets nor an explicit broker-return/optical selection. For [#23](https://github.com/wawow830/sliver/issues/23), following the [30 FPS premise correction](adp-native-rate-resolution.md). The ≥59.5 native release gate, parent requirements and failed ledgers remain unchanged pending a complete contract. No hardware capture, takeover, kernel change or upstream contact is part of this work.
 
+## Concrete candidate for approval
+
+The next “don't stop” continuation produced [policy candidate P1](native-performance-policy-candidate.md). It recommends broker-return-only evidence, a 29.75/s floor preserving the old relative allowance, explicit software deadline-miss and age/gap limits, causal-input sampling and jitter budgets, three separate native workloads, and an overhead comparison. **These are proposed product decisions, not approved limits or measured panel tolerances.** In particular, the archived ~29.67/s diagnostic remains below the proposed floor. P1 specifies edge/drain accounting and the implementation gaps; it does not change the checklist below, release code, thresholds, or historical results.
+
 ## Decision to make
 
 Recommend separating three claims rather than renaming one FPS counter:
@@ -20,10 +24,10 @@ The maintainer supplied a nominal panel rate, **not** its clock tolerance, a Sli
 
 Two defensible ways to specify one, requiring approval before capture:
 
-1. **Absolute product budget:** choose allowable throughput shortfall and deadline/latency jitter from the product requirement. Record the rationale independently of old measurements. For comparison only, preserving the old relative throughput allowance gives `30 × (59.5 / 60) = 29.75/s`, which the archived ~29.67/s diagnostic still fails. This arithmetic is not a recommendation or a new gate.
+1. **Absolute product budget:** choose allowable throughput shortfall and deadline/latency jitter from the product requirement. Record the rationale independently of old measurements. Preserving the old relative throughput allowance gives `30 × (59.5 / 60) = 29.75/s`, which the archived ~29.67/s diagnostic still fails. Initially included only as comparison arithmetic, this is now P1's proposed continuity choice, not an approved gate or established hardware tolerance.
 2. **Hardware-relative budget:** establish an independent reference cadence using an approved measurement method and workload, then predeclare the allowed Sliver loss relative to it. Do not derive the reference by fitting the Sliver run being graded. Neither ~60 FE IRQ/s nor a nominal mode label is a validated reference for distinct panel updates.
 
-**Recommended process:** select the observation point first, then approve the absolute budget or reference-calibration protocol before measuring. Do not collect a new release run until these choices are settled. A tolerance for measurement uncertainty is not permission to hide actual missed deadlines.
+**Recommended process:** select the observation point first, then approve the absolute budget or reference-calibration protocol before measuring. P1 supplies one complete absolute-budget option for that decision, rather than adopting it implicitly. Do not collect a new release run until these choices are settled. A tolerance for measurement uncertainty is not permission to hide actual missed deadlines.
 
 ## Identity and accounting
 
