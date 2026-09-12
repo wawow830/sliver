@@ -1,5 +1,5 @@
 use std::io::{ErrorKind, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
@@ -109,6 +109,32 @@ impl ProcessWorker {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn stage_observed(
+        source: &LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        storage: OwnedFd,
+    ) -> Result<Self> {
+        let path = frame_path_for_identity(WorkerIdentity::User)?;
+        let slots = FrameSlots::new_shared(
+            &path,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?;
+        Self::stage_with_spawned_capture(
+            source,
+            initial_backlight,
+            initial_input,
+            &path,
+            slots.broker(),
+            WorkerIdentity::User,
+            spawn_direct,
+            Some(storage),
+        )
+    }
+
     #[allow(clippy::needless_return)]
     pub(crate) fn stage_with_frames(
         source: &LuaSource,
@@ -173,6 +199,29 @@ impl ProcessWorker {
         identity: WorkerIdentity,
         spawn: fn(WorkerIdentity) -> Result<SpawnedWorker>,
     ) -> Result<Self> {
+        Self::stage_with_spawned_capture(
+            source,
+            initial_backlight,
+            initial_input,
+            frame_path,
+            broker,
+            identity,
+            spawn,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stage_with_spawned_capture(
+        source: &LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        frame_path: &Path,
+        broker: FrameBroker,
+        identity: WorkerIdentity,
+        spawn: fn(WorkerIdentity) -> Result<SpawnedWorker>,
+        storage: Option<OwnedFd>,
+    ) -> Result<Self> {
         if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) } < 0 {
             return Err(std::io::Error::last_os_error())
                 .context("enabling Lua worker child reaping");
@@ -215,7 +264,13 @@ impl ProcessWorker {
             systemd_runtime: spawned.systemd_runtime,
             broker,
         };
-        worker.request_bootstrap(source, initial_backlight, initial_input, frame_path)?;
+        worker.request_bootstrap(
+            source,
+            initial_backlight,
+            initial_input,
+            frame_path,
+            storage,
+        )?;
         Ok(worker)
     }
 }
@@ -502,13 +557,23 @@ impl ProcessWorker {
         initial_backlight: f64,
         initial_input: InputState,
         frame_path: &Path,
+        storage: Option<OwnedFd>,
     ) -> Result<()> {
+        let deadline = Instant::now() + CALLBACK_DEADLINE;
+        {
+            let stream = lock(&self.stream, "Lua worker control socket")?;
+            crate::diagnostic_capture_transport::send_bootstrap_storage(
+                &stream,
+                storage.as_ref(),
+                deadline,
+            )?;
+        }
         let mut payload = Vec::new();
         encode_source(&mut payload, source)?;
         put_bytes(&mut payload, frame_path.as_os_str().as_bytes())?;
         put_f64(&mut payload, initial_backlight);
         encode_input_state(&mut payload, initial_input);
-        let response = self.request(BOOTSTRAP, payload, CALLBACK_DEADLINE)?;
+        let response = self.request_until(BOOTSTRAP, payload, deadline)?;
         match response.as_slice() {
             [STATUS_OK] => Ok(()),
             _ => Err(self.protocol_failure(response_error("loading Lua worker", &response))),
@@ -906,9 +971,46 @@ pub(crate) fn worker_main() -> Result<()> {
     };
     stream.set_nonblocking(true)?;
     send_hello(&mut stream)?;
+    // The parent starts its one bootstrap budget after launcher/cgroup
+    // discovery, not when this child sends HELLO. Await its request or EOF.
+    let storage = crate::diagnostic_capture_transport::receive_parent_bootstrap_storage(&stream)?;
+    let capacity = storage.as_ref().map(|storage| storage.capacity());
+    let observer = storage
+        .map(crate::diagnostic_observer::Capture::from_mapped)
+        .transpose()?;
+    let timing = observer
+        .as_ref()
+        .zip(capacity)
+        .map(|(capture, capacity)| {
+            crate::diagnostic_timing::TimingCapture::exporting(capacity, capture.clone())
+        })
+        .transpose()?;
+    let result = run_bootstrapped_worker(&mut stream, observer.as_ref(), timing.as_ref());
+    if result.is_err() {
+        if let Some(observer) = &observer {
+            observer.record(crate::diagnostic_observer::EventKind::WorkerRunFailed);
+        }
+    }
+    // Runtime and producers are now dropped. Timing emits its fixed summary
+    // before raw closure; completed samples were appended at their actual seams.
+    // No heap sample-vector flush or report serialization happens at shutdown.
+    if let Some(timing) = timing {
+        timing.close();
+    }
+    if let Some(observer) = observer {
+        observer.finish();
+    }
+    result
+}
+
+fn run_bootstrapped_worker(
+    stream: &mut UnixStream,
+    observer: Option<&crate::diagnostic_observer::Capture>,
+    timing: Option<&crate::diagnostic_timing::TimingCapture>,
+) -> Result<()> {
     let mut input = Vec::new();
     let (source, frame_path, initial_backlight, initial_input) = loop {
-        let packets = read_packets(&mut stream, &mut input)?;
+        let packets = read_packets(stream, &mut input)?;
         if let Some((kind, payload)) = packets.into_iter().next() {
             ensure!(kind == BOOTSTRAP, "Lua worker expected bootstrap packet");
             break decode_bootstrap(&payload)?;
@@ -922,17 +1024,36 @@ pub(crate) fn worker_main() -> Result<()> {
             .with_context(|| format!("changing Lua worker directory to {}", directory.display()))?;
     }
     let slots = FrameSlots::open_shared(&frame_path)?;
+    let slots = if let Some(observer) = observer {
+        slots.with_observer(observer.clone())
+    } else {
+        slots
+    };
+    let slots = if let Some(timing) = timing {
+        slots.with_timing(timing.clone())
+    } else {
+        slots
+    };
     let producer = slots.producer();
     let runtime = match Runtime::load(&source, initial_backlight, initial_input, producer) {
         Ok(runtime) => runtime,
         Err(error) => {
+            if let Some(observer) = observer {
+                observer.record(crate::diagnostic_observer::EventKind::WorkerLoadFailed);
+            }
             eprintln!("Lua worker failed during startup: {error}");
-            send_ready(&mut stream, STATUS_ERROR, error)?;
+            send_ready(stream, STATUS_ERROR, error)?;
             return Ok(());
         }
     };
-    send_ready(&mut stream, STATUS_OK, String::new())?;
-    run_worker_loop(runtime, &mut stream, input)
+    send_ready(stream, STATUS_OK, String::new())?;
+    let result = run_worker_loop(runtime, stream, input, observer);
+    if result.is_err() {
+        if let Some(observer) = observer {
+            observer.record(crate::diagnostic_observer::EventKind::WorkerLoopFailed);
+        }
+    }
+    result
 }
 
 fn send_hello(stream: &mut UnixStream) -> Result<()> {
@@ -943,6 +1064,7 @@ fn run_worker_loop(
     mut runtime: Runtime,
     stream: &mut UnixStream,
     mut input: Vec<u8>,
+    observer: Option<&crate::diagnostic_observer::Capture>,
 ) -> Result<()> {
     let mut next_heartbeat = Instant::now();
     loop {
@@ -957,6 +1079,9 @@ fn run_worker_loop(
             let (status, body) = match result {
                 Ok(body) => (STATUS_OK, body),
                 Err(error) => {
+                    if let Some(observer) = observer {
+                        observer.record(crate::diagnostic_observer::EventKind::WorkerCommandFailed);
+                    }
                     eprintln!("Lua worker command failed: {error:#}");
                     (STATUS_ERROR, encode_error(&error.to_string()))
                 }
@@ -1896,6 +2021,399 @@ mod tests {
 
     fn embedded(source: &str) -> LuaSource {
         LuaSource::embedded(source.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn mapped_worker_capture_crosses_real_canvas_and_fake_present() -> Result<()> {
+        use crate::diagnostic_capture_transport::Collector;
+        use crate::diagnostic_observer::{Capture, EventKind};
+        use crate::hardware::{FakeTouchBar, HardwareEvent, ModifierState, TouchBarHardware};
+
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("observed.lua");
+        std::fs::write(
+            &source,
+            include_str!("../../../scripts/native-performance-observer-smoke.lua"),
+        )?;
+        std::fs::write(
+            directory.path().join("native_marker.lua"),
+            include_str!("../../../scripts/native-performance-marker.lua"),
+        )?;
+        let mut collector = Collector::new(32)?;
+        let worker = ProcessWorker::stage_observed(
+            &LuaSource::file(source),
+            1.0,
+            InputState::default(),
+            collector.take_worker_storage()?,
+        )?;
+        let frame = worker.render(0.0, 0.0, InputState::default())?;
+        let broker_capture = Capture::new(8)?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        broker_capture.present(&mut hardware, &frame.frame)?;
+        worker.commit(0.0, InputState::default())?;
+        let touch = TouchEvent {
+            phase: TouchPhase::Down,
+            id: 42,
+            time: 987654.0,
+            x: 14.5,
+            y: 6.0,
+            modifiers: ModifierState::default(),
+            pressure: Some(0.75),
+            width: None,
+            height: Some(4.0),
+        };
+        hardware.inject(HardwareEvent::Touch(touch));
+        let events = broker_capture.poll(&mut hardware, Duration::ZERO)?;
+        assert_eq!(events, [HardwareEvent::Touch(touch)]);
+        let effects = worker.drive_until(
+            DriveRequest::without_input(1.0, InputState::default()).with_events(vec![touch]),
+            Instant::now() + CALLBACK_DEADLINE,
+        )?;
+        let response = effects
+            .frame
+            .context("touch did not produce a real frame")?;
+        broker_capture.present(&mut hardware, &response.frame)?;
+        worker.shutdown(StopReason::Replaced)?;
+
+        let raw = collector.snapshot()?;
+        assert!(raw.metadata_consistent);
+        assert!(raw.report.closed);
+        assert_eq!(raw.report.lost, 0);
+        let callbacks: Vec<_> = raw
+            .report
+            .records
+            .iter()
+            .filter_map(|r| match &r.kind {
+                EventKind::MinimalSpan(sample) => Some(sample),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            callbacks.len(),
+            2,
+            "both actual callback samples must cross process exit"
+        );
+        for (index, sample) in callbacks.iter().enumerate() {
+            assert_eq!(
+                sample.kind,
+                crate::diagnostic_timing::SpanKind::RenderCallback
+            );
+            assert_eq!(
+                sample.status,
+                crate::diagnostic_timing::SpanStatus::Succeeded
+            );
+            assert_eq!(sample.sequence, index as u64 + 1);
+            assert!(sample.frame_bearing && sample.start_ns <= sample.end_ns);
+        }
+        let summary = raw
+            .report
+            .records
+            .iter()
+            .find_map(|r| match &r.kind {
+                EventKind::MinimalSummary(summary) => Some(summary),
+                _ => None,
+            })
+            .context("minimal timing summary was not exported")?;
+        assert_eq!(summary.completed_spans, 2);
+        assert_eq!(summary.open_spans, 0);
+        assert_eq!(summary.lost, 0);
+        assert!(summary.closed_at_ns.is_some());
+        assert!(summary.closed_at_ns <= raw.report.closed_at_ns);
+        assert!(raw
+            .report
+            .records
+            .iter()
+            .any(|r| matches!(r.kind, EventKind::RenderAllocated { attempt: 1 })));
+        let marker = raw
+            .report
+            .records
+            .iter()
+            .find_map(|r| match &r.kind {
+                EventKind::Published {
+                    marker: Ok(marker), ..
+                } => Some(marker),
+                _ => None,
+            })
+            .context("worker publication was not exported")?;
+        assert_eq!(marker.run_id(), b"software-smoke");
+        assert_eq!(marker.frame_id(), 1);
+        assert!(raw.report.records.iter().any(
+            |r| matches!(&r.kind, EventKind::TouchCallbackEntered(observed) if *observed == touch)
+        ));
+        assert!(raw.report.records.iter().any(|r| matches!(&r.kind, EventKind::Published { marker: Ok(decoded), .. } if decoded.input_id() == Some(b"1".as_slice()))));
+        assert_eq!(
+            crate::diagnostic_observer::decode(&response.frame)
+                .unwrap()
+                .input_id(),
+            Some(b"1".as_slice())
+        );
+        assert!(broker_capture
+            .close()
+            .records
+            .iter()
+            .any(|r| matches!(&r.kind,
+            EventKind::PresentEntered { marker: Ok(decoded), .. } if decoded == marker)));
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_worker_capture_retains_unclosed_prefix_after_watchdog() -> Result<()> {
+        use crate::diagnostic_capture_transport::Collector;
+        use crate::diagnostic_observer::EventKind;
+        let mut collector = Collector::new(8)?;
+        let worker = ProcessWorker::stage_observed(
+            &embedded("require('sliver.v1'); return { api_version = 1, render = function() while true do end end }"),
+            1.0, InputState::default(), collector.take_worker_storage()?,
+        )?;
+        let error = worker
+            .render(0.0, 0.0, InputState::default())
+            .err()
+            .context("hung worker unexpectedly rendered")?;
+        assert!(format!("{error:#}").contains("two seconds"));
+        assert!(!worker.is_alive());
+        let raw = collector.snapshot()?;
+        assert!(raw.initialized);
+        assert!(!raw.report.closed);
+        assert!(raw.report.closed_at_ns.is_none());
+        assert!(raw
+            .report
+            .records
+            .iter()
+            .any(|r| matches!(r.kind, EventKind::RenderAllocated { attempt: 1 })));
+        assert!(!raw
+            .report
+            .records
+            .iter()
+            .any(|r| matches!(r.kind, EventKind::RenderFinished { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_worker_capture_starts_before_load_and_retains_overflow() -> Result<()> {
+        use crate::diagnostic_capture_transport::Collector;
+        use crate::diagnostic_observer::EventKind;
+        let mut collector = Collector::new(1)?;
+        let worker = ProcessWorker::stage_observed(
+            &embedded("local s=require('sliver.v1'); s.timer.after(2.5, function() end); return { api_version=1, render=function(c) c:rectangle(0,0,8,8,'#ff0000') end }"),
+            1.0, InputState::default(), collector.take_worker_storage()?,
+        )?;
+        worker.render(0.0, 0.0, InputState::default())?;
+        worker.shutdown(StopReason::Replaced)?;
+        let raw = collector.snapshot()?;
+        assert!(raw.metadata_consistent && raw.report.closed);
+        assert_eq!(raw.report.records.len(), 1);
+        assert!(matches!(
+            raw.report.records[0].kind,
+            EventKind::TimerRegistered {
+                timer_id: 1,
+                delay_seconds: 2.5,
+                ..
+            }
+        ));
+        assert!(raw.report.attempted_records > 1);
+        assert_eq!(raw.report.lost, raw.report.attempted_records - 1);
+        assert!(
+            raw.report.decode_failures > 0,
+            "errors after capacity exhaustion must remain counted"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_worker_capture_retains_source_load_failure() -> Result<()> {
+        use crate::diagnostic_capture_transport::Collector;
+        let mut collector = Collector::new(4)?;
+        let error = ProcessWorker::stage_observed(
+            &embedded("error('source load failed deliberately')"),
+            1.0,
+            InputState::default(),
+            collector.take_worker_storage()?,
+        )
+        .err()
+        .context("broken source unexpectedly loaded")?;
+        assert!(format!("{error:#}").contains("source load failed deliberately"));
+        let raw = collector.snapshot()?;
+        assert!(raw.initialized);
+        assert_eq!(
+            raw.report.failed_operations, 1,
+            "READY error must not disappear from raw capture"
+        );
+        assert_eq!(
+            raw.report
+                .records
+                .iter()
+                .filter(|r| matches!(
+                    r.kind,
+                    crate::diagnostic_observer::EventKind::WorkerLoadFailed
+                ))
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_worker_capture_retains_control_loop_failure() -> Result<()> {
+        use crate::diagnostic_capture_transport::Collector;
+        let mut collector = Collector::new(4)?;
+        let worker = ProcessWorker::stage_observed(
+            &embedded("require('sliver.v1'); return { api_version=1, render=function() end }"),
+            1.0,
+            InputState::default(),
+            collector.take_worker_storage()?,
+        )?;
+        // Fail the actual Unix control interface; no fabricated observer event.
+        lock(&worker.stream, "test worker connection")?.shutdown(std::net::Shutdown::Both)?;
+        worker.wait_for_exit_until(Instant::now() + Duration::from_secs(1))?;
+        let raw = collector.snapshot()?;
+        assert!(raw.report.closed);
+        assert_eq!(
+            raw.report.failed_operations, 2,
+            "loop and enclosing run errors are both retained as observations"
+        );
+        assert_eq!(
+            raw.report
+                .records
+                .iter()
+                .filter(|r| matches!(
+                    r.kind,
+                    crate::diagnostic_observer::EventKind::WorkerLoopFailed
+                ))
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_worker_capture_retains_failed_stop_command() -> Result<()> {
+        use crate::diagnostic_capture_transport::Collector;
+        let mut collector = Collector::new(4)?;
+        let worker = ProcessWorker::stage_observed(
+            &embedded("require('sliver.v1'); return { api_version=1, render=function() end, stop=function() error('stop failed deliberately') end }"),
+            1.0, InputState::default(), collector.take_worker_storage()?,
+        )?;
+        let error = worker
+            .shutdown(StopReason::Replaced)
+            .err()
+            .context("broken stop unexpectedly succeeded")?;
+        assert!(format!("{error:#}").contains("stop failed deliberately"));
+        let raw = collector.snapshot()?;
+        assert_eq!(
+            raw.report.failed_operations, 1,
+            "command failure must survive a normally returning loop"
+        );
+        assert_eq!(
+            raw.report
+                .records
+                .iter()
+                .filter(|r| matches!(
+                    r.kind,
+                    crate::diagnostic_observer::EventKind::WorkerCommandFailed
+                ))
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_worker_capture_retains_failed_render_sample() -> Result<()> {
+        use crate::diagnostic_capture_transport::Collector;
+        use crate::diagnostic_observer::EventKind;
+        let mut collector = Collector::new(16)?;
+        let worker = ProcessWorker::stage_observed(
+            &embedded("require('sliver.v1'); return { api_version=1, render=function() error('render failed deliberately') end }"),
+            1.0, InputState::default(), collector.take_worker_storage()?,
+        )?;
+        assert!(worker.render(0.0, 0.0, InputState::default()).is_err());
+        let raw = collector.snapshot()?;
+        let sample = raw
+            .report
+            .records
+            .iter()
+            .find_map(|r| match &r.kind {
+                EventKind::MinimalSpan(sample) => Some(sample),
+                _ => None,
+            })
+            .context("failed callback sample was lost before child exit")?;
+        assert_eq!(
+            sample.kind,
+            crate::diagnostic_timing::SpanKind::RenderCallback
+        );
+        assert_eq!(sample.status, crate::diagnostic_timing::SpanStatus::Failed);
+        assert!(sample.frame_bearing && sample.start_ns <= sample.end_ns);
+        assert!(raw
+            .report
+            .records
+            .iter()
+            .any(|r| matches!(r.kind, EventKind::RenderFinished { marker: None, .. })));
+        assert!(raw
+            .report
+            .records
+            .iter()
+            .any(|r| matches!(r.kind, EventKind::WorkerCommandFailed)));
+        assert!(
+            raw.report.failed_operations >= 3,
+            "minimal, render, and command failure observations are all retained"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_worker_capture_retains_setup_failure_before_runtime_load() -> Result<()> {
+        use crate::diagnostic_capture_transport::Collector;
+        let directory = tempfile::tempdir()?;
+        let source = LuaSource::file(directory.path().join("missing-directory/source.lua"));
+        let mut collector = Collector::new(8)?;
+        assert!(ProcessWorker::stage_observed(
+            &source,
+            1.0,
+            InputState::default(),
+            collector.take_worker_storage()?,
+        )
+        .is_err());
+        let raw = collector.snapshot()?;
+        assert!(raw.initialized && raw.metadata_consistent && raw.report.closed);
+        assert_eq!(
+            raw.report.failed_operations, 1,
+            "setup failure must not become a zero-failure closed capture"
+        );
+        assert!(!raw.report.records.iter().any(|r| matches!(
+            r.kind,
+            crate::diagnostic_observer::EventKind::RenderAllocated { .. }
+        )));
+        Ok(())
+    }
+
+    fn spawn_direct_after_discovery_delay(identity: WorkerIdentity) -> Result<SpawnedWorker> {
+        let spawned = spawn_direct(identity)?;
+        // Model spawn_systemd discovering the cgroup after the child has sent
+        // HELLO, before the parent begins receive_hello/request_bootstrap.
+        thread::sleep(CALLBACK_DEADLINE + Duration::from_millis(500));
+        Ok(spawned)
+    }
+
+    #[test]
+    fn off_worker_bootstrap_waits_for_parent_after_slow_launcher_discovery() -> Result<()> {
+        let path = frame_path_for_identity(WorkerIdentity::User)?;
+        let slots = FrameSlots::new_shared(
+            &path,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?;
+        let worker = ProcessWorker::stage_with_spawned(
+            &embedded("require('sliver.v1'); return { api_version=1, render=function(c) c:rectangle(0,0,2,1,'#ff0000') end }"),
+            1.0, InputState::default(), &path, slots.broker(), WorkerIdentity::User,
+            spawn_direct_after_discovery_delay,
+        )?;
+        let frame = worker.render(0.0, 0.0, InputState::default())?;
+        // Logical canvas snapshots retain Cairo's native BGRA byte order.
+        assert_eq!(&frame.frame.pixels()[..4], &[0, 0, 255, 255]);
+        worker.shutdown(StopReason::Replaced)?;
+        Ok(())
     }
 
     fn spawn_waiting_launcher(_identity: WorkerIdentity) -> Result<SpawnedWorker> {

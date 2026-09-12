@@ -198,6 +198,691 @@ fn diagnostic_pixel_marker_rejects_ambiguous_identities_before_presenting() -> R
 }
 
 #[test]
+fn private_diagnostic_capture_records_timer_registration_activation_and_cancellation() -> Result<()>
+{
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::lua_worker::{DriveRequest, LuaWorker, StopReason};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("timers.lua");
+    std::fs::write(
+        &source,
+        r##"
+        local sliver = require("sliver.v1")
+        local cancelled = sliver.timer.after(2.5, function() error("cancelled") end)
+        cancelled:cancel()
+        cancelled:cancel()
+        sliver.timer.every(1 / 30, function() end)
+        return { api_version=1,
+            start=function() sliver.timer.after(4, function() end) end,
+            touch=function()
+                sliver.timer.after(0.125, function() end)
+                sliver.redraw()
+            end,
+            render=function(canvas) canvas:rectangle(0, 0, 8, 8, "#ff0000") end }
+    "##,
+    )?;
+    let capture = Capture::new(64)?;
+    let before = capture.monotonic_ns()?;
+    let worker = LuaWorker::stage_observed(&source, capture.clone())?.worker;
+    // Deliberately unrelated intended scheduler time must not become a host timestamp.
+    worker.commit(987654321.0, InputState::default())?;
+    let effects = worker.drive(
+        DriveRequest::without_input(987654321.0, InputState::default()).with_events(vec![
+            TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 88.0,
+                x: 1.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            },
+        ]),
+    )?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    hardware.present(&effects.frame.context("touch redraw missing")?.frame)?;
+    hardware.release()?;
+    worker.shutdown(StopReason::Shutdown)?;
+    let after = capture.monotonic_ns()?;
+    let report = capture.close();
+    let registered: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::TimerRegistered {
+                timer_id,
+                delay_seconds,
+                interval_seconds,
+                scheduler_now_seconds,
+            } => Some((
+                timer_id,
+                delay_seconds,
+                interval_seconds,
+                scheduler_now_seconds,
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(registered.len(), 4);
+    assert_eq!(
+        registered[..3],
+        [
+            (1, 2.5, None, None),
+            (2, 1.0 / 30.0, Some(1.0 / 30.0), None),
+            (3, 4.0, None, None)
+        ]
+    );
+    assert_eq!(
+        (registered[3].0, registered[3].1, registered[3].2),
+        (4, 0.125, None)
+    );
+    assert!(registered[3]
+        .3
+        .is_some_and(|now| (987654321.0..987654322.0).contains(&now)));
+    let activated: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::TimerActivated {
+                timer_id,
+                scheduler_now_seconds,
+                deadline_seconds,
+            } => Some((timer_id, scheduler_now_seconds, deadline_seconds)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(activated.len(), 3);
+    assert_eq!(
+        activated[..2],
+        [
+            (2, 987654321.0, 987654321.0 + 1.0 / 30.0),
+            (3, 987654321.0, 987654325.0)
+        ]
+    );
+    assert_eq!(
+        activated[2],
+        (
+            4,
+            registered[3].3.unwrap(),
+            registered[3].3.unwrap() + 0.125
+        )
+    );
+    let cancellations: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::TimerCancelled { timer_id, removed } => Some((timer_id, removed)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cancellations, [(1, true), (1, false)]);
+    assert!(report
+        .records
+        .iter()
+        .all(|r| (before..=after).contains(&r.at_ns)));
+    assert_eq!(
+        (report.lost, report.clock_failures, report.failed_operations),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        hardware.presented_frames()[0].rgba_at(1, 1),
+        [255, 0, 0, 255]
+    );
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_records_timer_dispatch_skips_and_redraw_coalescing() -> Result<()> {
+    use crate::diagnostic_observer::{Capture, EventKind, TimerDisposition};
+    use crate::lua_worker::{DriveRequest, LuaWorker, StopReason};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("dispatch.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    std::fs::write(
+        &source,
+        r#"
+        local sliver = require("sliver.v1")
+        local marker = require("native_marker")
+        local ticks, frames = 0, 0
+        local function tick()
+            ticks = ticks + 1
+            sliver.redraw()
+            sliver.redraw()
+        end
+        sliver.timer.every(10, tick)
+        sliver.timer.after(12, tick)
+        return { api_version=1, render=function(canvas)
+            frames = frames + 1
+            marker.draw(canvas, {run_id="timers", generation="g", frame_id=frames,
+                input_id=tostring(ticks)})
+        end }
+    "#,
+    )?;
+    let capture = Capture::new(128)?;
+    let before = capture.monotonic_ns()?;
+    let worker = LuaWorker::stage_observed(&source, capture.clone())?.worker;
+    worker.commit(1000.0, InputState::default())?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    let first = worker.drive(DriveRequest::without_input(1045.0, InputState::default()))?;
+    assert_eq!(first.next_worker_deadline, Some(1050.0));
+    capture.present(
+        &mut hardware,
+        &first.frame.context("coalesced redraw missing")?.frame,
+    )?;
+    assert!(worker
+        .drive(DriveRequest::without_input(1045.0, InputState::default()))?
+        .frame
+        .is_none());
+    let second = worker.drive(DriveRequest::without_input(1055.0, InputState::default()))?;
+    assert_eq!(second.next_worker_deadline, Some(1060.0));
+    capture.present(
+        &mut hardware,
+        &second.frame.context("next redraw missing")?.frame,
+    )?;
+    worker.shutdown(StopReason::Shutdown)?;
+    hardware.release()?;
+    let after = capture.monotonic_ns()?;
+    let report = capture.close();
+    let dispatched: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::TimerDispatched {
+                timer_id,
+                scheduled_deadline_seconds,
+                scheduler_now_seconds,
+            } => {
+                assert!((if timer_id == 2 {
+                    1045.0..1050.0
+                } else {
+                    1045.0..1060.0
+                })
+                .contains(&scheduler_now_seconds));
+                Some((timer_id, scheduled_deadline_seconds))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dispatched, [(1, 1010.0), (2, 1012.0), (1, 1050.0)]);
+    let finished: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::TimerFinished {
+                timer_id,
+                success,
+                scheduler_now_seconds,
+                disposition,
+            } => {
+                assert!(success);
+                assert!((1045.0..1060.0).contains(&scheduler_now_seconds));
+                Some((timer_id, disposition))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        finished,
+        [
+            (
+                1,
+                TimerDisposition::Rescheduled {
+                    next_deadline_seconds: 1050.0,
+                    intervals_advanced: 4.0,
+                    skipped_intervals: 3.0,
+                    fallback: false
+                }
+            ),
+            (2, TimerDisposition::Completed),
+            (
+                1,
+                TimerDisposition::Rescheduled {
+                    next_deadline_seconds: 1060.0,
+                    intervals_advanced: 1.0,
+                    skipped_intervals: 0.0,
+                    fallback: false
+                }
+            ),
+        ]
+    );
+    let redraws: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::RedrawRequested { coalesced } => Some(coalesced),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(redraws, [false, true, true, true, false, true]);
+    let pixels: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match &r.kind {
+            EventKind::PresentEntered {
+                marker: Ok(marker), ..
+            } => Some((marker.frame_id(), marker.input_id())),
+            _ => None,
+        })
+        .collect();
+    // The token here counts timer callbacks, NOT physical input or causal evidence.
+    assert_eq!(
+        pixels,
+        [(1, Some(b"2".as_slice())), (2, Some(b"3".as_slice()))]
+    );
+    assert_eq!(hardware.presented_frames().len(), 2);
+    assert!(report
+        .records
+        .iter()
+        .all(|r| (before..=after).contains(&r.at_ns)));
+    assert_eq!(
+        (report.lost, report.clock_failures, report.failed_operations),
+        (0, 0, 0)
+    );
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_retains_timer_errors_and_self_cancellation_outcomes() -> Result<()> {
+    use crate::diagnostic_observer::{Capture, EventKind, TimerDisposition};
+    use crate::lua_worker::{DriveRequest, LuaWorker, StopReason};
+    for cancel in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timer-error.lua");
+        std::fs::write(
+            &source,
+            format!(
+                r##"
+            local sliver = require("sliver.v1")
+            local timer
+            timer = sliver.timer.every(10, function()
+                if {cancel} then timer:cancel() end
+                sliver.timer.after(0, function() error("nested must not run") end)
+                sliver.redraw()
+                error("actual timer failure")
+            end)
+            sliver.timer.after(12, function() error("later must not run") end)
+            return {{ api_version=1, render=function(canvas)
+                canvas:rectangle(0, 0, 8, 8, "#0000ff")
+            end }}
+        "##
+            ),
+        )?;
+        let capture = Capture::new(64)?;
+        let worker = LuaWorker::stage_observed(&source, capture.clone())?.worker;
+        let initial = worker.render_at(1000.0, 0.0)?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&initial.frame)?;
+        worker.commit(1000.0, InputState::default())?;
+        let error = worker
+            .drive(DriveRequest::without_input(1045.0, InputState::default()))
+            .err()
+            .context("timer callback error was swallowed")?;
+        assert!(error.to_string().contains("actual timer failure"));
+        worker.shutdown(StopReason::Shutdown)?;
+        hardware.release()?;
+        let report = capture.close();
+        assert_eq!(
+            report.failed_operations, 1,
+            "timer failure must invalidate diagnostics"
+        );
+        let dispatches: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|r| match r.kind {
+                EventKind::TimerDispatched { timer_id, .. } => Some(timer_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dispatches,
+            [1],
+            "failure must not claim dispatch of later/nested work"
+        );
+        let outcomes: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|r| match r.kind {
+                EventKind::TimerFinished {
+                    timer_id,
+                    success,
+                    disposition,
+                    ..
+                } => Some((timer_id, success, disposition)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            [(
+                1,
+                false,
+                if cancel {
+                    TimerDisposition::Cancelled
+                } else {
+                    TimerDisposition::Rescheduled {
+                        next_deadline_seconds: 1050.0,
+                        intervals_advanced: 4.0,
+                        skipped_intervals: 3.0,
+                        fallback: false,
+                    }
+                }
+            )]
+        );
+        assert_eq!(
+            report
+                .records
+                .iter()
+                .filter(|r| matches!(r.kind, EventKind::RenderAllocated { .. }))
+                .count(),
+            1
+        );
+        assert!(report.records.iter().any(|r| matches!(r.kind,
+            EventKind::TimerActivated { timer_id: 3, scheduler_now_seconds, deadline_seconds } if scheduler_now_seconds == deadline_seconds)));
+        assert_eq!(report.lost, 0);
+        assert_eq!(hardware.presented_frames().len(), 1);
+    }
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_records_shifted_deadlines_and_nested_timer_completion() -> Result<()>
+{
+    use crate::diagnostic_observer::{Capture, EventKind, TimerDisposition};
+    use crate::lua_worker::{DriveRequest, LuaWorker, StopReason, VisibilityReason};
+    for explicit_resume in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("shifted-timers.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            local repeating, later
+            local ticks = 0
+            repeating = sliver.timer.every(10, function()
+                ticks = ticks + 1
+                repeating:cancel()
+                later:cancel()
+                sliver.redraw()
+                sliver.timer.after(0, function() ticks = ticks + 1; sliver.redraw() end)
+            end)
+            later = sliver.timer.after(20, function() error("cancelled") end)
+            return { api_version=1, render=function(canvas)
+                assert(ticks == 2)
+                canvas:rectangle(0, 0, 8, 8, "#ff0000")
+            end }
+        "##,
+        )?;
+        let capture = Capture::new(64)?;
+        let before = capture.monotonic_ns()?;
+        let worker = LuaWorker::stage_observed(&source, capture.clone())?.worker;
+        worker.commit(1000.0, InputState::default())?;
+        worker.drive(
+            DriveRequest::without_input(1002.0, InputState::default()).with_visibility(
+                false,
+                VisibilityReason::Suspend,
+                false,
+            ),
+        )?;
+        let paused = worker.drive(DriveRequest::without_input(1100.0, InputState::default()))?;
+        assert!(paused.frame.is_none());
+        assert_eq!(paused.next_worker_deadline, None);
+        let resume = DriveRequest::without_input(1102.0, InputState::default());
+        let resumed = worker.drive(if explicit_resume {
+            resume
+                .with_timer_resume()
+                .with_visibility(true, VisibilityReason::Device, false)
+        } else {
+            resume.with_visibility(true, VisibilityReason::Suspend, false)
+        })?;
+        assert!(resumed.frame.is_none());
+        assert_eq!(resumed.next_worker_deadline, Some(1110.0));
+        let response = worker.drive(DriveRequest::without_input(1111.0, InputState::default()))?;
+        assert_eq!(response.next_worker_deadline, None);
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&response.frame.context("nested timer redraw missing")?.frame)?;
+        worker.shutdown(StopReason::Shutdown)?;
+        hardware.release()?;
+        let after = capture.monotonic_ns()?;
+        let report = capture.close();
+        let shifts: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|r| match r.kind {
+                EventKind::TimerDeadlineShifted {
+                    timer_id,
+                    previous_deadline_seconds,
+                    shift_seconds,
+                    deadline_seconds,
+                } => Some((
+                    timer_id,
+                    previous_deadline_seconds,
+                    shift_seconds,
+                    deadline_seconds,
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            shifts,
+            [(1, 1010.0, 100.0, 1110.0), (2, 1020.0, 100.0, 1120.0)]
+        );
+        let dispatches: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|r| match r.kind {
+                EventKind::TimerDispatched {
+                    timer_id,
+                    scheduled_deadline_seconds,
+                    ..
+                } => Some((timer_id, scheduled_deadline_seconds)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dispatches.len(), 2);
+        assert_eq!(dispatches[0], (1, 1110.0));
+        assert_eq!(dispatches[1].0, 3);
+        assert!((1111.0..1112.0).contains(&dispatches[1].1));
+        let outcomes: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|r| match r.kind {
+                EventKind::TimerFinished {
+                    timer_id,
+                    success,
+                    disposition,
+                    ..
+                } => Some((timer_id, success, disposition)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            [
+                (1, true, TimerDisposition::Cancelled),
+                (3, true, TimerDisposition::Completed)
+            ]
+        );
+        assert!(report
+            .records
+            .iter()
+            .all(|r| (before..=after).contains(&r.at_ns)));
+        assert_eq!(
+            (report.lost, report.clock_failures, report.failed_operations),
+            (0, 0, 0)
+        );
+        assert_eq!(
+            hardware.presented_frames()[0].rgba_at(1, 1),
+            [255, 0, 0, 255]
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn private_diagnostic_capture_preserves_raw_timer_float_rounding_and_overflow() -> Result<()> {
+    use crate::diagnostic_observer::{Capture, EventKind, TimerDisposition};
+    use crate::lua_worker::{DriveRequest, LuaWorker, StopReason};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("raw-timers.lua");
+    std::fs::write(
+        &source,
+        r##"
+        local sliver = require("sliver.v1")
+        sliver.timer.after(-0.0, function() end)
+        local ticks = 0
+        sliver.timer.every(2.2250738585072014e-308, function()
+            ticks = ticks + 1
+            sliver.redraw()
+        end)
+        return { api_version=1, render=function(canvas)
+            assert(ticks == 1, "repeat may fire only once per drive")
+            canvas:rectangle(0, 0, 8, 8, "#0000ff")
+        end }
+    "##,
+    )?;
+    let capture = Capture::new(64)?;
+    let before = capture.monotonic_ns()?;
+    let worker = LuaWorker::stage_observed(&source, capture.clone())?.worker;
+    worker.commit(0.0, InputState::default())?;
+    let response = worker.drive(DriveRequest::without_input(1e30, InputState::default()))?;
+    // Existing fallback rounds now + tiny interval back to now; the observer
+    // must neither fix the scheduler nor sanitize this into an exact count.
+    assert_eq!(response.next_worker_deadline, Some(1e30));
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    hardware.present(&response.frame.context("raw timer redraw missing")?.frame)?;
+    worker.shutdown(StopReason::Shutdown)?;
+    hardware.release()?;
+    let after = capture.monotonic_ns()?;
+    let report = capture.close();
+    let registered: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::TimerRegistered {
+                delay_seconds,
+                interval_seconds,
+                ..
+            } => Some((delay_seconds.to_bits(), interval_seconds.map(f64::to_bits))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        registered,
+        [
+            ((-0.0_f64).to_bits(), None),
+            (
+                f64::MIN_POSITIVE.to_bits(),
+                Some(f64::MIN_POSITIVE.to_bits())
+            )
+        ]
+    );
+    assert!(report.records.iter().any(|r| matches!(r.kind,
+        EventKind::TimerFinished { timer_id: 2, success: true, scheduler_now_seconds: 1e30,
+            disposition: TimerDisposition::Rescheduled { next_deadline_seconds: 1e30,
+                intervals_advanced, skipped_intervals, fallback: true } }
+        if intervals_advanced == f64::INFINITY && skipped_intervals == f64::INFINITY)));
+    assert!(report
+        .records
+        .iter()
+        .all(|r| (before..=after).contains(&r.at_ns)));
+    assert_eq!(
+        (report.lost, report.clock_failures, report.failed_operations),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        hardware.presented_frames()[0].rgba_at(1, 1),
+        [0, 0, 255, 255]
+    );
+    Ok(())
+}
+
+#[test]
+fn private_minimal_callback_timing_covers_lua_body_and_error_without_detailed_capture() -> Result<()>
+{
+    use crate::diagnostic_observer::clock_ns;
+    use crate::diagnostic_timing::{SpanKind, SpanStatus, TimingCapture};
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("callback-timing.lua");
+    std::fs::write(
+        &source,
+        r##"
+        require("sliver.v1")
+        local calls = 0
+        return { api_version=1, render=function(canvas, intended)
+            assert(intended == 987654321)
+            calls = calls + 1
+            -- Wall-time wait, not process CPU time (other tests may run threads).
+            assert(os.execute("sleep 0.02"))
+            if calls == 2 then error("timed callback failure") end
+            canvas:rectangle(0, 0, 8, 8, "#00ff00")
+        end }
+    "##,
+    )?;
+    let timing = TimingCapture::new(16)?;
+    let before = clock_ns(false)?;
+    let worker = LuaWorker::stage_source_with_timing(
+        &LuaSource::file(source),
+        1.0,
+        InputState::default(),
+        timing.clone(),
+    )?
+    .worker;
+    let frame = worker.render_at(987654321.0, 0.0)?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    hardware.present(&frame.frame)?;
+    assert!(worker
+        .render_at(987654321.0, 0.0)
+        .err()
+        .context("expected render error")?
+        .to_string()
+        .contains("timed callback failure"));
+    worker.shutdown(StopReason::Shutdown)?;
+    hardware.release()?;
+    let after = clock_ns(false)?;
+    let report = timing.close();
+    assert_eq!(report.records.len(), 2, "missing actual callback spans");
+    assert_eq!(report.records[0].status, SpanStatus::Succeeded);
+    assert_eq!(report.records[1].status, SpanStatus::Failed);
+    for sample in &report.records {
+        assert_eq!(sample.kind, SpanKind::RenderCallback);
+        assert!(sample.frame_bearing);
+        assert!(
+            before <= sample.start_ns && sample.start_ns <= sample.end_ns && sample.end_ns <= after
+        );
+        // Generous lower bound detects measuring only canvas finalization instead
+        // of the deliberately long Lua body. This is not an overhead benchmark.
+        assert!(sample.end_ns - sample.start_ns >= 10_000_000);
+    }
+    assert!(report.records[0].end_ns <= report.records[1].start_ns);
+    assert_eq!(
+        (
+            report.lost,
+            report.open_spans,
+            report.clock_failures,
+            report.failed_spans
+        ),
+        (0, 0, 0, 1)
+    );
+    assert_eq!(
+        hardware.presented_frames()[0].rgba_at(1, 1),
+        [0, 255, 0, 255]
+    );
+    Ok(())
+}
+
+#[test]
 fn private_diagnostic_capture_observes_real_render_and_complete_fake_present() -> Result<()> {
     use crate::diagnostic_observer::{Capture, EventKind};
     let directory = tempfile::tempdir()?;

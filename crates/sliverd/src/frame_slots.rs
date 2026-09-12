@@ -108,6 +108,7 @@ struct Slot {
 
 struct SharedSlots {
     observer: Option<crate::diagnostic_observer::Capture>,
+    timing: Option<crate::diagnostic_timing::TimingCapture>,
     storage: Mutex<MmapMut>,
     slot_bytes: usize,
     width: usize,
@@ -461,7 +462,9 @@ impl Drop for SharedSlots {
 
 impl Drop for SharedFrameMap {
     fn drop(&mut self) {
-        if let Some(observer) = &self.observer {
+        // Only the creator owns global mapping teardown, after producer join.
+        // A worker opener can disappear while the owner still consumes READY.
+        if let Some(observer) = self.observer.as_ref().filter(|_| self.path.is_some()) {
             if let Ok(storage) = self.storage.lock() {
                 for index in 0..SLOT_COUNT {
                     if read_slot_state(&storage, index) == READY {
@@ -553,6 +556,7 @@ fn make_inner(
     });
     Arc::new(SharedSlots {
         observer: None,
+        timing: None,
         storage: Mutex::new(storage),
         slot_bytes,
         width,
@@ -573,7 +577,13 @@ fn make_inner(
 }
 
 impl FrameSlots {
-    #[cfg(test)]
+    pub(crate) fn with_timing(mut self, timing: crate::diagnostic_timing::TimingCapture) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("unshared slots")
+            .timing = Some(timing);
+        self
+    }
+
     pub(crate) fn with_observer(mut self, observer: crate::diagnostic_observer::Capture) -> Self {
         Arc::get_mut(&mut self.inner)
             .expect("unshared slots")
@@ -690,6 +700,10 @@ impl FrameSlots {
 }
 
 impl FrameProducer {
+    pub(crate) fn timing(&self) -> Option<&crate::diagnostic_timing::TimingCapture> {
+        self.inner.timing.as_ref()
+    }
+
     pub(crate) fn observer(&self) -> Option<&crate::diagnostic_observer::Capture> {
         self.inner.observer.as_ref()
     }
@@ -1104,6 +1118,67 @@ mod tests {
             .join()
             .expect("broker thread panicked")?
             .expect("broker did not select a frame");
+        Ok(())
+    }
+
+    #[test]
+    fn private_observed_opener_close_does_not_dispose_the_owners_ready_frame() -> Result<()> {
+        use crate::diagnostic_observer::{Capture, DiscardReason, EventKind};
+        for consume in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("frames");
+            let owner_capture = Capture::new(16)?;
+            let worker_capture = Capture::new(16)?;
+            let owner =
+                FrameSlots::new_shared(&path, 2, 1, 8)?.with_observer(owner_capture.clone());
+            let opener = FrameSlots::open_shared(&path)?.with_observer(worker_capture.clone());
+            assert!(opener.producer().try_publish(
+                2,
+                1,
+                8,
+                &frame(7),
+                FrameTiming::new(0.0, 0.0)?
+            )?);
+            drop(opener);
+            let worker_report = worker_capture.close();
+            assert!(
+                !worker_report.records.iter().any(|record| matches!(
+                    record.kind,
+                    EventKind::Discarded {
+                        reason: DiscardReason::MappingClosed,
+                        ..
+                    }
+                )),
+                "worker unmapping is not global publication disposal"
+            );
+            assert!(path.exists());
+            if consume {
+                assert_eq!(
+                    owner
+                        .broker()
+                        .take_newest()?
+                        .expect("ready frame lost")
+                        .pixels,
+                    frame(7)
+                );
+            }
+            // The owner tears down only after the producer is gone.
+            drop(owner);
+            let owner_report = owner_capture.close();
+            let closed: Vec<_> = owner_report
+                .records
+                .iter()
+                .filter_map(|record| match record.kind {
+                    EventKind::Discarded {
+                        sequence,
+                        reason: DiscardReason::MappingClosed,
+                    } => Some(sequence),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(closed, if consume { vec![] } else { vec![1] });
+            assert!(!path.exists());
+        }
         Ok(())
     }
 

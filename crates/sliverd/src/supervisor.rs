@@ -371,6 +371,7 @@ fn is_modifier_key(key: OutputKey) -> bool {
 
 pub(crate) struct Supervisor<H: TouchBarHardware, L: Logind = RealLogind> {
     hardware: H,
+    timing: Option<crate::diagnostic_timing::TimingCapture>,
     state_file: PathBuf,
     default_source: LuaSource,
     fallback_worker: bool,
@@ -551,6 +552,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         };
         Ok(Self {
             hardware,
+            timing: None,
             state_file,
             default_source,
             fallback_worker: false,
@@ -902,7 +904,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             Err(error) => {
                 return Err(self
                     .record_hardware_failure(error, HardwareCapability::Backlight)
-                    .into())
+                    .into());
             }
         };
         self.backlight = current_backlight;
@@ -913,6 +915,12 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         };
         #[cfg(test)]
         let staged_worker = if self.worker_process_backend {
+            if self.timing.is_some() {
+                return Err(anyhow::anyhow!(
+                    "private timing not yet provisioned to process workers"
+                )
+                .into());
+            }
             let stage = if self.worker_systemd_backend {
                 LuaWorker::stage_source_with_identity_systemd
             } else {
@@ -923,6 +931,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                 current_backlight,
                 self.input_state,
                 identity,
+            )
+        } else if let Some(timing) = &self.timing {
+            LuaWorker::stage_source_with_timing(
+                &source,
+                current_backlight,
+                self.input_state,
+                timing.clone(),
             )
         } else {
             LuaWorker::stage_source_with_identity(
@@ -960,7 +975,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             Err(error) => {
                 return Err(self
                     .record_hardware_failure(error, HardwareCapability::Backlight)
-                    .into())
+                    .into());
             }
         };
         self.ensure_hardware_available()
@@ -1049,7 +1064,9 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         }
 
         if !preserve_recovery {
-            if let Err(error) = self.hardware.present(&frame) {
+            if let Err(error) =
+                crate::diagnostic_timing::present(self.timing.as_ref(), &mut self.hardware, &frame)
+            {
                 let error = self.record_hardware_failure(error, HardwareCapability::Display);
                 return self.rollback_candidate(
                     CandidateRollback {
@@ -1253,7 +1270,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         let mut error = error;
         if restore_frame {
             let restore_result = match old_frame {
-                Some(frame) => self.hardware.present(frame),
+                Some(frame) => crate::diagnostic_timing::present(
+                    self.timing.as_ref(),
+                    &mut self.hardware,
+                    frame,
+                ),
                 None if self.recovery.is_some() => self.present_recovery(),
                 None => Ok(()),
             };
@@ -1663,7 +1684,7 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             .as_ref()
             .context("recovery session disappeared while rendering")?
             .render()?;
-        self.hardware.present(&frame)
+        crate::diagnostic_timing::present(self.timing.as_ref(), &mut self.hardware, &frame)
     }
 
     fn enter_recovery(&mut self) -> Result<()> {
@@ -2000,22 +2021,45 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
         transitions: Vec<InputTransition>,
         touches: Vec<TouchEvent>,
     ) -> Result<()> {
-        let delta = self
-            .last_presented_time
-            .map(|previous| (now - previous).max(0.0))
-            .unwrap_or(0.0);
-        let Some(effects) = self.drive_active_worker(DriveRequest::new(
-            now,
-            self.input_state,
-            transitions,
-            delta,
-            touches,
-        ))?
-        else {
-            return Ok(());
-        };
-        self.schedule_effects(now, &effects);
-        self.apply_effects(effects)
+        // Enclose worker dispatch, snapshots, broker reply and all detailed
+        // per-drive processing, not merely the worker callback.
+        let span = self
+            .timing
+            .as_ref()
+            .map(|timing| timing.begin(crate::diagnostic_timing::SpanKind::SupervisorDrive));
+        let mut frame_bearing = false;
+        let mut worker_completed = false;
+        let result = (|| {
+            let delta = self
+                .last_presented_time
+                .map(|previous| (now - previous).max(0.0))
+                .unwrap_or(0.0);
+            let Some(effects) = self.drive_active_worker(DriveRequest::new(
+                now,
+                self.input_state,
+                transitions,
+                delta,
+                touches,
+            ))?
+            else {
+                return Ok(());
+            };
+            worker_completed = true;
+            frame_bearing = effects.frame.is_some();
+            self.schedule_effects(now, &effects);
+            self.apply_effects(effects)
+        })();
+        if let Some(span) = span {
+            span.finish(
+                frame_bearing,
+                result.is_ok()
+                    && worker_completed
+                    && self.active.is_some()
+                    && self.recovery.is_none()
+                    && self.hardware_available,
+            );
+        }
+        result
     }
 
     fn schedule_effects(&mut self, now: f64, effects: &WorkerEffects) {
@@ -2147,7 +2191,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             brightness_changed = true;
         }
         if let Some(frame) = frame.as_ref() {
-            if let Err(error) = self.hardware.present(&frame.frame) {
+            if let Err(error) = crate::diagnostic_timing::present(
+                self.timing.as_ref(),
+                &mut self.hardware,
+                &frame.frame,
+            ) {
                 if !self.hardware.is_available() {
                     self.mark_hardware_unavailable(
                         self.hardware
@@ -2157,7 +2205,11 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
                     return Ok(());
                 }
                 let mut error = error.context("presenting Lua frame");
-                if let Err(restore_error) = self.hardware.present(&old_frame) {
+                if let Err(restore_error) = crate::diagnostic_timing::present(
+                    self.timing.as_ref(),
+                    &mut self.hardware,
+                    &old_frame,
+                ) {
                     error = error.context(format!(
                         "restoring the previous frame also failed: {restore_error:#}"
                     ));
@@ -2293,9 +2345,13 @@ impl<H: TouchBarHardware, L: Logind> Supervisor<H, L> {
             && !self.hardware.session_revoked()
         {
             FrameCanvas::new().and_then(|canvas| {
-                canvas
-                    .finish()
-                    .and_then(|frame| self.hardware.present(&frame))
+                canvas.finish().and_then(|frame| {
+                    crate::diagnostic_timing::present(
+                        self.timing.as_ref(),
+                        &mut self.hardware,
+                        &frame,
+                    )
+                })
             })
         } else {
             Ok(())
@@ -2374,7 +2430,7 @@ fn read_selected_path(state_file: &Path) -> Result<Option<PathBuf>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("reading selected-path state {}", state_file.display()))
+                .with_context(|| format!("reading selected-path state {}", state_file.display()));
         }
     };
     ensure!(!contents.is_empty(), "selected-path state is empty");
@@ -2978,6 +3034,181 @@ mod tests {
         fn release(&mut self) -> Result<()> {
             self.inner.release()
         }
+    }
+
+    #[test]
+    fn private_minimal_timing_encloses_real_worker_and_complete_present() -> Result<()> {
+        use crate::diagnostic_timing::{SpanKind, SpanStatus, TimingCapture};
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("timed.lua");
+        std::fs::write(
+            &source,
+            r##"
+            local sliver = require("sliver.v1")
+            sliver.timer.every(0.01, function() sliver.redraw() end)
+            return { api_version = 1, render = function(canvas)
+                canvas:rectangle(0, 0, 2008, 60, "#123456")
+            end }
+        "##,
+        )?;
+        let timing = TimingCapture::new(64)?;
+        let (logind, _) = active_local_logind("private-timing-session");
+        let mut supervisor = Supervisor::new_with_logind(
+            FakeTouchBar::new(),
+            directory.path().join("state"),
+            logind,
+        )?;
+        supervisor.timing = Some(timing.clone());
+        supervisor.apply(&source)?;
+        supervisor.step_at(1.0)?;
+        assert_eq!(supervisor.hardware.presented_frames().len(), 2);
+        supervisor.shutdown()?;
+        let report = timing.close();
+        assert_eq!(report.lost, 0);
+        assert_eq!(report.clock_failures, 0);
+        assert_eq!(report.open_spans, 0);
+        let drives: Vec<_> = report
+            .records
+            .iter()
+            .filter(|record| record.kind == SpanKind::SupervisorDrive)
+            .collect();
+        assert_eq!(drives.len(), 1);
+        let drive = drives[0];
+        assert!(drive.frame_bearing);
+        assert_eq!(drive.status, SpanStatus::Succeeded);
+        for kind in [SpanKind::RenderCallback, SpanKind::Present] {
+            let nested: Vec<_> = report
+                .records
+                .iter()
+                .filter(|record| {
+                    record.kind == kind
+                        && record.start_ns >= drive.start_ns
+                        && record.start_ns <= drive.end_ns
+                })
+                .collect();
+            assert_eq!(nested.len(), 1, "missing or duplicate {kind:?}");
+            assert!(nested[0].start_ns <= nested[0].end_ns);
+            assert!(
+                nested[0].end_ns <= drive.end_ns,
+                "{kind:?} outside complete drive"
+            );
+            assert_eq!(nested[0].status, SpanStatus::Succeeded);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn private_minimal_timing_counts_nested_records_and_capacity_loss() -> Result<()> {
+        use crate::diagnostic_timing::TimingCapture;
+        for capacity in [1, 64] {
+            let directory = tempfile::tempdir()?;
+            let source = directory.path().join("timed.lua");
+            std::fs::write(
+                &source,
+                r##"
+                local sliver = require("sliver.v1")
+                sliver.timer.every(0.01, function() sliver.redraw() end)
+                return { api_version = 1, render = function(canvas)
+                    canvas:rectangle(0, 0, 2008, 60, "#123456")
+                end }
+            "##,
+            )?;
+            let timing = TimingCapture::new(capacity)?;
+            let (logind, _) = active_local_logind("private-timing-bounds");
+            let mut supervisor = Supervisor::new_with_logind(
+                FakeTouchBar::new(),
+                directory.path().join("state"),
+                logind,
+            )?;
+            supervisor.timing = Some(timing.clone());
+            supervisor.apply(&source)?;
+            supervisor.step_at(1.0)?;
+            supervisor.shutdown()?;
+            let report = timing.close();
+            // Two callbacks, two fixture calls, one complete drive, then the
+            // shutdown recovery call. Boundary work must not disappear.
+            assert_eq!(report.started_spans, 6);
+            assert_eq!(report.open_spans, 0);
+            assert_eq!(report.failed_spans, 0);
+            assert_eq!(report.records.len(), capacity.min(6));
+            assert_eq!(report.lost as usize, 6 - capacity.min(6));
+            assert!(report.closed);
+            assert!(report.closed_at_ns.is_some());
+            assert_eq!(report.after_close, 0);
+            assert!(report.clock_resolution_ns > 0);
+            let sequences: Vec<_> = report
+                .records
+                .iter()
+                .map(|record| record.sequence)
+                .collect();
+            if capacity == 64 {
+                assert_eq!(sequences, [1, 2, 3, 4, 5, 6]);
+            } else {
+                assert_eq!(sequences, [1]);
+            }
+        }
+        assert!(TimingCapture::new(0).is_err());
+        assert!(TimingCapture::new(65_537).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn private_minimal_timing_retains_failed_callback_and_failed_present_drives() -> Result<()> {
+        use crate::diagnostic_timing::{SpanKind, SpanStatus, TimingCapture};
+        for render_error in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let source = directory.path().join("timed.lua");
+            std::fs::write(
+                &source,
+                format!(
+                    r##"
+                local sliver = require("sliver.v1")
+                sliver.timer.every(0.01, function() sliver.redraw() end)
+                local frames = 0
+                return {{ api_version = 1, render = function(canvas)
+                    frames = frames + 1
+                    if {render_error} and frames == 2 then error("timed render failed") end
+                    canvas:rectangle(0, 0, 2008, 60, "#123456")
+                end }}
+            "##
+                ),
+            )?;
+            let timing = TimingCapture::new(64)?;
+            let state_file = directory.path().join("state");
+            let (logind, _) = active_local_logind("private-timing-failure");
+            let mut supervisor = Supervisor::new_with_logind(
+                FailingPresentHardware::new(state_file.clone()),
+                state_file,
+                logind,
+            )?;
+            supervisor.timing = Some(timing.clone());
+            supervisor.apply(&source)?;
+            supervisor.hardware.fail_next_present = !render_error;
+            assert!(supervisor.step_at(1.0).is_err());
+            supervisor.shutdown()?;
+            let report = timing.close();
+            assert_eq!(report.lost, 0);
+            assert_eq!(report.open_spans, 0);
+            assert!(report.failed_spans >= 2);
+            let drive = report
+                .records
+                .iter()
+                .find(|r| r.kind == SpanKind::SupervisorDrive)
+                .expect("failed drive disappeared");
+            assert_eq!(drive.status, SpanStatus::Failed);
+            let kind = if render_error {
+                SpanKind::RenderCallback
+            } else {
+                SpanKind::Present
+            };
+            let failure = report
+                .records
+                .iter()
+                .find(|r| r.kind == kind && r.status == SpanStatus::Failed)
+                .expect("failed operation disappeared");
+            assert!(failure.start_ns >= drive.start_ns && failure.end_ns <= drive.end_ns);
+        }
+        Ok(())
     }
 
     #[test]
@@ -8013,11 +8244,15 @@ mod tests {
             ("invalid", Some("return {}")),
             (
                 "start",
-                Some("require('sliver.v1'); return { api_version = 1, start = function() error('start failed') end, render = function() end }"),
+                Some(
+                    "require('sliver.v1'); return { api_version = 1, start = function() error('start failed') end, render = function() end }",
+                ),
             ),
             (
                 "render",
-                Some("require('sliver.v1'); return { api_version = 1, render = function() error('render failed') end }"),
+                Some(
+                    "require('sliver.v1'); return { api_version = 1, render = function() error('render failed') end }",
+                ),
             ),
         ];
         for (name, contents) in cases {
@@ -8354,10 +8589,13 @@ mod tests {
         // Observe the background child's PID without changing callback/timer
         // boundaries or the verifier's command and Lua behavior.
         let fixture = std::fs::read_to_string(&source)?;
-        std::fs::write(&source, format!(
-            "local execute = os.execute\nos.execute = function(command) return execute(command .. {suffix:?}) end\n{fixture}",
-            suffix = format!(" echo $! > {}", child_marker.display()),
-        ))?;
+        std::fs::write(
+            &source,
+            format!(
+                "local execute = os.execute\nos.execute = function(command) return execute(command .. {suffix:?}) end\n{fixture}",
+                suffix = format!(" echo $! > {}", child_marker.display()),
+            ),
+        )?;
         let state = directory.path().join("state/config-path");
         let mut supervisor = Supervisor::new_with_logind_process(
             FakeTouchBar::new(),

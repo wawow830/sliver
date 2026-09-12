@@ -2,7 +2,8 @@
 
 Implemented under [approved P1](native-performance-policy-approval.md), at the
 existing real Lua/canvas and fake broker-hardware seams. This is **not yet a
-production native collector**. It has no service arming, cross-process export,
+production native collector**. It now includes bounded raw export from an
+actual worker process through private bootstrap. It still has no service arming,
 release-pass flag, public command or Lua interface addition.
 
 ## Interface and default behaviour
@@ -13,7 +14,9 @@ release-pass flag, public command or Lua interface addition.
 and normalized input receipt. `close()` returns a typed in-memory report.
 No environment variable, installed service configuration or broker payload
 field enables it. Existing production constructors leave observers **off**;
-only private test staging provisions a capture today.
+only private test staging provisions a capture today. The real worker accepts
+its explicitly transferred storage before loading Lua; ordinary supervisor
+staging sends observation-off. See [worker transport](native-performance-worker-transport.md).
 
 Records use actual integer host `CLOCK_MONOTONIC` nanoseconds, not intended Lua
 time or `TouchEvent.time`. Normalized events returned in one poll batch share
@@ -29,7 +32,16 @@ The recorder observes:
 - shared-slot publication sequence, selection and producer/consumer reclamation;
 - pending-frame replacement and remaining ready/pending frames at teardown;
 - marker identity at entry to complete hardware `present`, and success/error;
-- normalized input receipt and touch callback entry/outcome.
+- normalized input receipt and touch callback entry/outcome;
+- timer registration, activation, cancellation (including no-op attempts),
+  dispatch, callback outcome and registry advancement, plus redraw coalescing;
+- raw worker load, control-loop and command failure observations.
+
+Timer values ending in `_seconds` preserve actual scheduler `f64` values,
+including rounding/overflow. They are not host timestamps, exact rational
+periods or P1 opportunity credit. Timer IDs are local to one worker registry.
+An error outcome and a rescheduled/cancelled registry disposition are separate
+facts; rescheduling does not promise the failed worker will dispatch again.
 
 The digital decoder independently reads every 2×2 black/white cell from a
 complete owned logical 2008×60 frame and validates the complete
@@ -58,14 +70,42 @@ to grant acceptance.** Reports are not serialized as the Python evaluator's
 input; a future assembler must reconcile actual source records and refuse
 missing fields rather than invent them.
 
+## Minimal timing
+
+`diagnostic_timing.rs` retains bounded raw spans independently of detailed
+observation: the complete Lua render callback, the supplied adapter's complete
+`present`, and the supervisor's active drive from before dispatch through
+snapshot selection, broker reply and effect processing. Callback timing excludes
+canvas allocation, invalidation and snapshot/marker decoding; these remain
+inside the complete drive. The final minimal-record append itself is outside
+its own measured span. No duration subtracts estimated overhead.
+
+Nested spans have distinct allocation IDs and completion-record sequences.
+Errors, abandoned/open spans, overflow and post-closure activity remain visible.
+Startup/restoration/shutdown calls are retained, not silently credited as
+measured fixture work. At a supervisor `BrokerClient`, a present span includes
+IPC; it is **not** the real M2 adapter duration. Only broker-side instrumentation
+can supply that native measurement.
+
+Heap capture returns bounded samples. Mapped worker capture exports every
+completed callback span immediately and emits a fixed timing summary after
+runtime teardown, before raw source closure; there is no second sample vector
+or shutdown sample flush. Missing summaries, raw-source loss and timing-summary
+errors remain disqualifying/incomplete, never inferred success. Requested
+worker capture currently combines detailed and minimal observation; A/B mode
+provisioning and the native overhead battery remain unfinished.
+
 ## Tests and exact scope
 
-Six regressions in `lua_integration_tests.rs` cross real Lua/canvas and fake
+The original six regressions in `lua_integration_tests.rs` cross real Lua/canvas and fake
 hardware. They exercise input-to-pixel identity, repeated presentation, complete
 present errors, render/decode failures, three-slot reclaim/selection reasons,
 pending replacement/teardown, capacity loss and post-close writes. Both the
 anonymous mapping and the production shared-map **algorithm** are exercised
-through the owner-thread adapter; this does not claim process-IPC collection.
+through the owner-thread adapter. Additional regressions cover real timers,
+rounding/overflow, callback and complete-drive timing, failure/closure and
+mapping teardown. Separate real-child tests now exercise transferred storage,
+Lua/canvas/input and fake presentation; see the transport record for exact scope.
 The existing separate software headroom/drop benchmark is unchanged.
 
 `scripts/native-performance-observer-smoke.lua` is an uninstalled bounded
@@ -78,8 +118,8 @@ hardware workload or supply overhead samples.
 
 - Trusted local launcher and per-role broker/supervisor/worker provisioning,
   maintaining existing privilege and private IPC rules.
-- Actual supervisor complete-drive/minimal overhead observation in all A/B/C
-  modes, timer registration/dispatch and fixture token-mutation observations.
+- Production provisioning of the tested timer/callback/active-drive observations
+  in all A/B/C modes, real broker minimal timing, and fixture token mutation.
 - The timed P1 fixture with warmup quiescence, scheduled stop and causal-only
   drain behaviour, tested through the full process/fake-hardware seam.
 - Source identity/sequence/loss/work closure, lifecycle exclusions, installed

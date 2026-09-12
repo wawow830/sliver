@@ -335,6 +335,7 @@ struct CallbackRefs {
 
 #[derive(Clone)]
 struct RuntimeControls {
+    observer: Option<crate::diagnostic_observer::Capture>,
     redraw_pending: Rc<Cell<bool>>,
     timers: Rc<RefCell<TimerRegistry>>,
     committed: Rc<Cell<bool>>,
@@ -346,6 +347,7 @@ struct RuntimeControls {
 }
 
 struct TimerRegistry {
+    observer: Option<crate::diagnostic_observer::Capture>,
     next_id: u64,
     entries: Vec<TimerEntry>,
 }
@@ -523,6 +525,28 @@ impl LuaWorker {
             LuaSource::file(source.to_path_buf()),
             1.0,
             InputState::default(),
+            WorkerIdentity::User,
+            Some(slots),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stage_source_with_timing(
+        source: &LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        timing: crate::diagnostic_timing::TimingCapture,
+    ) -> Result<StagedLuaWorker> {
+        let slots = FrameSlots::new(
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?
+        .with_timing(timing);
+        Self::stage_source_inner(
+            source.clone(),
+            initial_backlight,
+            initial_input,
             WorkerIdentity::User,
             Some(slots),
         )
@@ -1258,18 +1282,33 @@ impl Runtime {
             let Some(due) = self.controls.timers.borrow().due(current, &fired_repeating) else {
                 return Ok(());
             };
+            if let Some(observer) = self.producer.observer() {
+                observer.record(crate::diagnostic_observer::EventKind::TimerDispatched {
+                    timer_id: due.id,
+                    scheduled_deadline_seconds: due.scheduled_deadline,
+                    scheduler_now_seconds: current,
+                });
+            }
             let result = due
                 .callback
                 .call::<()>(())
                 .map_err(|error| diagnostic("timer", &self.source, error.to_string()));
             let completed = sample_now(now_seconds, started);
             self.controls.now_seconds.set(Some(completed));
-            self.controls.timers.borrow_mut().finish(
+            let disposition = self.controls.timers.borrow_mut().finish(
                 due.id,
                 due.scheduled_deadline,
                 due.interval,
                 completed,
             );
+            if let Some(observer) = self.producer.observer() {
+                observer.record(crate::diagnostic_observer::EventKind::TimerFinished {
+                    timer_id: due.id,
+                    success: result.is_ok(),
+                    scheduler_now_seconds: completed,
+                    disposition,
+                });
+            }
             if due.interval.is_some() {
                 fired_repeating.insert(due.id);
             }
@@ -1292,7 +1331,11 @@ impl Runtime {
             configure_lua_path(&lua, path)
                 .map_err(|error| diagnostic("load", source, error.to_string()))?;
         }
-        let controls = RuntimeControls::new(initial_backlight, initial_input);
+        let controls = RuntimeControls::new(
+            initial_backlight,
+            initial_input,
+            producer.observer().cloned(),
+        );
         let loaded_v1 = install_v1_module(&lua, &controls, description.metadata)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let source_name = description.chunk_name;
@@ -1439,9 +1482,18 @@ impl Runtime {
             ._lua
             .create_userdata(Canvas::new(context))
             .map_err(|error| diagnostic("render", &self.source, error.to_string()))?;
+        // Common minimal A/B/C span: the complete Lua call, including errors,
+        // not canvas allocation, invalidation, snapshot finish or marker decode.
+        let callback_span = self
+            .producer
+            .timing()
+            .map(|timing| timing.begin(crate::diagnostic_timing::SpanKind::RenderCallback));
         let render_result = self
             .render
             .call::<()>((canvas.clone(), presentation_time, delta));
+        if let Some(span) = callback_span {
+            span.finish(true, render_result.is_ok());
+        }
         canvas
             .borrow::<Canvas>()
             .map_err(|error| diagnostic("render", &self.source, error.to_string()))?
@@ -1501,10 +1553,15 @@ fn configure_lua_path(lua: &Lua, source: &Path) -> mlua::Result<()> {
 }
 
 impl RuntimeControls {
-    fn new(initial_backlight: f64, initial_input: InputState) -> Self {
+    fn new(
+        initial_backlight: f64,
+        initial_input: InputState,
+        observer: Option<crate::diagnostic_observer::Capture>,
+    ) -> Self {
         Self {
             redraw_pending: Rc::new(Cell::new(false)),
-            timers: Rc::new(RefCell::new(TimerRegistry::new())),
+            timers: Rc::new(RefCell::new(TimerRegistry::new(observer.clone()))),
+            observer,
             committed: Rc::new(Cell::new(false)),
             now_seconds: Rc::new(Cell::new(None)),
             backlight_level: Rc::new(Cell::new(initial_backlight)),
@@ -1516,8 +1573,9 @@ impl RuntimeControls {
 }
 
 impl TimerRegistry {
-    fn new() -> Self {
+    fn new(observer: Option<crate::diagnostic_observer::Capture>) -> Self {
         Self {
+            observer,
             next_id: 1,
             entries: Vec::new(),
         }
@@ -1532,26 +1590,57 @@ impl TimerRegistry {
     ) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
+        let next_deadline = now_seconds.map(|now| now + delay);
         self.entries.push(TimerEntry {
             id,
             delay,
             interval,
-            next_deadline: now_seconds.map(|now| now + delay),
+            next_deadline,
             callback,
         });
+        if let Some(observer) = &self.observer {
+            observer.record(crate::diagnostic_observer::EventKind::TimerRegistered {
+                timer_id: id,
+                delay_seconds: delay,
+                interval_seconds: interval,
+                scheduler_now_seconds: now_seconds,
+            });
+            if let Some((now, deadline)) = now_seconds.zip(next_deadline) {
+                observer.record(crate::diagnostic_observer::EventKind::TimerActivated {
+                    timer_id: id,
+                    scheduler_now_seconds: now,
+                    deadline_seconds: deadline,
+                });
+            }
+        }
         id
     }
 
     fn activate(&mut self, now_seconds: f64) {
         for entry in &mut self.entries {
             if entry.next_deadline.is_none() {
-                entry.next_deadline = Some(now_seconds + entry.delay);
+                let deadline = now_seconds + entry.delay;
+                entry.next_deadline = Some(deadline);
+                if let Some(observer) = &self.observer {
+                    observer.record(crate::diagnostic_observer::EventKind::TimerActivated {
+                        timer_id: entry.id,
+                        scheduler_now_seconds: now_seconds,
+                        deadline_seconds: deadline,
+                    });
+                }
             }
         }
     }
 
     fn cancel(&mut self, id: u64) {
+        let previous_len = self.entries.len();
         self.entries.retain(|entry| entry.id != id);
+        if let Some(observer) = &self.observer {
+            observer.record(crate::diagnostic_observer::EventKind::TimerCancelled {
+                timer_id: id,
+                removed: self.entries.len() != previous_len,
+            });
+        }
     }
 
     fn due(&self, now_seconds: f64, fired_repeating: &BTreeSet<u64>) -> Option<DueTimer> {
@@ -1573,22 +1662,37 @@ impl TimerRegistry {
             })
     }
 
-    fn finish(&mut self, id: u64, scheduled_deadline: f64, interval: Option<f64>, now: f64) {
+    fn finish(
+        &mut self,
+        id: u64,
+        scheduled_deadline: f64,
+        interval: Option<f64>,
+        now: f64,
+    ) -> crate::diagnostic_observer::TimerDisposition {
+        use crate::diagnostic_observer::TimerDisposition;
         let Some(index) = self.entries.iter().position(|entry| entry.id == id) else {
-            return;
+            return TimerDisposition::Cancelled;
         };
         match interval {
             None => {
                 self.entries.swap_remove(index);
+                TimerDisposition::Completed
             }
             Some(interval) => {
                 let elapsed = (now - scheduled_deadline).max(0.0);
                 let skipped = (elapsed / interval).floor() + 1.0;
                 let mut next = scheduled_deadline + skipped * interval;
-                if !next.is_finite() || next <= now {
+                let fallback = !next.is_finite() || next <= now;
+                if fallback {
                     next = now + interval;
                 }
                 self.entries[index].next_deadline = Some(next);
+                TimerDisposition::Rescheduled {
+                    next_deadline_seconds: next,
+                    intervals_advanced: skipped,
+                    skipped_intervals: skipped - 1.0,
+                    fallback,
+                }
             }
         }
     }
@@ -1606,7 +1710,18 @@ impl TimerRegistry {
         }
         for entry in &mut self.entries {
             if let Some(deadline) = entry.next_deadline {
-                entry.next_deadline = Some(deadline + amount);
+                let next = deadline + amount;
+                entry.next_deadline = Some(next);
+                if let Some(observer) = &self.observer {
+                    observer.record(
+                        crate::diagnostic_observer::EventKind::TimerDeadlineShifted {
+                            timer_id: entry.id,
+                            previous_deadline_seconds: deadline,
+                            shift_seconds: amount,
+                            deadline_seconds: next,
+                        },
+                    );
+                }
             }
         }
     }
@@ -1769,10 +1884,16 @@ fn install_v1_module(
         module.set("image", image)?;
 
         let redraw_pending = loader_controls.redraw_pending.clone();
+        let redraw_observer = loader_controls.observer.clone();
         module.set(
             "redraw",
             lua.create_function(move |_, ()| {
-                redraw_pending.set(true);
+                let coalesced = redraw_pending.replace(true);
+                if let Some(observer) = &redraw_observer {
+                    observer.record(crate::diagnostic_observer::EventKind::RedrawRequested {
+                        coalesced,
+                    });
+                }
                 Ok(())
             })?,
         )?;

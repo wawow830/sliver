@@ -5,20 +5,35 @@
 //! Records are fixed-size, preallocated, and retained in memory until explicit
 //! closure. This module performs no filesystem IO. Marker CRC is not provenance.
 //!
-//! Scope: the in-process Lua/canvas seam (including the shared-map algorithm)
-//! and explicitly wrapped hardware calls. No cross-process recorder transport,
-//! supervisor drive duration, timer registration, native fixture scheduler,
-//! lifecycle/provenance verification, or release artifact exporter is provided.
+//! Scope: the Lua/canvas seam (including real worker bootstrap provisioned only
+//! by private tests), shared-frame handoff and explicitly wrapped hardware calls.
+//! diagnostic_capture_transport supplies bounded mapped raw export. No production
+//! arming, native fixture scheduler, lifecycle/provenance verifier or release
+//! artifact exporter is provided. Minimal callback/drive timing lives separately
+//! in diagnostic_timing so detailed observation is not required in modes A/B.
 //! Existing production constructors leave observation off. Publication is sampled
 //! immediately before releasing READY, selection after acquiring READING, render
 //! completion after snapshot finishing/decoding, and present return immediately
 //! after the complete adapter call. These are not optical timestamps or the
 //! overhead protocol's minimal callback/drive durations.
 //!
+//! Timer records observe the existing registry and real Lua callback path:
+//! registration, deadline activation, cancellation (including no-op attempts),
+//! dispatch, callback outcome and post-callback advancement. Redraw records
+//! distinguish setting the pending bit from coalescing into an existing request.
+//! Timer IDs are worker-local. Raw f64 scheduler values may round or overflow;
+//! they are never reinterpreted as CLOCK_MONOTONIC event timestamps, normalized
+//! into rational periods, or assigned scheduled-opportunity credit here. A
+//! callback's error and its registry disposition are separate facts. Teardown
+//! and cross-worker identity/semantic work closure still require an assembler.
+//!
 //! A recorder retains at most capacity * record_bytes (currently <=32 MiB), plus
 //! fixed metadata. Marker snapshots are transient complete frame copies at slot
-//! publication; no pixels are retained in records. close() clones the bounded
-//! record buffer for the caller, who owns that extra storage. Mutex contention,
+//! publication; no pixels are retained in records. Mapped storage replaces the
+//! heap record vector rather than mirroring it. finish() closes metadata without
+//! copying records, after sources stop; close() materializes a bounded report for
+//! callers explicitly requesting one. Storage closure is not operation success.
+//! Worker load/control-loop failures are separate raw events. Mutex contention,
 //! copying, decoding and recorder overhead have not been qualified on hardware.
 #![allow(dead_code)] // Private provisioning currently exercised only at the test seam.
 
@@ -35,6 +50,10 @@ const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) struct Marker([u8; 408]);
 
 impl Marker {
+    pub(crate) fn bytes(&self) -> &[u8; 408] {
+        &self.0
+    }
+
     pub(crate) fn run_id(&self) -> &[u8] {
         &self.0[20..20 + self.0[16] as usize]
     }
@@ -91,6 +110,12 @@ pub(crate) fn decode(frame: &LogicalFrame) -> std::result::Result<Marker, Decode
             bytes[bit / 8] |= 128 >> (bit % 8);
         }
     }
+    decode_packet(bytes)
+}
+
+/// Validate the same packet when reading explicitly encoded raw export records.
+/// This validates digital integrity only, not source authentication.
+pub(crate) fn decode_packet(bytes: [u8; 408]) -> std::result::Result<Marker, DecodeError> {
     let marker = Marker(bytes);
     if &bytes[..8] != b"SLVMRK00"
         || bytes[19] != 0
@@ -134,8 +159,75 @@ pub(crate) enum DiscardReason {
     MappingClosed,
 }
 
+/// Result of the existing scheduler's post-callback bookkeeping, including on
+/// callback error. Rescheduled does not promise a later dispatch: the worker may
+/// fail or stop. Float advancement is raw scheduler arithmetic, not an exact
+/// integer opportunity count; fallback/overflow must not be hidden by conversion.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TimerDisposition {
+    Completed,
+    Cancelled,
+    Rescheduled {
+        next_deadline_seconds: f64,
+        intervals_advanced: f64,
+        skipped_intervals: f64,
+        fallback: bool,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum EventKind {
+    MinimalSpan(crate::diagnostic_timing::Sample),
+    MinimalSummary(crate::diagnostic_timing::Summary),
+    /// Runtime::load returned an error. Storage closure is not startup success;
+    /// retain this fact even if its ordinary READY error reply cannot arrive.
+    WorkerLoadFailed,
+    /// The actual worker control loop returned an error (e.g. peer EOF).
+    WorkerLoopFailed,
+    /// handle_command returned an error, even when the loop subsequently exits
+    /// normally. May duplicate a more detailed callback failure observation.
+    WorkerCommandFailed,
+    /// The bootstrapped worker helper returned Err, including setup/READY
+    /// errors before entering the control loop. May duplicate a specific error.
+    WorkerRunFailed,
+    // Timer IDs are local to one worker registry, not capture-wide identities.
+    // All *_seconds fields preserve scheduler f64 values verbatim. They are
+    // NOT host-clock readings, rational periods, or policy opportunity credit.
+    TimerRegistered {
+        timer_id: u64,
+        delay_seconds: f64,
+        interval_seconds: Option<f64>,
+        scheduler_now_seconds: Option<f64>,
+    },
+    TimerActivated {
+        timer_id: u64,
+        scheduler_now_seconds: f64,
+        deadline_seconds: f64,
+    },
+    TimerCancelled {
+        timer_id: u64,
+        removed: bool,
+    },
+    TimerDeadlineShifted {
+        timer_id: u64,
+        previous_deadline_seconds: f64,
+        shift_seconds: f64,
+        deadline_seconds: f64,
+    },
+    TimerDispatched {
+        timer_id: u64,
+        scheduled_deadline_seconds: f64,
+        scheduler_now_seconds: f64,
+    },
+    TimerFinished {
+        timer_id: u64,
+        success: bool,
+        scheduler_now_seconds: f64,
+        disposition: TimerDisposition,
+    },
+    RedrawRequested {
+        coalesced: bool,
+    },
     RenderAllocated {
         attempt: u64,
     },
@@ -188,6 +280,9 @@ pub(crate) struct Report {
     pub(crate) attempted_records: u64,
     pub(crate) lost: u64,
     pub(crate) clock_failures: u64,
+    /// Failed observations, not unique failed operations: a command/run failure
+    /// can also have a detailed callback failure and a failed/abandoned minimal
+    /// span. Repeated minimal summaries do not add new failure observations.
     pub(crate) failed_operations: u64,
     /// Failed decode observations, not unique frames (one frame crosses seams).
     pub(crate) decode_failures: u64,
@@ -205,12 +300,14 @@ struct State {
     report: Report,
     renders: u64,
     calls: u64,
+    stored: usize,
+    mapped: Option<crate::diagnostic_capture_transport::MappedWriter>,
 }
 
 #[derive(Clone)]
 pub(crate) struct Capture(Arc<Mutex<State>>);
 
-fn clock_ns(resolution: bool) -> Result<u64> {
+pub(crate) fn clock_ns(resolution: bool) -> Result<u64> {
     let mut time = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -235,12 +332,27 @@ fn clock_ns(resolution: bool) -> Result<u64> {
 
 impl Capture {
     pub(crate) fn new(capacity: usize) -> Result<Self> {
+        Self::new_storage(capacity, None)
+    }
+
+    pub(crate) fn from_mapped(
+        storage: crate::diagnostic_capture_transport::MappedWriter,
+    ) -> Result<Self> {
+        Self::new_storage(storage.capacity(), Some(storage))
+    }
+
+    fn new_storage(
+        capacity: usize,
+        mapped: Option<crate::diagnostic_capture_transport::MappedWriter>,
+    ) -> Result<Self> {
         ensure!(
             (1..=MAX_RECORDS).contains(&capacity),
             "diagnostic capacity outside 1..=65536"
         );
         let mut records = Vec::new();
-        records.try_reserve_exact(capacity)?;
+        if mapped.is_none() {
+            records.try_reserve_exact(capacity)?;
+        }
         let mut clock_read_samples_ns = [0; 32];
         for sample in &mut clock_read_samples_ns {
             let start = clock_ns(false)?;
@@ -248,7 +360,7 @@ impl Capture {
                 .checked_sub(start)
                 .context("monotonic clock regressed")?;
         }
-        Ok(Self(Arc::new(Mutex::new(State {
+        let capture = Self(Arc::new(Mutex::new(State {
             report: Report {
                 records,
                 capacity,
@@ -261,12 +373,29 @@ impl Capture {
                 closed: false,
                 closed_at_ns: None,
                 clock_resolution_ns: clock_ns(true)?,
-                record_bytes: std::mem::size_of::<Record>(),
+                record_bytes: if mapped.is_some() {
+                    crate::diagnostic_capture_transport::RECORD_BYTES
+                } else {
+                    std::mem::size_of::<Record>()
+                },
                 clock_read_samples_ns,
             },
             renders: 0,
             calls: 0,
-        }))))
+            stored: 0,
+            mapped,
+        })));
+        {
+            let mut state = capture
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let State { report, mapped, .. } = &mut *state;
+            if let Some(mapped) = mapped {
+                mapped.update_metadata(report);
+            }
+        }
+        Ok(capture)
     }
 
     pub(crate) fn monotonic_ns(&self) -> Result<u64> {
@@ -283,13 +412,30 @@ impl Capture {
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let r = &mut state.report;
+        let State {
+            report: r,
+            mapped,
+            stored,
+            ..
+        } = &mut *state;
         r.attempted_records = r.attempted_records.saturating_add(1);
         match &kind {
             EventKind::RenderFinished { marker: None, .. }
             | EventKind::PresentReturned { success: false, .. }
             | EventKind::TouchCallbackReturned { success: false, .. }
+            | EventKind::TimerFinished { success: false, .. }
+            | EventKind::WorkerLoadFailed
+            | EventKind::WorkerLoopFailed
+            | EventKind::WorkerCommandFailed
+            | EventKind::WorkerRunFailed
             | EventKind::PollFailed => r.failed_operations = r.failed_operations.saturating_add(1),
+            EventKind::MinimalSpan(sample)
+                if sample.status != crate::diagnostic_timing::SpanStatus::Succeeded =>
+            {
+                r.failed_operations = r.failed_operations.saturating_add(1);
+            }
+            // Summaries are repeatable snapshots, not new failures or clock
+            // observations. Their counters stay separate instead of being summed.
             EventKind::RenderFinished {
                 marker: Some(Err(_)),
                 ..
@@ -308,15 +454,28 @@ impl Capture {
         if r.closed {
             r.after_close = r.after_close.saturating_add(1);
         }
-        if r.closed || r.records.len() == r.capacity {
+        if r.closed || *stored == r.capacity {
             r.lost = r.lost.saturating_add(1);
-            return;
+        } else {
+            let record = Record {
+                sequence: r.attempted_records,
+                at_ns,
+                kind,
+            };
+            if let Some(mapped) = mapped {
+                if mapped.append(&record).is_err() {
+                    r.lost = r.lost.saturating_add(1);
+                } else {
+                    *stored += 1;
+                }
+            } else {
+                r.records.push(record);
+                *stored += 1;
+            }
         }
-        r.records.push(Record {
-            sequence: r.attempted_records,
-            at_ns,
-            kind,
-        });
+        if let Some(mapped) = mapped {
+            mapped.update_metadata(r);
+        }
     }
 
     pub(crate) fn allocate_render(&self) -> u64 {
@@ -398,6 +557,24 @@ impl Capture {
     /// storage lifetime, NOT resolved work, cleanup success, or acceptance.
     /// Repeated snapshots expose any attempted writes after closure as loss.
     pub(crate) fn close(&self) -> Report {
+        self.finish();
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(mapped) = &state.mapped {
+            mapped
+                .snapshot()
+                .expect("observer-owned raw encoding is valid")
+                .report
+        } else {
+            state.report.clone()
+        }
+    }
+
+    /// Close storage without allocating/copying records. The process worker uses
+    /// this only after Runtime (including pending-frame producers) is dropped.
+    pub(crate) fn finish(&self) {
         let time = clock_ns(false);
         let mut state = self
             .0
@@ -410,6 +587,9 @@ impl Capture {
                 state.report.clock_failures += 1;
             }
         }
-        state.report.clone()
+        let State { report, mapped, .. } = &mut *state;
+        if let Some(mapped) = mapped {
+            mapped.update_metadata(report);
+        }
     }
 }
