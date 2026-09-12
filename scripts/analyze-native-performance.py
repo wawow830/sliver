@@ -36,14 +36,40 @@ def identity(value):
     return value
 
 
+def schedule_rows(schedule, start, end):
+    fields(schedule, "stop_ns period_numerator_ns period_denominator")
+    stop = integer(schedule["stop_ns"])
+    numerator = integer(schedule["period_numerator_ns"])
+    denominator = integer(schedule["period_denominator"])
+    require(start < stop <= end, "invalid schedule stop")
+    require(numerator >= denominator > 0, "schedule period must be at least one nanosecond")
+    count = ((stop - start) * denominator + numerator - 1) // numerator
+    require(count <= 100_000, "too many schedule opportunities")
+    return [{"due_ns": start + index * numerator // denominator,
+             "decision_ns": None, "key": None, "reason": None} for index in range(count)]
+
+
+def resolve_opportunity(rows, event, key=None):
+    index = integer(event["opportunity_id"])
+    require(1 <= index <= len(rows), "unknown schedule opportunity")
+    row = rows[index - 1]
+    require(row["decision_ns"] is None, "reused schedule opportunity")
+    require(event["time_ns"] >= row["due_ns"], "opportunity resolved before due time")
+    row.update(decision_ns=event["time_ns"], key=key,
+               reason=identity(event["reason"]) if key is None else None)
+
+
 def analyze(document):
-    fields(document, "schema source run_id clock start_ns end_ns window_ns capture_dropped events")
+    scheduled = type(document) is dict and "schedule" in document
+    fields(document, "schema source run_id clock start_ns end_ns window_ns capture_dropped events"
+           + (" schedule" if scheduled else ""))
     require(document["schema"] == "sliver-native-observation-v0", "unsupported schema")
     require(document["source"] in ("synthetic", "native-broker"), "unsupported observation source")
     require(document["clock"] == "CLOCK_MONOTONIC", "unsupported clock")
     identity(document["run_id"])
     start, end = integer(document["start_ns"]), integer(document["end_ns"])
     require(start < end, "empty or reversed interval")
+    opportunities = schedule_rows(document["schedule"], start, end) if scheduled else []
     window = integer(document["window_ns"])
     require(window > 0, "empty window")
     window_count = (end - start + window - 1) // window
@@ -87,6 +113,7 @@ def analyze(document):
             frame = frames[call["key"]]
             if not call["replay"]:
                 frame["state"] = "completed" if event["ok"] else "broker_error"
+                frame["disposed"] = now
                 if event["ok"]:
                     frame["returned"] = now
             token = frame["input_id"]
@@ -95,7 +122,13 @@ def analyze(document):
                 if active_input == token:
                     active_input = None
             continue
-        extra = {"render": " input_id", "publish": "", "select": "", "supersede": "",
+        if kind == "opportunity_skipped":
+            require(scheduled, "opportunity without declared schedule")
+            fields(event, "kind time_ns opportunity_id reason")
+            resolve_opportunity(opportunities, event)
+            continue
+        extra = {"render": " input_id" + (" opportunity_id" if scheduled else ""),
+                 "publish": "", "select": "", "supersede": "",
                  "invalidate": " reason", "render_failed": " reason", "not_submitted": " reason",
                  "broker_start": " run_id input_id call_id replay"}
         require(type(kind) is str and kind in extra, "unknown event kind")
@@ -111,9 +144,13 @@ def analyze(document):
             if token is not None:
                 identity(token)
                 require(token in inputs, "render marker precedes input receipt")
+            opportunity_id = event.get("opportunity_id")
+            if opportunity_id is not None:
+                resolve_opportunity(opportunities, event, key)
             latest[generation] = frame_id
             frames[key] = {"state": "rendered", "rendered": now, "returned": None,
-                           "reason": None, "input_id": token}
+                           "reason": None, "input_id": token, "opportunity_id": opportunity_id,
+                           "published": None, "selected": None, "submitted": None, "disposed": None}
             continue
         require(key in frames, "unknown frame")
         frame = frames[key]
@@ -126,14 +163,17 @@ def analyze(document):
             }[kind]
             require(frame["state"] == expected, "disposition out of order")
             frame["state"] = terminal
+            frame["disposed"] = now
             if "reason" in event:
                 frame["reason"] = identity(event["reason"])
         elif kind == "publish":
             require(frame["state"] == "rendered", "publication out of order")
             frame["state"] = "published"
+            frame["published"] = now
         elif kind == "select":
             require(frame["state"] == "published", "selection out of order")
             frame["state"] = "selected"
+            frame["selected"] = now
         else:
             require(event["run_id"] == document["run_id"], "broker run marker differs from capture")
             require(type(event["replay"]) is bool, "invalid replay flag")
@@ -147,12 +187,32 @@ def analyze(document):
             calls[call_id] = {"key": key, "start": now, "end": None, "replay": event["replay"]}
             if not event["replay"]:
                 frame["state"] = "in_flight"
+                frame["submitted"] = now
     require(all(call["end"] is not None for call in calls.values()), "unresolved broker call")
     require(all(frame["state"] in ("completed", "broker_error", "superseded", "invalidated",
                                    "render_failed", "not_submitted") for frame in frames.values()),
             "unresolved frame disposition")
     require(all(row["response_ns"] is not None or row["timeout_ns"] is not None
                 for row in inputs.values()), "unresolved input")
+    require(all(row["decision_ns"] is not None for row in opportunities),
+            "unresolved schedule opportunity")
+    schedule = None
+    if scheduled:
+        attempted = sum(row["key"] is not None for row in opportunities)
+        schedule = {
+            **document["schedule"], "epoch_ns": start, "opportunity_count": len(opportunities),
+            "attempted_count": attempted, "skipped_count": len(opportunities) - attempted,
+            "unscheduled_render_count": sum(f["opportunity_id"] is None for f in frames.values()),
+            "opportunities": [
+                {"opportunity_id": index + 1, "due_ns": row["due_ns"],
+                 "decision_ns": row["decision_ns"],
+                 "decision_delay_ns": row["decision_ns"] - row["due_ns"],
+                 "generation": row["key"][0] if row["key"] else None,
+                 "frame_id": row["key"][1] if row["key"] else None,
+                 "disposition": frames[row["key"]]["state"] if row["key"] else "skipped",
+                 "return_ns": frames[row["key"]]["returned"] if row["key"] else None,
+                 "reason": row["reason"]} for index, row in enumerate(opportunities)],
+        }
     windows = [None] * window_count
     for row in inputs.values():
         if row["latency_ns"] is not None:
@@ -173,6 +233,9 @@ def analyze(document):
     for frame in frames.values():
         state = frame["state"]
         dispositions[state] = dispositions.get(state, 0) + 1
+        residence_end = frame["selected"] if frame["selected"] is not None else frame["disposed"]
+        frame["residence"] = (residence_end - frame["published"]
+                              if frame["published"] is not None else None)
     return {
         "schema": "sliver-native-analysis-v0",
         "source": document["source"], "source_authentication": "not_verified",
@@ -189,7 +252,11 @@ def analyze(document):
         "frames": [{"generation": key[0], "frame_id": key[1],
                     "disposition": frame["state"], "render_ns": frame["rendered"],
                     "return_ns": frame["returned"], "reason": frame["reason"],
-                    "input_id": frame["input_id"]}
+                    "publish_ns": frame["published"], "select_ns": frame["selected"],
+                    "broker_start_ns": frame["submitted"], "disposition_ns": frame["disposed"],
+                    "published_residence_ns": frame["residence"],
+                    "age_at_disposition_ns": frame["disposed"] - frame["rendered"],
+                    "input_id": frame["input_id"], "opportunity_id": frame["opportunity_id"]}
                    for key, frame in frames.items()],
         "broker_calls": [{"call_id": call_id, "generation": call["key"][0],
                           "frame_id": call["key"][1], "start_ns": call["start"],
@@ -202,13 +269,17 @@ def analyze(document):
         "whole_interval_updates_per_second": len(returns) * 1e9 / (end - start),
         "max_frame_age_ns": max((f["returned"] - f["rendered"] for f in frames.values()
                                  if f["returned"] is not None), default=None),
+        "max_published_residence_ns": max((f["residence"] for f in frames.values()
+                                           if f["residence"] is not None), default=None),
+        "max_disposition_age_ns": max((f["disposed"] - f["rendered"] for f in frames.values()), default=None),
         "optical_fps": None, "missed_physical_refreshes": None,
-        "native_deadline_misses": None, "skipped_generation": None,
+        "native_deadline_misses": None, "schedule": schedule,
+        "skipped_generation": schedule["skipped_count"] if scheduled else None,
         "limitations": [
             "Caller-declared JSON; no pixel decoding, collector or source authentication in this reader.",
             "Closed cohort only; no implicit warmup, discarded edges or v1 ledger conversion.",
             "Isolated broker-input receipt to successful return; not physical or optical latency.",
-            "No approved rate/deadline/latency budget, schedule accounting or release verdict.",
+            "No approved rate/deadline/latency budget or release verdict; declared schedule only.",
         ],
     }
 

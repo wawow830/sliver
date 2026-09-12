@@ -51,6 +51,174 @@ class ObservationTests(unittest.TestCase):
         self.assertIsNone(result["optical_fps"])
         self.assertIsNone(result["missed_physical_refreshes"])
 
+    def test_schedule_opportunities_are_not_inferred_from_render_or_callback_counts(self):
+        doc = capture()
+        doc.update(end_ns=100, window_ns=100, schedule={
+            "stop_ns": 30, "period_numerator_ns": 10, "period_denominator": 1,
+        })
+        first, second = frame_events(1, 0, 5), frame_events(2, 22, 27)
+        first[0]["opportunity_id"], second[0]["opportunity_id"] = 1, 3
+        doc["events"] = first + [{"kind": "opportunity_skipped", "time_ns": 10,
+                                    "opportunity_id": 2, "reason": "callback-coalesced"}] + second
+        result = reader.analyze(doc)
+        self.assertEqual(result["schedule"]["opportunity_count"], 3)
+        self.assertEqual(result["schedule"]["attempted_count"], 2)
+        self.assertEqual(result["skipped_generation"], 1)
+        self.assertEqual([row["due_ns"] for row in result["schedule"]["opportunities"]], [0, 10, 20])
+        self.assertEqual([row["decision_delay_ns"] for row in result["schedule"]["opportunities"]],
+                         [0, 0, 2])
+        self.assertEqual([row["return_ns"] for row in result["schedule"]["opportunities"]],
+                         [5, None, 27])
+        self.assertEqual(result["schedule"]["opportunities"][1]["reason"], "callback-coalesced")
+        self.assertEqual(result["successful_unique_updates"], 2)
+        self.assertEqual(result["acceptance"], "not_evaluated")
+        self.assertIsNone(result["native_deadline_misses"])
+        self.assertIsNone(result["missed_physical_refreshes"])
+
+    def test_rational_schedule_keeps_phase_and_excludes_stop_and_drain_opportunities(self):
+        doc = capture()
+        doc.update(start_ns=100, end_ns=150, window_ns=50, schedule={
+            "stop_ns": 110, "period_numerator_ns": 10, "period_denominator": 3,
+        })
+        doc["events"] = [
+            {"kind": "opportunity_skipped", "time_ns": due, "opportunity_id": index,
+             "reason": "callback-coalesced"} for index, due in ((1, 100), (2, 103), (3, 106))
+        ]
+        empty = reader.analyze(doc)
+        self.assertEqual(empty["frames"], [])
+        self.assertIsNone(empty["max_published_residence_ns"])
+        self.assertIsNone(empty["max_disposition_age_ns"])
+        # Unscheduled work must be explicit, and cannot fill a missing opportunity.
+        tail = frame_events(1, 120, 140)
+        tail[0]["opportunity_id"] = None
+        doc["events"] += tail
+        before = copy.deepcopy(doc)
+        result = reader.analyze(doc)
+        self.assertEqual(doc, before)
+        self.assertEqual(result["schedule"]["epoch_ns"], 100)
+        self.assertEqual(result["schedule"]["opportunity_count"], 3)
+        self.assertEqual(result["schedule"]["unscheduled_render_count"], 1)
+        self.assertEqual(result["skipped_generation"], 3)
+        self.assertEqual(result["successful_unique_updates"], 1)
+        # Extending stop by one ns includes the phase-exact 110ns opportunity.
+        doc["schedule"]["stop_ns"] = 111
+        with self.assertRaisesRegex(reader.EvidenceError, "unresolved schedule"):
+            reader.analyze(doc)
+        doc["events"].append({"kind": "opportunity_skipped", "time_ns": 150,
+                              "opportunity_id": 4, "reason": "callback-coalesced"})
+        self.assertEqual([row["due_ns"] for row in reader.analyze(doc)["schedule"]["opportunities"]],
+                         [100, 103, 106, 110])
+
+    def test_schedule_cannot_hide_missing_duplicated_early_or_invalid_opportunities(self):
+        base = capture()
+        base.update(end_ns=100, window_ns=100, schedule={
+            "stop_ns": 20, "period_numerator_ns": 10, "period_denominator": 1,
+        })
+        base["events"] = frame_events(1, 0, 5) + [
+            {"kind": "opportunity_skipped", "time_ns": 10, "opportunity_id": 2, "reason": "coalesced"},
+        ]
+        base["events"][0]["opportunity_id"] = 1
+        mutations = []
+        for field, value in (("stop_ns", 0), ("stop_ns", 101), ("stop_ns", True),
+                             ("period_numerator_ns", 0), ("period_numerator_ns", 2**63),
+                             ("period_numerator_ns", 1.5), ("period_denominator", 0),
+                             ("period_denominator", 11), ("period_denominator", False),
+                             ("period_denominator", "1"), ("approved", True)):
+            bad = copy.deepcopy(base)
+            bad["schedule"][field] = value
+            mutations.append(bad)
+        for value in (None, [], {}, "30fps"):
+            bad = copy.deepcopy(base)
+            bad["schedule"] = value
+            mutations.append(bad)
+        for field, value in (("opportunity_id", 0), ("opportunity_id", 3), ("opportunity_id", True),
+                             ("opportunity_id", 1.0), ("opportunity_id", None),
+                             ("opportunity_id", 1), ("time_ns", 9), ("reason", "")):
+            bad = copy.deepcopy(base)
+            bad["events"][-1][field] = value
+            mutations.append(bad)
+        bad = copy.deepcopy(base)
+        bad["events"].pop()  # Missing skip is not inferred from the frame sequence.
+        mutations.append(bad)
+        bad = copy.deepcopy(base)
+        bad["events"][0]["opportunity_id"] = None  # Unscheduled render cannot fill slot 1.
+        mutations.append(bad)
+        bad = copy.deepcopy(base)
+        del bad["events"][0]["opportunity_id"]
+        mutations.append(bad)
+        bad = copy.deepcopy(base)
+        bad["events"][0]["opportunity_id"] = 2  # Attempt before due, not just early skip.
+        mutations.append(bad)
+        bad = copy.deepcopy(base)
+        bad["events"].append(copy.deepcopy(bad["events"][-1]))
+        mutations.append(bad)
+        bad = copy.deepcopy(base)
+        del bad["schedule"]
+        mutations.append(bad)
+        bad = copy.deepcopy(base)
+        bad.update(end_ns=100_001, window_ns=100_001)
+        bad["schedule"].update(stop_ns=100_001, period_numerator_ns=1)
+        mutations.append(bad)
+        for index, bad in enumerate(mutations):
+            with self.subTest(index=index), self.assertRaises(reader.EvidenceError):
+                reader.analyze(bad)
+        legacy = capture()
+        legacy["events"] = frame_events(1, 0, 100)
+        result = reader.analyze(legacy)
+        self.assertIsNone(result["schedule"])
+        self.assertIsNone(result["skipped_generation"])
+        legacy["events"].append({"kind": "opportunity_skipped", "time_ns": 200,
+                                 "opportunity_id": 1, "reason": "coalesced"})
+        with self.assertRaises(reader.EvidenceError):
+            reader.analyze(legacy)
+
+    def test_scheduled_failures_and_supersession_are_attempts_not_forgiven_deadlines(self):
+        doc = capture()
+        doc.update(end_ns=100, window_ns=100, schedule={
+            "stop_ns": 50, "period_numerator_ns": 10, "period_denominator": 1,
+        })
+        for frame_id, start, terminal, prefix in (
+            (1, 0, "supersede", 2), (2, 10, "render_failed", 1), (3, 20, "not_submitted", 3),
+        ):
+            attempt = frame_events(frame_id, start, start + 5)[:prefix]
+            attempt[0]["opportunity_id"] = frame_id
+            event = {"kind": terminal, "time_ns": start + 5, "generation": "worker-a", "frame_id": frame_id}
+            if terminal != "supersede":
+                event["reason"] = "diagnostic-failure"
+            doc["events"] += attempt + [event]
+        for frame_id, start, ok in ((4, 30, False), (5, 40, True)):
+            attempt = frame_events(frame_id, start, start + 5)
+            attempt[0]["opportunity_id"] = frame_id
+            attempt[-1]["ok"] = ok
+            doc["events"] += attempt
+        doc["events"] += [
+            {"kind": "broker_start", "time_ns": 60, "generation": "worker-a",
+             "frame_id": 5, "run_id": "test-run", "input_id": None, "call_id": "recovery", "replay": True},
+            {"kind": "broker_end", "time_ns": 70, "call_id": "recovery", "ok": True},
+        ]
+        result = reader.analyze(doc)
+        self.assertEqual(result["schedule"]["attempted_count"], 5)
+        self.assertEqual(result["skipped_generation"], 0)
+        self.assertEqual([row["disposition"] for row in result["schedule"]["opportunities"]],
+                         ["superseded", "render_failed", "not_submitted", "broker_error", "completed"])
+        self.assertEqual([row["return_ns"] for row in result["schedule"]["opportunities"]],
+                         [None, None, None, None, 45])
+        self.assertEqual(result["successful_unique_updates"], 1)
+        self.assertEqual(result["acceptance"], "not_evaluated")
+        self.assertIsNone(result["native_deadline_misses"])
+        self.assertIsNone(result["missed_physical_refreshes"])
+
+    def test_zero_duration_phases_remain_zero_not_missing(self):
+        doc = capture()
+        doc["events"] = frame_events(1, 0, 0)
+        for event in doc["events"]:
+            event["time_ns"] = 0
+        result = reader.analyze(doc)
+        self.assertEqual(result["max_published_residence_ns"], 0)
+        self.assertEqual(result["max_disposition_age_ns"], 0)
+        for field in ("publish_ns", "select_ns", "broker_start_ns", "disposition_ns", "published_residence_ns"):
+            self.assertEqual(result["frames"][0][field], 0)
+
     def test_recovery_replay_does_not_create_a_new_update(self):
         doc = capture()
         doc["events"] = frame_events(1, 0, 100)
@@ -97,6 +265,37 @@ class ObservationTests(unittest.TestCase):
         doc["events"].pop()
         with self.assertRaisesRegex(reader.EvidenceError, "unresolved frame"):
             reader.analyze(doc)
+
+    def test_published_residence_includes_drops_and_preserves_original_age_across_replay(self):
+        doc = capture()
+        doc["events"] = frame_events(1, 0, 100)
+        for frame_id, start, terminal, time in (
+            (2, 110, "supersede", 160), (3, 170, "not_submitted", 190),
+            (4, 200, "render_failed", 210), (5, 220, "invalidate", 260),
+        ):
+            prefix = {"supersede": 2, "not_submitted": 3, "render_failed": 1, "invalidate": 2}[terminal]
+            doc["events"] += frame_events(frame_id, start, time)[:prefix]
+            event = {"kind": terminal, "time_ns": time, "generation": "worker-a", "frame_id": frame_id}
+            if terminal != "supersede":
+                event["reason"] = "diagnostic-failure"
+            doc["events"].append(event)
+        failed = frame_events(6, 270, 300)
+        failed[-1]["ok"] = False
+        doc["events"] += failed + [
+            {"kind": "broker_start", "time_ns": 310, "generation": "worker-a",
+             "frame_id": 1, "run_id": "test-run", "input_id": None, "call_id": "recovery", "replay": True},
+            {"kind": "broker_end", "time_ns": 400, "call_id": "recovery", "ok": True},
+        ]
+        result = reader.analyze(doc)
+        self.assertEqual([f["published_residence_ns"] for f in result["frames"]], [1, 49, 1, None, 39, 1])
+        self.assertEqual([f["disposition_ns"] for f in result["frames"]], [100, 160, 190, 210, 260, 300])
+        self.assertEqual([f["age_at_disposition_ns"] for f in result["frames"]], [100, 50, 20, 10, 40, 30])
+        self.assertEqual([f["broker_start_ns"] for f in result["frames"]], [3, None, None, None, None, 273])
+        self.assertEqual(result["max_published_residence_ns"], 49)
+        self.assertEqual(result["max_disposition_age_ns"], 100)
+        self.assertEqual(result["frames"][0]["publish_ns"], 1)
+        self.assertEqual(result["frames"][0]["select_ns"], 2)
+        self.assertIsNone(result["frames"][3]["publish_ns"])
 
     def test_causal_latency_exposes_an_interior_spike_between_equal_endpoints(self):
         doc = capture()
@@ -161,8 +360,19 @@ class ObservationTests(unittest.TestCase):
             result = subprocess.run(command, capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["acceptance"], "not_evaluated")
+            doc["schedule"] = {"stop_ns": 1, "period_numerator_ns": 1, "period_denominator": 1}
+            doc["events"][0]["opportunity_id"] = 1
+            original = json.dumps(doc)
+            path.write_text(original)
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["schedule"]["attempted_count"], 1)
+            self.assertEqual(report["acceptance"], "not_evaluated")
+            self.assertEqual(path.read_text(), original)
             for text in ('{"schema":"x","schema":"y"}', '{"capture_dropped":NaN}',
-                         '{"capture_dropped":Infinity}', '[]', '{'):
+                         '{"capture_dropped":Infinity}', '[]', '{',
+                         '{"schedule":{"stop_ns":1,"stop_ns":2}}'):
                 path.write_text(text)
                 with self.subTest(text=text):
                     result = subprocess.run(command, capture_output=True, text=True, check=False)
