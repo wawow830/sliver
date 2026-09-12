@@ -1,6 +1,8 @@
 # Proposed native performance evidence contract
 
-**Status: nominal 30 FPS direction and offline implementation continuation approved; acceptance policy still incomplete.** On 2026-09-12 the user replied **“yes, don't stop”** to this planning continuation. That approves proceeding, but supplies neither numeric tolerance/latency budgets nor an explicit broker-return/optical selection. For [#23](https://github.com/wawow830/sliver/issues/23), following the [30 FPS premise correction](adp-native-rate-resolution.md). The ≥59.5 native release gate, parent requirements and failed ledgers remain unchanged pending a complete contract. No hardware capture, takeover, kernel change or upstream contact is part of this work.
+**Current status: P1 approved in full at `cbe2b5da809eed7cc4b3406b222baf43e1e34a2d` by the user's “approve. don't stop”.** See the [approval record and implementation boundary](native-performance-policy-approval.md). The proposal narrative below records the earlier decision process; its pending-approval language is historical, not a remaining blocker.
+
+**Earlier status: nominal 30 FPS direction and offline implementation continuation approved; acceptance policy still incomplete.** On 2026-09-12 the user replied **“yes, don't stop”** to this planning continuation. That approves proceeding, but supplies neither numeric tolerance/latency budgets nor an explicit broker-return/optical selection. For [#23](https://github.com/wawow830/sliver/issues/23), following the [30 FPS premise correction](adp-native-rate-resolution.md). The ≥59.5 native release gate, parent requirements and failed ledgers remain unchanged pending a complete contract. No hardware capture, takeover, kernel change or upstream contact is part of this work.
 
 ## Concrete candidate for approval
 
@@ -79,12 +81,13 @@ After the decision, implementation order is:
 ## Approval checklist
 
 - [x] Nominal 30 FPS native direction; existing 60-frame software benchmark retained with accurate scope (2026-09-12 continuation approval).
-- [ ] Broker-return, optical, or both observation points, with precise claim names.
-- [ ] Absolute rate/deadline budget **or** independent reference-calibration protocol and relative budget.
-- [ ] Native/overproduction schedules and separate skipped-generation/supersession/deadline-miss rules.
-- [ ] Input origin, causal marker method, sampling and no-growth/jitter rule.
+- [x] Broker-return only: successful broker updates, not optical FPS or DMA completion (P1 approval).
+- [x] Absolute budgets: ≥29.75/s, ≤15/1,800 software misses and 100 ms age/gap/deadline limits (P1 approval).
+- [x] Native cadence, isolated-input and requested-overproduction cases with separate omission accounting (P1 approval).
+- [x] Broker input receipt, observed callback/token chain, ≤150 ms response, explicit sampling and one-period window-worsening allowance (P1 approval).
+- [x] Predeclaration, edge/drain closure, provenance and A/B/C/C/B/A overhead protocol (P1 approval).
 
-Unchecked items mean **not ready for unattended acceptance implementation**. No accepted ADR, production interface, fixture, release verifier, threshold or release verdict has changed.
+Policy decisions are complete. Implementation and fresh release evidence are not; approval alone changes no release verdict.
 
 ## Offline implementation after continuation approval
 
