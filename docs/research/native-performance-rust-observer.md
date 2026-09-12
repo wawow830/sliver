@@ -92,8 +92,11 @@ completed callback span immediately and emits a fixed timing summary after
 runtime teardown, before raw source closure; there is no second sample vector
 or shutdown sample flush. Missing summaries, raw-source loss and timing-summary
 errors remain disqualifying/incomplete, never inferred success. Requested
-worker capture currently combines detailed and minimal observation; A/B mode
-provisioning and the native overhead battery remain unfinished.
+worker capture now selects detailed-plus-minimal or minimal-only recording via
+private bootstrap; ordinary staging stays off. Native A/B/C provisioning and the
+complete overhead battery remain unfinished. Explicit complete-sampler
+[calibration](native-performance-fixture.md) retains 32 no-op probes and checks
+authoritative raw-source health, including aggregate-record loss.
 
 ## Tests and exact scope
 
@@ -119,9 +122,10 @@ hardware workload or supply overhead samples.
 - Trusted local launcher and per-role broker/supervisor/worker provisioning,
   maintaining existing privilege and private IPC rules.
 - Production provisioning of the tested timer/callback/active-drive observations
-  in all A/B/C modes, real broker minimal timing, and fixture token mutation.
-- The timed P1 fixture with warmup quiescence, scheduled stop and causal-only
-  drain behaviour, tested through the full process/fake-hardware seam.
+  in all A/B/C modes and the tested broker adapter wrapper.
+- Full process/coordinator integration of the [timed fixture and authoritative
+  token mutation](native-performance-fixture.md), whose warmup, stop, causal drain
+  and clock-domain behavior is tested through real Lua/canvas with fake hardware.
 - Source identity/sequence/loss/work closure, lifecycle exclusions, installed
   RPM/fixture/observer provenance and safe artifact export/assembly.
 - Coherent native release schema/verifier integration, instrumentation overhead

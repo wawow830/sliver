@@ -18,6 +18,7 @@ use super::{
     Runtime, StopReason, TimedFrame, TouchEvent, TouchPhase, VisibilityReason, WorkerEffects,
     WorkerIdentity,
 };
+use crate::diagnostic_capture_transport::{CaptureLevel, FixtureBootstrap, FixtureControl};
 use crate::frame_slots::{FrameBroker, FrameSlots, FrameTiming};
 use crate::hardware::{LogicalFrame, Modifier, ObservedKey, OutputKey};
 
@@ -46,6 +47,7 @@ const DRIVE: u8 = 3;
 const PENDING_BACKLIGHT: u8 = 4;
 const RESTORE_BACKLIGHT: u8 = 5;
 const SHUTDOWN: u8 = 6;
+const FIXTURE_CONTROL: u8 = 7;
 
 const STATUS_OK: u8 = 0;
 const STATUS_ERROR: u8 = 1;
@@ -87,6 +89,69 @@ pub(crate) struct ProcessWorker {
 
 impl ProcessWorker {
     #[cfg(test)]
+    pub(crate) fn stage_with_fixture(
+        source: &LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        storage: OwnedFd,
+        plan: FixtureBootstrap,
+    ) -> Result<Self> {
+        let path = frame_path_for_identity(WorkerIdentity::User)?;
+        let slots = FrameSlots::new_shared(
+            &path,
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?;
+        let level = plan.capture_level();
+        Self::stage_with_spawned_capture(
+            source,
+            initial_backlight,
+            initial_input,
+            &path,
+            slots.broker(),
+            WorkerIdentity::User,
+            spawn_direct,
+            Some((storage, level)),
+            Some(plan),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_control(&self, control: FixtureControl) -> Result<()> {
+        let mut payload = Vec::new();
+        match control {
+            FixtureControl::ConfirmWarmupClosed => payload.push(2),
+            FixtureControl::Finish => payload.push(3),
+            FixtureControl::Receive(receipt) => {
+                payload.push(0);
+                payload.extend_from_slice(&receipt.sequence.to_be_bytes());
+                payload.extend_from_slice(&receipt.received_ns.to_be_bytes());
+                encode_touch(&mut payload, receipt.event);
+            }
+            FixtureControl::Resolve {
+                frame_id,
+                resolution,
+                resolved_ns,
+            } => {
+                payload.push(1);
+                payload.extend_from_slice(&frame_id.to_be_bytes());
+                payload.push(match resolution {
+                    crate::diagnostic_fixture::Resolution::Presented => 0,
+                    crate::diagnostic_fixture::Resolution::Discarded => 1,
+                    crate::diagnostic_fixture::Resolution::Failed => 2,
+                });
+                payload.extend_from_slice(&resolved_ns.to_be_bytes());
+            }
+        }
+        let response = self.request(FIXTURE_CONTROL, payload, CALLBACK_DEADLINE)?;
+        self.terminal_response(parse_status_response(
+            "controlling private fixture",
+            &response,
+        ))
+    }
+
+    #[cfg(test)]
     pub(crate) fn stage(
         source: &LuaSource,
         initial_backlight: f64,
@@ -116,6 +181,23 @@ impl ProcessWorker {
         initial_input: InputState,
         storage: OwnedFd,
     ) -> Result<Self> {
+        Self::stage_with_capture(
+            source,
+            initial_backlight,
+            initial_input,
+            storage,
+            CaptureLevel::Detailed,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stage_with_capture(
+        source: &LuaSource,
+        initial_backlight: f64,
+        initial_input: InputState,
+        storage: OwnedFd,
+        level: CaptureLevel,
+    ) -> Result<Self> {
         let path = frame_path_for_identity(WorkerIdentity::User)?;
         let slots = FrameSlots::new_shared(
             &path,
@@ -131,7 +213,8 @@ impl ProcessWorker {
             slots.broker(),
             WorkerIdentity::User,
             spawn_direct,
-            Some(storage),
+            Some((storage, level)),
+            None,
         )
     }
 
@@ -208,6 +291,7 @@ impl ProcessWorker {
             identity,
             spawn,
             None,
+            None,
         )
     }
 
@@ -220,7 +304,8 @@ impl ProcessWorker {
         broker: FrameBroker,
         identity: WorkerIdentity,
         spawn: fn(WorkerIdentity) -> Result<SpawnedWorker>,
-        storage: Option<OwnedFd>,
+        storage: Option<(OwnedFd, CaptureLevel)>,
+        fixture: Option<FixtureBootstrap>,
     ) -> Result<Self> {
         if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) } < 0 {
             return Err(std::io::Error::last_os_error())
@@ -270,6 +355,7 @@ impl ProcessWorker {
             initial_input,
             frame_path,
             storage,
+            fixture.as_ref(),
         )?;
         Ok(worker)
     }
@@ -557,14 +643,15 @@ impl ProcessWorker {
         initial_backlight: f64,
         initial_input: InputState,
         frame_path: &Path,
-        storage: Option<OwnedFd>,
+        storage: Option<(OwnedFd, CaptureLevel)>,
+        fixture: Option<&FixtureBootstrap>,
     ) -> Result<()> {
         let deadline = Instant::now() + CALLBACK_DEADLINE;
         {
             let stream = lock(&self.stream, "Lua worker control socket")?;
             crate::diagnostic_capture_transport::send_bootstrap_storage(
                 &stream,
-                storage.as_ref(),
+                storage.as_ref().map(|(fd, level)| (fd, *level)),
                 deadline,
             )?;
         }
@@ -573,6 +660,7 @@ impl ProcessWorker {
         put_bytes(&mut payload, frame_path.as_os_str().as_bytes())?;
         put_f64(&mut payload, initial_backlight);
         encode_input_state(&mut payload, initial_input);
+        encode_fixture_bootstrap(&mut payload, fixture)?;
         let response = self.request_until(BOOTSTRAP, payload, deadline)?;
         match response.as_slice() {
             [STATUS_OK] => Ok(()),
@@ -974,10 +1062,18 @@ pub(crate) fn worker_main() -> Result<()> {
     // The parent starts its one bootstrap budget after launcher/cgroup
     // discovery, not when this child sends HELLO. Await its request or EOF.
     let storage = crate::diagnostic_capture_transport::receive_parent_bootstrap_storage(&stream)?;
-    let capacity = storage.as_ref().map(|storage| storage.capacity());
+    let capacity = storage.as_ref().map(|(storage, _)| storage.capacity());
+    let level = storage.as_ref().map(|(_, level)| *level);
     let observer = storage
-        .map(crate::diagnostic_observer::Capture::from_mapped)
+        .map(|(storage, _)| crate::diagnostic_observer::Capture::from_mapped(storage))
         .transpose()?;
+    if let Some(observer) = &observer {
+        observer.record(
+            crate::diagnostic_observer::EventKind::WorkerCaptureConfigured {
+                detailed: level == Some(CaptureLevel::Detailed),
+            },
+        );
+    }
     let timing = observer
         .as_ref()
         .zip(capacity)
@@ -985,7 +1081,7 @@ pub(crate) fn worker_main() -> Result<()> {
             crate::diagnostic_timing::TimingCapture::exporting(capacity, capture.clone())
         })
         .transpose()?;
-    let result = run_bootstrapped_worker(&mut stream, observer.as_ref(), timing.as_ref());
+    let result = run_bootstrapped_worker(&mut stream, observer.as_ref(), timing.as_ref(), level);
     if result.is_err() {
         if let Some(observer) = &observer {
             observer.record(crate::diagnostic_observer::EventKind::WorkerRunFailed);
@@ -1007,9 +1103,10 @@ fn run_bootstrapped_worker(
     stream: &mut UnixStream,
     observer: Option<&crate::diagnostic_observer::Capture>,
     timing: Option<&crate::diagnostic_timing::TimingCapture>,
+    level: Option<CaptureLevel>,
 ) -> Result<()> {
     let mut input = Vec::new();
-    let (source, frame_path, initial_backlight, initial_input) = loop {
+    let (source, frame_path, initial_backlight, initial_input, fixture_plan) = loop {
         let packets = read_packets(stream, &mut input)?;
         if let Some((kind, payload)) = packets.into_iter().next() {
             ensure!(kind == BOOTSTRAP, "Lua worker expected bootstrap packet");
@@ -1018,13 +1115,30 @@ fn run_bootstrapped_worker(
         thread::sleep(WRITE_RETRY);
     };
 
+    let fixture = fixture_plan
+        .map(|plan| -> Result<_> {
+            ensure!(
+                level == Some(plan.capture_level()),
+                "fixture mode/storage level mismatch"
+            );
+            let fixture = crate::diagnostic_fixture::Fixture::new(
+                plan.plan()?,
+                crate::diagnostic_fixture::Clock::HostMonotonic,
+            )?;
+            if plan.mode == crate::diagnostic_fixture::Mode::C {
+                fixture
+                    .attach_observer(observer.context("fixture C requires raw storage")?.clone())?;
+            }
+            Ok(fixture)
+        })
+        .transpose()?;
     if let LuaSource::File(path) = &source {
         let directory = path.parent().unwrap_or_else(|| std::path::Path::new("."));
         std::env::set_current_dir(directory)
             .with_context(|| format!("changing Lua worker directory to {}", directory.display()))?;
     }
     let slots = FrameSlots::open_shared(&frame_path)?;
-    let slots = if let Some(observer) = observer {
+    let slots = if let Some(observer) = observer.filter(|_| level == Some(CaptureLevel::Detailed)) {
         slots.with_observer(observer.clone())
     } else {
         slots
@@ -1035,7 +1149,13 @@ fn run_bootstrapped_worker(
         slots
     };
     let producer = slots.producer();
-    let runtime = match Runtime::load(&source, initial_backlight, initial_input, producer) {
+    let runtime = match Runtime::load_inner(
+        &source,
+        initial_backlight,
+        initial_input,
+        producer,
+        fixture.clone(),
+    ) {
         Ok(runtime) => runtime,
         Err(error) => {
             if let Some(observer) = observer {
@@ -1047,7 +1167,7 @@ fn run_bootstrapped_worker(
         }
     };
     send_ready(stream, STATUS_OK, String::new())?;
-    let result = run_worker_loop(runtime, stream, input, observer);
+    let result = run_worker_loop(runtime, stream, input, observer, fixture.as_ref());
     if result.is_err() {
         if let Some(observer) = observer {
             observer.record(crate::diagnostic_observer::EventKind::WorkerLoopFailed);
@@ -1065,6 +1185,7 @@ fn run_worker_loop(
     stream: &mut UnixStream,
     mut input: Vec<u8>,
     observer: Option<&crate::diagnostic_observer::Capture>,
+    fixture: Option<&crate::diagnostic_fixture::Fixture>,
 ) -> Result<()> {
     let mut next_heartbeat = Instant::now();
     loop {
@@ -1075,7 +1196,11 @@ fn run_worker_loop(
             let (command, payload) = payload
                 .split_first()
                 .context("Lua worker command is empty")?;
-            let result = handle_command(*command, payload, &mut runtime);
+            let result = if *command == FIXTURE_CONTROL {
+                handle_fixture_control(payload, fixture)
+            } else {
+                handle_command(*command, payload, &mut runtime)
+            };
             let (status, body) = match result {
                 Ok(body) => (STATUS_OK, body),
                 Err(error) => {
@@ -1101,6 +1226,46 @@ fn run_worker_loop(
             thread::sleep(WRITE_RETRY);
         }
     }
+}
+
+fn handle_fixture_control(
+    payload: &[u8],
+    fixture: Option<&crate::diagnostic_fixture::Fixture>,
+) -> Result<Vec<u8>> {
+    let fixture = fixture.context("worker has no private fixture capability")?;
+    let mut reader = Reader::new(payload);
+    let control = match reader.u8()? {
+        0 => FixtureControl::Receive(crate::diagnostic_fixture::Receipt {
+            sequence: reader.u64()?,
+            received_ns: reader.u64()?,
+            event: decode_touch(&mut reader)?,
+        }),
+        1 => FixtureControl::Resolve {
+            frame_id: reader.u64()?,
+            resolution: match reader.u8()? {
+                0 => crate::diagnostic_fixture::Resolution::Presented,
+                1 => crate::diagnostic_fixture::Resolution::Discarded,
+                2 => crate::diagnostic_fixture::Resolution::Failed,
+                _ => bail!("invalid fixture resolution"),
+            },
+            resolved_ns: reader.u64()?,
+        },
+        2 => FixtureControl::ConfirmWarmupClosed,
+        3 => FixtureControl::Finish,
+        _ => bail!("unknown private fixture control"),
+    };
+    reader.finish()?;
+    match control {
+        FixtureControl::ConfirmWarmupClosed => fixture.confirm_warmup_closed()?,
+        FixtureControl::Finish => fixture.finish()?,
+        FixtureControl::Receive(receipt) => fixture.receive(receipt)?,
+        FixtureControl::Resolve {
+            frame_id,
+            resolution,
+            resolved_ns,
+        } => fixture.resolve_frame(frame_id, resolution, resolved_ns)?,
+    }
+    Ok(Vec::new())
 }
 
 fn handle_command(command: u8, payload: &[u8], runtime: &mut Runtime) -> Result<Vec<u8>> {
@@ -1521,7 +1686,70 @@ fn encode_source(output: &mut Vec<u8>, source: &LuaSource) -> Result<()> {
     Ok(())
 }
 
-fn decode_bootstrap(payload: &[u8]) -> Result<(LuaSource, PathBuf, f64, InputState)> {
+fn encode_fixture_bootstrap(
+    output: &mut Vec<u8>,
+    fixture: Option<&FixtureBootstrap>,
+) -> Result<()> {
+    let Some(fixture) = fixture else {
+        output.push(0);
+        return Ok(());
+    };
+    fixture.plan()?;
+    output.push(1); // private optional plan v1
+    put_bytes(output, fixture.run.as_bytes())?;
+    put_bytes(output, fixture.generation.as_bytes())?;
+    output.extend_from_slice(&fixture.start_ns.to_be_bytes());
+    output.extend_from_slice(&fixture.rate.to_be_bytes());
+    output.push(match fixture.mode {
+        crate::diagnostic_fixture::Mode::A => 0,
+        crate::diagnostic_fixture::Mode::B => 1,
+        crate::diagnostic_fixture::Mode::C => 2,
+    });
+    output.push(u8::from(fixture.causal));
+    Ok(())
+}
+
+fn decode_fixture_bootstrap(reader: &mut Reader<'_>) -> Result<Option<FixtureBootstrap>> {
+    match reader.u8()? {
+        0 => Ok(None),
+        1 => {
+            let mut identity = || -> Result<String> {
+                let len = reader.u32()? as usize;
+                ensure!(
+                    (1..=128).contains(&len),
+                    "fixture identity length outside bounds"
+                );
+                Ok(std::str::from_utf8(reader.take(len)?)?.to_owned())
+            };
+            let run = identity()?;
+            let generation = identity()?;
+            let start_ns = reader.u64()?;
+            let rate = reader.u32()?;
+            let mode = match reader.u8()? {
+                0 => crate::diagnostic_fixture::Mode::A,
+                1 => crate::diagnostic_fixture::Mode::B,
+                2 => crate::diagnostic_fixture::Mode::C,
+                _ => bail!("invalid fixture mode"),
+            };
+            let causal = reader.bool()?;
+            let mut plan = FixtureBootstrap::new(&run, &generation, start_ns, rate, mode)?;
+            plan.causal = causal;
+            plan.plan()?;
+            Ok(Some(plan))
+        }
+        _ => bail!("unknown private fixture bootstrap version"),
+    }
+}
+
+fn decode_bootstrap(
+    payload: &[u8],
+) -> Result<(
+    LuaSource,
+    PathBuf,
+    f64,
+    InputState,
+    Option<FixtureBootstrap>,
+)> {
     let mut reader = Reader::new(payload);
     let kind = reader.u8()?;
     let bytes = reader.bytes()?;
@@ -1533,8 +1761,9 @@ fn decode_bootstrap(payload: &[u8]) -> Result<(LuaSource, PathBuf, f64, InputSta
     let frame_path = PathBuf::from(std::ffi::OsString::from_vec(reader.bytes()?));
     let backlight = reader.f64()?;
     let input = decode_input_state(&mut reader)?;
+    let fixture = decode_fixture_bootstrap(&mut reader)?;
     reader.finish()?;
-    Ok((source, frame_path, backlight, input))
+    Ok((source, frame_path, backlight, input, fixture))
 }
 
 fn encode_input_state(output: &mut Vec<u8>, state: InputState) {
@@ -1983,10 +2212,12 @@ impl<'a> Reader<'a> {
         Ok(u32::from_be_bytes(self.take(4)?.try_into()?))
     }
 
+    fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_be_bytes(self.take(8)?.try_into()?))
+    }
+
     fn f64(&mut self) -> Result<f64> {
-        Ok(f64::from_bits(u64::from_be_bytes(
-            self.take(8)?.try_into()?,
-        )))
+        Ok(f64::from_bits(self.u64()?))
     }
 
     fn bytes(&mut self) -> Result<Vec<u8>> {
@@ -2021,6 +2252,581 @@ mod tests {
 
     fn embedded(source: &str) -> LuaSource {
         LuaSource::embedded(source.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn process_fixture_binds_reviewed_source_and_preserves_resolution_endpoint() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap, FixtureControl};
+        use crate::diagnostic_fixture::{Mode, ObservationKind, Resolution, SOURCE};
+        use crate::diagnostic_observer::{clock_ns, decode, EventKind};
+        let mut collector = Collector::new(64)?;
+        let plan = FixtureBootstrap::new(
+            "process-fixture",
+            "generation-1",
+            clock_ns(false)? + 30_000_000_000,
+            30,
+            Mode::C,
+        )?;
+        let worker = ProcessWorker::stage_with_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            1.0,
+            InputState::default(),
+            collector.take_worker_storage()?,
+            plan,
+        )?;
+        let frame = worker.render(0.0, 0.0, InputState::default())?;
+        let marker =
+            decode(&frame.frame).expect("reviewed child fixture must draw complete marker pixels");
+        assert_eq!(marker.run_id(), b"process-fixture");
+        // Decoded C identity is supplied SOFTWARE test context, not native
+        // allocation/publication authority or an identity solution for mode A.
+        let resolved_ns = clock_ns(false)?;
+        worker.fixture_control(FixtureControl::Resolve {
+            frame_id: marker.frame_id(),
+            resolution: Resolution::Discarded,
+            resolved_ns,
+        })?;
+        worker.shutdown(StopReason::Replaced)?;
+        let raw = collector.snapshot()?;
+        assert!(raw.metadata_consistent && raw.report.closed);
+        assert_eq!(raw.report.failed_operations, 0);
+        assert_eq!(raw.report.lost, 0);
+        let mut allocated = false;
+        let mut resolved = false;
+        for record in &raw.report.records {
+            if let EventKind::FixtureObserved {
+                synthetic,
+                decision_ns,
+                kind,
+            } = record.kind
+            {
+                assert!(!synthetic);
+                assert_eq!(
+                    record.at_ns, decision_ns,
+                    "child uses its actual host clock for decisions"
+                );
+                match kind {
+                    ObservationKind::Allocated { frame_id, token: 0 } => {
+                        assert_eq!(frame_id, marker.frame_id());
+                        assert!(record.at_ns <= resolved_ns);
+                        allocated = true;
+                    }
+                    ObservationKind::Resolved {
+                        frame_id,
+                        resolution: Resolution::Discarded,
+                        resolved_ns: endpoint,
+                    } => {
+                        assert_eq!(frame_id, marker.frame_id());
+                        assert_eq!(endpoint, resolved_ns);
+                        assert!(endpoint <= record.at_ns);
+                        resolved = true;
+                    }
+                    ObservationKind::Closed => {
+                        panic!("ordinary worker shutdown must not invent fixture closure")
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(allocated && resolved);
+        Ok(())
+    }
+
+    #[test]
+    fn process_fixture_receipt_crosses_actual_callback_and_token_pixels() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap, FixtureControl};
+        use crate::diagnostic_fixture::{Mode, ObservationKind, Receipt, Resolution, SOURCE};
+        use crate::diagnostic_observer::{clock_ns, decode, EventKind};
+        let mut collector = Collector::new(128)?;
+        let plan = FixtureBootstrap::new(
+            "process-receipt",
+            "generation-1",
+            clock_ns(false)? + 30_000_000_000,
+            30,
+            Mode::C,
+        )?;
+        let worker = ProcessWorker::stage_with_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            1.0,
+            InputState::default(),
+            collector.take_worker_storage()?,
+            plan,
+        )?;
+        let first = worker.render(0.0, 0.0, InputState::default())?;
+        worker.fixture_control(FixtureControl::Resolve {
+            frame_id: decode(&first.frame).unwrap().frame_id(),
+            resolution: Resolution::Discarded,
+            resolved_ns: clock_ns(false)?,
+        })?;
+        worker.commit(0.0, InputState::default())?;
+        let event = TouchEvent {
+            phase: TouchPhase::Down,
+            id: 42,
+            time: 987654.25,
+            x: 14.5,
+            y: 6.0,
+            modifiers: crate::hardware::ModifierState::default(),
+            pressure: Some(0.75),
+            width: None,
+            height: Some(4.0),
+        };
+        let received_ns = clock_ns(false)?;
+        worker.fixture_control(FixtureControl::Receive(Receipt {
+            sequence: 1,
+            received_ns,
+            event,
+        }))?;
+        let effects = worker.drive_until(
+            DriveRequest::without_input(1.0, InputState::default()).with_events(vec![event]),
+            Instant::now() + CALLBACK_DEADLINE,
+        )?;
+        let response = effects
+            .frame
+            .context("eligible callback did not produce frame")?;
+        let marker = decode(&response.frame).unwrap();
+        assert_eq!(marker.input_id(), Some(b"1".as_slice()));
+        let responded_ns = clock_ns(false)?;
+        worker.fixture_control(FixtureControl::Resolve {
+            frame_id: marker.frame_id(),
+            resolution: Resolution::Presented,
+            resolved_ns: responded_ns,
+        })?;
+        worker.shutdown(StopReason::Replaced)?;
+        let raw = collector.snapshot()?;
+        assert_eq!(raw.report.failed_operations, 0);
+        assert_eq!(raw.report.lost, 0);
+        assert!(raw
+            .report
+            .records
+            .iter()
+            .any(|r| matches!(r.kind, EventKind::TouchCallbackEntered(t) if t == event)));
+        assert!(raw.report.records.iter().any(|r| matches!(r.kind, EventKind::FixtureObserved {
+            synthetic: false, kind: ObservationKind::ReceiptSupplied { receipt_sequence: 1, received_ns: endpoint, contact: 42, phase: TouchPhase::Down }, ..
+        } if endpoint == received_ns && endpoint <= r.at_ns)));
+        assert!(raw.report.records.iter().any(|r| matches!(
+            r.kind,
+            EventKind::FixtureObserved {
+                kind: ObservationKind::TokenMutated {
+                    receipt_sequence: 1,
+                    previous: 0,
+                    token: 1
+                },
+                ..
+            }
+        )));
+        assert!(raw.report.records.iter().any(|r| matches!(r.kind, EventKind::FixtureObserved {
+            kind: ObservationKind::ResponseConfirmed { receipt_sequence: 1, frame_id, token: 1, responded_ns: endpoint }, ..
+        } if frame_id == marker.frame_id() && endpoint == responded_ns && endpoint <= r.at_ns)));
+        Ok(())
+    }
+
+    #[test]
+    fn process_fixture_closure_controls_reject_early_host_time() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap};
+        use crate::diagnostic_fixture::{Mode, ObservationKind, SOURCE};
+        use crate::diagnostic_observer::{clock_ns, EventKind};
+        for (subtag, expected_error) in [
+            (2, "warmup closure requires five seconds"),
+            (3, "fixture closure requires E"),
+        ] {
+            let mut collector = Collector::new(32)?;
+            let worker = ProcessWorker::stage_with_fixture(
+                &LuaSource::embedded(SOURCE.to_vec()),
+                1.0,
+                InputState::default(),
+                collector.take_worker_storage()?,
+                FixtureBootstrap::new(
+                    "early-close",
+                    "generation-1",
+                    clock_ns(false)? + 30_000_000_000,
+                    30,
+                    Mode::C,
+                )?,
+            )?;
+            // Literal private v1 command, no caller closure timestamp/clock selector.
+            let response = worker.request(FIXTURE_CONTROL, vec![subtag], CALLBACK_DEADLINE)?;
+            let error = worker
+                .terminal_response(parse_status_response("fixture closure", &response))
+                .unwrap_err();
+            assert!(format!("{error:#}").contains(expected_error), "{error:#}");
+            let raw = collector.snapshot()?;
+            assert!(raw.report.records.iter().any(|r| matches!(
+                r.kind,
+                EventKind::FixtureObserved {
+                    kind: ObservationKind::Failed,
+                    ..
+                }
+            )));
+            assert!(!raw.report.records.iter().any(|r| matches!(
+                r.kind,
+                EventKind::FixtureObserved {
+                    kind: ObservationKind::Closed | ObservationKind::WarmupClosed,
+                    ..
+                }
+            )));
+            assert!(
+                raw.report.failed_operations >= 2,
+                "fixture failure and command failure are distinct observations"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn process_fixture_abc_preserves_scene_and_minimal_span_placement() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap};
+        use crate::diagnostic_fixture::{Mode, SOURCE};
+        use crate::diagnostic_observer::{clock_ns, decode, EventKind};
+        let mut scenes = Vec::new();
+        for mode in [Mode::A, Mode::B, Mode::C] {
+            let mut collector = Collector::new(64)?;
+            let worker = ProcessWorker::stage_with_fixture(
+                &LuaSource::embedded(SOURCE.to_vec()),
+                1.0,
+                InputState::default(),
+                collector.take_worker_storage()?,
+                FixtureBootstrap::new(
+                    "abc-child",
+                    "generation-1",
+                    clock_ns(false)? + 30_000_000_000,
+                    30,
+                    mode,
+                )?,
+            )?;
+            let frame = worker.render(0.0, 0.0, InputState::default())?;
+            assert_eq!(decode(&frame.frame).is_ok(), mode != Mode::A);
+            scenes.push(frame.frame.pixels().to_vec());
+            worker.shutdown(StopReason::Replaced)?;
+            let raw = collector.snapshot()?;
+            assert_eq!(raw.report.failed_operations, 0);
+            assert_eq!(raw.report.lost, 0);
+            assert_eq!(
+                raw.report
+                    .records
+                    .iter()
+                    .any(|r| matches!(r.kind, EventKind::FixtureObserved { .. })),
+                mode == Mode::C
+            );
+            let spans: Vec<_> = raw
+                .report
+                .records
+                .iter()
+                .filter_map(|r| match &r.kind {
+                    EventKind::MinimalSpan(s) => Some(s),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(spans.len(), 1);
+            assert_eq!(
+                spans[0].kind,
+                crate::diagnostic_timing::SpanKind::RenderCallback
+            );
+            assert_eq!(
+                spans[0].status,
+                crate::diagnostic_timing::SpanStatus::Succeeded
+            );
+            assert!(spans[0].frame_bearing);
+        }
+        for y in 0..60 {
+            for x in 0..2008 {
+                if (188..1820).contains(&x) && (4..12).contains(&y) {
+                    continue;
+                }
+                let offset = (y * 2008 + x) * 4;
+                assert_eq!(
+                    &scenes[0][offset..offset + 4],
+                    &scenes[1][offset..offset + 4]
+                );
+                assert_eq!(
+                    &scenes[1][offset..offset + 4],
+                    &scenes[2][offset..offset + 4]
+                );
+            }
+        }
+        // No A allocation/publication identity or successful fixture closure
+        // is inferred from identical pixels or ordinary storage closure.
+        Ok(())
+    }
+
+    #[test]
+    fn process_fixture_rejects_unprovisioned_and_altered_source_before_execution() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap};
+        use crate::diagnostic_fixture::{Mode, ObservationKind, SOURCE};
+        use crate::diagnostic_observer::{clock_ns, EventKind};
+        let ordinary = embedded("assert(select('#', ...) == 0); require('sliver.v1'); return { api_version=1, render=function() end }");
+        let worker = ProcessWorker::stage(&ordinary, 1.0, InputState::default())?;
+        worker.shutdown(StopReason::Replaced)?;
+        let error = ProcessWorker::stage(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            1.0,
+            InputState::default(),
+        )
+        .err()
+        .context("reviewed fixture unexpectedly armed itself")?;
+        assert!(format!("{error:#}").contains("private P1 capability required"));
+        let directory = tempfile::tempdir()?;
+        let sentinel = directory.path().join("executed");
+        let altered = format!(
+            "local f=assert(io.open({:?}, 'w')); f:write('wrong source executed'); f:close();\n{}",
+            sentinel.to_str().unwrap(),
+            std::str::from_utf8(SOURCE)?
+        );
+        let mut collector = Collector::new(32)?;
+        let error = ProcessWorker::stage_with_fixture(
+            &embedded(&altered),
+            1.0,
+            InputState::default(),
+            collector.take_worker_storage()?,
+            FixtureBootstrap::new(
+                "wrong-source",
+                "generation-1",
+                clock_ns(false)? + 30_000_000_000,
+                30,
+                Mode::C,
+            )?,
+        )
+        .err()
+        .context("altered fixture source was accepted")?;
+        assert!(format!("{error:#}").contains("does not match reviewed bytes"));
+        assert!(
+            !sentinel.exists(),
+            "source executed before exact byte binding"
+        );
+        let raw = collector.snapshot()?;
+        assert!(
+            raw.report.records.iter().any(|r| matches!(
+                r.kind,
+                EventKind::FixtureObserved {
+                    kind: ObservationKind::Failed,
+                    ..
+                }
+            )),
+            "C sink must be attached before bind_source rejects the chunk"
+        );
+        assert!(raw.report.failed_operations >= 2);
+        Ok(())
+    }
+
+    #[test]
+    fn process_fixture_rejects_invalid_coordinator_operations_terminally() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap, FixtureControl};
+        use crate::diagnostic_fixture::{Mode, ObservationKind, Receipt, Resolution, SOURCE};
+        use crate::diagnostic_observer::{clock_ns, EventKind};
+        let event = TouchEvent {
+            phase: TouchPhase::Down,
+            id: 1,
+            time: 0.0,
+            x: 0.0,
+            y: 0.0,
+            modifiers: crate::hardware::ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        for bad_receipt in [false, true] {
+            let mut collector = Collector::new(32)?;
+            let worker = ProcessWorker::stage_with_fixture(
+                &LuaSource::embedded(SOURCE.to_vec()),
+                1.0,
+                InputState::default(),
+                collector.take_worker_storage()?,
+                FixtureBootstrap::new(
+                    "bad-control",
+                    "generation-1",
+                    clock_ns(false)? + 30_000_000_000,
+                    30,
+                    Mode::C,
+                )?,
+            )?;
+            let command = if bad_receipt {
+                FixtureControl::Receive(Receipt {
+                    sequence: 2,
+                    received_ns: clock_ns(false)?,
+                    event,
+                })
+            } else {
+                FixtureControl::Resolve {
+                    frame_id: 99,
+                    resolution: Resolution::Presented,
+                    resolved_ns: clock_ns(false)?,
+                }
+            };
+            assert!(worker.fixture_control(command).is_err());
+            assert!(
+                worker.render(0.0, 0.0, InputState::default()).is_err(),
+                "failed worker must not accept another callback"
+            );
+            let raw = collector.snapshot()?;
+            assert!(raw.report.records.iter().any(|r| matches!(
+                r.kind,
+                EventKind::FixtureObserved {
+                    kind: ObservationKind::Failed,
+                    ..
+                }
+            )));
+            assert!(raw.report.failed_operations >= 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn process_fixture_rejects_malformed_controls_before_effects() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap};
+        use crate::diagnostic_fixture::{Mode, SOURCE};
+        use crate::diagnostic_observer::{clock_ns, EventKind};
+        let mut bad_resolution = vec![0; 18];
+        bad_resolution[0] = 1;
+        bad_resolution[9] = 3;
+        let mut bad_touch_phase = vec![0; 18];
+        bad_touch_phase[17] = 4;
+        let mut bad_touch_bool = vec![0; 47];
+        bad_touch_bool[46] = 2;
+        for payload in [
+            vec![],
+            vec![255],
+            vec![0],
+            vec![1],
+            vec![2, 0],
+            vec![3, 0],
+            bad_resolution,
+            bad_touch_phase,
+            bad_touch_bool,
+        ] {
+            let mut collector = Collector::new(32)?;
+            let worker = ProcessWorker::stage_with_fixture(
+                &LuaSource::embedded(SOURCE.to_vec()),
+                1.0,
+                InputState::default(),
+                collector.take_worker_storage()?,
+                FixtureBootstrap::new(
+                    "malformed",
+                    "generation-1",
+                    clock_ns(false)? + 30_000_000_000,
+                    30,
+                    Mode::C,
+                )?,
+            )?;
+            let response = worker.request(FIXTURE_CONTROL, payload.clone(), CALLBACK_DEADLINE)?;
+            assert!(
+                worker
+                    .terminal_response(parse_status_response("malformed control", &response))
+                    .is_err(),
+                "accepted {payload:?}"
+            );
+            let raw = collector.snapshot()?;
+            assert_eq!(
+                raw.report.failed_operations, 1,
+                "malformed command fails before fixture operation"
+            );
+            assert!(!raw
+                .report
+                .records
+                .iter()
+                .any(|r| matches!(r.kind, EventKind::FixtureObserved { .. })));
+        }
+        let ordinary = ProcessWorker::stage(
+            &embedded("require('sliver.v1'); return {api_version=1,render=function() end}"),
+            1.0,
+            InputState::default(),
+        )?;
+        let error = ordinary
+            .fixture_control(FixtureControl::Finish)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("no private fixture capability"));
+        Ok(())
+    }
+
+    #[test]
+    fn process_fixture_rejects_bounded_bootstrap_packets_in_actual_child() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap};
+        use crate::diagnostic_fixture::{Mode, SOURCE};
+        use crate::diagnostic_observer::clock_ns;
+        let plan = FixtureBootstrap::new("r", "g", clock_ns(false)? + 30_000_000_000, 30, Mode::C)?;
+        let mut valid = Vec::new();
+        encode_fixture_bootstrap(&mut valid, Some(&plan))?;
+        assert_eq!(valid.len(), 25);
+        let mut cases = Vec::new();
+        for (offset, value) in [(0, 2), (5, b'/'), (23, 3), (24, 2)] {
+            let mut packet = valid.clone();
+            packet[offset] = value;
+            cases.push((packet, CaptureLevel::Detailed));
+        }
+        for length in [0_u32, 129, u32::MAX] {
+            let mut packet = valid.clone();
+            packet[1..5].copy_from_slice(&length.to_be_bytes());
+            cases.push((packet, CaptureLevel::Detailed));
+        }
+        let mut overflow = valid.clone();
+        overflow[11..19].copy_from_slice(&u64::MAX.to_be_bytes());
+        cases.push((overflow, CaptureLevel::Detailed));
+        let mut bad_rate = valid.clone();
+        bad_rate[19..23].copy_from_slice(&31_u32.to_be_bytes());
+        cases.push((bad_rate, CaptureLevel::Detailed));
+        let mut bad_causal = valid.clone();
+        bad_causal[19..23].copy_from_slice(&60_u32.to_be_bytes());
+        bad_causal[24] = 1;
+        cases.push((bad_causal, CaptureLevel::Detailed));
+        cases.push((valid[..24].to_vec(), CaptureLevel::Detailed));
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        cases.push((trailing, CaptureLevel::Detailed));
+        cases.push((valid.clone(), CaptureLevel::Minimal)); // C must have detailed sink.
+        let mut wrong_ab = valid;
+        wrong_ab[23] = 0;
+        cases.push((wrong_ab, CaptureLevel::Detailed));
+        for (tail, level) in cases {
+            let path = frame_path_for_identity(WorkerIdentity::User)?;
+            let _slots = FrameSlots::new_shared(
+                &path,
+                crate::DISPLAY_WIDTH,
+                crate::DISPLAY_HEIGHT,
+                crate::DISPLAY_WIDTH * 4,
+            )?;
+            let mut collector = Collector::new(16)?;
+            let storage = collector.take_worker_storage()?;
+            let mut spawned = spawn_direct(WorkerIdentity::User)?;
+            // Always reap the actual direct child, including failed assertions.
+            let result = (|| -> Result<()> {
+                spawned.stream.set_nonblocking(true)?;
+                receive_hello(&mut spawned.stream, &mut Vec::new())?;
+                crate::diagnostic_capture_transport::send_bootstrap_storage(
+                    &spawned.stream,
+                    Some((&storage, level)),
+                    Instant::now() + CALLBACK_DEADLINE,
+                )?;
+                let mut payload = Vec::new();
+                encode_source(&mut payload, &LuaSource::embedded(SOURCE.to_vec()))?;
+                put_bytes(&mut payload, path.as_os_str().as_bytes())?;
+                put_f64(&mut payload, 1.0);
+                encode_input_state(&mut payload, InputState::default());
+                payload.extend_from_slice(&tail);
+                write_packet_blocking(&mut spawned.stream, BOOTSTRAP, &payload)?;
+                let deadline = Instant::now() + CALLBACK_DEADLINE;
+                loop {
+                    if let Some(status) = spawned.child.try_wait()? {
+                        ensure!(
+                            !status.success(),
+                            "malformed fixture bootstrap exited successfully"
+                        );
+                        break;
+                    }
+                    ensure!(
+                        Instant::now() < deadline,
+                        "malformed fixture bootstrap was accepted: {tail:?}"
+                    );
+                    thread::sleep(WRITE_RETRY);
+                }
+                let raw = collector.snapshot()?;
+                ensure!(
+                    raw.report.failed_operations >= 1,
+                    "bootstrap rejection missing raw failure"
+                );
+                Ok(())
+            })();
+            terminate_spawned(&mut spawned);
+            result?;
+        }
+        Ok(())
     }
 
     #[test]
@@ -2193,7 +2999,7 @@ mod tests {
     fn mapped_worker_capture_starts_before_load_and_retains_overflow() -> Result<()> {
         use crate::diagnostic_capture_transport::Collector;
         use crate::diagnostic_observer::EventKind;
-        let mut collector = Collector::new(1)?;
+        let mut collector = Collector::new(2)?;
         let worker = ProcessWorker::stage_observed(
             &embedded("local s=require('sliver.v1'); s.timer.after(2.5, function() end); return { api_version=1, render=function(c) c:rectangle(0,0,8,8,'#ff0000') end }"),
             1.0, InputState::default(), collector.take_worker_storage()?,
@@ -2202,17 +3008,21 @@ mod tests {
         worker.shutdown(StopReason::Replaced)?;
         let raw = collector.snapshot()?;
         assert!(raw.metadata_consistent && raw.report.closed);
-        assert_eq!(raw.report.records.len(), 1);
+        assert_eq!(raw.report.records.len(), 2);
         assert!(matches!(
             raw.report.records[0].kind,
+            EventKind::WorkerCaptureConfigured { detailed: true }
+        ));
+        assert!(matches!(
+            raw.report.records[1].kind,
             EventKind::TimerRegistered {
                 timer_id: 1,
                 delay_seconds: 2.5,
                 ..
             }
         ));
-        assert!(raw.report.attempted_records > 1);
-        assert_eq!(raw.report.lost, raw.report.attempted_records - 1);
+        assert!(raw.report.attempted_records > 2);
+        assert_eq!(raw.report.lost, raw.report.attempted_records - 2);
         assert!(
             raw.report.decode_failures > 0,
             "errors after capacity exhaustion must remain counted"
@@ -2384,6 +3194,182 @@ mod tests {
             r.kind,
             crate::diagnostic_observer::EventKind::RenderAllocated { .. }
         )));
+        Ok(())
+    }
+
+    #[test]
+    fn worker_minimal_capture_preserves_scene_without_detailed_records() -> Result<()> {
+        use crate::diagnostic_capture_transport::{CaptureLevel, Collector};
+        use crate::diagnostic_observer::EventKind;
+        use crate::hardware::{FakeTouchBar, HardwareEvent, ModifierState, TouchBarHardware};
+
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("same-scene.lua");
+        std::fs::write(
+            &source,
+            format!(
+                "local s=require('sliver.v1'); s.timer.after(100, function() end)\n{}",
+                include_str!("../../../scripts/native-performance-observer-smoke.lua"),
+            ),
+        )?;
+        std::fs::write(
+            directory.path().join("native_marker.lua"),
+            include_str!("../../../scripts/native-performance-marker.lua"),
+        )?;
+        let mut frames = Vec::new();
+        for level in [CaptureLevel::Detailed, CaptureLevel::Minimal] {
+            let mut collector = Collector::new(128)?;
+            let worker = ProcessWorker::stage_with_capture(
+                &LuaSource::file(source.clone()),
+                1.0,
+                InputState::default(),
+                collector.take_worker_storage()?,
+                level,
+            )?;
+            let mut hardware = FakeTouchBar::new();
+            hardware.claim()?;
+            hardware.present(&worker.render(0.0, 0.0, InputState::default())?.frame)?;
+            worker.commit(0.0, InputState::default())?;
+            let down = TouchEvent {
+                phase: TouchPhase::Down,
+                id: 7,
+                time: 999.0,
+                x: 14.0,
+                y: 6.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            };
+            hardware.inject(HardwareEvent::Touch(down));
+            assert_eq!(hardware.poll(Duration::ZERO)?, [HardwareEvent::Touch(down)]);
+            let effects = worker.drive_until(
+                DriveRequest::without_input(1.0, InputState::default()).with_events(vec![down]),
+                Instant::now() + CALLBACK_DEADLINE,
+            )?;
+            assert!(effects.key_requests.is_empty() && effects.backlight.is_none());
+            let response = effects.frame.context("touch callback produced no frame")?;
+            assert_eq!(
+                crate::diagnostic_observer::decode(&response.frame)
+                    .unwrap()
+                    .input_id(),
+                Some(b"1".as_slice())
+            );
+            hardware.present(&response.frame)?;
+            worker.shutdown(StopReason::Replaced)?;
+            hardware.release()?;
+            assert_eq!(hardware.presented_frames().len(), 2);
+            frames.push((
+                hardware.presented_frames().to_vec(),
+                hardware.actions().to_vec(),
+            ));
+
+            let raw = collector.snapshot()?;
+            assert!(raw.initialized && raw.metadata_consistent && raw.report.closed);
+            assert_eq!(raw.report.lost, 0);
+            assert_eq!(raw.report.failed_operations, 0);
+            assert!(matches!(raw.report.records.first().map(|r| &r.kind),
+                Some(EventKind::WorkerCaptureConfigured { detailed }) if *detailed == (level == CaptureLevel::Detailed)));
+            assert_eq!(
+                raw.report
+                    .records
+                    .iter()
+                    .filter(|r| matches!(r.kind, EventKind::WorkerCaptureConfigured { .. }))
+                    .count(),
+                1
+            );
+            let samples: Vec<_> = raw
+                .report
+                .records
+                .iter()
+                .filter_map(|r| match &r.kind {
+                    EventKind::MinimalSpan(sample) => Some(sample),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(samples.len(), 2);
+            assert!(samples.iter().all(|s| s.frame_bearing
+                && s.kind == crate::diagnostic_timing::SpanKind::RenderCallback
+                && s.status == crate::diagnostic_timing::SpanStatus::Succeeded));
+            assert!(raw.report.records.iter().any(|r| matches!(&r.kind,
+                EventKind::MinimalSummary(s) if s.completed_spans == 2 && s.open_spans == 0 && s.lost == 0)));
+            if level == CaptureLevel::Minimal {
+                assert!(
+                    raw.report.records.iter().all(|r| matches!(
+                        r.kind,
+                        EventKind::WorkerCaptureConfigured { .. }
+                            | EventKind::MinimalSpan(_)
+                            | EventKind::MinimalSummary(_)
+                    )),
+                    "minimal-only capture leaked detailed records"
+                );
+            } else {
+                assert!(raw
+                    .report
+                    .records
+                    .iter()
+                    .any(|r| matches!(r.kind, EventKind::TimerRegistered { .. })));
+                assert!(raw
+                    .report
+                    .records
+                    .iter()
+                    .any(|r| matches!(r.kind, EventKind::RenderAllocated { .. })));
+                assert!(raw
+                    .report
+                    .records
+                    .iter()
+                    .any(|r| matches!(r.kind, EventKind::Published { .. })));
+                assert!(raw
+                    .report
+                    .records
+                    .iter()
+                    .any(|r| matches!(r.kind, EventKind::TouchCallbackEntered(_))));
+            }
+        }
+        assert_eq!(
+            frames[0], frames[1],
+            "capture level changed pixels or hardware actions"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn worker_minimal_capture_retains_load_and_callback_errors() -> Result<()> {
+        use crate::diagnostic_capture_transport::{CaptureLevel, Collector};
+        use crate::diagnostic_observer::EventKind;
+        for (source, load_failure) in [
+            ("error('minimal load failure')", true),
+            ("require('sliver.v1'); return { api_version=1, render=function() error('minimal render failure') end }", false),
+        ] {
+            let mut collector = Collector::new(16)?;
+            let staged = ProcessWorker::stage_with_capture(
+                &embedded(source), 1.0, InputState::default(),
+                collector.take_worker_storage()?, CaptureLevel::Minimal,
+            );
+            if load_failure {
+                assert!(staged.is_err());
+            } else {
+                assert!(staged?.render(0.0, 0.0, InputState::default()).is_err());
+            }
+            let raw = collector.snapshot()?;
+            assert!(raw.initialized);
+            assert!(raw.report.failed_operations > 0);
+            assert_eq!(raw.report.lost, 0);
+            assert!(matches!(raw.report.records.first().map(|r| &r.kind),
+                Some(EventKind::WorkerCaptureConfigured { detailed: false })));
+            assert!(raw.report.records.iter().all(|r| matches!(r.kind,
+                EventKind::WorkerCaptureConfigured { .. } | EventKind::MinimalSpan(_) |
+                EventKind::MinimalSummary(_) | EventKind::WorkerLoadFailed |
+                EventKind::WorkerCommandFailed | EventKind::WorkerLoopFailed | EventKind::WorkerRunFailed)),
+                "error path leaked detailed events in Minimal");
+            if load_failure {
+                assert!(raw.report.records.iter().any(|r| matches!(r.kind, EventKind::WorkerLoadFailed)));
+            } else {
+                assert!(raw.report.records.iter().any(|r| matches!(r.kind, EventKind::WorkerCommandFailed)));
+                assert!(raw.report.records.iter().any(|r| matches!(&r.kind,
+                    EventKind::MinimalSpan(s) if s.status == crate::diagnostic_timing::SpanStatus::Failed)));
+            }
+        }
         Ok(())
     }
 

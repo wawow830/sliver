@@ -179,6 +179,16 @@ pub(crate) enum TimerDisposition {
 pub(crate) enum EventKind {
     MinimalSpan(crate::diagnostic_timing::Sample),
     MinimalSummary(crate::diagnostic_timing::Summary),
+    /// Explicit no-op sampler calibration costs, never work credit or an amount
+    /// to subtract from measured durations. The calibrator supplies all samples.
+    MinimalCalibration { cost_ns: [u64; 32] },
+    /// Fixture decision-clock values remain distinct from Record::at_ns.
+    /// Neither the synthetic flag nor these observations authenticate a source.
+    FixtureObserved {
+        synthetic: bool,
+        decision_ns: u64,
+        kind: crate::diagnostic_fixture::ObservationKind,
+    },
     /// Runtime::load returned an error. Storage closure is not startup success;
     /// retain this fact even if its ordinary READY error reply cannot arrive.
     WorkerLoadFailed,
@@ -190,6 +200,11 @@ pub(crate) enum EventKind {
     /// The bootstrapped worker helper returned Err, including setup/READY
     /// errors before entering the control loop. May duplicate a specific error.
     WorkerRunFailed,
+    /// Actual private bootstrap recording level, observed before Runtime::load.
+    /// This is not marker mode or authenticated source/build provenance.
+    WorkerCaptureConfigured {
+        detailed: bool,
+    },
     // Timer IDs are local to one worker registry, not capture-wide identities.
     // All *_seconds fields preserve scheduler f64 values verbatim. They are
     // NOT host-clock readings, rational periods, or policy opportunity credit.
@@ -282,7 +297,9 @@ pub(crate) struct Report {
     pub(crate) clock_failures: u64,
     /// Failed observations, not unique failed operations: a command/run failure
     /// can also have a detailed callback failure and a failed/abandoned minimal
-    /// span. Repeated minimal summaries do not add new failure observations.
+    /// span. Fixture Failed and Resolved(Failed) each count as observations,
+    /// regardless of the synthetic flag. Repeated minimal summaries do not add
+    /// new failure observations.
     pub(crate) failed_operations: u64,
     /// Failed decode observations, not unique frames (one frame crosses seams).
     pub(crate) decode_failures: u64,
@@ -398,6 +415,26 @@ impl Capture {
         Ok(capture)
     }
 
+    /// Check the shared source without closing it or copying its records. A
+    /// healthy snapshot is not a promise about subsequent writes or provenance.
+    pub(crate) fn ensure_open_and_healthy(&self) -> Result<()> {
+        let state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let report = &state.report;
+        ensure!(
+            !report.closed
+                && report.lost == 0
+                && report.clock_failures == 0
+                && report.failed_operations == 0
+                && report.decode_failures == 0
+                && report.after_close == 0,
+            "raw diagnostic source is closed or has errors/loss"
+        );
+        Ok(())
+    }
+
     pub(crate) fn monotonic_ns(&self) -> Result<u64> {
         clock_ns(false)
     }
@@ -407,7 +444,7 @@ impl Capture {
         self.record_at(clock_ns(false), kind);
     }
 
-    fn record_at(&self, time: Result<u64>, kind: EventKind) {
+    pub(crate) fn record_at(&self, time: Result<u64>, kind: EventKind) {
         let mut state = self
             .0
             .lock()
@@ -428,7 +465,16 @@ impl Capture {
             | EventKind::WorkerLoopFailed
             | EventKind::WorkerCommandFailed
             | EventKind::WorkerRunFailed
-            | EventKind::PollFailed => r.failed_operations = r.failed_operations.saturating_add(1),
+            | EventKind::PollFailed
+            | EventKind::FixtureObserved {
+                kind:
+                    crate::diagnostic_fixture::ObservationKind::Failed
+                    | crate::diagnostic_fixture::ObservationKind::Resolved {
+                        resolution: crate::diagnostic_fixture::Resolution::Failed,
+                        ..
+                    },
+                ..
+            } => r.failed_operations = r.failed_operations.saturating_add(1),
             EventKind::MinimalSpan(sample)
                 if sample.status != crate::diagnostic_timing::SpanStatus::Succeeded =>
             {

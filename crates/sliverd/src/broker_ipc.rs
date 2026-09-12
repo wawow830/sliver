@@ -3938,6 +3938,116 @@ mod tests {
     }
 
     #[test]
+    fn private_broker_capture_observes_real_ipc_present_and_adapter_receipt() -> Result<()> {
+        use crate::diagnostic_hardware::ObservedHardware;
+        use crate::diagnostic_observer::{Capture, EventKind};
+        use crate::diagnostic_timing::{SpanKind, SpanStatus, TimingCapture};
+        use crate::lua_worker::LuaWorker;
+        for detailed in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let socket = directory.path().join("broker.sock");
+            let listener = UnixListener::bind(&socket)?;
+            let logind = FakeLogind::new();
+            logind.set_active(
+                SEAT,
+                Some(ActiveSession {
+                    id: "private-broker-capture".into(),
+                    uid: unsafe { libc::getuid() },
+                }),
+            );
+            let shared = ThreadFakeHardware::new();
+            let observer = Capture::new(256)?;
+            let timing = TimingCapture::new(64)?;
+            let hardware = ObservedHardware::new(
+                shared.clone(),
+                detailed.then(|| observer.clone()),
+                Some(timing.clone()),
+            );
+            let running = Arc::new(AtomicBool::new(true));
+            let stop = running.clone();
+            let state = directory.path().join("state");
+            let source = directory.path().join("observed.lua");
+            std::fs::write(
+                &source,
+                include_bytes!("../../../scripts/native-performance-observer-smoke.lua"),
+            )?;
+            std::fs::write(
+                directory.path().join("native_marker.lua"),
+                include_bytes!("../../../scripts/native-performance-marker.lua"),
+            )?;
+            let staged = LuaWorker::stage(&source)?;
+            let server = thread::spawn(move || -> Result<()> {
+                let fallback = Supervisor::new_fallback_with_logind(
+                    hardware,
+                    state,
+                    logind.clone(),
+                    Some(LuaSource::embedded(default_source_bytes())),
+                )?;
+                run_broker(
+                    listener,
+                    fallback,
+                    SessionAuthorizer::new(logind),
+                    stop,
+                    SEAT,
+                    PeerVerification::Test,
+                )
+            });
+            let mut client = BrokerHardware::new_at(socket);
+            let touch = TouchEvent {
+                phase: TouchPhase::Down,
+                id: 7,
+                time: 0.0,
+                x: 2.0,
+                y: 1.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            };
+            let result = (|| -> Result<()> {
+                client.claim()?;
+                client.present(&staged.worker.render_next()?)?;
+                shared.inject(HardwareEvent::Touch(touch));
+                ensure!(
+                    client.poll(Duration::ZERO)? == vec![HardwareEvent::Touch(touch)],
+                    "broker did not preserve the normalized receipt"
+                );
+                client.release()?;
+                Ok(())
+            })();
+            let worker_result = staged.worker.shutdown(StopReason::Shutdown);
+            drop(client);
+            running.store(false, Ordering::Release);
+            let server_result = server.join().expect("private observed broker panicked");
+            result?;
+            worker_result?;
+            server_result?;
+            let raw = observer.close();
+            let minimal = timing.close();
+            assert_eq!(minimal.lost, 0);
+            assert_eq!(minimal.failed_spans, 0);
+            assert!(minimal
+                .records
+                .iter()
+                .any(|sample| sample.kind == SpanKind::Present
+                    && sample.frame_bearing
+                    && sample.status == SpanStatus::Succeeded));
+            if detailed {
+                assert_eq!(raw.lost, 0);
+                assert!(raw.records.iter().any(|record| matches!(&record.kind, EventKind::PresentEntered { marker: Ok(marker), .. } if marker.frame_id() == 1)));
+                assert!(raw.records.iter().any(|record| matches!(
+                    record.kind,
+                    EventKind::PresentReturned { success: true, .. }
+                )));
+                assert!(raw.records.iter().any(|record| matches!(record.kind, EventKind::InputReceived(HardwareEvent::Touch(event)) if event == touch)));
+            } else {
+                assert!(raw.records.is_empty());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn public_cli_crosses_broker_supervisor_worker_and_fake_hardware() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let broker_socket = directory.path().join("broker.sock");

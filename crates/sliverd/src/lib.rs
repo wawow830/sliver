@@ -5,6 +5,8 @@ mod clock;
 mod config_selection;
 mod default_source;
 mod diagnostic_capture_transport;
+mod diagnostic_fixture;
+mod diagnostic_hardware;
 mod diagnostic_observer;
 mod diagnostic_timing;
 mod frame_canvas;

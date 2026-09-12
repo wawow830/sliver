@@ -198,6 +198,1288 @@ fn diagnostic_pixel_marker_rejects_ambiguous_identities_before_presenting() -> R
 }
 
 #[test]
+fn private_p1_fixture_binds_exact_source_and_uses_private_marker_and_allocation_ids() -> Result<()>
+{
+    use crate::diagnostic_fixture::{Clock, Fixture, Mode, Plan, SyntheticClock, SOURCE};
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("fixture.lua");
+    std::fs::write(&source, SOURCE)?;
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        "error('untrusted marker loaded')",
+    )?;
+    let clock = SyntheticClock::new(0);
+    let fixture = Fixture::new(
+        Plan::new("fixture", "g", 8_000_000_000, 30, Mode::B)?,
+        Clock::Synthetic(clock.clone()),
+    )?;
+    let timing = TimingCapture::new(16)?;
+    let worker = LuaWorker::stage_fixture(
+        &LuaSource::file(source.clone()),
+        fixture.clone(),
+        None,
+        timing.clone(),
+    )?
+    .worker;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    for id in [1, 2] {
+        // This intended scheduler value is not the fixture's phase clock.
+        let frame = worker.render_at(987654321.0, 0.0)?;
+        let marker = crate::diagnostic_observer::decode(&frame.frame).unwrap();
+        assert_eq!(marker.frame_id(), id);
+        assert_eq!(marker.run_id(), b"fixture");
+        assert_eq!(marker.input_id(), None);
+        hardware.present(&frame.frame)?;
+    }
+    worker.shutdown(StopReason::Shutdown)?;
+    hardware.release()?;
+    assert_eq!(fixture.report().allocated, 2);
+    assert!(fixture.report().synthetic);
+    assert_eq!(timing.close().completed_spans, 2);
+    assert!(LuaWorker::stage(&source)
+        .err()
+        .context("canonical fixture accepted without capability")?
+        .to_string()
+        .contains("private P1 capability required"));
+    let marker = directory.path().join("executed");
+    let wrong = LuaSource::embedded(
+        format!(
+            "local f=assert(io.open({:?}, 'w')); f:write('bad'); f:close(); return {{}}",
+            marker.to_string_lossy()
+        )
+        .into_bytes(),
+    );
+    let rejected = Fixture::new(
+        Plan::new("wrong", "g", 8_000_000_000, 30, Mode::A)?,
+        Clock::Synthetic(clock),
+    )?;
+    assert!(
+        LuaWorker::stage_fixture(&wrong, rejected.clone(), None, TimingCapture::new(8)?).is_err()
+    );
+    assert!(
+        !marker.exists(),
+        "wrong source executed before byte binding"
+    );
+    assert!(
+        rejected.report().failed,
+        "rejected preflight disappeared from fixture report"
+    );
+    std::fs::write(
+        &source,
+        r#"
+        assert(select('#', ...) == 0, 'ordinary entry received an argument')
+        local sliver = require('sliver.v1')
+        assert(sliver.capture == nil and sliver.fixture == nil)
+        return { api_version=1, render=function() end }
+    "#,
+    )?;
+    LuaWorker::stage(&source)?
+        .worker
+        .shutdown(StopReason::Shutdown)?;
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_quiesces_warmup_and_keeps_abc_scene_and_actual_ids_equal() -> Result<()> {
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, Phase, Plan, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason, VisibilityReason};
+    let mut scenes = Vec::new();
+    let before = crate::diagnostic_observer::clock_ns(false)?;
+    for mode in [Mode::A, Mode::B, Mode::C] {
+        let clock = SyntheticClock::new(1_000_000_000);
+        let fixture = Fixture::new(
+            Plan::new("abc", "g", 8_000_000_000, 30, mode)?,
+            Clock::Synthetic(clock.clone()),
+        )?;
+        let observer = (mode == Mode::C).then(|| Capture::new(128)).transpose()?;
+        let timing = TimingCapture::new(32)?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            observer.clone(),
+            timing.clone(),
+        )?
+        .worker;
+        worker.commit(9000.0, InputState::default())?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        let initial = worker.render_at(9000.0, 0.0)?;
+        hardware.present(&initial.frame)?;
+        fixture.resolve_frame(1, Resolution::Presented, 1_000_000_000)?;
+        clock.set(6_000_000_000); // exactly five seconds since first warmup allocation
+        assert!(worker
+            .drive(DriveRequest::without_input(9010.0, InputState::default()))?
+            .frame
+            .is_none());
+        assert_eq!(fixture.report().phase, Phase::Quiescing);
+        // Explicit trusted coordinator attestation, not Lua or worker inference.
+        fixture.confirm_warmup_closed()?;
+        clock.set(7_999_999_999);
+        assert!(worker
+            .drive(
+                DriveRequest::without_input(9011.0, InputState::default()).with_visibility(
+                    true,
+                    VisibilityReason::Device,
+                    true
+                )
+            )?
+            .frame
+            .is_none());
+        clock.set(8_000_000_000);
+        let measured = worker
+            .drive(
+                DriveRequest::without_input(9012.0, InputState::default()).with_visibility(
+                    true,
+                    VisibilityReason::Device,
+                    true,
+                ),
+            )?
+            .frame
+            .context("T allocation missing")?;
+        hardware.present(&measured.frame)?;
+        fixture.resolve_frame(2, Resolution::Presented, 8_000_000_000)?;
+        if mode != Mode::A {
+            assert_eq!(
+                crate::diagnostic_observer::decode(&measured.frame)
+                    .unwrap()
+                    .frame_id(),
+                2
+            );
+        }
+        scenes.push(measured.frame.pixels().to_vec());
+        clock.set(68_000_000_000);
+        let stopped = worker.drive(
+            DriveRequest::without_input(9100.0, InputState::default()).with_visibility(
+                true,
+                VisibilityReason::Device,
+                true,
+            ),
+        )?;
+        assert!(
+            stopped.frame.is_none(),
+            "periodic/forced render allocated at S"
+        );
+        assert_eq!(
+            stopped.next_worker_deadline, None,
+            "periodic timer was not retired"
+        );
+        clock.set(70_000_000_000);
+        fixture.finish()?;
+        worker.shutdown(StopReason::Shutdown)?;
+        hardware.release()?;
+        let report = fixture.report();
+        assert_eq!(report.allocated, 2);
+        assert_eq!(report.warmup_closed_ns, Some(6_000_000_000));
+        assert_eq!(report.phase, Phase::Ended);
+        assert!(!report.failed && report.closed && report.synthetic);
+        assert_eq!(timing.close().completed_spans, 2);
+        if let Some(observer) = observer {
+            let raw = observer.close();
+            let allocations: Vec<_> = raw
+                .records
+                .iter()
+                .filter_map(|r| match r.kind {
+                    EventKind::RenderAllocated { attempt } => Some((attempt, r.at_ns)),
+                    _ => None,
+                })
+                .collect();
+            let admitted: Vec<_> = report
+                .observations
+                .iter()
+                .filter_map(|o| match o.kind {
+                    crate::diagnostic_fixture::ObservationKind::Allocated { frame_id, .. } => {
+                        Some((frame_id, o.host_ns))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                allocations, admitted,
+                "capability and raw allocation must share actual clock sample"
+            );
+            let after = crate::diagnostic_observer::clock_ns(false)?;
+            assert!(
+                allocations
+                    .iter()
+                    .all(|(_, at)| (before..=after).contains(at)),
+                "synthetic phase time was substituted for actual CLOCK_MONOTONIC allocation"
+            );
+            assert_eq!(raw.lost, 0);
+        } else {
+            assert!(
+                report.observations.is_empty(),
+                "detailed fixture recorder enabled in A/B"
+            );
+        }
+    }
+    for y in 0..60 {
+        for x in 0..2008 {
+            if (188..1820).contains(&x) && (4..12).contains(&y) {
+                continue;
+            }
+            let offset = (y * 2008 + x) * 4;
+            assert_eq!(
+                &scenes[0][offset..offset + 4],
+                &scenes[1][offset..offset + 4]
+            );
+            assert_eq!(
+                &scenes[1][offset..offset + 4],
+                &scenes[2][offset..offset + 4]
+            );
+        }
+    }
+    assert_eq!(
+        scenes[1], scenes[2],
+        "B/C must include identical marker pixels"
+    );
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_mutates_only_delivered_down_and_drains_confirmed_pre_stop_input() -> Result<()>
+{
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, ObservationKind, Plan, Receipt, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::Capture;
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::hardware::HardwareEvent;
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason, VisibilityReason};
+    let clock = SyntheticClock::new(1_000_000_000);
+    let fixture = Fixture::new(
+        Plan::new("causal", "g", 8_000_000_000, 30, Mode::C)?.causal_response()?,
+        Clock::Synthetic(clock.clone()),
+    )?;
+    use crate::diagnostic_capture_transport::{Collector, MappedWriter};
+    use crate::diagnostic_observer::EventKind;
+    let mut collector = Collector::new(128)?;
+    let capture = Capture::from_mapped(MappedWriter::receive(collector.take_worker_storage()?)?)?;
+    let host_before = crate::diagnostic_observer::clock_ns(false)?;
+    let worker = LuaWorker::stage_fixture(
+        &LuaSource::embedded(SOURCE.to_vec()),
+        fixture.clone(),
+        Some(capture.clone()),
+        TimingCapture::new(32)?,
+    )?
+    .worker;
+    worker.commit(1000.0, InputState::default())?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    let first = worker.render_at(1000.0, 0.0)?;
+    capture.present(&mut hardware, &first.frame)?;
+    fixture.resolve_frame(1, Resolution::Presented, 1_000_000_000)?;
+    clock.set(6_000_000_000);
+    fixture.confirm_warmup_closed()?;
+    let down = TouchEvent {
+        phase: TouchPhase::Down,
+        id: 42,
+        time: 987654321.0,
+        x: 0.0,
+        y: 30.0,
+        modifiers: ModifierState::default(),
+        pressure: None,
+        width: None,
+        height: None,
+    };
+    clock.set(67_999_999_999);
+    hardware.inject(HardwareEvent::Touch(down));
+    assert_eq!(
+        capture.poll(&mut hardware, Duration::ZERO)?,
+        [HardwareEvent::Touch(down)]
+    );
+    fixture.receive(Receipt {
+        sequence: 1,
+        received_ns: 67_999_999_999,
+        event: down,
+    })?;
+    clock.set(68_000_000_000);
+    let response = worker.drive(
+        DriveRequest::without_input(9999.0, InputState::default()).with_events(vec![down]),
+    )?;
+    let frame = response
+        .frame
+        .context("confirmed pre-S down must receive a causal-only drain frame")?;
+    let marker = crate::diagnostic_observer::decode(&frame.frame).unwrap();
+    assert_eq!(marker.frame_id(), 2);
+    assert_eq!(marker.input_id(), Some(b"1".as_slice()));
+    capture.present(&mut hardware, &frame.frame)?;
+    fixture.resolve_frame(2, Resolution::Presented, 68_000_000_000)?;
+    let up = TouchEvent {
+        phase: TouchPhase::Up,
+        ..down
+    };
+    clock.set(68_000_000_001);
+    hardware.inject(HardwareEvent::Touch(up));
+    capture.poll(&mut hardware, Duration::ZERO)?;
+    fixture.receive(Receipt {
+        sequence: 2,
+        received_ns: 68_000_000_001,
+        event: up,
+    })?;
+    assert!(worker
+        .drive(
+            DriveRequest::without_input(10000.0, InputState::default())
+                .with_events(vec![up])
+                .with_visibility(true, VisibilityReason::Device, true)
+        )?
+        .frame
+        .is_none());
+    clock.set(70_000_000_000);
+    fixture.finish()?;
+    worker.shutdown(StopReason::Shutdown)?;
+    hardware.release()?;
+    let report = fixture.report();
+    assert!(!report.failed && report.closed && report.synthetic);
+    let mutations: Vec<_> = report
+        .observations
+        .iter()
+        .filter_map(|o| match o.kind {
+            ObservationKind::TokenMutated {
+                receipt_sequence,
+                previous,
+                token,
+            } => Some((receipt_sequence, previous, token, o.decision_ns)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(mutations, [(1, 0, 1, 68_000_000_000)]);
+    assert!(report.observations.iter().any(|o| matches!(
+        o.kind,
+        ObservationKind::ResponseConfirmed {
+            receipt_sequence: 1,
+            frame_id: 2,
+            token: 1,
+            responded_ns: 68_000_000_000,
+        }
+    )));
+    let frames = hardware.presented_frames();
+    assert_eq!(frames[0].rgba_at(0, 30), [1, 0, 113, 255]);
+    assert_eq!(frames[1].rgba_at(0, 30), [2, 37, 113, 255]);
+    capture.finish();
+    let host_after = crate::diagnostic_observer::clock_ns(false)?;
+    let raw = collector.snapshot()?;
+    assert!(raw.initialized && raw.metadata_consistent && raw.report.closed);
+    assert_eq!(raw.report.lost, 0);
+    let exported: Vec<_> = raw
+        .report
+        .records
+        .iter()
+        .filter_map(|r| match r.kind {
+            EventKind::FixtureObserved {
+                synthetic,
+                decision_ns,
+                kind,
+            } => {
+                assert!(synthetic);
+                assert!((host_before..=host_after).contains(&r.at_ns));
+                Some((r.at_ns, decision_ns, kind))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !exported.is_empty(),
+        "fixture observations never reached raw tag32 sink"
+    );
+    assert_eq!(exported.len(), report.observations.len());
+    for ((host_ns, decision_ns, kind), local) in exported.iter().zip(&report.observations) {
+        assert_eq!(
+            (*host_ns, *decision_ns, *kind),
+            (local.host_ns, local.decision_ns, local.kind)
+        );
+    }
+    assert!(
+        exported
+            .iter()
+            .any(|(_, ns, kind)| *ns == 6_000_000_000
+                && matches!(kind, ObservationKind::WarmupClosed))
+    );
+    assert!(exported.iter().any(|(_, ns, kind)| *ns == 68_000_000_000
+        && matches!(
+            kind,
+            ObservationKind::TokenMutated {
+                receipt_sequence: 1,
+                previous: 0,
+                token: 1
+            }
+        )));
+    assert!(exported.iter().any(|(_, _, kind)| matches!(
+        kind,
+        ObservationKind::ResponseConfirmed {
+            receipt_sequence: 1,
+            frame_id: 2,
+            token: 1,
+            responded_ns: 68_000_000_000
+        }
+    )));
+    assert!(exported
+        .iter()
+        .any(|(_, ns, kind)| *ns == 70_000_000_000 && matches!(kind, ObservationKind::Closed)));
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_never_acknowledges_a_closure_lost_by_raw_storage() -> Result<()> {
+    use crate::diagnostic_capture_transport::{Collector, MappedWriter};
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, Plan, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::Capture;
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    // Normal staging, render/selection and resolution produce seven records;
+    // Quiescing and WarmupClosed add two; Ended and Closed add another two.
+    for capacity in [8, 10] {
+        let clock = SyntheticClock::new(1_000_000_000);
+        let fixture = Fixture::new(
+            Plan::new("terminal-loss", "g", 8_000_000_000, 30, Mode::C)?,
+            Clock::Synthetic(clock.clone()),
+        )?;
+        let mut collector = Collector::new(capacity)?;
+        let capture =
+            Capture::from_mapped(MappedWriter::receive(collector.take_worker_storage()?)?)?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            Some(capture.clone()),
+            TimingCapture::new(8)?,
+        )?
+        .worker;
+        worker.render_at(0.0, 0.0)?;
+        fixture.resolve_frame(1, Resolution::Discarded, 1_000_000_000)?;
+        assert_eq!(collector.snapshot()?.report.attempted_records, 7);
+        clock.set(6_000_000_000);
+        let warmup = fixture.confirm_warmup_closed();
+        if capacity == 8 {
+            assert!(warmup.is_err(), "lost WarmupClosed was acknowledged");
+        } else {
+            warmup?;
+            clock.set(70_000_000_000);
+            assert!(fixture.finish().is_err(), "lost Closed was acknowledged");
+        }
+        let report = fixture.report();
+        assert!(report.failed && !report.closed);
+        assert_eq!(report.lost, 0, "raw overflow is not local observation loss");
+        worker.shutdown(StopReason::Shutdown)?;
+        capture.finish();
+        let raw = collector.snapshot()?;
+        assert!(raw.report.lost > 0 && raw.report.failed_operations > 0);
+        assert_eq!(raw.report.records.len(), capacity);
+    }
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_fails_the_operation_that_exhausts_local_observations() -> Result<()> {
+    use crate::diagnostic_capture_transport::{Collector, MappedWriter};
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, ObservationKind, Plan, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    let clock = SyntheticClock::new(1_000_000_000);
+    let fixture = Fixture::new(
+        Plan::new("local-bound", "g", 8_000_000_000, 30, Mode::C)?,
+        Clock::Synthetic(clock.clone()),
+    )?;
+    let mut collector = Collector::new(32768)?;
+    let capture = Capture::from_mapped(MappedWriter::receive(collector.take_worker_storage()?)?)?;
+    let worker = LuaWorker::stage_fixture(
+        &LuaSource::embedded(SOURCE.to_vec()),
+        fixture.clone(),
+        Some(capture.clone()),
+        TimingCapture::new(8)?,
+    )?
+    .worker;
+    worker.render_at(0.0, 0.0)?;
+    fixture.resolve_frame(1, Resolution::Discarded, 1_000_000_000)?;
+    clock.set(6_000_000_000);
+    fixture.confirm_warmup_closed()?;
+    assert_eq!(fixture.report().observations.len(), 4);
+    for _ in 0..16380 {
+        worker.render_to_slots_at(0.0, 0.0)?;
+    }
+    let full = fixture.report();
+    assert_eq!(full.observations.len(), 16384);
+    assert_eq!(full.lost, 0);
+    assert!(!full.failed);
+    assert!(
+        worker.render_to_slots_at(0.0, 0.0).is_err(),
+        "overflowing fixture observation returned success"
+    );
+    let failed = fixture.report();
+    assert!(failed.failed && !failed.closed);
+    assert_eq!(failed.observations.len(), 16384);
+    assert!(failed.lost > 0);
+    assert_eq!(failed.allocated, 1);
+    worker.shutdown(StopReason::Shutdown)?;
+    capture.finish();
+    let raw = collector.snapshot()?;
+    assert!(raw.metadata_consistent && raw.report.closed);
+    assert_eq!(
+        raw.report.lost, 0,
+        "local loss must not be confused with raw storage loss"
+    );
+    assert!(raw.report.failed_operations > 0);
+    assert!(raw.report.records.iter().any(|r| matches!(
+        r.kind,
+        EventKind::FixtureObserved {
+            kind: ObservationKind::Failed,
+            ..
+        }
+    )));
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_bounds_unresolved_frames_and_queued_receipts_in_all_modes() -> Result<()> {
+    use crate::diagnostic_fixture::{Clock, Fixture, Mode, Plan, Receipt, SyntheticClock, SOURCE};
+    use crate::diagnostic_observer::Capture;
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    for mode in [Mode::A, Mode::B, Mode::C] {
+        for queued_input in [false, true] {
+            let fixture = Fixture::new(
+                Plan::new("bounds", "g", 8_000_000_000, 30, mode)?,
+                Clock::Synthetic(SyntheticClock::new(1_000_000_000)),
+            )?;
+            let capture = (mode == Mode::C).then(|| Capture::new(1024)).transpose()?;
+            let worker = LuaWorker::stage_fixture(
+                &LuaSource::embedded(SOURCE.to_vec()),
+                fixture.clone(),
+                capture.clone(),
+                TimingCapture::new(128)?,
+            )?
+            .worker;
+            let receipt = |sequence| Receipt {
+                sequence,
+                received_ns: 1_000_000_000,
+                event: TouchEvent {
+                    phase: if sequence == 1 {
+                        TouchPhase::Down
+                    } else {
+                        TouchPhase::Move
+                    },
+                    id: 1,
+                    time: 0.0,
+                    x: 0.0,
+                    y: 30.0,
+                    modifiers: ModifierState::default(),
+                    pressure: None,
+                    width: None,
+                    height: None,
+                },
+            };
+            for sequence in 1..=64 {
+                if queued_input {
+                    fixture.receive(receipt(sequence))?;
+                } else {
+                    worker.render_at(0.0, 0.0)?;
+                }
+            }
+            assert!(!fixture.report().failed);
+            let overflow = if queued_input {
+                fixture.receive(receipt(65))
+            } else {
+                worker.render_at(0.0, 0.0).map(|_| ())
+            };
+            assert!(overflow.is_err());
+            let report = fixture.report();
+            assert!(report.failed);
+            assert_eq!(report.allocated, if queued_input { 0 } else { 64 });
+            if mode != Mode::C {
+                assert!(report.observations.is_empty());
+            }
+            assert!(worker.render_at(0.0, 0.0).is_err());
+            worker.shutdown(StopReason::Shutdown)?;
+            if let Some(capture) = capture {
+                let raw = capture.close();
+                assert_eq!(raw.lost, 0);
+                assert!(raw.failed_operations > 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_retains_runtime_failure_and_rejects_later_work() -> Result<()> {
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, ObservationKind, Plan, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::hardware::{InputTransition, ObservedKey};
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason, VisibilityReason};
+    for case in ["invalid-render", "uncommitted-drive", "key", "hidden"] {
+        let fixture = Fixture::new(
+            Plan::new("runtime-failure", "g", 8_000_000_000, 30, Mode::C)?,
+            Clock::Synthetic(SyntheticClock::new(1_000_000_000)),
+        )?;
+        let capture = Capture::new(64)?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            Some(capture.clone()),
+            TimingCapture::new(8)?,
+        )?
+        .worker;
+        if case != "uncommitted-drive" {
+            worker.commit(0.0, InputState::default())?;
+        }
+        let result = match case {
+            "invalid-render" => worker.render_at(f64::NAN, 0.0).map(|_| ()),
+            "uncommitted-drive" => worker
+                .drive(DriveRequest::without_input(0.0, InputState::default()))
+                .map(|_| ()),
+            "key" => worker
+                .drive(DriveRequest::new(
+                    0.0,
+                    InputState::default(),
+                    vec![InputTransition {
+                        key: ObservedKey::Fn,
+                        active: true,
+                        state: InputState {
+                            fn_active: true,
+                            ..InputState::default()
+                        },
+                    }],
+                    0.0,
+                    vec![],
+                ))
+                .map(|_| ()),
+            "hidden" => worker
+                .drive(
+                    DriveRequest::without_input(0.0, InputState::default()).with_visibility(
+                        false,
+                        VisibilityReason::Device,
+                        false,
+                    ),
+                )
+                .map(|_| ()),
+            _ => unreachable!(),
+        };
+        assert!(
+            result.is_err(),
+            "unexpected {case} accepted by canonical fixture"
+        );
+        assert!(
+            fixture.report().failed,
+            "runtime {case} error escaped fixture failure accounting"
+        );
+        assert_eq!(fixture.report().allocated, 0);
+        assert!(
+            worker.render_at(0.0, 0.0).is_err(),
+            "failed fixture resumed rendering"
+        );
+        assert_eq!(fixture.report().allocated, 0);
+        worker.shutdown(StopReason::Shutdown)?;
+        assert!(fixture
+            .report()
+            .observations
+            .iter()
+            .any(|o| matches!(o.kind, ObservationKind::Failed)));
+        let raw = capture.close();
+        assert_eq!(raw.lost, 0);
+        assert!(raw.failed_operations > 0);
+        assert!(raw.records.iter().any(|r| matches!(
+            r.kind,
+            EventKind::FixtureObserved {
+                synthetic: true,
+                kind: ObservationKind::Failed,
+                ..
+            }
+        )));
+    }
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_rejects_raw_loss_or_premature_storage_closure() -> Result<()> {
+    use crate::diagnostic_capture_transport::{Collector, MappedWriter};
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, Plan, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::Capture;
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    for capacity in [1, 128] {
+        let clock = SyntheticClock::new(1_000_000_000);
+        let fixture = Fixture::new(
+            Plan::new("raw-health", "g", 8_000_000_000, 30, Mode::C)?,
+            Clock::Synthetic(clock.clone()),
+        )?;
+        let mut collector = Collector::new(capacity)?;
+        let capture =
+            Capture::from_mapped(MappedWriter::receive(collector.take_worker_storage()?)?)?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            Some(capture.clone()),
+            TimingCapture::new(8)?,
+        )?
+        .worker;
+        worker.commit(0.0, InputState::default())?;
+        let rendered = worker.render_at(0.0, 0.0);
+        if capacity == 1 {
+            assert!(
+                rendered.is_err(),
+                "known raw loss must reject further allocation"
+            );
+            assert!(collector.snapshot()?.report.lost > 0);
+        } else {
+            rendered?;
+            fixture.resolve_frame(1, Resolution::Discarded, 1_000_000_000)?;
+            assert_eq!(collector.snapshot()?.report.lost, 0);
+            capture.finish();
+        }
+        clock.set(6_000_000_000);
+        assert!(
+            fixture.confirm_warmup_closed().is_err(),
+            "unhealthy raw storage was accepted"
+        );
+        assert!(fixture.report().failed);
+        clock.set(70_000_000_000);
+        assert!(fixture.finish().is_err());
+        worker.shutdown(StopReason::Shutdown)?;
+        capture.finish();
+        let raw = collector.snapshot()?;
+        assert!(raw.metadata_consistent && raw.report.closed);
+        assert!(raw.report.failed_operations > 0);
+        assert!(raw.report.lost > 0);
+        assert!(raw.report.records.len() <= capacity);
+        if capacity == 1 {
+            assert_eq!(raw.report.records.len(), 1);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_rejects_early_unresolved_and_contradicted_warmup_closure() -> Result<()> {
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, Plan, Receipt, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    for case in ["early", "unresolved", "at-T", "late-receipt"] {
+        let clock = SyntheticClock::new(1_000_000_000);
+        let fixture = Fixture::new(
+            Plan::new("warmup", "g", 8_000_000_000, 30, Mode::B)?,
+            Clock::Synthetic(clock.clone()),
+        )?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            None,
+            TimingCapture::new(8)?,
+        )?
+        .worker;
+        worker.commit(0.0, InputState::default())?;
+        let initial = worker.render_at(0.0, 0.0)?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&initial.frame)?;
+        if case != "unresolved" {
+            fixture.resolve_frame(1, Resolution::Presented, 1_000_000_000)?;
+        }
+        clock.set(match case {
+            "early" => 5_999_999_999,
+            "at-T" => 8_000_000_000,
+            _ => 6_000_000_000,
+        });
+        if case == "late-receipt" {
+            fixture.confirm_warmup_closed()?;
+            clock.set(8_000_000_000);
+            let down = TouchEvent {
+                phase: TouchPhase::Down,
+                id: 1,
+                time: 123.0,
+                x: 0.0,
+                y: 0.0,
+                modifiers: ModifierState::default(),
+                pressure: None,
+                width: None,
+                height: None,
+            };
+            assert!(
+                fixture
+                    .receive(Receipt {
+                        sequence: 1,
+                        received_ns: 7_000_000_000,
+                        event: down
+                    })
+                    .is_err(),
+                "late pre-T receipt contradicts the coordinator's quiescence assertion"
+            );
+        } else {
+            assert!(
+                fixture.confirm_warmup_closed().is_err(),
+                "accepted {case} closure"
+            );
+        }
+        assert!(
+            fixture.report().failed,
+            "failed preflight must remain failed: {case}"
+        );
+        worker.shutdown(StopReason::Shutdown)?;
+        hardware.release()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_suppresses_request_crossing_stop_before_allocation() -> Result<()> {
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, ObservationKind, Plan, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason};
+    let clock = SyntheticClock::new(1_000_000_000);
+    let fixture = Fixture::new(
+        Plan::new("cross-stop", "g", 8_000_000_000, 60, Mode::C)?,
+        Clock::Synthetic(clock.clone()),
+    )?;
+    let capture = Capture::new(64)?;
+    let worker = LuaWorker::stage_fixture(
+        &LuaSource::embedded(SOURCE.to_vec()),
+        fixture.clone(),
+        Some(capture.clone()),
+        TimingCapture::new(16)?,
+    )?
+    .worker;
+    worker.commit(0.0, InputState::default())?;
+    let frame = worker.render_at(0.0, 0.0)?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    hardware.present(&frame.frame)?;
+    fixture.resolve_frame(1, Resolution::Presented, 1_000_000_000)?;
+    clock.set(6_000_000_000);
+    fixture.confirm_warmup_closed()?;
+    // Fake clock crosses S after periodic admission and the Lua phase check,
+    // before allocation. All subsequent decisions stay at S. No native claim.
+    clock.script(&[67_999_999_999, 67_999_999_999, 68_000_000_000]);
+    let effects = worker.drive(DriveRequest::without_input(1000.0, InputState::default()))?;
+    assert!(effects.frame.is_none());
+    assert_eq!(effects.next_worker_deadline, None);
+    worker.shutdown(StopReason::Shutdown)?;
+    hardware.release()?;
+    let raw = capture.close();
+    assert_eq!(
+        raw.records
+            .iter()
+            .filter(|r| matches!(r.kind, EventKind::RedrawRequested { .. }))
+            .count(),
+        1,
+        "test must really request a redraw before S, not merely skip a late callback"
+    );
+    assert_eq!(
+        raw.records
+            .iter()
+            .filter(|r| matches!(r.kind, EventKind::TimerDispatched { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(fixture.report().allocated, 1);
+    assert!(fixture
+        .report()
+        .observations
+        .iter()
+        .any(|o| o.decision_ns == 68_000_000_000 && matches!(o.kind, ObservationKind::Suppressed)));
+    assert_eq!(hardware.presented_frames().len(), 1);
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_rejects_missing_or_invalid_input_context_and_requires_end_closure(
+) -> Result<()> {
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, Plan, Receipt, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason};
+    for case in [
+        "missing-receipt",
+        "post-S-down",
+        "duplicate-contact",
+        "unanswered",
+        "unreleased",
+        "release-at-E",
+        "release-after-E",
+        "late-response",
+    ] {
+        let clock = SyntheticClock::new(1_000_000_000);
+        let fixture = Fixture::new(
+            Plan::new("input-closure", "g", 8_000_000_000, 30, Mode::B)?.causal_response()?,
+            Clock::Synthetic(clock.clone()),
+        )?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            None,
+            TimingCapture::new(16)?,
+        )?
+        .worker;
+        worker.commit(0.0, InputState::default())?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&worker.render_at(0.0, 0.0)?.frame)?;
+        fixture.resolve_frame(1, Resolution::Presented, 1_000_000_000)?;
+        clock.set(6_000_000_000);
+        fixture.confirm_warmup_closed()?;
+        let down = TouchEvent {
+            phase: TouchPhase::Down,
+            id: 1,
+            time: 0.0,
+            x: 2007.0,
+            y: 59.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        clock.set(8_000_000_000);
+        if case == "missing-receipt" {
+            assert!(worker
+                .drive(
+                    DriveRequest::without_input(1000.0, InputState::default())
+                        .with_events(vec![down])
+                )
+                .is_err());
+        } else if case == "post-S-down" {
+            clock.set(68_000_000_000);
+            assert!(fixture
+                .receive(Receipt {
+                    sequence: 1,
+                    received_ns: 68_000_000_000,
+                    event: down
+                })
+                .is_err());
+        } else {
+            fixture.receive(Receipt {
+                sequence: 1,
+                received_ns: 8_000_000_000,
+                event: down,
+            })?;
+            let response = worker
+                .drive(
+                    DriveRequest::without_input(1000.0, InputState::default())
+                        .with_events(vec![down]),
+                )?
+                .frame
+                .context("input response missing")?;
+            if case != "late-response" && case != "unanswered" {
+                hardware.present(&response.frame)?;
+                fixture.resolve_frame(2, Resolution::Presented, 8_000_000_000)?;
+            }
+            let up = TouchEvent {
+                phase: TouchPhase::Up,
+                ..down
+            };
+            match case {
+                "duplicate-contact" => {
+                    assert!(fixture
+                        .receive(Receipt {
+                            sequence: 2,
+                            received_ns: 8_000_000_000,
+                            event: down,
+                        })
+                        .is_err());
+                }
+                "unanswered" => {
+                    fixture.receive(Receipt {
+                        sequence: 2,
+                        received_ns: 8_000_000_000,
+                        event: up,
+                    })?;
+                    worker.drive(
+                        DriveRequest::without_input(1000.0, InputState::default())
+                            .with_events(vec![up]),
+                    )?;
+                    assert!(fixture
+                        .receive(Receipt {
+                            sequence: 3,
+                            received_ns: 8_000_000_000,
+                            event: down,
+                        })
+                        .is_err());
+                }
+                "unreleased" => {
+                    clock.set(70_000_000_000);
+                    assert!(
+                        fixture.finish().is_err(),
+                        "unreleased contact disappeared at E"
+                    );
+                }
+                "release-at-E" | "release-after-E" => {
+                    clock.set(70_000_000_000);
+                    fixture.receive(Receipt {
+                        sequence: 2,
+                        received_ns: 70_000_000_000,
+                        event: up,
+                    })?;
+                    if case == "release-after-E" {
+                        clock.set(70_000_000_001);
+                    }
+                    let delivery = worker.drive(
+                        DriveRequest::without_input(2000.0, InputState::default())
+                            .with_events(vec![up]),
+                    );
+                    if case == "release-after-E" {
+                        assert!(delivery.is_err(), "callback delivery after E was accepted");
+                        assert!(fixture.finish().is_err());
+                    } else {
+                        assert!(delivery?.frame.is_none());
+                        fixture.finish()?;
+                    }
+                }
+                "late-response" => {
+                    clock.set(70_000_000_001);
+                    hardware.present(&response.frame)?;
+                    assert!(
+                        fixture
+                            .resolve_frame(2, Resolution::Presented, 70_000_000_001)
+                            .is_err(),
+                        "late coordinator response was backdated"
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(
+            fixture.report().failed,
+            case != "release-at-E",
+            "case {case}"
+        );
+        worker.shutdown(StopReason::Shutdown)?;
+        hardware.release()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_rejects_regressed_coordinator_clock_without_resolving_work() -> Result<()> {
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, Plan, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    let clock = SyntheticClock::new(1_000_000_000);
+    let fixture = Fixture::new(
+        Plan::new("clock", "g", 8_000_000_000, 30, Mode::B)?,
+        Clock::Synthetic(clock.clone()),
+    )?;
+    let worker = LuaWorker::stage_fixture(
+        &LuaSource::embedded(SOURCE.to_vec()),
+        fixture.clone(),
+        None,
+        TimingCapture::new(8)?,
+    )?
+    .worker;
+    let frame = worker.render_at(0.0, 0.0)?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    hardware.present(&frame.frame)?;
+    clock.set(999_999_999);
+    assert!(
+        fixture
+            .resolve_frame(1, Resolution::Presented, 1_000_000_000)
+            .is_err(),
+        "response timestamp preceded allocation"
+    );
+    clock.set(6_000_000_000);
+    assert!(
+        fixture.confirm_warmup_closed().is_err(),
+        "clock regression disappeared after time advanced again"
+    );
+    assert!(fixture.report().failed);
+    worker.shutdown(StopReason::Shutdown)?;
+    hardware.release()?;
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_rejects_receipt_overlap_before_callback_or_response_delivery() -> Result<()> {
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, Plan, Receipt, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason};
+    for delivered in [false, true] {
+        let clock = SyntheticClock::new(1_000_000_000);
+        let fixture = Fixture::new(
+            Plan::new("receipt-overlap", "g", 8_000_000_000, 30, Mode::B)?.causal_response()?,
+            Clock::Synthetic(clock.clone()),
+        )?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            None,
+            TimingCapture::new(16)?,
+        )?
+        .worker;
+        worker.commit(0.0, InputState::default())?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        hardware.present(&worker.render_at(0.0, 0.0)?.frame)?;
+        fixture.resolve_frame(1, Resolution::Presented, 1_000_000_000)?;
+        clock.set(6_000_000_000);
+        fixture.confirm_warmup_closed()?;
+        let down = TouchEvent {
+            phase: TouchPhase::Down,
+            id: 1,
+            time: 0.0,
+            x: 0.0,
+            y: 0.0,
+            modifiers: ModifierState::default(),
+            pressure: None,
+            width: None,
+            height: None,
+        };
+        let up = TouchEvent {
+            phase: TouchPhase::Up,
+            ..down
+        };
+        clock.set(8_000_000_000);
+        fixture.receive(Receipt {
+            sequence: 1,
+            received_ns: 8_000_000_000,
+            event: down,
+        })?;
+        let response = if delivered {
+            worker
+                .drive(
+                    DriveRequest::without_input(1000.0, InputState::default())
+                        .with_events(vec![down]),
+                )?
+                .frame
+        } else {
+            None
+        };
+        fixture.receive(Receipt {
+            sequence: 2,
+            received_ns: 8_000_000_000,
+            event: up,
+        })?;
+        assert!(
+            fixture
+                .receive(Receipt {
+                    sequence: 3,
+                    received_ns: 8_000_000_000,
+                    event: down
+                })
+                .is_err(),
+            "new receipt while previous down unanswered was accepted (delivered={delivered})"
+        );
+        if let Some(response) = response {
+            hardware.present(&response.frame)?;
+            fixture.resolve_frame(2, Resolution::Presented, 8_000_000_000)?;
+            assert!(
+                fixture.report().failed,
+                "later response confirmation erased known receipt overlap"
+            );
+        }
+        worker.shutdown(StopReason::Shutdown)?;
+        hardware.release()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn private_p1_fixture_preserves_supplied_response_endpoint_separate_from_confirmation_time(
+) -> Result<()> {
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, ObservationKind, Plan, Receipt, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::Capture;
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason};
+    let clock = SyntheticClock::new(1_000_000_000);
+    let fixture = Fixture::new(
+        Plan::new("response-time", "g", 8_000_000_000, 30, Mode::C)?.causal_response()?,
+        Clock::Synthetic(clock.clone()),
+    )?;
+    let worker = LuaWorker::stage_fixture(
+        &LuaSource::embedded(SOURCE.to_vec()),
+        fixture.clone(),
+        Some(Capture::new(128)?),
+        TimingCapture::new(16)?,
+    )?
+    .worker;
+    worker.commit(0.0, InputState::default())?;
+    let mut hardware = FakeTouchBar::new();
+    hardware.claim()?;
+    hardware.present(&worker.render_at(0.0, 0.0)?.frame)?;
+    fixture.resolve_frame(1, Resolution::Presented, 1_000_000_000)?;
+    clock.set(6_000_000_000);
+    fixture.confirm_warmup_closed()?;
+    let down = TouchEvent {
+        phase: TouchPhase::Down,
+        id: 1,
+        time: 987654321.0,
+        x: 0.0,
+        y: 0.0,
+        modifiers: ModifierState::default(),
+        pressure: None,
+        width: None,
+        height: None,
+    };
+    clock.set(8_000_000_000);
+    fixture.receive(Receipt {
+        sequence: 1,
+        received_ns: 8_000_000_000,
+        event: down,
+    })?;
+    let response = worker
+        .drive(DriveRequest::without_input(1000.0, InputState::default()).with_events(vec![down]))?
+        .frame
+        .context("response missing")?;
+    clock.set(8_010_000_000);
+    hardware.present(&response.frame)?;
+    clock.set(8_020_000_000); // the coordinator delivers its confirmation later
+    fixture.resolve_frame(2, Resolution::Presented, 8_010_000_000)?;
+    let report = fixture.report();
+    assert!(report
+        .observations
+        .iter()
+        .any(|o| o.decision_ns == 8_020_000_000
+            && matches!(
+                o.kind,
+                ObservationKind::ResponseConfirmed {
+                    receipt_sequence: 1,
+                    frame_id: 2,
+                    token: 1,
+                    responded_ns: 8_010_000_000
+                }
+            )));
+    // Calls must preserve source event order; a later-reported earlier receipt
+    // cannot be used to erase an overlap or invent a negative response interval.
+    assert!(fixture
+        .receive(Receipt {
+            sequence: 2,
+            received_ns: 8_005_000_000,
+            event: TouchEvent {
+                phase: TouchPhase::Up,
+                ..down
+            }
+        })
+        .is_err());
+    assert!(fixture.report().failed);
+    worker.shutdown(StopReason::Shutdown)?;
+    hardware.release()?;
+    Ok(())
+}
+
+#[test]
 fn private_diagnostic_capture_records_timer_registration_activation_and_cancellation() -> Result<()>
 {
     use crate::diagnostic_observer::{Capture, EventKind};

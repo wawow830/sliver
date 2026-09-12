@@ -14,8 +14,9 @@ private control socket **before `Runtime::load`**, so source evaluation and
 startup observations do not disappear.
 
 A single ancillary-bearing bootstrap byte precedes the existing framed source
-packet. Ordinary staging sends Off; requested test capture sends exactly one
-storage FD with `SCM_RIGHTS`. This works after either launch mechanism's existing
+packet. Ordinary staging sends Off; requested test capture selects detailed-plus-
+minimal or minimal-only recording and sends exactly one storage FD with
+`SCM_RIGHTS`. The actual bootstrap level is retained as raw tag26. This works after either launch mechanism's existing
 connection: arbitrary FDs do not have to survive `systemd-run` or test-child
 inherited-descriptor cleanup. No numeric descriptor, environment variable, Lua
 option or broker identity field enables observation.
@@ -78,7 +79,11 @@ duplicate observations must not be mistaken for separate attempts. Failed or
 abandoned minimal spans contribute failure observations; repeated timing
 summaries do not recount earlier failures. Minimal-clock failures remain in the
 timing summary and must be checked alongside raw-record clock failures.
-Detailed error strings still use the ordinary error reply/journal path.
+Detailed error strings still use the ordinary error reply/journal path. Fixture
+failure and failed-resolution observations also increment the failure counter,
+without granting source authority or unique-work credit. Fixed tags27/32 preserve
+[calibration and fixture clock domains](native-performance-fixture.md); neither is
+an evaluator-shaped evidence conversion.
 
 Normal finalization occurs after the runtime and its producers are dropped:
 minimal timing emits its fixed summary, then raw capture closes metadata.
@@ -110,8 +115,10 @@ mapping tests demonstrate opener-versus-owner teardown semantics. These tests
 use direct disposable child processes, not installed services or hardware.
 
 This does **not** yet establish broker/supervisor service provisioning, three
-independent observed service processes, a timed P1 fixture, actual token-mutation
-instrumentation, native A/B/C overhead comparisons, trusted installed provenance,
-complete edge/cohort assembly, or a release artifact schema/verifier. Raw records
+independent observed service processes, full timed-fixture/coordinator integration,
+native A/B/C overhead comparisons, trusted installed provenance, complete
+edge/cohort assembly, or a release artifact schema/verifier. The separate
+[fixture slice](native-performance-fixture.md) implements reviewed source binding,
+actual token mutation and synthetic in-process phase tests, not native acceptance. Raw records
 must not be padded with guessed fields to fit the offline evaluator. Legacy
 ledgers and their old numeric gates remain unchanged until coherent integration.

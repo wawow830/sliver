@@ -14,6 +14,8 @@ use crate::hardware::{LogicalFrame, TouchBarHardware};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SpanKind {
+    /// An explicit no-op sampler probe, never fixture/render/hardware work.
+    Calibration,
     RenderCallback,
     Present,
     SupervisorDrive,
@@ -54,6 +56,7 @@ pub(crate) struct Report {
     pub(crate) clock_resolution_ns: u64,
     pub(crate) record_bytes: usize,
     pub(crate) clock_read_samples_ns: [u64; 32],
+    pub(crate) counter_cost_samples_ns: Option<[u64; 32]>,
 }
 
 #[derive(Clone, Debug)]
@@ -157,8 +160,61 @@ impl TimingCapture {
                 clock_resolution_ns: clock_ns(true)?,
                 record_bytes: std::mem::size_of::<Sample>(),
                 clock_read_samples_ns,
+                counter_cost_samples_ns: None,
             },
         }))))
+    }
+
+    /// Measure the complete minimal sampler (clock reads, counters, retention
+    /// and optional raw export), not hardware or callback work. Invoke once,
+    /// before any work spans/arming. Retain the no-op probes explicitly rather
+    /// than resetting counters or pretending they are fixture calls.
+    pub(crate) fn calibrate(&self) -> Result<[u64; 32]> {
+        {
+            let state = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            ensure!(
+                !state.report.closed && state.report.started_spans == 0,
+                "minimal calibration must precede work and closure"
+            );
+            if let Some(export) = &state.export {
+                export.ensure_open_and_healthy()?;
+            }
+        }
+        let mut cost_ns = [0; 32];
+        for cost in &mut cost_ns {
+            let before = clock_ns(false)?;
+            self.begin(SpanKind::Calibration).finish(false, true);
+            let after = clock_ns(false)?;
+            ensure!(after >= before, "monotonic calibration clock regressed");
+            *cost = after - before;
+        }
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let State { report, export } = &mut *state;
+        ensure!(
+            !report.closed
+                && report.started_spans == 32
+                && report.completed_spans == 32
+                && report.open_spans == 0
+                && report.failed_spans == 0
+                && report.clock_failures == 0
+                && report.lost == 0,
+            "minimal calibration overlaps work or has errors/loss"
+        );
+        if let Some(export) = export {
+            export.ensure_open_and_healthy()?;
+            export.record(crate::diagnostic_observer::EventKind::MinimalCalibration { cost_ns });
+            // The aggregate record can itself overflow the authoritative raw
+            // source even when all 32 probe records fitted.
+            export.ensure_open_and_healthy()?;
+        }
+        report.counter_cost_samples_ns = Some(cost_ns);
+        Ok(cost_ns)
     }
 
     pub(crate) fn begin(&self, kind: SpanKind) -> Span {
@@ -344,6 +400,108 @@ mod tests {
         assert!(summary
             .closed_at_ns
             .is_some_and(|closed| closed >= sample.end_ns));
+        Ok(())
+    }
+
+    #[test]
+    fn private_minimal_timing_calibrates_complete_sampler_cost_without_work_credit() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, MappedWriter};
+        use crate::diagnostic_observer::{Capture, EventKind};
+        let mut collector = Collector::new(40)?;
+        let capture =
+            Capture::from_mapped(MappedWriter::receive(collector.take_worker_storage()?)?)?;
+        let timing = TimingCapture::exporting(40, capture.clone())?;
+        let costs = timing.calibrate()?;
+        assert!(timing.calibrate().is_err());
+        let report = timing.close();
+        assert_eq!(report.counter_cost_samples_ns, Some(costs));
+        assert_eq!(report.completed_spans, 32);
+        assert_eq!(report.failed_spans, 0);
+        capture.finish();
+        let raw = collector.snapshot()?;
+        assert_eq!(raw.report.lost, 0);
+        let samples: Vec<_> = raw
+            .report
+            .records
+            .iter()
+            .filter_map(|row| match &row.kind {
+                EventKind::MinimalSpan(sample) => Some(sample),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(samples.len(), 32);
+        for (sample, cost) in samples.iter().zip(costs) {
+            assert_eq!(sample.kind, SpanKind::Calibration);
+            assert!(!sample.frame_bearing);
+            assert!(cost >= sample.end_ns - sample.start_ns);
+        }
+        assert!(raw.report.records.iter().any(|row| matches!(row.kind,
+            EventKind::MinimalCalibration { cost_ns } if cost_ns == costs)));
+        Ok(())
+    }
+
+    #[test]
+    fn private_minimal_timing_calibration_cannot_hide_shared_source_overflow() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, MappedWriter};
+        use crate::diagnostic_observer::Capture;
+        let mut collector = Collector::new(1)?;
+        let capture =
+            Capture::from_mapped(MappedWriter::receive(collector.take_worker_storage()?)?)?;
+        let timing = TimingCapture::exporting(64, capture.clone())?;
+        assert!(timing.calibrate().is_err());
+        assert!(timing.close().counter_cost_samples_ns.is_none());
+        capture.finish();
+        assert!(collector.snapshot()?.report.lost > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn private_minimal_timing_calibration_checks_aggregate_retention_and_existing_raw_errors(
+    ) -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, MappedWriter};
+        use crate::diagnostic_observer::{Capture, EventKind};
+        // All probes fit, but the aggregate does not. Local retention cannot
+        // certify calibration when its authoritative raw record is lost.
+        let mut collector = Collector::new(32)?;
+        let capture =
+            Capture::from_mapped(MappedWriter::receive(collector.take_worker_storage()?)?)?;
+        let timing = TimingCapture::exporting(64, capture.clone())?;
+        assert!(timing.calibrate().is_err());
+        let raw = collector.snapshot()?;
+        assert_eq!(raw.report.records.len(), 32);
+        assert_eq!(raw.report.lost, 1);
+        assert!(!raw.report.closed);
+        assert!(timing.close().counter_cost_samples_ns.is_none());
+        capture.finish();
+
+        for failure in 0..4 {
+            let capture = Capture::new(64)?;
+            match failure {
+                0 => capture.record(EventKind::WorkerRunFailed),
+                1 => capture.record_at(
+                    Err(anyhow::anyhow!("injected clock failure")),
+                    EventKind::WorkerCaptureConfigured { detailed: false },
+                ),
+                2 => capture.record(EventKind::Published {
+                    sequence: 1,
+                    marker: Err(crate::diagnostic_observer::DecodeError::Geometry),
+                }),
+                _ => capture.finish(),
+            }
+            let timing = TimingCapture::exporting(64, capture.clone())?;
+            assert!(timing.calibrate().is_err());
+            let local = timing.close();
+            assert_eq!(local.started_spans, 0);
+            assert!(local.counter_cost_samples_ns.is_none());
+            let raw = capture.close();
+            assert_eq!(raw.failed_operations, u64::from(failure == 0));
+            assert_eq!(raw.clock_failures, u64::from(failure == 1));
+            assert_eq!(raw.decode_failures, u64::from(failure == 2));
+            assert!(!raw
+                .records
+                .iter()
+                .any(|record| matches!(record.kind, EventKind::MinimalCalibration { .. })));
+        }
         Ok(())
     }
 

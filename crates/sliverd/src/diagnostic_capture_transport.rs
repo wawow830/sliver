@@ -13,9 +13,10 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use memmap2::MmapMut;
 
+use crate::diagnostic_fixture::{ObservationKind, Phase, Resolution};
 use crate::diagnostic_observer::{
     DecodeError, DiscardReason, EventKind, Marker, Record, Report, TimerDisposition,
 };
@@ -35,6 +36,75 @@ const CLAIM: usize = 6;
 const REVISION: usize = 7;
 const COMMITTED: usize = 8;
 const INITIALIZED: usize = 51;
+
+/// Bounded private bootstrap plan, not launcher/source authentication. The
+/// child revalidates it and always constructs its own HostMonotonic clock.
+#[derive(Clone)]
+pub(crate) struct FixtureBootstrap {
+    pub(crate) run: String,
+    pub(crate) generation: String,
+    pub(crate) start_ns: u64,
+    pub(crate) rate: u32,
+    pub(crate) mode: crate::diagnostic_fixture::Mode,
+    pub(crate) causal: bool,
+}
+impl FixtureBootstrap {
+    pub(crate) fn new(
+        run: &str,
+        generation: &str,
+        start_ns: u64,
+        rate: u32,
+        mode: crate::diagnostic_fixture::Mode,
+    ) -> Result<Self> {
+        crate::diagnostic_fixture::Plan::new(run, generation, start_ns, rate, mode)?;
+        Ok(Self {
+            run: run.into(),
+            generation: generation.into(),
+            start_ns,
+            rate,
+            mode,
+            causal: false,
+        })
+    }
+
+    pub(crate) fn plan(&self) -> Result<crate::diagnostic_fixture::Plan> {
+        let plan = crate::diagnostic_fixture::Plan::new(
+            &self.run,
+            &self.generation,
+            self.start_ns,
+            self.rate,
+            self.mode,
+        )?;
+        if self.causal {
+            plan.causal_response()
+        } else {
+            Ok(plan)
+        }
+    }
+
+    pub(crate) fn capture_level(&self) -> CaptureLevel {
+        match self.mode {
+            crate::diagnostic_fixture::Mode::C => CaptureLevel::Detailed,
+            crate::diagnostic_fixture::Mode::A | crate::diagnostic_fixture::Mode::B => {
+                CaptureLevel::Minimal
+            }
+        }
+    }
+}
+
+/// Explicit coordinator-supplied observations; no timestamp/source authority
+/// is inferred from transport delivery or from successful command completion.
+#[derive(Clone, Copy)]
+pub(crate) enum FixtureControl {
+    Receive(crate::diagnostic_fixture::Receipt),
+    ConfirmWarmupClosed,
+    Finish,
+    Resolve {
+        frame_id: u64,
+        resolution: Resolution,
+        resolved_ns: u64,
+    },
+}
 
 struct Mapping(MmapMut);
 impl Mapping {
@@ -333,16 +403,25 @@ impl MappedWriter {
 // packet. Production sends Off. No ordinary Read may consume this byte first.
 const BOOTSTRAP_OFF: u8 = 0xa0;
 const BOOTSTRAP_WORKER: u8 = 0xa1;
+const BOOTSTRAP_WORKER_MINIMAL: u8 = 0xa2;
+
+/// Recording level, NOT marker/scene mode or authenticated P1 provenance.
+/// Both levels export minimal spans and generic worker failure observations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaptureLevel {
+    Detailed,
+    Minimal,
+}
 
 pub(crate) fn send_bootstrap_storage(
     stream: &UnixStream,
-    fd: Option<&OwnedFd>,
+    storage: Option<(&OwnedFd, CaptureLevel)>,
     deadline: Instant,
 ) -> Result<()> {
-    let mut byte = if fd.is_some() {
-        BOOTSTRAP_WORKER
-    } else {
-        BOOTSTRAP_OFF
+    let mut byte = match storage {
+        Some((_, CaptureLevel::Detailed)) => BOOTSTRAP_WORKER,
+        Some((_, CaptureLevel::Minimal)) => BOOTSTRAP_WORKER_MINIMAL,
+        None => BOOTSTRAP_OFF,
     };
     let mut iov = libc::iovec {
         iov_base: (&mut byte as *mut u8).cast(),
@@ -352,7 +431,7 @@ pub(crate) fn send_bootstrap_storage(
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
-    if let Some(fd) = fd {
+    if let Some((fd, _)) = storage {
         msg.msg_control = control.as_mut_ptr().cast();
         msg.msg_controllen =
             unsafe { libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) } as usize;
@@ -391,7 +470,7 @@ pub(crate) fn send_bootstrap_storage(
 pub(crate) fn receive_bootstrap_storage(
     stream: &UnixStream,
     deadline: Instant,
-) -> Result<Option<MappedWriter>> {
+) -> Result<Option<(MappedWriter, CaptureLevel)>> {
     receive_storage(stream, Some(deadline))
 }
 
@@ -400,11 +479,14 @@ pub(crate) fn receive_bootstrap_storage(
 /// not start a competing timer when it sends HELLO.
 pub(crate) fn receive_parent_bootstrap_storage(
     stream: &UnixStream,
-) -> Result<Option<MappedWriter>> {
+) -> Result<Option<(MappedWriter, CaptureLevel)>> {
     receive_storage(stream, None)
 }
 
-fn receive_storage(stream: &UnixStream, deadline: Option<Instant>) -> Result<Option<MappedWriter>> {
+fn receive_storage(
+    stream: &UnixStream,
+    deadline: Option<Instant>,
+) -> Result<Option<(MappedWriter, CaptureLevel)>> {
     loop {
         if let Some(deadline) = deadline {
             ensure!(
@@ -475,12 +557,18 @@ fn receive_storage(stream: &UnixStream, deadline: Option<Instant>) -> Result<Opt
                 ensure!(fds.is_empty(), "off bootstrap carries descriptors");
                 return Ok(None);
             }
-            BOOTSTRAP_WORKER => {
+            BOOTSTRAP_WORKER | BOOTSTRAP_WORKER_MINIMAL => {
                 ensure!(
                     fds.len() == 1,
                     "worker bootstrap requires exactly one storage descriptor"
                 );
-                return MappedWriter::receive(fds.pop().expect("one descriptor")).map(Some);
+                let level = if byte == BOOTSTRAP_WORKER {
+                    CaptureLevel::Detailed
+                } else {
+                    CaptureLevel::Minimal
+                };
+                return MappedWriter::receive(fds.pop().expect("one descriptor"))
+                    .map(|writer| Some((writer, level)));
             }
             _ => bail!("unknown worker descriptor bootstrap version"),
         }
@@ -556,6 +644,92 @@ impl Encoder {
             Err(DecodeError::Cell) => self.u8(2),
             Err(DecodeError::Packet) => self.u8(3),
         }
+    }
+    fn fixture(&mut self, kind: &ObservationKind) -> Result<()> {
+        match kind {
+            ObservationKind::Phase(phase) => {
+                self.u8(0)?;
+                self.u8(match phase {
+                    Phase::Warmup => 0,
+                    Phase::Quiescing => 1,
+                    Phase::Armed => 2,
+                    Phase::Measured => 3,
+                    Phase::Drain => 4,
+                    Phase::Ended => 5,
+                })?;
+            }
+            ObservationKind::Allocated { frame_id, token } => {
+                self.u8(1)?;
+                self.u64(*frame_id)?;
+                self.u64(*token)?;
+            }
+            ObservationKind::Suppressed => self.u8(2)?,
+            ObservationKind::Resolved {
+                frame_id,
+                resolution,
+                resolved_ns,
+            } => {
+                self.u8(3)?;
+                self.u64(*frame_id)?;
+                self.u8(match resolution {
+                    Resolution::Presented => 0,
+                    Resolution::Discarded => 1,
+                    Resolution::Failed => 2,
+                })?;
+                self.u64(*resolved_ns)?;
+            }
+            ObservationKind::WarmupClosed => self.u8(4)?,
+            ObservationKind::PeriodicRetired { timer_id } => {
+                self.u8(5)?;
+                self.u64(*timer_id)?;
+            }
+            ObservationKind::ReceiptSupplied {
+                receipt_sequence,
+                received_ns,
+                contact,
+                phase,
+            } => {
+                self.u8(6)?;
+                self.u64(*receipt_sequence)?;
+                self.u64(*received_ns)?;
+                self.bytes(&contact.to_le_bytes())?;
+                self.u8(match phase {
+                    TouchPhase::Down => 0,
+                    TouchPhase::Move => 1,
+                    TouchPhase::Up => 2,
+                    TouchPhase::Cancel => 3,
+                })?;
+            }
+            ObservationKind::Delivered { receipt_sequence } => {
+                self.u8(7)?;
+                self.u64(*receipt_sequence)?;
+            }
+            ObservationKind::TokenMutated {
+                receipt_sequence,
+                previous,
+                token,
+            } => {
+                self.u8(8)?;
+                self.u64(*receipt_sequence)?;
+                self.u64(*previous)?;
+                self.u64(*token)?;
+            }
+            ObservationKind::ResponseConfirmed {
+                receipt_sequence,
+                frame_id,
+                token,
+                responded_ns,
+            } => {
+                self.u8(9)?;
+                self.u64(*receipt_sequence)?;
+                self.u64(*frame_id)?;
+                self.u64(*token)?;
+                self.u64(*responded_ns)?;
+            }
+            ObservationKind::Failed => self.u8(10)?,
+            ObservationKind::Closed => self.u8(11)?,
+        }
+        Ok(())
     }
     fn touch(&mut self, t: &TouchEvent) -> Result<()> {
         self.u8(match t.phase {
@@ -761,6 +935,7 @@ fn encode_record(record: &Record) -> Result<[u8; RECORD_BYTES]> {
                 SpanKind::RenderCallback => 0,
                 SpanKind::Present => 1,
                 SpanKind::SupervisorDrive => 2,
+                SpanKind::Calibration => 3,
             })?;
             e.u64(sample.start_ns)?;
             e.u64(sample.end_ns)?;
@@ -797,6 +972,26 @@ fn encode_record(record: &Record) -> Result<[u8; RECORD_BYTES]> {
         }
         WorkerCommandFailed => e.u8(24)?,
         WorkerRunFailed => e.u8(25)?,
+        WorkerCaptureConfigured { detailed } => {
+            e.u8(26)?;
+            e.boolean(*detailed)?;
+        }
+        MinimalCalibration { cost_ns } => {
+            e.u8(27)?;
+            for cost in cost_ns {
+                e.u64(*cost)?;
+            }
+        }
+        FixtureObserved {
+            synthetic,
+            decision_ns,
+            kind,
+        } => {
+            e.u8(32)?;
+            e.boolean(*synthetic)?;
+            e.u64(*decision_ns)?;
+            e.fixture(kind)?;
+        }
     }
     e.bytes[..2].copy_from_slice(&(e.at as u16).to_le_bytes());
     Ok(e.bytes)
@@ -852,6 +1047,67 @@ impl<'a> Decoder<'a> {
             2 => Err(DecodeError::Cell),
             3 => Err(DecodeError::Packet),
             _ => bail!("invalid raw marker status"),
+        })
+    }
+    fn fixture(&mut self) -> Result<ObservationKind> {
+        Ok(match self.u8()? {
+            0 => ObservationKind::Phase(match self.u8()? {
+                0 => Phase::Warmup,
+                1 => Phase::Quiescing,
+                2 => Phase::Armed,
+                3 => Phase::Measured,
+                4 => Phase::Drain,
+                5 => Phase::Ended,
+                _ => bail!("invalid raw fixture phase"),
+            }),
+            1 => ObservationKind::Allocated {
+                frame_id: self.u64()?,
+                token: self.u64()?,
+            },
+            2 => ObservationKind::Suppressed,
+            3 => ObservationKind::Resolved {
+                frame_id: self.u64()?,
+                resolution: match self.u8()? {
+                    0 => Resolution::Presented,
+                    1 => Resolution::Discarded,
+                    2 => Resolution::Failed,
+                    _ => bail!("invalid raw fixture resolution"),
+                },
+                resolved_ns: self.u64()?,
+            },
+            4 => ObservationKind::WarmupClosed,
+            5 => ObservationKind::PeriodicRetired {
+                timer_id: self.u64()?,
+            },
+            6 => ObservationKind::ReceiptSupplied {
+                receipt_sequence: self.u64()?,
+                received_ns: self.u64()?,
+                contact: self.u32()?,
+                phase: match self.u8()? {
+                    0 => TouchPhase::Down,
+                    1 => TouchPhase::Move,
+                    2 => TouchPhase::Up,
+                    3 => TouchPhase::Cancel,
+                    _ => bail!("invalid raw fixture touch phase"),
+                },
+            },
+            7 => ObservationKind::Delivered {
+                receipt_sequence: self.u64()?,
+            },
+            8 => ObservationKind::TokenMutated {
+                receipt_sequence: self.u64()?,
+                previous: self.u64()?,
+                token: self.u64()?,
+            },
+            9 => ObservationKind::ResponseConfirmed {
+                receipt_sequence: self.u64()?,
+                frame_id: self.u64()?,
+                token: self.u64()?,
+                responded_ns: self.u64()?,
+            },
+            10 => ObservationKind::Failed,
+            11 => ObservationKind::Closed,
+            _ => bail!("invalid raw fixture observation tag"),
         })
     }
     fn touch(&mut self) -> Result<TouchEvent> {
@@ -1018,6 +1274,7 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> Result<Record> {
                 0 => SpanKind::RenderCallback,
                 1 => SpanKind::Present,
                 2 => SpanKind::SupervisorDrive,
+                3 => SpanKind::Calibration,
                 _ => bail!("invalid raw minimal span kind"),
             },
             start_ns: d.u64()?,
@@ -1052,6 +1309,23 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> Result<Record> {
         }),
         24 => WorkerCommandFailed,
         25 => WorkerRunFailed,
+        26 => WorkerCaptureConfigured {
+            detailed: d.boolean()?,
+        },
+        27 => MinimalCalibration {
+            cost_ns: {
+                let mut costs = [0; 32];
+                for cost in &mut costs {
+                    *cost = d.u64()?;
+                }
+                costs
+            },
+        },
+        32 => FixtureObserved {
+            synthetic: d.boolean()?,
+            decision_ns: d.u64()?,
+            kind: d.fixture()?,
+        },
         _ => bail!("unknown raw event tag"),
     };
     ensure!(d.at == len, "trailing raw record bytes");
@@ -1110,6 +1384,9 @@ mod tests {
             (BOOTSTRAP_WORKER, 0, "exactly one"),
             (BOOTSTRAP_WORKER, 2, "exactly one"),
             (BOOTSTRAP_WORKER, 8, "truncated"),
+            (BOOTSTRAP_WORKER_MINIMAL, 0, "exactly one"),
+            (BOOTSTRAP_WORKER_MINIMAL, 2, "exactly one"),
+            (BOOTSTRAP_WORKER_MINIMAL, 8, "truncated"),
             (BOOTSTRAP_OFF, 1, "off bootstrap"),
             (0xff, 1, "version"),
         ] {
@@ -1124,7 +1401,11 @@ mod tests {
         assert!(!collector.snapshot()?.initialized);
         // The rejected transfers did not consume/claim the real source ticket.
         let (sender, receiver) = UnixStream::pair()?;
-        send_bootstrap_storage(&sender, Some(&fd), Instant::now() + Duration::from_secs(1))?;
+        send_bootstrap_storage(
+            &sender,
+            Some((&fd, CaptureLevel::Detailed)),
+            Instant::now() + Duration::from_secs(1),
+        )?;
         assert!(
             receive_bootstrap_storage(&receiver, Instant::now() + Duration::from_secs(1))?
                 .is_some()
@@ -1294,6 +1575,415 @@ mod tests {
             2
         );
         assert_eq!(raw.report.clock_failures, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn private_capture_counts_fixture_failure_observations_not_phase_or_summaries() -> Result<()> {
+        use crate::diagnostic_observer::Capture;
+        use crate::diagnostic_timing::TimingCapture;
+        for synthetic in [false, true] {
+            let mut collector = Collector::new(8)?;
+            let capture =
+                Capture::from_mapped(MappedWriter::receive(collector.take_worker_storage()?)?)?;
+            for kind in [
+                ObservationKind::Failed,
+                ObservationKind::Resolved {
+                    frame_id: 7,
+                    resolution: Resolution::Failed,
+                    resolved_ns: 80,
+                },
+                ObservationKind::Resolved {
+                    frame_id: 8,
+                    resolution: Resolution::Discarded,
+                    resolved_ns: 81,
+                },
+                ObservationKind::Resolved {
+                    frame_id: 9,
+                    resolution: Resolution::Presented,
+                    resolved_ns: 82,
+                },
+                ObservationKind::Phase(Phase::Ended),
+                ObservationKind::Closed,
+            ] {
+                capture.record_at(
+                    Ok(100),
+                    EventKind::FixtureObserved {
+                        synthetic,
+                        decision_ns: 90,
+                        kind,
+                    },
+                );
+            }
+            let timing = TimingCapture::exporting(1, capture.clone())?;
+            timing.close();
+            timing.close();
+            capture.finish();
+            let raw = collector.snapshot()?;
+            assert_eq!(
+                raw.report.failed_operations, 2,
+                "Failed and Resolved(Failed) are separate failure observations, synthetic={synthetic}"
+            );
+            assert_eq!(raw.report.clock_failures, 0);
+            assert_eq!(raw.report.records.len(), 8);
+            assert_eq!(raw.report.lost, 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn private_capture_bootstrap_preserves_typed_recording_level() -> Result<()> {
+        for level in [CaptureLevel::Detailed, CaptureLevel::Minimal] {
+            let mut collector = Collector::new(8)?;
+            let fd = collector.take_worker_storage()?;
+            let (sender, receiver) = UnixStream::pair()?;
+            let deadline = Instant::now() + Duration::from_secs(1);
+            send_bootstrap_storage(&sender, Some((&fd, level)), deadline)?;
+            let (writer, received_level) = receive_bootstrap_storage(&receiver, deadline)?
+                .context("requested recording level was dropped")?;
+            assert_eq!(received_level, level);
+            assert_eq!(writer.capacity(), 8);
+            assert!(!collector.snapshot()?.initialized);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn private_capture_encodes_calibration_separately_from_work() -> Result<()> {
+        use crate::diagnostic_observer::Capture;
+        use crate::diagnostic_timing::TimingCapture;
+        use std::os::unix::fs::FileExt;
+        let mut collector = Collector::new(4)?;
+        let fd = collector.take_worker_storage()?;
+        let bytes = std::fs::File::from(fd.try_clone()?);
+        let capture = Capture::from_mapped(MappedWriter::receive(fd)?)?;
+        let timing = TimingCapture::exporting(1, capture.clone())?;
+        timing.begin(SpanKind::Calibration).finish(false, true);
+        let mut costs = [7; 32];
+        costs[0] = 0;
+        costs[31] = u64::MAX;
+        capture.record(EventKind::MinimalCalibration { cost_ns: costs });
+        timing.close();
+        capture.finish();
+        let raw = collector.snapshot()?;
+        assert!(
+            matches!(&raw.report.records[0].kind, EventKind::MinimalSpan(s)
+            if s.kind == SpanKind::Calibration && !s.frame_bearing && s.status == SpanStatus::Succeeded)
+        );
+        assert!(
+            matches!(&raw.report.records[1].kind, EventKind::MinimalCalibration { cost_ns } if *cost_ns == costs)
+        );
+        assert_eq!(raw.report.failed_operations, 0);
+        let mut kind = [0; 1];
+        bytes.read_exact_at(&mut kind, (HEADER_BYTES + 35) as u64)?;
+        assert_eq!(kind, [3], "Calibration has its own span wire kind");
+        let mut encoded = [0; RECORD_BYTES];
+        bytes.read_exact_at(&mut encoded, (HEADER_BYTES + RECORD_BYTES) as u64)?;
+        assert_eq!(&encoded[..2], &275_u16.to_le_bytes());
+        assert_eq!(encoded[18], 27);
+        assert_eq!(&encoded[19..27], &[0; 8]);
+        assert_eq!(&encoded[267..275], &[255; 8]);
+        assert!(encoded[275..].iter().all(|b| *b == 0));
+        Ok(())
+    }
+
+    #[test]
+    fn private_capture_preserves_fixture_endpoint_and_clock_domains() -> Result<()> {
+        use crate::diagnostic_fixture::{ObservationKind, Resolution};
+        use crate::diagnostic_observer::Capture;
+        use std::os::unix::fs::FileExt;
+        let mut collector = Collector::new(4)?;
+        let fd = collector.take_worker_storage()?;
+        let bytes = std::fs::File::from(fd.try_clone()?);
+        let capture = Capture::from_mapped(MappedWriter::receive(fd)?)?;
+        // Codec fixtures, not native observations: neither a false synthetic
+        // flag nor these labels authenticate supplied timestamp/source values.
+        capture.record_at(
+            Ok(100),
+            EventKind::FixtureObserved {
+                synthetic: true,
+                decision_ns: 90,
+                kind: ObservationKind::Resolved {
+                    frame_id: 7,
+                    resolution: Resolution::Presented,
+                    resolved_ns: 80,
+                },
+            },
+        );
+        capture.record_at(
+            Ok(200),
+            EventKind::FixtureObserved {
+                synthetic: false,
+                decision_ns: 190,
+                kind: ObservationKind::ResponseConfirmed {
+                    receipt_sequence: 3,
+                    frame_id: 7,
+                    token: 1,
+                    responded_ns: 180,
+                },
+            },
+        );
+        capture.finish();
+        let raw = collector.snapshot()?;
+        assert_eq!(raw.report.records[0].at_ns, 100);
+        assert_eq!(raw.report.records[1].at_ns, 200);
+        assert!(matches!(
+            raw.report.records[0].kind,
+            EventKind::FixtureObserved {
+                synthetic: true,
+                decision_ns: 90,
+                kind: ObservationKind::Resolved {
+                    frame_id: 7,
+                    resolution: Resolution::Presented,
+                    resolved_ns: 80
+                },
+            }
+        ));
+        assert!(matches!(
+            raw.report.records[1].kind,
+            EventKind::FixtureObserved {
+                synthetic: false,
+                decision_ns: 190,
+                kind: ObservationKind::ResponseConfirmed {
+                    receipt_sequence: 3,
+                    frame_id: 7,
+                    token: 1,
+                    responded_ns: 180
+                },
+            }
+        ));
+        let mut record = [0; RECORD_BYTES];
+        bytes.read_exact_at(&mut record, HEADER_BYTES as u64)?;
+        assert_eq!(record[18], 32);
+        assert_eq!(record[19], 1);
+        assert_eq!(&record[20..28], &90_u64.to_le_bytes());
+        assert_eq!(record[28], 3, "Resolved has a fixed fixture subtag");
+        assert_eq!(&record[38..46], &80_u64.to_le_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn private_capture_fixture_variants_roundtrip_in_fixed_records() -> Result<()> {
+        use crate::diagnostic_observer::Capture;
+        use std::os::unix::fs::FileExt;
+        // Independent v1 subtag/length expectations, including every nested enum.
+        let mut cases = vec![
+            (
+                ObservationKind::Allocated {
+                    frame_id: 0,
+                    token: u64::MAX,
+                },
+                1,
+                45,
+            ),
+            (ObservationKind::Suppressed, 2, 29),
+            (ObservationKind::WarmupClosed, 4, 29),
+            (
+                ObservationKind::PeriodicRetired { timer_id: u64::MAX },
+                5,
+                37,
+            ),
+            (
+                ObservationKind::Delivered {
+                    receipt_sequence: u64::MAX,
+                },
+                7,
+                37,
+            ),
+            (
+                ObservationKind::TokenMutated {
+                    receipt_sequence: 0,
+                    previous: u64::MAX,
+                    token: 1,
+                },
+                8,
+                53,
+            ),
+            (
+                ObservationKind::ResponseConfirmed {
+                    receipt_sequence: 0,
+                    frame_id: 1,
+                    token: 2,
+                    responded_ns: u64::MAX,
+                },
+                9,
+                61,
+            ),
+            (ObservationKind::Failed, 10, 29),
+            (ObservationKind::Closed, 11, 29),
+        ];
+        for phase in [
+            Phase::Warmup,
+            Phase::Quiescing,
+            Phase::Armed,
+            Phase::Measured,
+            Phase::Drain,
+            Phase::Ended,
+        ] {
+            cases.push((ObservationKind::Phase(phase), 0, 30));
+        }
+        for resolution in [
+            Resolution::Presented,
+            Resolution::Discarded,
+            Resolution::Failed,
+        ] {
+            cases.push((
+                ObservationKind::Resolved {
+                    frame_id: u64::MAX,
+                    resolution,
+                    resolved_ns: 0,
+                },
+                3,
+                46,
+            ));
+        }
+        for phase in [
+            TouchPhase::Down,
+            TouchPhase::Move,
+            TouchPhase::Up,
+            TouchPhase::Cancel,
+        ] {
+            cases.push((
+                ObservationKind::ReceiptSupplied {
+                    receipt_sequence: u64::MAX,
+                    received_ns: 0,
+                    contact: u32::MAX,
+                    phase,
+                },
+                6,
+                50,
+            ));
+        }
+        let mut collector = Collector::new(cases.len())?;
+        let fd = collector.take_worker_storage()?;
+        let bytes = std::fs::File::from(fd.try_clone()?);
+        let capture = Capture::from_mapped(MappedWriter::receive(fd)?)?;
+        for (index, (kind, _, _)) in cases.iter().enumerate() {
+            capture.record_at(
+                Ok(u64::MAX),
+                EventKind::FixtureObserved {
+                    synthetic: index % 2 == 0,
+                    decision_ns: 0,
+                    kind: *kind,
+                },
+            );
+        }
+        capture.finish();
+        let raw = collector.snapshot()?;
+        assert!(raw.metadata_consistent && raw.report.closed);
+        assert_eq!(raw.report.records.len(), cases.len());
+        assert_eq!(raw.report.lost, 0);
+        assert_eq!(raw.storage_bytes, HEADER_BYTES + cases.len() * RECORD_BYTES);
+        for (index, (expected, subtag, len)) in cases.iter().enumerate() {
+            let record = &raw.report.records[index];
+            assert_eq!(record.sequence, index as u64 + 1);
+            assert_eq!(record.at_ns, u64::MAX);
+            let EventKind::FixtureObserved {
+                synthetic,
+                decision_ns,
+                kind,
+            } = record.kind
+            else {
+                panic!("fixture record decoded as another event");
+            };
+            assert_eq!(synthetic, index % 2 == 0);
+            assert_eq!(decision_ns, 0);
+            assert_eq!(kind, *expected);
+            let mut encoded = [0; RECORD_BYTES];
+            bytes.read_exact_at(&mut encoded, (HEADER_BYTES + index * RECORD_BYTES) as u64)?;
+            assert_eq!(u16::from_le_bytes(encoded[..2].try_into()?), *len as u16);
+            assert_eq!(encoded[18], 32);
+            assert_eq!(encoded[28], *subtag);
+            assert!(encoded[*len..].iter().all(|byte| *byte == 0));
+            match index {
+                9..=14 => assert_eq!(encoded[29], (index - 9) as u8),
+                15..=17 => assert_eq!(encoded[37], (index - 15) as u8),
+                18..=21 => assert_eq!(encoded[49], (index - 18) as u8),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn private_capture_rejects_malformed_calibration_and_fixture_records() -> Result<()> {
+        use crate::diagnostic_observer::Capture;
+        use std::os::unix::fs::FileExt;
+        let mut collector = Collector::new(1)?;
+        let fd = collector.take_worker_storage()?;
+        let bytes = std::fs::File::from(fd.try_clone()?);
+        let capture = Capture::from_mapped(MappedWriter::receive(fd)?)?;
+        capture.record_at(Ok(100), EventKind::MinimalCalibration { cost_ns: [0; 32] });
+        capture.finish();
+        let mut calibration = [0; RECORD_BYTES];
+        bytes.read_exact_at(&mut calibration, HEADER_BYTES as u64)?;
+        // Literal fixture packets exercise the decoder independently of its encoder.
+        // All payload integers are zero; only v1 discriminants and lengths differ.
+        let mut packets = vec![calibration];
+        for (subtag, len) in [(0, 30_u16), (3, 46), (6, 50), (9, 61)] {
+            let mut packet = [0; RECORD_BYTES];
+            packet[..2].copy_from_slice(&len.to_le_bytes());
+            packet[2] = 1; // sequence
+            packet[18] = 32;
+            packet[28] = subtag;
+            packets.push(packet);
+        }
+        for original in packets {
+            bytes.write_all_at(&original, HEADER_BYTES as u64)?;
+            assert!(
+                collector.snapshot().is_ok(),
+                "valid packet must decode first"
+            );
+            let len = u16::from_le_bytes(original[..2].try_into()?) as usize;
+            // Every truncated prefix, including inside any u64/u32 field, must
+            // fail with canonical zero padding rather than reading beyond length.
+            for short in 0..len {
+                let mut malformed = original;
+                malformed[short.max(2)..].fill(0);
+                malformed[..2].copy_from_slice(&(short as u16).to_le_bytes());
+                bytes.write_all_at(&malformed, HEADER_BYTES as u64)?;
+                assert!(
+                    collector.snapshot().is_err(),
+                    "accepted tag {} length {short}",
+                    original[18]
+                );
+            }
+            for invalid_len in [len + 1, RECORD_BYTES, RECORD_BYTES + 1, u16::MAX as usize] {
+                let mut malformed = original;
+                malformed[..2].copy_from_slice(&(invalid_len as u16).to_le_bytes());
+                bytes.write_all_at(&malformed, HEADER_BYTES as u64)?;
+                assert!(
+                    collector.snapshot().is_err(),
+                    "accepted tag {} length {invalid_len}",
+                    original[18]
+                );
+            }
+            let mut invalid_bytes = vec![(RECORD_BYTES - 1, 1)];
+            if original[18] == 32 {
+                invalid_bytes.extend([(19, 2), (28, 12), (28, 255)]);
+                match original[28] {
+                    0 => invalid_bytes.push((29, 6)),
+                    3 => invalid_bytes.push((37, 3)),
+                    6 => invalid_bytes.push((49, 4)),
+                    _ => {}
+                }
+            }
+            for (offset, value) in invalid_bytes {
+                let mut malformed = original;
+                malformed[offset] = value;
+                bytes.write_all_at(&malformed, HEADER_BYTES as u64)?;
+                assert!(
+                    collector.snapshot().is_err(),
+                    "accepted tag {} byte {offset}={value}",
+                    original[18]
+                );
+            }
+            bytes.write_all_at(&original, HEADER_BYTES as u64)?;
+            assert!(
+                collector.snapshot().is_ok(),
+                "malformed input must not consume the valid prefix"
+            );
+        }
         Ok(())
     }
 

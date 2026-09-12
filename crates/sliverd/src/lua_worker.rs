@@ -335,6 +335,7 @@ struct CallbackRefs {
 
 #[derive(Clone)]
 struct RuntimeControls {
+    fixture: Option<crate::diagnostic_fixture::Fixture>,
     observer: Option<crate::diagnostic_observer::Capture>,
     redraw_pending: Rc<Cell<bool>>,
     timers: Rc<RefCell<TimerRegistry>>,
@@ -507,6 +508,8 @@ impl LuaWorker {
             identity,
             #[cfg(test)]
             None,
+            #[cfg(test)]
+            None,
         )
     }
 
@@ -527,6 +530,7 @@ impl LuaWorker {
             InputState::default(),
             WorkerIdentity::User,
             Some(slots),
+            None,
         )
     }
 
@@ -549,6 +553,40 @@ impl LuaWorker {
             initial_input,
             WorkerIdentity::User,
             Some(slots),
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stage_fixture(
+        source: &LuaSource,
+        fixture: crate::diagnostic_fixture::Fixture,
+        observer: Option<crate::diagnostic_observer::Capture>,
+        timing: crate::diagnostic_timing::TimingCapture,
+    ) -> Result<StagedLuaWorker> {
+        ensure!(
+            observer.is_some() == (fixture.mode() == crate::diagnostic_fixture::Mode::C),
+            "fixture observer must match A/B/C mode"
+        );
+        if let Some(observer) = &observer {
+            fixture.attach_observer(observer.clone())?;
+        }
+        let mut slots = FrameSlots::new(
+            crate::DISPLAY_WIDTH,
+            crate::DISPLAY_HEIGHT,
+            crate::DISPLAY_WIDTH * 4,
+        )?
+        .with_timing(timing);
+        if let Some(observer) = observer {
+            slots = slots.with_observer(observer);
+        }
+        Self::stage_source_inner(
+            source.clone(),
+            1.0,
+            InputState::default(),
+            WorkerIdentity::User,
+            Some(slots),
+            Some(fixture),
         )
     }
 
@@ -571,6 +609,7 @@ impl LuaWorker {
             InputState::default(),
             WorkerIdentity::User,
             Some(slots),
+            None,
         )
     }
 
@@ -581,6 +620,7 @@ impl LuaWorker {
         initial_input: InputState,
         identity: WorkerIdentity,
         #[cfg(test)] observed_slots: Option<FrameSlots>,
+        #[cfg(test)] fixture: Option<crate::diagnostic_fixture::Fixture>,
     ) -> Result<StagedLuaWorker> {
         #[cfg(test)]
         let _ = identity;
@@ -620,6 +660,7 @@ impl LuaWorker {
                         initial_backlight,
                         initial_input,
                         producer,
+                        fixture,
                         command_rx,
                         ready_tx,
                     )
@@ -960,16 +1001,18 @@ fn owner_main(
     initial_backlight: f64,
     initial_input: InputState,
     producer: FrameProducer,
+    fixture: Option<crate::diagnostic_fixture::Fixture>,
     commands: mpsc::Receiver<WorkerCommand>,
     ready: mpsc::SyncSender<std::result::Result<(), String>>,
 ) {
-    let runtime = match Runtime::load(&source, initial_backlight, initial_input, producer) {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            let _ = ready.send(Err(error));
-            return;
-        }
-    };
+    let runtime =
+        match Runtime::load_inner(&source, initial_backlight, initial_input, producer, fixture) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let _ = ready.send(Err(error));
+                return;
+            }
+        };
     if ready.send(Ok(())).is_err() {
         return;
     }
@@ -1023,11 +1066,39 @@ impl Runtime {
         delta: f64,
         input_state: InputState,
     ) -> std::result::Result<(), String> {
+        if let Some(fixture) = &self.controls.fixture {
+            fixture
+                .ensure_runtime_active()
+                .map_err(|error| error.to_string())?;
+        }
+        let result = self.render_and_queue_inner(presentation_time, delta, input_state);
+        self.fixture_outcome(result)
+    }
+
+    fn fixture_outcome<T>(
+        &self,
+        result: std::result::Result<T, String>,
+    ) -> std::result::Result<T, String> {
+        if result.is_err() {
+            if let Some(fixture) = &self.controls.fixture {
+                fixture.fail_runtime();
+            }
+        }
+        result
+    }
+
+    fn render_and_queue_inner(
+        &mut self,
+        presentation_time: f64,
+        delta: f64,
+        input_state: InputState,
+    ) -> std::result::Result<(), String> {
         let timing =
             FrameTiming::new(presentation_time, delta).map_err(|error| error.to_string())?;
         self.controls.input_state.set(input_state);
-        let frame = self.render_frame(presentation_time, delta)?;
-        self.replace_pending(PendingFrame { frame, timing });
+        if let Some(frame) = self.render_frame(presentation_time, delta)? {
+            self.replace_pending(PendingFrame { frame, timing });
+        }
         self.try_publish_pending(presentation_time)?;
         Ok(())
     }
@@ -1095,6 +1166,19 @@ impl Runtime {
     }
 
     fn drive(&mut self, request: DriveRequest) -> std::result::Result<RuntimeEffects, String> {
+        if let Some(fixture) = &self.controls.fixture {
+            fixture
+                .ensure_runtime_active()
+                .map_err(|error| error.to_string())?;
+        }
+        let result = self.drive_inner(request);
+        self.fixture_outcome(result)
+    }
+
+    fn drive_inner(
+        &mut self,
+        request: DriveRequest,
+    ) -> std::result::Result<RuntimeEffects, String> {
         let DriveRequest {
             now_seconds,
             input_state,
@@ -1151,8 +1235,9 @@ impl Runtime {
             if self.visible {
                 self.controls.redraw_pending.set(false);
                 if options.force_render || redraw_requested {
-                    let frame = self.render_frame(now_seconds, delta)?;
-                    self.replace_pending(PendingFrame { frame, timing });
+                    if let Some(frame) = self.render_frame(now_seconds, delta)? {
+                        self.replace_pending(PendingFrame { frame, timing });
+                    }
                 }
             }
             let frame = if self.visible {
@@ -1251,12 +1336,25 @@ impl Runtime {
         for event in events {
             let table = touch_event_table(&self._lua, &event)
                 .map_err(|error| diagnostic("touch", &self.source, error.to_string()))?;
+            if let Some(fixture) = &self.controls.fixture {
+                fixture
+                    .enter_delivery(event)
+                    .map_err(|error| error.to_string())?;
+            }
             if let Some(observer) = self.producer.observer() {
                 observer.record(crate::diagnostic_observer::EventKind::TouchCallbackEntered(
                     event,
                 ));
             }
             let result = self.invoke_callback(touch, "touch", now_seconds, started, table);
+            let result = if let Some(fixture) = &self.controls.fixture {
+                let outcome = fixture
+                    .exit_delivery(result.is_ok())
+                    .map_err(|error| error.to_string());
+                result.and(outcome)
+            } else {
+                result
+            };
             if let Some(observer) = self.producer.observer() {
                 observer.record(
                     crate::diagnostic_observer::EventKind::TouchCallbackReturned {
@@ -1277,6 +1375,14 @@ impl Runtime {
     ) -> std::result::Result<(), String> {
         let mut fired_repeating = BTreeSet::new();
         loop {
+            if let Some(fixture) = &self.controls.fixture {
+                if let Some(id) = fixture
+                    .retire_periodic()
+                    .map_err(|error| error.to_string())?
+                {
+                    self.controls.timers.borrow_mut().cancel(id);
+                }
+            }
             let current = sample_now(now_seconds, started);
             self.controls.now_seconds.set(Some(current));
             let Some(due) = self.controls.timers.borrow().due(current, &fired_repeating) else {
@@ -1316,26 +1422,38 @@ impl Runtime {
         }
     }
 
-    fn load(
+    fn load_inner(
         source: &LuaSource,
         initial_backlight: f64,
         initial_input: InputState,
         producer: FrameProducer,
+        fixture: Option<crate::diagnostic_fixture::Fixture>,
     ) -> std::result::Result<Self, String> {
         let description = source.describe();
         let bytes = description
             .read_bytes()
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
+        if let Some(fixture) = &fixture {
+            fixture
+                .bind_source(&bytes)
+                .map_err(|error| diagnostic("load", source, error.to_string()))?;
+        }
         let lua = unsafe { Lua::unsafe_new() };
         if let Some(path) = description.path {
             configure_lua_path(&lua, path)
                 .map_err(|error| diagnostic("load", source, error.to_string()))?;
         }
-        let controls = RuntimeControls::new(
+        let mut controls = RuntimeControls::new(
             initial_backlight,
             initial_input,
             producer.observer().cloned(),
         );
+        let capability = fixture
+            .as_ref()
+            .map(|fixture| fixture.capability(&lua))
+            .transpose()
+            .map_err(|error| diagnostic("load", source, error.to_string()))?;
+        controls.fixture = fixture;
         let loaded_v1 = install_v1_module(&lua, &controls, description.metadata)
             .map_err(|error| diagnostic("load", source, error.to_string()))?;
         let source_name = description.chunk_name;
@@ -1369,14 +1487,16 @@ impl Runtime {
         let validation_result = lua
             .load(
                 r#"
-                local entry, validate = ...
-                local application = entry()
+                local entry, validate, capability = ...
+                local application
+                if capability == nil then application = entry()
+                else application = entry(capability) end
                 validate(application)
                 return application
                 "#,
             )
             .set_name("=sliver validation")
-            .call::<Value>((entry, validator));
+            .call::<Value>((entry, validator, capability));
         lua.remove_hook();
 
         let value = validation_result.map_err(|error| {
@@ -1456,17 +1576,33 @@ impl Runtime {
         &self,
         presentation_time: f64,
         delta: f64,
-    ) -> std::result::Result<LogicalFrame, String> {
+    ) -> std::result::Result<Option<LogicalFrame>, String> {
         let observer = self.producer.observer();
-        let attempt = observer.map(|observer| observer.allocate_render());
+        let attempt = if let Some(fixture) = &self.controls.fixture {
+            let Some(frame) = fixture.allocate().map_err(|error| error.to_string())? else {
+                return Ok(None);
+            };
+            if let Some(observer) = observer {
+                observer.record_at(
+                    Ok(frame.allocated_ns),
+                    crate::diagnostic_observer::EventKind::RenderAllocated { attempt: frame.id },
+                );
+            }
+            Some(frame.id)
+        } else {
+            observer.map(|observer| observer.allocate_render())
+        };
         let result = self.render_frame_inner(presentation_time, delta);
+        if let Some(fixture) = &self.controls.fixture {
+            fixture.finish_render();
+        }
         if let (Some(observer), Some(attempt)) = (observer, attempt) {
             observer.record(crate::diagnostic_observer::EventKind::RenderFinished {
                 attempt,
                 marker: result.as_ref().ok().map(crate::diagnostic_observer::decode),
             });
         }
-        result
+        result.map(Some)
     }
 
     fn render_frame_inner(
@@ -1561,6 +1697,7 @@ impl RuntimeControls {
         Self {
             redraw_pending: Rc::new(Cell::new(false)),
             timers: Rc::new(RefCell::new(TimerRegistry::new(observer.clone()))),
+            fixture: None,
             observer,
             committed: Rc::new(Cell::new(false)),
             now_seconds: Rc::new(Cell::new(None)),
@@ -1961,6 +2098,11 @@ fn install_v1_module(
                         .timers
                         .borrow_mut()
                         .add(interval, Some(interval), callback, now);
+                if let Some(fixture) = &every_controls.fixture {
+                    fixture
+                        .bind_periodic(id, interval)
+                        .map_err(mlua::Error::external)?;
+                }
                 lua.create_userdata(TimerHandle {
                     id,
                     timers: every_controls.timers.clone(),
