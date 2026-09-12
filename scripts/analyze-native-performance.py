@@ -205,7 +205,7 @@ def analyze(document):
         "optical_fps": None, "missed_physical_refreshes": None,
         "native_deadline_misses": None, "skipped_generation": None,
         "limitations": [
-            "Caller-declared observations; no collector, marker decoder or source authentication.",
+            "Caller-declared JSON; no pixel decoding, collector or source authentication in this reader.",
             "Closed cohort only; no implicit warmup, discarded edges or v1 ledger conversion.",
             "Isolated broker-input receipt to successful return; not physical or optical latency.",
             "No approved rate/deadline/latency budget, schedule accounting or release verdict.",

@@ -84,7 +84,9 @@ Unchecked items mean **not ready for unattended acceptance implementation**. No 
 
 ## Offline implementation after continuation approval
 
-The [experimental v0 reader](native-performance-observation-format.md) and synthetic tests now exercise closed-cohort identity/disposition accounting, replay exclusion, declared causal input links, timeouts/late responses, and fixed-window latency summaries. It is included in the source audit, not the release verifier. It has no collector, marker decoder, schedule/deadline policy or release-pass mode; accepted diagnostic records can include failures. Unsupported optical claims, capture loss, partial cohorts and old schemas fail validation. This implements a policy-independent portion of the proposed single reader, not the full future acceptance contract.
+The [experimental v0 reader](native-performance-observation-format.md) and synthetic tests now exercise closed-cohort identity/disposition accounting, replay exclusion, declared causal input links, timeouts/late responses, and fixed-window latency summaries. It is included in the source audit, not the release verifier. It has no collector, integrated pixel decoding, schedule/deadline policy or release-pass mode; accepted diagnostic records can include failures. Unsupported optical claims, capture loss, partial cohorts and old schemas fail validation. This implements a policy-independent portion of the proposed single reader, not the full future acceptance contract.
+
+After the next “don't stop” continuation, the [offline marker codec](native-performance-marker-format.md) adds exact run/generation/frame/input identities in CRC-protected pixel cells, digital decode integrity, logical/panel rotation and stride coverage, and a codec → reader causal-accounting test. A separate Lua encoder is also checked through the real canvas/fake-hardware seam against shared worked vectors. The production fixture/runtime and broker wire format remain untouched; there is no live or optical collector.
 
 ## Safe work completed while the decision was pending
 

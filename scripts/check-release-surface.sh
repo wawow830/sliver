@@ -11,6 +11,7 @@ fail() {
 
 cargo fmt --all -- --check
 python3 -B scripts/test-analyze-native-performance.py
+python3 -B scripts/test-native-performance-marker.py
 cargo test --workspace -- --test-threads=1
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 scripts/test-verify-release.sh

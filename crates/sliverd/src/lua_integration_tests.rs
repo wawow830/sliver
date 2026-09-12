@@ -46,6 +46,158 @@ fn assert_bottom_band_is_solid(frame: &FrameSnapshot, x_end: usize, message: &st
 }
 
 #[test]
+fn diagnostic_pixel_marker_crosses_the_lua_canvas_and_fake_hardware_seam() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("marker.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    std::fs::write(
+        &source,
+        r##"
+        require("sliver.v1")
+        local marker = require("native_marker")
+        return {
+            api_version = 1,
+            render = function(canvas)
+                canvas:rectangle(0, 0, 2008, 60, "#112233")
+                marker.draw(canvas, { run_id = "r", generation = "g", frame_id = 1 })
+            end,
+        }
+        "##,
+    )?;
+    let mut hardware = FakeTouchBar::new();
+    present_lua_once(&source, &mut hardware)?;
+    let frame = hardware
+        .presented_frames()
+        .first()
+        .context("no marked frame")?;
+    // Worked wire vector from native-performance-marker-format.md; not a
+    // checksum recomputed using the encoder's implementation.
+    let mut packet = b"SLVMRK00".to_vec();
+    packet.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0]);
+    packet.resize(408, 0);
+    packet[20] = b'r';
+    packet[148] = b'g';
+    packet[404..].copy_from_slice(&[0xaa, 0x94, 0xd7, 0x12]);
+    for y in 0..60 {
+        for x in 0..2008 {
+            let expected = if (188..1820).contains(&x) && (4..12).contains(&y) {
+                let bit = ((y - 4) / 2) * 816 + (x - 188) / 2;
+                let level = if packet[bit / 8] & (128 >> (bit % 8)) == 0 {
+                    0
+                } else {
+                    255
+                };
+                [level, level, level, 255]
+            } else {
+                [17, 34, 51, 255]
+            };
+            assert_eq!(frame.rgba_at(x, y), expected, "marker pixel ({x}, {y})");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn diagnostic_pixel_marker_preserves_full_capacity_input_identity() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("capacity-marker.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    std::fs::write(
+        &source,
+        r#"
+        require("sliver.v1")
+        local marker = require("native_marker")
+        return { api_version = 1, render = function(canvas)
+            marker.draw(canvas, {
+                run_id = string.rep("r", 128), generation = string.rep("g", 128),
+                frame_id = math.maxinteger, input_id = string.rep("i", 128),
+            })
+        end }
+        "#,
+    )?;
+    let mut hardware = FakeTouchBar::new();
+    present_lua_once(&source, &mut hardware)?;
+    let frame = hardware
+        .presented_frames()
+        .first()
+        .context("no marked frame")?;
+    let mut packet = vec![0_u8; 408];
+    for bit in 0..3264 {
+        let x = 188 + (bit % 816) * 2;
+        let y = 4 + (bit / 816) * 2;
+        let pixel = frame.rgba_at(x, y);
+        assert!(pixel == [0, 0, 0, 255] || pixel == [255; 4]);
+        if pixel[0] == 255 {
+            packet[bit / 8] |= 128 >> (bit % 8);
+        }
+    }
+    let mut expected = b"SLVMRK00".to_vec();
+    expected.extend_from_slice(&[0x7f, 255, 255, 255, 255, 255, 255, 255, 128, 128, 128, 0]);
+    expected.extend_from_slice(&[b'r'; 128]);
+    expected.extend_from_slice(&[b'g'; 128]);
+    expected.extend_from_slice(&[b'i'; 128]);
+    // Independently evaluated capacity vector, including a non-null input.
+    expected.extend_from_slice(&[0x47, 0x46, 0x54, 0xe2]);
+    assert_eq!(packet, expected);
+    Ok(())
+}
+
+#[test]
+fn diagnostic_pixel_marker_rejects_ambiguous_identities_before_presenting() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("invalid-marker.lua");
+    std::fs::write(
+        directory.path().join("native_marker.lua"),
+        include_str!("../../../scripts/native-performance-marker.lua"),
+    )?;
+    for identity in [
+        "nil",
+        "{run_id='', generation='g', frame_id=1}",
+        "{run_id=string.rep('r',129), generation='g', frame_id=1}",
+        "{run_id='r', generation='a/b', frame_id=1}",
+        "{run_id='é', generation='g', frame_id=1}",
+        "{run_id='r', generation='g', frame_id=0}",
+        "{run_id='r', generation='g', frame_id=-1}",
+        "{run_id='r', generation='g', frame_id=math.maxinteger+1}",
+        "{run_id='r', generation='g', frame_id=1.0}",
+        "{run_id='r', generation='g', frame_id='1'}",
+        "{run_id='r', generation='g', frame_id=true}",
+        "{run_id='r', generation='g', frame_id=1, input_id=false}",
+        "{run_id='r', generation='g', frame_id=1, input_id=''}",
+        "{run_id='r', generation='g', frame_id=1, extra=true}",
+        "setmetatable({run_id='r', generation='g', frame_id=1}, {})",
+    ] {
+        std::fs::write(
+            &source,
+            r#"
+            require("sliver.v1")
+            local marker = require("native_marker")
+            return { api_version = 1, render = function(canvas)
+                marker.draw(canvas, IDENTITY)
+            end }
+            "#
+            .replace("IDENTITY", identity),
+        )?;
+        let mut hardware = FakeTouchBar::new();
+        assert!(
+            present_lua_once(&source, &mut hardware).is_err(),
+            "accepted {identity}"
+        );
+        assert!(
+            hardware.presented_frames().is_empty(),
+            "presented {identity}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn lua_v1_frame_crosses_the_hardware_seam() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let source = directory.path().join("config.lua");

@@ -13,7 +13,7 @@ python3 -B scripts/test-analyze-native-performance.py
 
 CLI exit 0 means **internally consistent observations**, never release acceptance. Every report says `acceptance: "not_evaluated"`, preserves the declared source, and says `source_authentication: "not_verified"`. Errors exit 1 without a report; usage errors exit 2. No hardware, tracefs, services, subprocesses, live clocks, or network are consulted by the reader. It reads only the supplied capture file. The CLI hashes its exact bytes into `capture_sha256` and never rewrites it.
 
-This is the first, **partial** implementation of the proposed reader. It is not invoked by `verify-release.sh` or `verify-release-evidence.sh`, cannot replace v1 artifacts, and has no threshold override. Its synthetic tests run in `check-release-surface.sh`. No production collector, pixel-marker encoder/decoder, fixture modification, broker protocol change or new public command is included.
+This is the first, **partial** implementation of the proposed reader. It is not invoked by `verify-release.sh` or `verify-release-evidence.sh`, cannot replace v1 artifacts, and has no threshold override. Its synthetic tests run in `check-release-surface.sh`. A separate [offline pixel-marker codec](native-performance-marker-format.md) now implements and tests digital identity encoding/decoding; the JSON reader does not invoke it or authenticate the caller's records. No production collector, fixture modification, broker protocol change or new public command is included.
 
 ## Capture header
 
@@ -81,6 +81,6 @@ Input mode is **isolated transitions**, not a high-load/coalescing test. A new i
 
 1. Select the acceptance observation point and approve rate/deadline/latency/sampling policy; nominal 30 FPS is not a numeric tolerance.
 2. Complete the schema for predeclared schedule opportunities, edge cohorts, exact build/fixture provenance, capture closure/loss attestation and instrumentation-overhead comparison. The current v0 is intentionally not a release-evidence revision.
-3. Implement and offline-test actual pixel identity encoding/decoding and bounded observers at the existing production seams. Caller-supplied JSON correlation alone is not proof of independently observed causality.
+3. Integrate the offline-tested pixel identity format with actual fixture drawing and bounded observers at the existing production seams. The reference codec is not a live collector; caller-supplied JSON correlation alone is not proof of independently observed causality.
 4. Test native-cadence deadlines and overproduction separately, including skipped generation, pending-frame replacement, supersession, lifecycle invalidation, late responses and queue/frame-age bounds.
 5. Update parent requirements, canonical fixture, verifier, schema and numeric gates coherently, then run a fresh authorized hardware transaction with the committed rollback checks. Preserve old failures; no v0 or v1 report is silently promoted into a new release pass.
