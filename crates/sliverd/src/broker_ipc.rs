@@ -3938,6 +3938,154 @@ mod tests {
     }
 
     #[test]
+    fn private_broker_role_source_binds_real_child_frames_to_pre_reply_adapter_returns(
+    ) -> Result<()> {
+        use crate::diagnostic_broker::{BrokerCapture, Operation};
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap, SourceRole};
+        use crate::diagnostic_coordinator::Coordinator;
+        use crate::diagnostic_fixture::{Mode, SOURCE};
+        use crate::diagnostic_hardware::ObservedHardware;
+        use crate::diagnostic_observer::{clock_ns, EventKind};
+        use crate::diagnostic_timing::{SpanKind, TimingCapture};
+        use crate::lua_worker::worker_process::ProcessWorker;
+        for (mode, mismatched_identity) in [
+            (Mode::A, false),
+            (Mode::B, false),
+            (Mode::C, false),
+            (Mode::C, true),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let socket = directory.path().join("broker.sock");
+            let listener = UnixListener::bind(&socket)?;
+            let logind = FakeLogind::new();
+            logind.set_active(
+                SEAT,
+                Some(ActiveSession {
+                    id: "broker-role-source".into(),
+                    uid: unsafe { libc::getuid() },
+                }),
+            );
+            let plan = FixtureBootstrap::new(
+                "ipc-source",
+                "actual-child",
+                clock_ns(false)? + 10_000_000_000,
+                30,
+                mode,
+            )?;
+            let mut collector = Collector::for_role(256, SourceRole::Broker)?;
+            let mut broker_plan = plan.clone();
+            if mismatched_identity {
+                broker_plan.run = "foreign-run".into();
+            }
+            let source =
+                BrokerCapture::new(broker_plan, collector.take_storage(SourceRole::Broker)?)?;
+            let hardware = ObservedHardware::for_broker(ThreadFakeHardware::new(), source.clone());
+            let running = Arc::new(AtomicBool::new(true));
+            let stop = running.clone();
+            let state = directory.path().join("state");
+            let server = thread::spawn(move || -> Result<()> {
+                let fallback = Supervisor::new_fallback_with_logind(
+                    hardware,
+                    state,
+                    logind.clone(),
+                    Some(LuaSource::embedded(default_source_bytes())),
+                )?;
+                run_broker(
+                    listener,
+                    fallback,
+                    SessionAuthorizer::new(logind),
+                    stop,
+                    SEAT,
+                    PeerVerification::Test,
+                )
+            });
+            let mut client = BrokerHardware::new_at(socket);
+            let mut worker_raw = Collector::new(512)?;
+            let result = (|| -> Result<_> {
+                client.claim()?;
+                let worker = ProcessWorker::stage_with_fixture(
+                    &LuaSource::embedded(SOURCE.to_vec()),
+                    0.75,
+                    InputState::default(),
+                    worker_raw.take_worker_storage()?,
+                    plan.clone(),
+                )?;
+                let mut coordinator = Coordinator::new(worker, plan, TimingCapture::new(128)?)?;
+                coordinator.start(&mut client, 0.0)?;
+                let frame = coordinator.report().frames[0].clone();
+                drop(coordinator); // This bounded warmup smoke is NOT a closed P1 case.
+                Ok(frame)
+            })();
+            // Stop the broker before disconnect: normal post-disconnect recovery
+            // is lifecycle work, not another marked workload update.
+            running.store(false, Ordering::Release);
+            drop(client);
+            let server_result = server.join().expect("broker source test panicked");
+            server_result?;
+            let frame = result?;
+            let closed = source.finish();
+            assert_eq!(closed.is_err(), mismatched_identity);
+            let raw = collector.snapshot()?;
+            assert!(raw.initialized && raw.metadata_consistent && raw.report.closed);
+            assert_eq!(raw.report.lost, 0);
+            assert_eq!(raw.report.failed_operations > 0, mismatched_identity);
+            assert_eq!(
+                raw.report.records.iter().any(|r| matches!(
+                    r.kind,
+                    EventKind::BrokerOperation {
+                        operation: Operation::PlanIdentity,
+                        success: false,
+                    }
+                )),
+                mismatched_identity
+            );
+            assert_eq!(raw.report.decode_failures, 0);
+            let presents: Vec<_> = raw
+                .report
+                .records
+                .iter()
+                .filter_map(|r| match &r.kind {
+                    EventKind::MinimalSpan(s) if s.kind == SpanKind::Present => Some(s),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(presents.len(), 1);
+            assert!(presents[0].start_ns >= frame.correlation.allocation.allocated_ns);
+            assert!(
+                presents[0].end_ns < frame.adapter_return_ns,
+                "supervisor IPC return must not substitute for broker hardware return"
+            );
+            if mode == Mode::C {
+                assert!(raw.report.records.iter().any(|r| matches!(&r.kind,
+                    EventKind::PresentEntered { call: 1, marker: Ok(m) }
+                        if m.run_id() == b"ipc-source" && m.generation() == b"actual-child"
+                            && m.frame_id() == frame.correlation.allocation.id)));
+                assert!(raw.report.records.iter().any(|r| matches!(
+                    r.kind,
+                    EventKind::PresentReturned {
+                        call: 1,
+                        success: true
+                    }
+                ) && r.at_ns == presents[0].end_ns));
+            } else {
+                assert!(!raw
+                    .report
+                    .records
+                    .iter()
+                    .any(|r| matches!(r.kind, EventKind::PresentEntered { .. })));
+            }
+            assert!(raw.report.records.iter().any(|r| matches!(
+                r.kind,
+                EventKind::BrokerOperation {
+                    operation: Operation::Release,
+                    success: true,
+                }
+            )));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn private_broker_capture_observes_real_ipc_present_and_adapter_receipt() -> Result<()> {
         use crate::diagnostic_hardware::ObservedHardware;
         use crate::diagnostic_observer::{Capture, EventKind};

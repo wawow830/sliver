@@ -177,6 +177,16 @@ pub(crate) enum TimerDisposition {
 
 #[derive(Clone, Debug)]
 pub(crate) enum EventKind {
+    BrokerConfigured {
+        mode: crate::diagnostic_fixture::Mode,
+        start_ns: u64,
+        rate: u32,
+        causal: bool,
+    },
+    BrokerOperation {
+        operation: crate::diagnostic_broker::Operation,
+        success: bool,
+    },
     MinimalSpan(crate::diagnostic_timing::Sample),
     MinimalSummary(crate::diagnostic_timing::Summary),
     /// Explicit no-op sampler calibration costs, never work credit or an amount
@@ -422,19 +432,28 @@ impl Capture {
     /// Check the shared source without closing it or copying its records. A
     /// healthy snapshot is not a promise about subsequent writes or provenance.
     pub(crate) fn ensure_open_and_healthy(&self) -> Result<()> {
+        self.ensure_health(false)
+    }
+
+    pub(crate) fn ensure_closed_and_healthy(&self) -> Result<()> {
+        self.ensure_health(true)
+    }
+
+    fn ensure_health(&self, closed: bool) -> Result<()> {
         let state = self
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let report = &state.report;
         ensure!(
-            !report.closed
+            report.closed == closed
+                && (!closed || report.closed_at_ns.is_some())
                 && report.lost == 0
                 && report.clock_failures == 0
                 && report.failed_operations == 0
                 && report.decode_failures == 0
                 && report.after_close == 0,
-            "raw diagnostic source is closed or has errors/loss"
+            "raw diagnostic source has wrong closure state or errors/loss"
         );
         Ok(())
     }
@@ -470,6 +489,7 @@ impl Capture {
             | EventKind::WorkerCommandFailed
             | EventKind::WorkerRunFailed
             | EventKind::PollFailed
+            | EventKind::BrokerOperation { success: false, .. }
             | EventKind::FixtureObserved {
                 kind:
                     crate::diagnostic_fixture::ObservationKind::Failed
@@ -582,8 +602,22 @@ impl Capture {
         hardware: &mut H,
         timeout: std::time::Duration,
     ) -> Result<Vec<HardwareEvent>> {
+        self.poll_with_clock(hardware, timeout, || clock_ns(false))
+    }
+
+    fn poll_with_clock<H: TouchBarHardware>(
+        &self,
+        hardware: &mut H,
+        timeout: std::time::Duration,
+        read_clock: impl FnOnce() -> Result<u64>,
+    ) -> Result<Vec<HardwareEvent>> {
         let result = hardware.poll(timeout);
-        let received = clock_ns(false);
+        // No receipt timestamp exists for an empty successful batch. Avoid a
+        // clock read whose possible failure would otherwise vanish in the loop.
+        if result.as_ref().is_ok_and(Vec::is_empty) {
+            return result;
+        }
+        let received = read_clock();
         match &result {
             Ok(events) => {
                 for event in events {
@@ -641,5 +675,47 @@ impl Capture {
         if let Some(mapped) = mapped {
             mapped.update_metadata(report);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hardware::FakeTouchBar;
+
+    #[test]
+    fn private_empty_poll_does_not_sample_and_discard_a_clock_failure() -> Result<()> {
+        let source = Capture::new(8)?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        let events = source.poll_with_clock(&mut hardware, std::time::Duration::ZERO, || {
+            panic!("empty poll must not sample an unrecorded clock")
+        })?;
+        assert!(events.is_empty());
+        assert!(source.close().records.is_empty());
+        hardware.release()?;
+        Ok(())
+    }
+
+    #[test]
+    fn private_nonempty_poll_clock_failure_is_retained_without_changing_hardware_result(
+    ) -> Result<()> {
+        let source = Capture::new(8)?;
+        let mut hardware = FakeTouchBar::new();
+        hardware.claim()?;
+        let event = HardwareEvent::Fn { active: true };
+        hardware.inject(event);
+        let events = source.poll_with_clock(&mut hardware, std::time::Duration::ZERO, || {
+            anyhow::bail!("injected receipt clock failure")
+        })?;
+        assert_eq!(events, vec![event]);
+        let report = source.close();
+        assert_eq!(report.clock_failures, 1);
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(report.records[0].at_ns, 0);
+        assert!(matches!(report.records[0].kind, EventKind::InputReceived(e) if e == event));
+        assert!(source.ensure_closed_and_healthy().is_err());
+        hardware.release()?;
+        Ok(())
     }
 }

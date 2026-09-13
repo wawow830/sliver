@@ -283,8 +283,25 @@ impl Span {
         );
     }
 
+    /// A direct adapter observer samples immediately on return, before detailed
+    /// logging. Reuse that exact reading for minimal hardware-call duration.
+    pub(crate) fn finish_at(mut self, now: Result<u64>, frame_bearing: bool, success: bool) {
+        self.complete_at(
+            now,
+            frame_bearing,
+            if success {
+                SpanStatus::Succeeded
+            } else {
+                SpanStatus::Failed
+            },
+        );
+    }
+
     fn complete(&mut self, frame_bearing: bool, status: SpanStatus) {
-        let now = clock_ns(false);
+        self.complete_at(clock_ns(false), frame_bearing, status);
+    }
+
+    fn complete_at(&mut self, now: Result<u64>, frame_bearing: bool, status: SpanStatus) {
         self.finished = true;
         let mut state = self
             .capture

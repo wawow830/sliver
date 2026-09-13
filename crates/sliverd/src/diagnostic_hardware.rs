@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::diagnostic_broker::{BrokerCapture, Operation};
 use crate::diagnostic_observer::Capture;
 use crate::diagnostic_timing::{SpanKind, TimingCapture};
 use crate::hardware::{
@@ -17,6 +18,7 @@ pub(crate) struct ObservedHardware<H> {
     hardware: H,
     observer: Option<Capture>,
     timing: Option<TimingCapture>,
+    broker: Option<BrokerCapture>,
 }
 
 impl<H: TouchBarHardware> ObservedHardware<H> {
@@ -29,16 +31,39 @@ impl<H: TouchBarHardware> ObservedHardware<H> {
             hardware,
             observer,
             timing,
+            broker: None,
+        }
+    }
+
+    /// Use only immediately around the broker's real adapter, never around a
+    /// BrokerHardware client. Source/process authority is the caller's duty.
+    pub(crate) fn for_broker(hardware: H, broker: BrokerCapture) -> Self {
+        Self {
+            hardware,
+            observer: None,
+            timing: None,
+            broker: Some(broker),
+        }
+    }
+
+    fn perform<T>(
+        &mut self,
+        operation: Operation,
+        work: impl FnOnce(&mut H) -> Result<T>,
+    ) -> Result<T> {
+        match &self.broker {
+            Some(source) => source.operation(operation, || work(&mut self.hardware)),
+            None => work(&mut self.hardware),
         }
     }
 }
 
 impl<H: TouchBarHardware> TouchBarHardware for ObservedHardware<H> {
     fn claim(&mut self) -> Result<()> {
-        self.hardware.claim()
+        self.perform(Operation::Claim, |h| h.claim())
     }
     fn reacquire(&mut self) -> Result<()> {
-        self.hardware.reacquire()
+        self.perform(Operation::Reacquire, |h| h.reacquire())
     }
     fn is_available(&self) -> bool {
         self.hardware.is_available()
@@ -53,6 +78,9 @@ impl<H: TouchBarHardware> TouchBarHardware for ObservedHardware<H> {
         self.hardware.connection_lost()
     }
     fn poll(&mut self, timeout: Duration) -> Result<Vec<HardwareEvent>> {
+        if let Some(source) = &self.broker {
+            return source.poll(&mut self.hardware, timeout);
+        }
         match &self.observer {
             Some(observer) => observer.poll(&mut self.hardware, timeout),
             None => self.hardware.poll(timeout),
@@ -62,6 +90,9 @@ impl<H: TouchBarHardware> TouchBarHardware for ObservedHardware<H> {
         self.hardware.input_state()
     }
     fn present(&mut self, frame: &LogicalFrame) -> Result<()> {
+        if let Some(source) = &self.broker {
+            return source.present(&mut self.hardware, frame);
+        }
         // The complete decorated adapter operation includes detailed decoding
         // and retention when enabled. It is not a bare ioctl duration; raw
         // PresentEntered/Returned remain the independent adapter-call seams.
@@ -79,19 +110,19 @@ impl<H: TouchBarHardware> TouchBarHardware for ObservedHardware<H> {
         result
     }
     fn confirm_owner(&mut self) -> Result<()> {
-        self.hardware.confirm_owner()
+        self.perform(Operation::ConfirmOwner, |h| h.confirm_owner())
     }
     fn emit_key_events(&mut self, events: &[SyntheticKeyEvent]) -> Result<()> {
-        self.hardware.emit_key_events(events)
+        self.perform(Operation::EmitKeys, |h| h.emit_key_events(events))
     }
     fn get_backlight(&mut self) -> Result<f64> {
-        self.hardware.get_backlight()
+        self.perform(Operation::GetBacklight, |h| h.get_backlight())
     }
     fn set_backlight(&mut self, level: f64) -> Result<()> {
-        self.hardware.set_backlight(level)
+        self.perform(Operation::SetBacklight, |h| h.set_backlight(level))
     }
     fn release(&mut self) -> Result<()> {
-        self.hardware.release()
+        self.perform(Operation::Release, |h| h.release())
     }
 }
 

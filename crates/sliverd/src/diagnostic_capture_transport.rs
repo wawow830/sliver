@@ -1,6 +1,6 @@
-//! Private raw worker recording transport, NOT native provenance or P1 evidence.
+//! Private role-bound raw recording transport, NOT native provenance or P1 evidence.
 //! One source/ticket per Collector, <=65536 512-byte records + a 512-byte header.
-//! No paths, environment, public arming or broker fields. Size seals prevent
+//! No paths, environment, public arming or broker protocol fields. Size seals prevent
 //! truncation; they do not authenticate a caller. Only explicit private staging
 //! delivers this capability. Records are append-only; death preserves a prefix,
 //! never semantic closure. All mapped accesses use aligned atomic words so a
@@ -29,9 +29,19 @@ const HEADER_BYTES: usize = 512;
 pub(crate) const RECORD_BYTES: usize = 512;
 const MAX_RECORDS: usize = 65_536;
 const MAGIC: u64 = u64::from_le_bytes(*b"SLVRAW01");
-const VERSION: u64 = 2;
-const WORKER_ROLE: u64 = 1;
+const VERSION: u64 = 3;
+
+/// Storage routing, not source authentication. The trusted provisioning registry
+/// must bind the FD identity to the actual process independently of this header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceRole {
+    Worker = 1,
+    Broker = 2,
+    Supervisor = 3,
+}
 const SIZE_SEALS: i32 = libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+// Linux UAPI include/linux/socket.h; libc exposes SO_PASSPIDFD but not SCM_PIDFD.
+const SCM_PIDFD: i32 = 4;
 const CLAIM: usize = 6;
 const REVISION: usize = 7;
 const COMMITTED: usize = 8;
@@ -127,6 +137,7 @@ pub(crate) struct Collector {
     fd: OwnedFd,
     map: Mapping,
     capacity: usize,
+    role: SourceRole,
     ticket_taken: bool,
 }
 
@@ -141,6 +152,10 @@ pub(crate) struct RawReport {
 
 impl Collector {
     pub(crate) fn new(capacity: usize) -> Result<Self> {
+        Self::for_role(capacity, SourceRole::Worker)
+    }
+
+    pub(crate) fn for_role(capacity: usize, role: SourceRole) -> Result<Self> {
         ensure!(
             (1..=MAX_RECORDS).contains(&capacity),
             "raw capture capacity outside 1..=65536"
@@ -148,7 +163,7 @@ impl Collector {
         let size = HEADER_BYTES + capacity * RECORD_BYTES;
         let raw = unsafe {
             libc::memfd_create(
-                c"sliver-worker-raw".as_ptr(),
+                c"sliver-role-raw".as_ptr(),
                 libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
             )
         };
@@ -169,7 +184,7 @@ impl Collector {
         for (index, value) in [
             (0, MAGIC),
             (1, VERSION),
-            (2, WORKER_ROLE),
+            (2, role as u64),
             (3, 1),
             (4, capacity as u64),
             (5, RECORD_BYTES as u64),
@@ -185,24 +200,43 @@ impl Collector {
             fd,
             map,
             capacity,
+            role,
             ticket_taken: false,
         })
     }
 
     /// There is exactly one source and one writer ticket; no source fan-out.
     pub(crate) fn take_worker_storage(&mut self) -> Result<OwnedFd> {
-        ensure!(!self.ticket_taken, "worker capture ticket already taken");
+        self.take_storage(SourceRole::Worker)
+    }
+
+    pub(crate) fn take_storage(&mut self, role: SourceRole) -> Result<OwnedFd> {
+        ensure!(role == self.role, "capture ticket role mismatch");
+        ensure!(!self.ticket_taken, "capture ticket already taken");
         let fd = self.fd.try_clone()?;
         self.ticket_taken = true;
         Ok(fd)
     }
 
     pub(crate) fn snapshot(&self) -> Result<RawReport> {
-        snapshot_mapping(&self.map, self.capacity)
+        snapshot_mapping(&self.map, self.capacity, self.role)
     }
 }
 
-fn snapshot_mapping(map: &Mapping, capacity: usize) -> Result<RawReport> {
+fn snapshot_mapping(map: &Mapping, capacity: usize, role: SourceRole) -> Result<RawReport> {
+    let check_header = || -> Result<()> {
+        ensure!(
+            map.get(0) == MAGIC
+                && map.get(1) == VERSION
+                && map.get(2) == role as u64
+                && map.get(3) == 1
+                && map.get(4) == capacity as u64
+                && map.get(5) == RECORD_BYTES as u64,
+            "raw source header changed or mismatched"
+        );
+        Ok(())
+    };
+    check_header()?;
     let mut last = None;
     for _ in 0..3 {
         let before = map.get(REVISION);
@@ -248,6 +282,7 @@ fn snapshot_mapping(map: &Mapping, capacity: usize) -> Result<RawReport> {
             clock_read_samples_ns: samples,
         };
         let after = map.get(REVISION);
+        check_header()?;
         let consistent = before == after && after.is_multiple_of(2);
         let mut raw = RawReport {
             report,
@@ -272,10 +307,15 @@ pub(crate) struct MappedWriter {
     capacity: usize,
     committed: usize,
     revision: u64,
+    role: SourceRole,
 }
 
 impl MappedWriter {
     pub(crate) fn receive(fd: OwnedFd) -> Result<Self> {
+        Self::receive_for_role(fd, SourceRole::Worker)
+    }
+
+    pub(crate) fn receive_for_role(fd: OwnedFd, role: SourceRole) -> Result<Self> {
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
         ensure!(
             unsafe { libc::fstat(fd.as_raw_fd(), stat.as_mut_ptr()) } == 0,
@@ -307,8 +347,8 @@ impl MappedWriter {
             "unsupported raw storage version"
         );
         ensure!(
-            map.get(2) == WORKER_ROLE && map.get(3) == 1,
-            "raw storage is not exactly one worker source"
+            map.get(2) == role as u64 && map.get(3) == 1,
+            "raw storage is not exactly one source of the expected role"
         );
         let capacity = usize::try_from(map.get(4))?;
         ensure!(
@@ -347,13 +387,17 @@ impl MappedWriter {
             capacity,
             committed: 0,
             revision: 0,
+            role,
         })
     }
     pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }
+    pub(crate) fn role(&self) -> SourceRole {
+        self.role
+    }
     pub(crate) fn snapshot(&self) -> Result<RawReport> {
-        snapshot_mapping(&self.map, self.capacity)
+        snapshot_mapping(&self.map, self.capacity, self.role)
     }
     fn begin(&mut self) {
         if self.revision.is_multiple_of(2) {
@@ -525,9 +569,16 @@ fn receive_storage(
         unsafe {
             let mut cmsg = libc::CMSG_FIRSTHDR(&msg);
             while !cmsg.is_null() {
-                if (*cmsg).cmsg_level != libc::SOL_SOCKET || (*cmsg).cmsg_type != libc::SCM_RIGHTS {
+                let rights =
+                    (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == libc::SCM_RIGHTS;
+                let pidfd =
+                    (*cmsg).cmsg_level == libc::SOL_SOCKET && (*cmsg).cmsg_type == SCM_PIDFD;
+                if !rights {
                     invalid = true;
-                } else {
+                }
+                // SO_PASSPIDFD installs an FD even though this protocol rejects
+                // its ancillary type. Adopt it before taking the error path.
+                if rights || pidfd {
                     let len = (*cmsg).cmsg_len.saturating_sub(libc::CMSG_LEN(0) as usize);
                     if !len.is_multiple_of(std::mem::size_of::<i32>()) {
                         invalid = true;
@@ -1003,6 +1054,27 @@ fn encode_record(record: &Record) -> Result<[u8; RECORD_BYTES]> {
                 e.u64(value)?;
             }
         }
+        BrokerConfigured {
+            mode,
+            start_ns,
+            rate,
+            causal,
+        } => {
+            e.u8(33)?;
+            e.u8(match mode {
+                crate::diagnostic_fixture::Mode::A => 0,
+                crate::diagnostic_fixture::Mode::B => 1,
+                crate::diagnostic_fixture::Mode::C => 2,
+            })?;
+            e.u64(*start_ns)?;
+            e.u64(u64::from(*rate))?;
+            e.boolean(*causal)?;
+        }
+        BrokerOperation { operation, success } => {
+            e.u8(34)?;
+            e.u8(*operation as u8)?;
+            e.boolean(*success)?;
+        }
         WorkerCommandFailed => e.u8(24)?,
         WorkerRunFailed => e.u8(25)?,
         WorkerCaptureConfigured { detailed } => {
@@ -1373,6 +1445,21 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> Result<Record> {
             decision_ns: d.u64()?,
             kind: d.fixture()?,
         },
+        33 => BrokerConfigured {
+            mode: match d.u8()? {
+                0 => crate::diagnostic_fixture::Mode::A,
+                1 => crate::diagnostic_fixture::Mode::B,
+                2 => crate::diagnostic_fixture::Mode::C,
+                _ => bail!("invalid broker capture mode"),
+            },
+            start_ns: d.u64()?,
+            rate: u32::try_from(d.u64()?)?,
+            causal: d.boolean()?,
+        },
+        34 => BrokerOperation {
+            operation: crate::diagnostic_broker::Operation::from_wire(d.u8()?)?,
+            success: d.boolean()?,
+        },
         _ => bail!("unknown raw event tag"),
     };
     ensure!(d.at == len, "trailing raw record bytes");
@@ -1386,6 +1473,150 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> Result<Record> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_worker_bootstrap_rejects_and_closes_unexpected_pidfd() -> Result<()> {
+        // Isolate descriptor accounting from concurrently running Cargo tests.
+        const CHILD: &str = "SLIVER_TEST_BOOTSTRAP_PIDFD_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", "diagnostic_capture_transport::tests::private_worker_bootstrap_rejects_and_closes_unexpected_pidfd", "--test-threads=1", "--nocapture"])
+                .env(CHILD, "1").output()?;
+            ensure!(
+                output.status.success(),
+                "isolated bootstrap PIDFD check failed: {} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        let count_pidfds = || -> Result<usize> {
+            Ok(std::fs::read_dir("/proc/self/fd")?
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| {
+                    std::fs::read_link(entry.path())
+                        .is_ok_and(|p| p == std::path::Path::new("anon_inode:[pidfd]"))
+                })
+                .count())
+        };
+        let (sender, receiver) = UnixStream::pair()?;
+        let enabled = 1i32;
+        ensure!(
+            unsafe {
+                libc::setsockopt(
+                    receiver.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_PASSPIDFD,
+                    (&enabled as *const i32).cast(),
+                    std::mem::size_of::<i32>() as libc::socklen_t,
+                )
+            } == 0,
+            "enabling test SO_PASSPIDFD: {}",
+            io::Error::last_os_error()
+        );
+        let before = count_pidfds()?;
+        send_bootstrap_storage(&sender, None, Instant::now() + Duration::from_secs(1))?;
+        assert!(
+            receive_bootstrap_storage(&receiver, Instant::now() + Duration::from_secs(1)).is_err()
+        );
+        assert_eq!(
+            count_pidfds()?,
+            before,
+            "unsupported SCM_PIDFD leaked its installed descriptor"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn private_capture_roles_reject_cross_role_tickets_writers_and_changed_headers() -> Result<()> {
+        let roles = [
+            SourceRole::Worker,
+            SourceRole::Broker,
+            SourceRole::Supervisor,
+        ];
+        for role in roles {
+            let mut collector = Collector::for_role(8, role)?;
+            for other in roles.into_iter().filter(|other| *other != role) {
+                assert!(collector.take_storage(other).is_err());
+                assert!(MappedWriter::receive_for_role(collector.fd.try_clone()?, other).is_err());
+            }
+            let ticket = collector.take_storage(role)?;
+            assert!(collector.take_storage(role).is_err());
+            let writer = MappedWriter::receive_for_role(ticket, role)?;
+            assert!(MappedWriter::receive_for_role(collector.fd.try_clone()?, role).is_err());
+            let capture = crate::diagnostic_observer::Capture::from_mapped(writer)?;
+            capture.record(EventKind::BrokerOperation {
+                operation: crate::diagnostic_broker::Operation::Claim,
+                success: true,
+            });
+            capture.finish();
+            assert!(collector.snapshot()?.report.closed);
+            for field in 0..6 {
+                let before = collector.map.get(field);
+                collector.map.set(field, before + 1);
+                assert!(
+                    collector.snapshot().is_err(),
+                    "mutated identity/layout field {field} accepted"
+                );
+                collector.map.set(field, before);
+            }
+            assert_eq!(collector.snapshot()?.report.records.len(), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn private_broker_raw_tags_round_trip_and_reject_unknown_modes_operations_and_padding(
+    ) -> Result<()> {
+        use crate::diagnostic_broker::Operation;
+        use crate::diagnostic_fixture::Mode;
+        let mut kinds = vec![
+            EventKind::BrokerConfigured {
+                mode: Mode::A,
+                start_ns: 123,
+                rate: 30,
+                causal: false,
+            },
+            EventKind::BrokerConfigured {
+                mode: Mode::B,
+                start_ns: 456,
+                rate: 60,
+                causal: false,
+            },
+            EventKind::BrokerConfigured {
+                mode: Mode::C,
+                start_ns: 789,
+                rate: 30,
+                causal: true,
+            },
+        ];
+        for value in 0..=10 {
+            for success in [false, true] {
+                kinds.push(EventKind::BrokerOperation {
+                    operation: Operation::from_wire(value)?,
+                    success,
+                });
+            }
+        }
+        for kind in kinds {
+            let record = Record {
+                sequence: 1,
+                at_ns: 2,
+                kind,
+            };
+            let encoded = encode_record(&record)?;
+            let decoded = decode_record(&encoded)?;
+            assert_eq!(format!("{:?}", decoded), format!("{:?}", record));
+            let mut malformed = encoded;
+            // Header: u16 record length, u64 sequence, u64 timestamp, u8 tag.
+            malformed[19] = 255;
+            assert!(decode_record(&malformed).is_err());
+            let mut padding = encoded;
+            padding[RECORD_BYTES - 1] = 1;
+            assert!(decode_record(&padding).is_err());
+        }
+        Ok(())
+    }
 
     // Malformed peers are manufactured at the descriptor interface, not by
     // weakening validation or adding runtime provisioning switches.
@@ -1483,7 +1714,7 @@ mod tests {
         // also be rejected rather than mapping beyond its actual allocation.
         let file = std::fs::File::from(fd.try_clone()?);
         for (index, invalid, original) in [
-            (2, 2, WORKER_ROLE),
+            (2, 2, SourceRole::Worker as u64),
             (3, 2, 1),
             (4, 3, 2),
             (5, 1024, RECORD_BYTES as u64),
@@ -1589,7 +1820,7 @@ mod tests {
         assert!(!raw.initialized && !raw.report.closed);
         assert!(raw.report.records.is_empty());
         assert_eq!(writer.map.get(0), MAGIC);
-        assert_eq!(writer.map.get(2), WORKER_ROLE);
+        assert_eq!(writer.map.get(2), SourceRole::Worker as u64);
         assert_eq!(writer.map.get(4), 128);
         assert_eq!(writer.map.get(REVISION), 0);
         Ok(())

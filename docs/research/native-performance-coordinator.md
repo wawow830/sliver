@@ -33,8 +33,8 @@ installed build, or native update.
 Pending frames retain original allocation metadata through retries. Detailed
 publication and pending-discard records carry that allocation, while selection
 and mapped discard records join through mapping-local publication sequence.
-The raw storage version is now 2; tags 3 and 6 include an explicit optional
-allocation. This requires matched private binaries, not compatibility with old
+The raw storage is now version 3; tags 3 and 6 retain version 2's explicit optional
+allocation. Version 3 adds [role-bound broker recording](native-performance-broker-source.md). This requires matched private binaries, not compatibility with old
 raw captures. Record size remains 512 bytes.
 
 ## Coordinator interface and scope
@@ -107,9 +107,13 @@ a successor. The complete collector must separately verify raw and minimal sourc
 health, source/cohort closure, calibration, cleanup and all normalized input.
 These are not implied by a coordinator acknowledgement.
 
-Still required: trusted root-owned startup acquisition and service provisioning,
-per-role/process/build/mapping binding, original broker input/return observations
-and ordered forwarding, complete installed supervisor lifecycle integration,
+[Private provisioning](native-performance-provisioning.md) now acquires trusted
+root-owned declarations and binds bounded role/process/plan tickets; the
+[broker source](native-performance-broker-source.md) records original adapter
+input/return seams. Neither is installed startup integration or native evidence.
+Still required: actual service/control-channel discovery and provisioning,
+complete build/mapping/device provenance, ordered original receipt forwarding,
+complete installed supervisor lifecycle integration,
 source-complete native assembly and the full overhead battery, versioned native
 artifacts and coherent release-verifier gates. Then an exact-commit RPM and a
 fresh authorized complete #17/#24 hardware/rollback transaction are required.

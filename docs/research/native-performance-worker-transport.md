@@ -37,9 +37,9 @@ with an older worker binary; packaging must build and deploy matched binaries.
 
 One `Collector` supplies one consumable worker ticket. Storage is bounded to
 1–65,536 records of 512 encoded bytes plus a 512-byte header (at most
-33,554,944 bytes per source). Total sources/run memory must additionally be
-bounded by the future launcher; arbitrarily constructing collectors is not a
-run-level bound.
+33,554,944 bytes per source). The new [private provisioning registry](native-performance-provisioning.md)
+bounds all three declared roles together to 65,536 records plus three headers.
+Arbitrarily constructing collectors outside that registry is not a run-level bound.
 
 - A memfd is created and size-sealed against growth/shrink and later seal changes.
   The receiver checks type, write access, seals, role, version and exact size.
@@ -50,9 +50,12 @@ run-level bound.
   explicitly encoded records and publishes only completed records. Source-local
   sequence, loss/error metadata and bounded revision checks describe snapshots.
   No Rust `Vec`, pointer, mutex or enum representation crosses the mapping.
-- Raw storage version 2 adds optional exact allocation metadata to publication
-  and pending-discard tags 3/6. Matched private binaries are required; old raw
-  storage is rejected. The record codec has explicit tags, little-endian fields, bounded lengths and
+- Raw storage version 3 retains version 2's optional exact allocation metadata
+  in publication and pending-discard tags 3/6, adds broker records, and requires
+  an explicitly matching Worker/Broker/Supervisor role. Existing worker staging
+  remains Worker-only. Collector-owned header checks prevent accidental source
+  relabeling; see [broker source and storage](native-performance-broker-source.md).
+  Matched private binaries are required; old raw storage is rejected. The record codec has explicit tags, little-endian fields, bounded lengths and
   zero padding; floating scheduler values preserve their raw IEEE bits. The
   shared atomic mapping is a same-host transport, not a portable artifact file.
   Exported marker packets are independently revalidated before typed access.
