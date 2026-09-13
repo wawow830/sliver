@@ -198,6 +198,211 @@ fn diagnostic_pixel_marker_rejects_ambiguous_identities_before_presenting() -> R
 }
 
 #[test]
+fn private_p1_pending_retry_preserves_allocation_host_time_in_every_mode() -> Result<()> {
+    use crate::diagnostic_fixture::{Clock, Fixture, Mode, Plan, SyntheticClock, SOURCE};
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason};
+    for mode in [Mode::A, Mode::B, Mode::C] {
+        let fixture = Fixture::new(
+            Plan::new("retry", "g", 8_000_000_000, 30, mode)?,
+            Clock::Synthetic(SyntheticClock::new(1_000_000_000)),
+        )?;
+        let capture = (mode == Mode::C).then(|| Capture::new(64)).transpose()?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            capture.clone(),
+            TimingCapture::new(8)?,
+        )?
+        .worker;
+        worker.commit(1000.0, InputState::default())?;
+        let held = worker.hold_slots_for_test();
+        let before = crate::diagnostic_observer::clock_ns(false)?;
+        worker.render_to_slots_at(1000.0, 0.25)?;
+        let after_render = crate::diagnostic_observer::clock_ns(false)?;
+        assert!(worker.broker_for_test().take_newest()?.is_none());
+        std::thread::sleep(Duration::from_millis(1));
+        drop(held);
+        let selected = worker
+            .drive(DriveRequest::without_input(1000.0, InputState::default()))?
+            .frame
+            .context("pending retry did not publish")?;
+        let correlation = selected
+            .fixture_correlation()
+            .context("private identity lost")?;
+        assert_eq!(
+            (
+                correlation.allocation.id,
+                correlation.allocation.token,
+                correlation.sequence
+            ),
+            (1, 0, 1)
+        );
+        assert!(
+            (before..=after_render).contains(&correlation.allocation.allocated_ns),
+            "retry replaced original host allocation time"
+        );
+        assert_eq!(selected.timing.delta, 0.25);
+        assert_eq!(fixture.report().allocated, 1, "retry allocated new work");
+        if mode == Mode::A {
+            assert!(crate::diagnostic_observer::decode(&selected.frame).is_err());
+        } else {
+            assert_eq!(
+                crate::diagnostic_observer::decode(&selected.frame)
+                    .unwrap()
+                    .frame_id(),
+                1
+            );
+        }
+        worker.shutdown(StopReason::Shutdown)?;
+        if let Some(capture) = capture {
+            let report = capture.close();
+            let at = report
+                .records
+                .iter()
+                .find_map(|record| match record.kind {
+                    EventKind::RenderAllocated { attempt: 1 } => Some(record.at_ns),
+                    _ => None,
+                })
+                .context("allocation observation missing")?;
+            assert_eq!(correlation.allocation.allocated_ns, at);
+            assert!(report.records.iter().any(|record| matches!(record.kind,
+                EventKind::Published { sequence: 1, allocation: Some(value), .. }
+                    if value == correlation.allocation)));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn private_p1_pending_shutdown_retains_unpublished_allocation_disposition() -> Result<()> {
+    use crate::diagnostic_fixture::{Clock, Fixture, Mode, Plan, SyntheticClock, SOURCE};
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{LuaSource, LuaWorker, StopReason};
+    let fixture = Fixture::new(
+        Plan::new("shutdown", "g", 8_000_000_000, 30, Mode::C)?,
+        Clock::Synthetic(SyntheticClock::new(1_000_000_000)),
+    )?;
+    let capture = Capture::new(64)?;
+    let worker = LuaWorker::stage_fixture(
+        &LuaSource::embedded(SOURCE.to_vec()),
+        fixture.clone(),
+        Some(capture.clone()),
+        TimingCapture::new(8)?,
+    )?
+    .worker;
+    let held = worker.hold_slots_for_test();
+    worker.render_to_slots_at(1000.0, 0.0)?;
+    worker.shutdown(StopReason::Shutdown)?;
+    drop(held);
+    let report = capture.close();
+    let allocated_ns = report
+        .records
+        .iter()
+        .find_map(|record| match record.kind {
+            EventKind::RenderAllocated { attempt: 1 } => Some(record.at_ns),
+            _ => None,
+        })
+        .context("allocation observation missing")?;
+    let pending: Vec<_> = report
+        .records
+        .iter()
+        .filter_map(|record| match record.kind {
+            EventKind::PendingDiscarded { allocation, .. } => allocation,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        pending,
+        vec![crate::frame_slots::FrameAllocation {
+            id: 1,
+            token: 0,
+            allocated_ns
+        }]
+    );
+    assert!(!report
+        .records
+        .iter()
+        .any(|record| matches!(record.kind, EventKind::Published { .. })));
+    assert!(
+        !fixture.report().closed,
+        "shutdown invented semantic closure"
+    );
+    Ok(())
+}
+
+#[test]
+fn private_p1_pending_supersession_does_not_relabel_allocation_or_close_dropped_work() -> Result<()>
+{
+    use crate::diagnostic_fixture::{
+        Clock, Fixture, Mode, Plan, Resolution, SyntheticClock, SOURCE,
+    };
+    use crate::diagnostic_observer::{Capture, EventKind};
+    use crate::diagnostic_timing::TimingCapture;
+    use crate::lua_worker::{DriveRequest, LuaSource, LuaWorker, StopReason};
+    for mode in [Mode::A, Mode::B, Mode::C] {
+        let clock = SyntheticClock::new(1_000_000_000);
+        let fixture = Fixture::new(
+            Plan::new("superseded", "g", 8_000_000_000, 30, mode)?,
+            Clock::Synthetic(clock.clone()),
+        )?;
+        let capture = (mode == Mode::C).then(|| Capture::new(64)).transpose()?;
+        let worker = LuaWorker::stage_fixture(
+            &LuaSource::embedded(SOURCE.to_vec()),
+            fixture.clone(),
+            capture.clone(),
+            TimingCapture::new(8)?,
+        )?
+        .worker;
+        worker.commit(1000.0, InputState::default())?;
+        let held = worker.hold_slots_for_test();
+        worker.render_to_slots_at(1000.0, 0.0)?;
+        worker.render_to_slots_at(1000.0, 0.0)?;
+        drop(held);
+        let selected = worker
+            .drive(DriveRequest::without_input(1000.0, InputState::default()))?
+            .frame
+            .context("replacement was not published")?;
+        let correlation = selected
+            .fixture_correlation()
+            .context("replacement identity lost")?;
+        assert_eq!(
+            (correlation.allocation.id, correlation.sequence),
+            (2, 1),
+            "publication success count was mistaken for allocation identity"
+        );
+        fixture.resolve_frame(
+            correlation.allocation.id,
+            Resolution::Presented,
+            1_000_000_000,
+        )?;
+        clock.set(6_000_000_000);
+        assert!(
+            fixture.confirm_warmup_closed().is_err(),
+            "successful successor silently closed unresolved dropped allocation"
+        );
+        worker.shutdown(StopReason::Shutdown)?;
+        if let Some(capture) = capture {
+            let report = capture.close();
+            let pending: Vec<_> = report
+                .records
+                .iter()
+                .filter_map(|record| match record.kind {
+                    EventKind::PendingDiscarded { allocation, .. } => allocation,
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].id, 1);
+            assert!(pending[0].allocated_ns <= correlation.allocation.allocated_ns);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn private_p1_fixture_binds_exact_source_and_uses_private_marker_and_allocation_ids() -> Result<()>
 {
     use crate::diagnostic_fixture::{Clock, Fixture, Mode, Plan, SyntheticClock, SOURCE};
@@ -2455,7 +2660,9 @@ fn private_diagnostic_capture_retains_pending_replacement_and_shutdown_dispositi
         .records
         .iter()
         .filter_map(|r| match &r.kind {
-            EventKind::PendingDiscarded { marker: Ok(marker) } => Some(marker.frame_id()),
+            EventKind::PendingDiscarded {
+                marker: Ok(marker), ..
+            } => Some(marker.frame_id()),
             _ => None,
         })
         .collect();

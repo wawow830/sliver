@@ -71,19 +71,22 @@ Ordinary staging explicitly supplies no fixture.
 Private typed controls carry `Receive`, `Resolve`, `ConfirmWarmupClosed` and
 `Finish` over the existing watchdog/status protocol. Their decoder consumes the
 entire bounded payload before applying any effect. Normal shutdown closes the
-recorder but does **not** invent a fixture `Closed` observation. The private
-parent-side staging/control entry points remain test-only.
+recorder but does **not** invent a fixture `Closed` observation. Provisioned
+parent-side staging remains test-only; controls are private crate-local entry
+points used by the coordinator, not armed by ordinary service startup.
 
 The actual child tracer preserves supplied resolution endpoints independently of
 host=decision observation times. A receipt crosses the actual Lua callback and
 changes token pixels; early warmup/finish commands fail against real host time.
 These tests do not replace the five-second warmup or the 60+2-second measured and
-drain intervals with shorter epochs, and do not claim a successful complete
-host-clock lifecycle. Additional direct-child tests check identical A/B/C scene
-pixels outside the marker rectangle and matching minimal callback-span placement,
-reject altered source before execution, and reject malformed/bounded plan and
-control packets before effects. Marker decoding in the C tracer supplies software
-test context, not authoritative all-mode allocation/publication correlation.
+drain intervals with shorter epochs. The subsequent
+[lockstep coordinator](native-performance-coordinator.md) now tests complete
+host-clock lifecycle closure with real A/B/C child workers and carries exact
+allocation/publication correlation through shared slots, including markerless A.
+Additional direct-child tests check identical A/B/C scene pixels outside the
+marker rectangle and matching minimal callback-span placement, reject altered
+source before execution, and reject malformed/bounded plan and control packets
+before effects. These are software tests, not native source authentication.
 
 ## Complete minimal-sampler calibration
 
@@ -100,8 +103,11 @@ append. Even if all 32 probes fit, loss of the aggregate rejects calibration.
 The non-closing source health accessor neither copies records nor resets errors.
 It is a point-in-time check, not a guarantee about future writes.
 
-Calibration is explicit; ordinary worker startup does not automatically run it.
-Missing calibration remains an assembly/integration gap, not implicit success.
+Calibration is explicit. Fixture-bearing worker bootstrap now runs it before
+fixture creation/loading in every mode and rejects source overflow before any
+allocation. Ordinary unprovisioned worker startup still does not run it. The
+collector must verify calibration/health for every source; one worker's success
+does not establish broker or supervisor calibration.
 
 ## Broker adapter seam
 
@@ -121,10 +127,12 @@ capture off/on. These are not installed broker/service or M2 hardware tests.
 
 ## Remaining integration
 
-Complete process/coordinator lifecycle integration, allocation-to-publication
-correlation in all modes (including markerless A), trusted root-owned startup
-acquisition, per-role identity/build binding, source/cohort closure, complete overhead battery,
-versioned native artifact assembly and release-verifier integration must be
-completed together. The separately authorized hardware/RPM/rollback transaction
+The private lockstep process coordinator and exact all-mode shared-frame
+correlation are now implemented/tested; see the
+[coordinator scope and limits](native-performance-coordinator.md).
+Complete installed-service lifecycle integration, trusted root-owned startup
+acquisition, per-role identity/build binding, source-complete native cohort
+assembly, the complete overhead battery, versioned native artifacts and
+release-verifier integration remain. The separately authorized hardware/RPM/rollback transaction
 remains required. Old ledgers, approved budgets and native release gates are not
 changed by this software slice.

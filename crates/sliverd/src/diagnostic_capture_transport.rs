@@ -13,7 +13,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use memmap2::MmapMut;
 
 use crate::diagnostic_fixture::{ObservationKind, Phase, Resolution};
@@ -29,7 +29,7 @@ const HEADER_BYTES: usize = 512;
 pub(crate) const RECORD_BYTES: usize = 512;
 const MAX_RECORDS: usize = 65_536;
 const MAGIC: u64 = u64::from_le_bytes(*b"SLVRAW01");
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 const WORKER_ROLE: u64 = 1;
 const SIZE_SEALS: i32 = libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
 const CLAIM: usize = 6;
@@ -39,7 +39,7 @@ const INITIALIZED: usize = 51;
 
 /// Bounded private bootstrap plan, not launcher/source authentication. The
 /// child revalidates it and always constructs its own HostMonotonic clock.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FixtureBootstrap {
     pub(crate) run: String,
     pub(crate) generation: String,
@@ -634,6 +634,19 @@ impl Encoder {
         }
         Ok(())
     }
+    fn allocation(
+        &mut self,
+        allocation: Option<crate::frame_slots::FrameAllocation>,
+    ) -> Result<()> {
+        self.boolean(allocation.is_some())?;
+        if let Some(allocation) = allocation {
+            validate_allocation(allocation)?;
+            self.u64(allocation.id)?;
+            self.u64(allocation.token)?;
+            self.u64(allocation.allocated_ns)?;
+        }
+        Ok(())
+    }
     fn marker(&mut self, marker: &std::result::Result<Marker, DecodeError>) -> Result<()> {
         match marker {
             Ok(marker) => {
@@ -751,6 +764,20 @@ impl Encoder {
     }
 }
 
+fn validate_allocation(allocation: crate::frame_slots::FrameAllocation) -> Result<()> {
+    ensure!(
+        allocation.id > 0 && allocation.id <= i64::MAX as u64,
+        "invalid raw fixture allocation id"
+    );
+    ensure!(
+        allocation.token <= i64::MAX as u64
+            && allocation.allocated_ns > 0
+            && allocation.allocated_ns <= i64::MAX as u64,
+        "invalid raw fixture allocation token/time"
+    );
+    Ok(())
+}
+
 fn encode_record(record: &Record) -> Result<[u8; RECORD_BYTES]> {
     use EventKind::*;
     let mut e = Encoder::new();
@@ -769,9 +796,14 @@ fn encode_record(record: &Record) -> Result<[u8; RECORD_BYTES]> {
                 e.marker(marker)?;
             }
         }
-        Published { sequence, marker } => {
+        Published {
+            sequence,
+            allocation,
+            marker,
+        } => {
             e.u8(3)?;
             e.u64(*sequence)?;
+            e.allocation(*allocation)?;
             e.marker(marker)?;
         }
         Selected { sequence } => {
@@ -787,8 +819,9 @@ fn encode_record(record: &Record) -> Result<[u8; RECORD_BYTES]> {
                 DiscardReason::MappingClosed => 2,
             })?;
         }
-        PendingDiscarded { marker } => {
+        PendingDiscarded { allocation, marker } => {
             e.u8(6)?;
+            e.allocation(*allocation)?;
             e.marker(marker)?;
         }
         PresentEntered { call, marker } => {
@@ -1037,6 +1070,18 @@ impl<'a> Decoder<'a> {
             Ok(None)
         }
     }
+    fn allocation(&mut self) -> Result<Option<crate::frame_slots::FrameAllocation>> {
+        if !self.boolean()? {
+            return Ok(None);
+        }
+        let allocation = crate::frame_slots::FrameAllocation {
+            id: self.u64()?,
+            token: self.u64()?,
+            allocated_ns: self.u64()?,
+        };
+        validate_allocation(allocation)?;
+        Ok(Some(allocation))
+    }
     fn marker(&mut self) -> Result<std::result::Result<Marker, DecodeError>> {
         Ok(match self.u8()? {
             0 => Ok(
@@ -1168,6 +1213,7 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> Result<Record> {
         },
         3 => Published {
             sequence: d.u64()?,
+            allocation: d.allocation()?,
             marker: d.marker()?,
         },
         4 => Selected { sequence: d.u64()? },
@@ -1181,6 +1227,7 @@ fn decode_record(bytes: &[u8; RECORD_BYTES]) -> Result<Record> {
             },
         },
         6 => PendingDiscarded {
+            allocation: d.allocation()?,
             marker: d.marker()?,
         },
         7 => PresentEntered {
@@ -1984,6 +2031,96 @@ mod tests {
                 "malformed input must not consume the valid prefix"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn private_capture_correlated_publications_preserve_exact_allocation_and_reject_malformed_fields(
+    ) -> Result<()> {
+        use crate::diagnostic_observer::Capture;
+        use crate::frame_slots::FrameAllocation;
+        use std::os::unix::fs::FileExt;
+        let allocation = FrameAllocation {
+            id: 7,
+            token: 3,
+            allocated_ns: 123_456_789,
+        };
+        let mut collector = Collector::new(4)?;
+        let fd = collector.take_worker_storage()?;
+        let file = std::fs::File::from(fd.try_clone()?);
+        let capture = Capture::from_mapped(MappedWriter::receive(fd)?)?;
+        capture.record_at(
+            Ok(200_000_000),
+            EventKind::Published {
+                sequence: 2,
+                allocation: Some(allocation),
+                marker: Err(DecodeError::Geometry),
+            },
+        );
+        capture.record_at(
+            Ok(200_000_001),
+            EventKind::PendingDiscarded {
+                allocation: Some(allocation),
+                marker: Err(DecodeError::Geometry),
+            },
+        );
+        capture.record_at(
+            Ok(200_000_002),
+            EventKind::Published {
+                sequence: 3,
+                allocation: None,
+                marker: Err(DecodeError::Geometry),
+            },
+        );
+        capture.finish();
+        let report = collector.snapshot()?;
+        assert!(matches!(report.report.records[0].kind,
+            EventKind::Published { sequence: 2, allocation: Some(actual), .. } if actual == allocation));
+        assert!(matches!(report.report.records[1].kind,
+            EventKind::PendingDiscarded { allocation: Some(actual), .. } if actual == allocation));
+        assert!(matches!(
+            report.report.records[2].kind,
+            EventKind::Published {
+                sequence: 3,
+                allocation: None,
+                ..
+            }
+        ));
+        let mut original = [0; RECORD_BYTES];
+        file.read_exact_at(&mut original, HEADER_BYTES as u64)?;
+        // Independent offsets: 2-byte length, sequence/time, tag3, publication
+        // sequence, allocation tag, id/token/host-ns, then marker result.
+        assert_eq!(original[18], 3);
+        assert_eq!(original[27], 1);
+        for (offset, value) in [
+            (28, 0),
+            (28, u64::MAX),
+            (36, u64::MAX),
+            (44, 0),
+            (44, u64::MAX),
+        ] {
+            let mut malformed = original;
+            malformed[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+            file.write_all_at(&malformed, HEADER_BYTES as u64)?;
+            assert!(
+                collector.snapshot().is_err(),
+                "accepted malformed allocation at {offset}"
+            );
+        }
+        let mut malformed = original;
+        malformed[27] = 2;
+        file.write_all_at(&malformed, HEADER_BYTES as u64)?;
+        assert!(collector.snapshot().is_err());
+        file.write_all_at(&original, HEADER_BYTES as u64)?;
+        assert!(collector.snapshot().is_ok());
+        // A matched new binary must not claim compatibility with old raw storage.
+        file.write_all_at(&1_u64.to_le_bytes(), 8)?;
+        let error = MappedWriter::receive(file.try_clone()?.into())
+            .err()
+            .context("accepted old raw version")?;
+        assert!(error
+            .to_string()
+            .contains("unsupported raw storage version"));
         Ok(())
     }
 

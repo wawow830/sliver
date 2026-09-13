@@ -23,7 +23,7 @@ use crate::lua_canvas::{create_path, Canvas};
 use crate::lua_image::create_image;
 
 #[path = "worker_process.rs"]
-mod worker_process;
+pub(crate) mod worker_process;
 
 pub(crate) fn worker_process_main() -> Result<()> {
     worker_process::worker_main()
@@ -32,6 +32,14 @@ pub(crate) fn worker_process_main() -> Result<()> {
 pub(crate) struct TimedFrame {
     pub(crate) frame: LogicalFrame,
     pub(crate) timing: FrameTiming,
+}
+
+impl TimedFrame {
+    /// Exact private allocation/publication pair selected from this worker's
+    /// mapping. None for ordinary frames; never decoded or guessed from pixels.
+    pub(crate) fn fixture_correlation(&self) -> Option<crate::frame_slots::FrameCorrelation> {
+        self.frame.fixture_correlation()
+    }
 }
 
 pub(crate) struct StagedLuaWorker {
@@ -1108,6 +1116,7 @@ impl Runtime {
             if let Some(observer) = self.producer.observer() {
                 observer.record(crate::diagnostic_observer::EventKind::PendingDiscarded {
                     marker: crate::diagnostic_observer::decode(&previous.frame),
+                    allocation: previous.frame.fixture_allocation(),
                 });
             }
         }
@@ -1559,17 +1568,24 @@ impl Runtime {
         frame: &LogicalFrame,
         timing: FrameTiming,
     ) -> std::result::Result<bool, String> {
-        let published = self
-            .producer
-            .try_publish(
+        let published = match frame.fixture_allocation() {
+            Some(allocation) => self.producer.try_publish_fixture(
                 frame.width(),
                 frame.height(),
                 frame.stride(),
                 frame.pixels(),
                 timing,
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(published)
+                Some(allocation),
+            ),
+            None => self.producer.try_publish(
+                frame.width(),
+                frame.height(),
+                frame.stride(),
+                frame.pixels(),
+                timing,
+            ),
+        };
+        published.map_err(|error| error.to_string())
     }
 
     fn render_frame(
@@ -1578,7 +1594,7 @@ impl Runtime {
         delta: f64,
     ) -> std::result::Result<Option<LogicalFrame>, String> {
         let observer = self.producer.observer();
-        let attempt = if let Some(fixture) = &self.controls.fixture {
+        let allocation = if let Some(fixture) = &self.controls.fixture {
             let Some(frame) = fixture.allocate().map_err(|error| error.to_string())? else {
                 return Ok(None);
             };
@@ -1588,11 +1604,23 @@ impl Runtime {
                     crate::diagnostic_observer::EventKind::RenderAllocated { attempt: frame.id },
                 );
             }
-            Some(frame.id)
+            Some(crate::frame_slots::FrameAllocation {
+                id: frame.id,
+                token: frame.token,
+                allocated_ns: frame.allocated_ns,
+            })
         } else {
-            observer.map(|observer| observer.allocate_render())
+            None
         };
-        let result = self.render_frame_inner(presentation_time, delta);
+        let attempt = allocation
+            .map(|frame| frame.id)
+            .or_else(|| observer.map(|observer| observer.allocate_render()));
+        let result =
+            self.render_frame_inner(presentation_time, delta)
+                .map(|frame| match allocation {
+                    Some(allocation) => frame.with_fixture_allocation(allocation),
+                    None => frame,
+                });
         if let Some(fixture) = &self.controls.fixture {
             fixture.finish_render();
         }
@@ -1654,6 +1682,7 @@ impl Drop for Runtime {
         if let (Some(observer), Some(pending)) = (self.producer.observer(), &self.pending_frame) {
             observer.record(crate::diagnostic_observer::EventKind::PendingDiscarded {
                 marker: crate::diagnostic_observer::decode(&pending.frame),
+                allocation: pending.frame.fixture_allocation(),
             });
         }
     }

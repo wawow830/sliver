@@ -268,6 +268,10 @@ impl TimingCapture {
 }
 
 impl Span {
+    pub(crate) fn id(&self) -> u64 {
+        self.sequence
+    }
+
     pub(crate) fn finish(mut self, frame_bearing: bool, success: bool) {
         self.complete(
             frame_bearing,
@@ -375,6 +379,7 @@ mod tests {
             height: 1,
             stride: 8,
             pixels: vec![255; 8],
+            fixture_correlation: None,
             timing: crate::frame_slots::FrameTiming::new(0.0, 0.0)?,
         });
         present(Some(&timing), &mut hardware, &frame)?;
@@ -484,6 +489,7 @@ mod tests {
                 ),
                 2 => capture.record(EventKind::Published {
                     sequence: 1,
+                    allocation: None,
                     marker: Err(crate::diagnostic_observer::DecodeError::Geometry),
                 }),
                 _ => capture.finish(),

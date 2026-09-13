@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{ensure, Result};
 use cairo::ImageSurface;
 
-use crate::frame_slots::{CompletedFrame, FrameTiming};
+use crate::frame_slots::{CompletedFrame, FrameAllocation, FrameCorrelation, FrameTiming};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modifier {
@@ -418,6 +418,10 @@ pub(crate) struct LogicalFrame {
     height: usize,
     stride: usize,
     pixels: Vec<u8>,
+    // Private same-host fixture metadata. Deliberately absent from broker wire
+    // construction; it is not pixel identity or proof of a hardware update.
+    fixture_allocation: Option<FrameAllocation>,
+    publication_sequence: Option<u64>,
 }
 
 impl LogicalFrame {
@@ -429,6 +433,8 @@ impl LogicalFrame {
             height: surface.height() as usize,
             stride: surface.stride() as usize,
             pixels,
+            fixture_allocation: None,
+            publication_sequence: None,
         })
     }
 
@@ -454,7 +460,26 @@ impl LogicalFrame {
             height,
             stride,
             pixels,
+            fixture_allocation: None,
+            publication_sequence: None,
         }
+    }
+
+    pub(crate) fn with_fixture_allocation(mut self, allocation: FrameAllocation) -> Self {
+        self.fixture_allocation = Some(allocation);
+        self.publication_sequence = None;
+        self
+    }
+
+    pub(crate) fn fixture_allocation(&self) -> Option<FrameAllocation> {
+        self.fixture_allocation
+    }
+
+    pub(crate) fn fixture_correlation(&self) -> Option<FrameCorrelation> {
+        Some(FrameCorrelation {
+            allocation: self.fixture_allocation?,
+            sequence: self.publication_sequence?,
+        })
     }
 
     pub(crate) fn from_completed(completed: CompletedFrame) -> (Self, FrameTiming) {
@@ -464,6 +489,8 @@ impl LogicalFrame {
                 height: completed.height,
                 stride: completed.stride,
                 pixels: completed.pixels,
+                fixture_allocation: completed.fixture_correlation.map(|value| value.allocation),
+                publication_sequence: completed.fixture_correlation.map(|value| value.sequence),
             },
             completed.timing,
         )

@@ -181,7 +181,9 @@ pub(crate) enum EventKind {
     MinimalSummary(crate::diagnostic_timing::Summary),
     /// Explicit no-op sampler calibration costs, never work credit or an amount
     /// to subtract from measured durations. The calibrator supplies all samples.
-    MinimalCalibration { cost_ns: [u64; 32] },
+    MinimalCalibration {
+        cost_ns: [u64; 32],
+    },
     /// Fixture decision-clock values remain distinct from Record::at_ns.
     /// Neither the synthetic flag nor these observations authenticate a source.
     FixtureObserved {
@@ -252,6 +254,7 @@ pub(crate) enum EventKind {
     },
     Published {
         sequence: u64,
+        allocation: Option<crate::frame_slots::FrameAllocation>,
         marker: std::result::Result<Marker, DecodeError>,
     },
     Selected {
@@ -262,6 +265,7 @@ pub(crate) enum EventKind {
         reason: DiscardReason,
     },
     PendingDiscarded {
+        allocation: Option<crate::frame_slots::FrameAllocation>,
         marker: std::result::Result<Marker, DecodeError>,
     },
     PresentEntered {
@@ -488,7 +492,7 @@ impl Capture {
             }
             | EventKind::Published { marker: Err(_), .. }
             | EventKind::PresentEntered { marker: Err(_), .. }
-            | EventKind::PendingDiscarded { marker: Err(_) } => {
+            | EventKind::PendingDiscarded { marker: Err(_), .. } => {
                 r.decode_failures = r.decode_failures.saturating_add(1)
             }
             _ => {}

@@ -110,6 +110,7 @@ mod tests {
             height: 1,
             stride: 8,
             pixels: vec![255; 8],
+            fixture_correlation: None,
             timing: crate::frame_slots::FrameTiming::new(0.0, 0.0)?,
         });
         for enabled in [false, true] {

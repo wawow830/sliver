@@ -85,9 +85,17 @@ pub(crate) struct ProcessWorker {
     cgroup: Option<PathBuf>,
     systemd_runtime: Option<PathBuf>,
     broker: FrameBroker,
+    // Exact immutable capability sent at bootstrap. This prevents accidental
+    // same-process plan mismatch; it is NOT installed-build/source attestation.
+    fixture_plan: Option<FixtureBootstrap>,
 }
 
 impl ProcessWorker {
+    #[allow(dead_code)] // Private coordinator only; ordinary workers retain None.
+    pub(crate) fn matches_fixture_plan(&self, plan: &FixtureBootstrap) -> bool {
+        self.fixture_plan.as_ref() == Some(plan)
+    }
+
     #[cfg(test)]
     pub(crate) fn stage_with_fixture(
         source: &LuaSource,
@@ -117,7 +125,7 @@ impl ProcessWorker {
         )
     }
 
-    #[cfg(test)]
+    #[allow(dead_code)] // Only the private coordinator uses this; no service arming.
     pub(crate) fn fixture_control(&self, control: FixtureControl) -> Result<()> {
         let mut payload = Vec::new();
         match control {
@@ -348,6 +356,7 @@ impl ProcessWorker {
             cgroup: spawned.cgroup,
             systemd_runtime: spawned.systemd_runtime,
             broker,
+            fixture_plan: fixture.clone(),
         };
         worker.request_bootstrap(
             source,
@@ -1121,6 +1130,12 @@ fn run_bootstrapped_worker(
                 level == Some(plan.capture_level()),
                 "fixture mode/storage level mismatch"
             );
+            // All modes pay the identical complete minimal sampler cost before
+            // fixture allocation, callbacks or arming. Retain actual probes;
+            // source loss here is a setup failure, never implicit calibration.
+            timing
+                .context("fixture requires minimal timing")?
+                .calibrate()?;
             let fixture = crate::diagnostic_fixture::Fixture::new(
                 plan.plan()?,
                 crate::diagnostic_fixture::Clock::HostMonotonic,
@@ -2421,6 +2436,43 @@ mod tests {
     }
 
     #[test]
+    fn process_fixture_calibration_loss_rejects_startup_before_any_allocation() -> Result<()> {
+        use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap};
+        use crate::diagnostic_fixture::{Mode, SOURCE};
+        use crate::diagnostic_observer::{clock_ns, EventKind};
+        for mode in [Mode::A, Mode::B, Mode::C] {
+            // One bootstrap record plus 32 probes already exceeds this budget;
+            // the aggregate must not be certified or source loading attempted.
+            let mut collector = Collector::new(32)?;
+            let result = ProcessWorker::stage_with_fixture(
+                &LuaSource::embedded(SOURCE.to_vec()),
+                1.0,
+                InputState::default(),
+                collector.take_worker_storage()?,
+                FixtureBootstrap::new(
+                    "calibration-loss",
+                    "child",
+                    clock_ns(false)? + 30_000_000_000,
+                    30,
+                    mode,
+                )?,
+            );
+            assert!(result.is_err());
+            let raw = collector.snapshot()?;
+            assert!(raw.initialized && raw.metadata_consistent && raw.report.closed);
+            assert!(raw.report.lost > 0);
+            assert!(raw.report.failed_operations > 0);
+            assert!(!raw.report.records.iter().any(|r| matches!(
+                r.kind,
+                EventKind::FixtureObserved { .. }
+                    | EventKind::RenderAllocated { .. }
+                    | EventKind::MinimalCalibration { .. }
+            )));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn process_fixture_closure_controls_reject_early_host_time() -> Result<()> {
         use crate::diagnostic_capture_transport::{Collector, FixtureBootstrap};
         use crate::diagnostic_fixture::{Mode, ObservationKind, SOURCE};
@@ -2429,7 +2481,7 @@ mod tests {
             (2, "warmup closure requires five seconds"),
             (3, "fixture closure requires E"),
         ] {
-            let mut collector = Collector::new(32)?;
+            let mut collector = Collector::new(96)?;
             let worker = ProcessWorker::stage_with_fixture(
                 &LuaSource::embedded(SOURCE.to_vec()),
                 1.0,
@@ -2516,16 +2568,20 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(spans.len(), 1);
+            assert_eq!(spans.len(), 33);
+            assert!(spans[..32].iter().all(|s| s.kind
+                == crate::diagnostic_timing::SpanKind::Calibration
+                && !s.frame_bearing
+                && s.status == crate::diagnostic_timing::SpanStatus::Succeeded));
             assert_eq!(
-                spans[0].kind,
+                spans[32].kind,
                 crate::diagnostic_timing::SpanKind::RenderCallback
             );
             assert_eq!(
-                spans[0].status,
+                spans[32].status,
                 crate::diagnostic_timing::SpanStatus::Succeeded
             );
-            assert!(spans[0].frame_bearing);
+            assert!(spans[32].frame_bearing);
         }
         for y in 0..60 {
             for x in 0..2008 {
@@ -2571,7 +2627,7 @@ mod tests {
             sentinel.to_str().unwrap(),
             std::str::from_utf8(SOURCE)?
         );
-        let mut collector = Collector::new(32)?;
+        let mut collector = Collector::new(96)?;
         let error = ProcessWorker::stage_with_fixture(
             &embedded(&altered),
             1.0,
@@ -2624,7 +2680,7 @@ mod tests {
             height: None,
         };
         for bad_receipt in [false, true] {
-            let mut collector = Collector::new(32)?;
+            let mut collector = Collector::new(96)?;
             let worker = ProcessWorker::stage_with_fixture(
                 &LuaSource::embedded(SOURCE.to_vec()),
                 1.0,
@@ -2692,7 +2748,7 @@ mod tests {
             bad_touch_phase,
             bad_touch_bool,
         ] {
-            let mut collector = Collector::new(32)?;
+            let mut collector = Collector::new(96)?;
             let worker = ProcessWorker::stage_with_fixture(
                 &LuaSource::embedded(SOURCE.to_vec()),
                 1.0,

@@ -50,7 +50,9 @@ run-level bound.
   explicitly encoded records and publishes only completed records. Source-local
   sequence, loss/error metadata and bounded revision checks describe snapshots.
   No Rust `Vec`, pointer, mutex or enum representation crosses the mapping.
-- The record codec has explicit tags, little-endian fields, bounded lengths and
+- Raw storage version 2 adds optional exact allocation metadata to publication
+  and pending-discard tags 3/6. Matched private binaries are required; old raw
+  storage is rejected. The record codec has explicit tags, little-endian fields, bounded lengths and
   zero padding; floating scheduler values preserve their raw IEEE bits. The
   shared atomic mapping is a same-host transport, not a portable artifact file.
   Exported marker packets are independently revalidated before typed access.
@@ -114,11 +116,16 @@ pre-loop setup failure, receiver prefaulting and post-close writes. Separate
 mapping tests demonstrate opener-versus-owner teardown semantics. These tests
 use direct disposable child processes, not installed services or hardware.
 
+The [private coordinator](native-performance-coordinator.md) now tests complete
+host-clock fixture lifecycle through actual children, and exact allocation and
+publication correlation also works in markerless A. All fixture-bearing worker
+bootstraps calibrate before source loading; calibration loss rejects startup.
+
 This does **not** yet establish broker/supervisor service provisioning, three
-independent observed service processes, full timed-fixture/coordinator integration,
-native A/B/C overhead comparisons, trusted installed provenance, complete
-edge/cohort assembly, or a release artifact schema/verifier. The separate
-[fixture slice](native-performance-fixture.md) implements reviewed source binding,
-actual token mutation and synthetic in-process phase tests, not native acceptance. Raw records
-must not be padded with guessed fields to fit the offline evaluator. Legacy
+independent observed service processes, complete installed supervisor lifecycle
+integration, native A/B/C overhead comparisons, trusted installed provenance,
+source-complete edge/cohort assembly, or a release artifact schema/verifier. The
+[fixture](native-performance-fixture.md) and coordinator remain software
+collection, not native acceptance. Raw records must not be padded with guessed
+fields to fit the offline evaluator. Legacy
 ledgers and their old numeric gates remain unchanged until coherent integration.

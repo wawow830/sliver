@@ -68,6 +68,47 @@ impl AcquisitionGate {
     }
 }
 
+// One-shot, bounded interleaving gate for independently opened shared maps.
+#[cfg(test)]
+struct SharedSelectionGate {
+    reached: std::sync::mpsc::Sender<()>,
+    resume: Mutex<std::sync::mpsc::Receiver<()>>,
+    active: AtomicU8,
+}
+
+#[cfg(test)]
+impl SharedSelectionGate {
+    fn new() -> (
+        Self,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let (reached, notification) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        (
+            Self {
+                reached,
+                resume: Mutex::new(resume),
+                active: AtomicU8::new(1),
+            },
+            notification,
+            release,
+        )
+    }
+
+    fn pause_once(&self) -> Result<()> {
+        if self.active.swap(0, Ordering::AcqRel) != 0 {
+            self.reached.send(())?;
+            self.resume
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .context("timed out resuming shared frame selection")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FrameTiming {
     pub(crate) presentation_time: f64,
@@ -91,6 +132,33 @@ impl FrameTiming {
     }
 }
 
+/// Private fixture identity, sampled before rendering, never inferred from pixels
+/// or successful publications. IDs are scoped to the provisioned worker/mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameAllocation {
+    pub(crate) id: u64,
+    pub(crate) token: u64,
+    pub(crate) allocated_ns: u64,
+}
+
+impl FrameAllocation {
+    fn validate(self) -> Result<()> {
+        ensure!(
+            (1..=i64::MAX as u64).contains(&self.id)
+                && self.token <= i64::MAX as u64
+                && (1..=i64::MAX as u64).contains(&self.allocated_ns),
+            "invalid fixture allocation metadata"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameCorrelation {
+    pub(crate) allocation: FrameAllocation,
+    pub(crate) sequence: u64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CompletedFrame {
     pub(crate) width: usize,
@@ -98,12 +166,13 @@ pub(crate) struct CompletedFrame {
     pub(crate) stride: usize,
     pub(crate) pixels: Vec<u8>,
     pub(crate) timing: FrameTiming,
+    pub(crate) fixture_correlation: Option<FrameCorrelation>,
 }
 
 struct Slot {
     state: AtomicU8,
     sequence: AtomicU64,
-    timing: Mutex<Option<FrameTiming>>,
+    timing: Mutex<Option<(FrameTiming, Option<FrameAllocation>)>>,
 }
 
 struct SharedSlots {
@@ -158,15 +227,20 @@ pub(crate) struct FrameWriter {
     published: bool,
 }
 
-const SHARED_MAGIC: &[u8; 8] = b"SLVRFRM1";
+// Matched private worker/supervisor binaries; never accept the old layout.
+const SHARED_MAGIC: &[u8; 8] = b"SLVRFRM2";
 const SHARED_HEADER_BYTES: usize = 128;
-const SHARED_SLOT_META_BYTES: usize = 32;
+const SHARED_SLOT_META_BYTES: usize = 64;
 const SHARED_PIXEL_OFFSET: usize = SHARED_HEADER_BYTES + SLOT_COUNT * SHARED_SLOT_META_BYTES;
 
 struct SharedFrameMap {
     observer: Option<crate::diagnostic_observer::Capture>,
     storage: Mutex<MmapMut>,
     path: Option<PathBuf>,
+    #[cfg(test)]
+    snapshot_gate: Option<SharedSelectionGate>,
+    #[cfg(test)]
+    reading_gate: Option<SharedSelectionGate>,
     slot_bytes: usize,
     width: usize,
     height: usize,
@@ -211,6 +285,10 @@ impl SharedFrameMap {
             storage: Mutex::new(storage),
             observer: None,
             path: Some(path.to_path_buf()),
+            #[cfg(test)]
+            snapshot_gate: None,
+            #[cfg(test)]
+            reading_gate: None,
             slot_bytes,
             width,
             height,
@@ -259,6 +337,10 @@ impl SharedFrameMap {
             storage: Mutex::new(storage),
             observer: None,
             path: None,
+            #[cfg(test)]
+            snapshot_gate: None,
+            #[cfg(test)]
+            reading_gate: None,
             slot_bytes,
             width,
             height,
@@ -266,7 +348,12 @@ impl SharedFrameMap {
         })
     }
 
-    fn try_publish(&self, pixels: &[u8], timing: FrameTiming) -> Result<bool> {
+    fn try_publish(
+        &self,
+        pixels: &[u8],
+        timing: FrameTiming,
+        allocation: Option<FrameAllocation>,
+    ) -> Result<bool> {
         ensure!(
             pixels.len() == self.slot_bytes,
             "frame pixels do not fill one shared slot"
@@ -283,8 +370,11 @@ impl SharedFrameMap {
             storage[offset..offset + self.slot_bytes].copy_from_slice(pixels);
             let sequence = unsafe {
                 (&*(storage.as_ptr().add(32) as *const AtomicU64))
-                    .fetch_add(1, Ordering::Relaxed)
-                    .wrapping_add(1)
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                        value.checked_add(1)
+                    })
+                    .map_err(|_| anyhow::anyhow!("shared publication sequence exhausted"))?
+                    + 1
             };
             write_u64(&mut storage, slot_offset(index) + 8, sequence);
             write_u64(
@@ -297,6 +387,7 @@ impl SharedFrameMap {
                 slot_offset(index) + 24,
                 timing.delta.to_bits(),
             );
+            write_allocation(&mut storage, index, allocation);
             if let Some(observer) = &self.observer {
                 let frame = crate::hardware::LogicalFrame::from_wire(
                     self.width,
@@ -307,6 +398,7 @@ impl SharedFrameMap {
                 observer.record(crate::diagnostic_observer::EventKind::Published {
                     sequence,
                     marker: crate::diagnostic_observer::decode(&frame),
+                    allocation,
                 });
             }
             write_slot_state(&storage, index, READY);
@@ -375,6 +467,10 @@ impl SharedFrameMap {
             let Some(index) = newest else {
                 return Ok(None);
             };
+            #[cfg(test)]
+            if let Some(gate) = &self.snapshot_gate {
+                gate.pause_once()?;
+            }
             let storage = self
                 .storage
                 .lock()
@@ -395,7 +491,11 @@ impl SharedFrameMap {
                 sequence: selected_sequence,
             });
         }
-        let (pixels, timing) = {
+        #[cfg(test)]
+        if let Some(gate) = &self.reading_gate {
+            gate.pause_once()?;
+        }
+        let (pixels, timing, allocation) = {
             let storage = self
                 .storage
                 .lock()
@@ -406,7 +506,11 @@ impl SharedFrameMap {
                 f64::from_bits(read_u64(&storage, slot_offset(index) + 16)?),
                 f64::from_bits(read_u64(&storage, slot_offset(index) + 24)?),
             )?;
-            (pixels, timing)
+            ensure!(
+                selected_sequence != 0,
+                "invalid shared publication sequence"
+            );
+            (pixels, timing, read_allocation(&storage, index)?)
         };
         {
             let storage = self
@@ -441,6 +545,10 @@ impl SharedFrameMap {
             stride: self.stride,
             pixels,
             timing,
+            fixture_correlation: allocation.map(|allocation| FrameCorrelation {
+                allocation,
+                sequence: selected_sequence,
+            }),
         }))
     }
 }
@@ -523,11 +631,61 @@ fn write_u32(storage: &mut [u8], offset: usize, value: usize) -> Result<()> {
 }
 
 fn read_u64(storage: &[u8], offset: usize) -> Result<u64> {
-    Ok(u64::from_ne_bytes(storage[offset..offset + 8].try_into()?))
+    ensure!(
+        offset.is_multiple_of(8) && offset + 8 <= storage.len(),
+        "invalid mapped word offset"
+    );
+    // Selection snapshots may race a reclaiming producer's sequence update.
+    // Atomic words avoid torn/data-racing sequence reads; slot ownership still
+    // gates the pixel and allocation snapshot used by the consumer.
+    Ok(unsafe { (&*(storage.as_ptr().add(offset) as *const AtomicU64)).load(Ordering::Relaxed) })
 }
 
 fn write_u64(storage: &mut [u8], offset: usize, value: u64) {
-    storage[offset..offset + 8].copy_from_slice(&value.to_ne_bytes());
+    assert!(offset.is_multiple_of(8) && offset + 8 <= storage.len());
+    unsafe {
+        (&*(storage.as_ptr().add(offset) as *const AtomicU64)).store(value, Ordering::Relaxed)
+    }
+}
+
+fn write_allocation(storage: &mut [u8], index: usize, allocation: Option<FrameAllocation>) {
+    let base = slot_offset(index);
+    write_u64(storage, base + 32, u64::from(allocation.is_some()));
+    write_u64(storage, base + 40, allocation.map_or(0, |value| value.id));
+    write_u64(
+        storage,
+        base + 48,
+        allocation.map_or(0, |value| value.token),
+    );
+    write_u64(
+        storage,
+        base + 56,
+        allocation.map_or(0, |value| value.allocated_ns),
+    );
+}
+
+fn read_allocation(storage: &[u8], index: usize) -> Result<Option<FrameAllocation>> {
+    let base = slot_offset(index);
+    let tag = read_u64(storage, base + 32)?;
+    let allocation = FrameAllocation {
+        id: read_u64(storage, base + 40)?,
+        token: read_u64(storage, base + 48)?,
+        allocated_ns: read_u64(storage, base + 56)?,
+    };
+    match tag {
+        0 => {
+            ensure!(
+                allocation.id == 0 && allocation.token == 0 && allocation.allocated_ns == 0,
+                "absent fixture allocation has nonzero metadata"
+            );
+            Ok(None)
+        }
+        1 => {
+            allocation.validate()?;
+            Ok(Some(allocation))
+        }
+        _ => anyhow::bail!("unknown fixture allocation metadata tag"),
+    }
 }
 
 fn validate_dimensions(width: usize, height: usize, stride: usize) -> Result<usize> {
@@ -721,11 +879,31 @@ impl FrameProducer {
         pixels: &[u8],
         timing: FrameTiming,
     ) -> Result<bool> {
+        self.try_publish_fixture(width, height, stride, pixels, timing, None)
+    }
+
+    pub(crate) fn try_publish_fixture(
+        &self,
+        width: usize,
+        height: usize,
+        stride: usize,
+        pixels: &[u8],
+        timing: FrameTiming,
+        allocation: Option<FrameAllocation>,
+    ) -> Result<bool> {
         self.validate_frame(width, height, stride, pixels)?;
-        if let Some(shared) = &self.shared {
-            return shared.try_publish(pixels, timing);
+        if let Some(allocation) = allocation {
+            allocation.validate()?;
         }
-        self.publish_once(pixels, timing)
+        if let Some(shared) = &self.shared {
+            return shared.try_publish(pixels, timing, allocation);
+        }
+        let Some(mut writer) = self.begin_write() else {
+            return Ok(false);
+        };
+        writer.write_complete(pixels)?;
+        writer.publish_fixture(timing, allocation)?;
+        Ok(true)
     }
 
     #[cfg(test)]
@@ -791,6 +969,7 @@ impl FrameProducer {
         Ok(())
     }
 
+    #[cfg(test)]
     fn publish_once(&self, pixels: &[u8], timing: FrameTiming) -> Result<bool> {
         let Some(mut writer) = self.begin_write() else {
             return Ok(false);
@@ -864,17 +1043,30 @@ impl FrameWriter {
         Ok(())
     }
 
+    #[cfg(test)]
     fn publish(&mut self, timing: FrameTiming) -> Result<()> {
+        self.publish_fixture(timing, None)
+    }
+
+    fn publish_fixture(
+        &mut self,
+        timing: FrameTiming,
+        allocation: Option<FrameAllocation>,
+    ) -> Result<()> {
         let sequence = self
             .inner
             .next_sequence
-            .fetch_add(1, Ordering::Relaxed)
-            .wrapping_add(1);
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("publication sequence exhausted"))?
+            + 1;
         let slot = &self.inner.slots[self.index];
         *slot
             .timing
             .lock()
-            .map_err(|_| anyhow::anyhow!("shared frame metadata was poisoned"))? = Some(timing);
+            .map_err(|_| anyhow::anyhow!("shared frame metadata was poisoned"))? =
+            Some((timing, allocation));
         slot.sequence.store(sequence, Ordering::Relaxed);
         if let Some(observer) = &self.inner.observer {
             let storage = self
@@ -892,6 +1084,7 @@ impl FrameWriter {
             observer.record(crate::diagnostic_observer::EventKind::Published {
                 sequence,
                 marker: crate::diagnostic_observer::decode(&frame),
+                allocation,
             });
         }
         slot.state.store(READY, Ordering::Release);
@@ -997,7 +1190,7 @@ impl FrameBroker {
                 return Err(anyhow::anyhow!("shared frame storage was poisoned"));
             }
         };
-        let timing = match newest_slot.timing.lock() {
+        let (timing, allocation) = match newest_slot.timing.lock() {
             Ok(mut timing) => match timing.take() {
                 Some(timing) => timing,
                 None => {
@@ -1021,6 +1214,10 @@ impl FrameBroker {
             stride: self.inner.stride,
             pixels,
             timing,
+            fixture_correlation: allocation.map(|allocation| FrameCorrelation {
+                allocation,
+                sequence: selected_sequence,
+            }),
         }))
     }
 }
@@ -1031,6 +1228,448 @@ mod tests {
 
     fn frame(value: u8) -> Vec<u8> {
         vec![value; 8]
+    }
+
+    fn allocation(id: u64) -> FrameAllocation {
+        FrameAllocation {
+            id,
+            token: 7,
+            allocated_ns: 123_456_789 + id,
+        }
+    }
+
+    #[test]
+    fn private_allocation_survives_shared_selection_without_marker_pixels() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("frames");
+        let owner = FrameSlots::new_shared(&path, 2, 1, 8)?;
+        let child = FrameSlots::open_shared(&path)?;
+        for (sequence, id) in [(1, 41), (2, 73)] {
+            assert!(child.producer().try_publish_fixture(
+                2,
+                1,
+                8,
+                &frame(0),
+                FrameTiming::new(987.0, 0.5)?,
+                Some(allocation(id)),
+            )?);
+            let completed = owner
+                .broker()
+                .take_newest()?
+                .context("missing private frame")?;
+            let expected = Some(FrameCorrelation {
+                allocation: allocation(id),
+                sequence,
+            });
+            assert_eq!(completed.fixture_correlation, expected);
+            let (logical, timing) = crate::hardware::LogicalFrame::from_completed(completed);
+            assert_eq!(logical.fixture_correlation(), expected);
+            assert_eq!(logical.clone().fixture_correlation(), expected);
+            assert_eq!(timing.presentation_time, 987.0);
+            assert!(crate::diagnostic_observer::decode(&logical).is_err());
+            // The complete broker payload is still pixels only.
+            let wire = crate::hardware::LogicalFrame::from_wire(
+                logical.width(),
+                logical.height(),
+                logical.stride(),
+                logical.pixels().to_vec(),
+            );
+            assert_eq!(wire.fixture_correlation(), None);
+        }
+        // Reuse of the same slot must erase all prior fixture metadata.
+        assert!(child
+            .producer()
+            .try_publish(2, 1, 8, &frame(0), FrameTiming::new(987.0, 0.5)?)?);
+        assert_eq!(
+            owner.broker().take_newest()?.unwrap().fixture_correlation,
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn private_shared_allocation_rejects_malformed_tags_and_values() -> Result<()> {
+        // Includes absent-but-nonzero payload, unknown tag, zero ID/time and
+        // invalid publication sequence. Never return pixels with bad identity.
+        for (offset, value) in [
+            (32, 2),
+            (32, 0),
+            (40, 0),
+            (56, 0),
+            (8, 0),
+            (40, u64::MAX),
+            (48, u64::MAX),
+            (56, u64::MAX),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("frames");
+            let owner = FrameSlots::new_shared(&path, 2, 1, 8)?;
+            let child = FrameSlots::open_shared(&path)?;
+            assert!(child.producer().try_publish_fixture(
+                2,
+                1,
+                8,
+                &frame(8),
+                FrameTiming::new(0.0, 0.0)?,
+                Some(allocation(9)),
+            )?);
+            let mut storage = child.shared.as_ref().unwrap().storage.lock().unwrap();
+            write_u64(&mut storage, slot_offset(0) + offset, value);
+            drop(storage);
+            assert!(
+                owner.broker().take_newest().is_err(),
+                "accepted offset {offset} value {value}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn private_shared_reclaim_preserves_exact_publication_dispositions() -> Result<()> {
+        use crate::diagnostic_observer::{Capture, DiscardReason, EventKind};
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("frames");
+        let capture = Capture::new(32)?;
+        let owner = FrameSlots::new_shared(&path, 2, 1, 8)?.with_observer(capture.clone());
+        let child = FrameSlots::open_shared(&path)?.with_observer(capture.clone());
+        for id in [10, 20, 30, 40] {
+            assert!(child.producer().try_publish_fixture(
+                2,
+                1,
+                8,
+                &frame(0),
+                FrameTiming::new(0.0, 0.0)?,
+                Some(allocation(id)),
+            )?);
+        }
+        let selected = owner.broker().take_newest()?.unwrap();
+        assert_eq!(
+            selected.fixture_correlation,
+            Some(FrameCorrelation {
+                allocation: allocation(40),
+                sequence: 4,
+            })
+        );
+        drop(child);
+        drop(owner);
+        let report = capture.close();
+        let published: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|record| match record.kind {
+                EventKind::Published {
+                    sequence,
+                    allocation,
+                    ..
+                } => Some((sequence, allocation)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            published,
+            vec![
+                (1, Some(allocation(10))),
+                (2, Some(allocation(20))),
+                (3, Some(allocation(30))),
+                (4, Some(allocation(40)))
+            ]
+        );
+        let mut discarded: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|record| match record.kind {
+                EventKind::Discarded { sequence, reason } => Some((sequence, reason)),
+                _ => None,
+            })
+            .collect();
+        discarded.sort_by_key(|(sequence, _)| *sequence);
+        assert_eq!(
+            discarded,
+            vec![
+                (1, DiscardReason::ProducerReclaim),
+                (2, DiscardReason::ConsumerSuperseded),
+                (3, DiscardReason::ConsumerSuperseded)
+            ]
+        );
+        assert_eq!(report.lost, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn private_shared_concurrent_reclaim_keeps_correlation_and_exact_dispositions() -> Result<()> {
+        use crate::diagnostic_observer::{Capture, DiscardReason, EventKind};
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("frames");
+        let capture = Capture::new(64)?;
+        let mut owner = FrameSlots::new_shared(&path, 2, 1, 8)?.with_observer(capture.clone());
+        let child = FrameSlots::open_shared(&path)?.with_observer(capture.clone());
+        let (snapshot_gate, snapshot_reached, resume_snapshot) = SharedSelectionGate::new();
+        let (reading_gate, reading_reached, resume_reading) = SharedSelectionGate::new();
+        let shared = Arc::get_mut(owner.shared.as_mut().unwrap()).unwrap();
+        shared.snapshot_gate = Some(snapshot_gate);
+        shared.reading_gate = Some(reading_gate);
+
+        // Neither the IDs nor timestamps are derived from publication success.
+        // Tokens and pixels also differ so a mixed publication cannot pass.
+        let allocations =
+            [101, 205, 309, 413, 517, 621, 725, 829, 933, 1037, 1141].map(|id| FrameAllocation {
+                token: id + 10,
+                ..allocation(id)
+            });
+        let publish = |value: u8| -> Result<()> {
+            let producer = child.producer();
+            let pixels = frame(value);
+            let timing = FrameTiming::new(f64::from(value), f64::from(value) / 100.0)?;
+            let published = if value == 10 {
+                producer.try_publish(2, 1, 8, &pixels, timing)?
+            } else {
+                producer.try_publish_fixture(
+                    2,
+                    1,
+                    8,
+                    &pixels,
+                    timing,
+                    Some(allocations[usize::from(value - 1)]),
+                )?
+            };
+            ensure!(published, "publication {value} unexpectedly blocked");
+            Ok(())
+        };
+        for value in 1..=3 {
+            publish(value)?;
+        }
+        let broker = owner.broker();
+        let consumer = std::thread::spawn(move || broker.take_newest());
+        let interleaving = (|| -> Result<()> {
+            snapshot_reached.recv_timeout(Duration::from_secs(5))?;
+            // The consumer chose slot 2 holding publication 3, but does not
+            // own it yet. Reclaim every slot, including that chosen slot.
+            for value in 4..=6 {
+                publish(value)?;
+            }
+            resume_snapshot.send(())?;
+            reading_reached.recv_timeout(Duration::from_secs(5))?;
+            // The consumer now owns publication 6, before copying its pixels
+            // and allocation. Reclaim both other slots, then one again: the
+            // pinned publication must stay intact and newer work must survive.
+            for value in 7..=9 {
+                publish(value)?;
+            }
+            resume_reading.send(())?;
+            Ok(())
+        })();
+        // Gate waits are bounded, and even an interleaving failure joins the
+        // consumer before owner teardown rather than leaving a blocked thread.
+        let selected = consumer.join().expect("shared consumer panicked");
+        interleaving?;
+        let first = selected?.context("reclaimed selection disappeared")?;
+        let second = owner.broker().take_newest()?.context("newer frame lost")?;
+        // Publication 9 used slot 0, originally populated with fixture metadata.
+        // Ordinary publication 10 reuses it and must clear every identity word.
+        publish(10)?;
+        let ordinary = owner
+            .broker()
+            .take_newest()?
+            .context("ordinary frame lost")?;
+        for (completed, value, sequence) in [(first, 6, 6), (second, 9, 9), (ordinary, 10, 10)] {
+            assert_eq!(
+                (completed.width, completed.height, completed.stride),
+                (2, 1, 8)
+            );
+            assert_eq!(completed.pixels, frame(value));
+            assert_eq!(
+                completed.timing,
+                FrameTiming::new(f64::from(value), f64::from(value) / 100.0)?
+            );
+            assert_eq!(
+                completed.fixture_correlation,
+                (value != 10).then_some(FrameCorrelation {
+                    allocation: allocations[usize::from(value - 1)],
+                    sequence,
+                })
+            );
+        }
+        assert!(owner.broker().take_newest()?.is_none());
+        // Include a READY publication closed only by the owner, after the
+        // producer is gone, in the same exact-once disposition ledger.
+        publish(11)?;
+        drop(child);
+        drop(owner);
+        let report = capture.close();
+        let published: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|record| match record.kind {
+                EventKind::Published {
+                    sequence,
+                    allocation,
+                    ..
+                } => Some((sequence, allocation)),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<_> = allocations
+            .iter()
+            .enumerate()
+            .map(|(index, allocation)| ((index + 1) as u64, (index != 9).then_some(*allocation)))
+            .collect();
+        assert_eq!(published, expected);
+        let selected: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|record| match record.kind {
+                EventKind::Selected { sequence } => Some(sequence),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selected, vec![6, 9, 10]);
+        let mut discarded: Vec<_> = report
+            .records
+            .iter()
+            .filter_map(|record| match record.kind {
+                EventKind::Discarded { sequence, reason } => Some((sequence, reason)),
+                _ => None,
+            })
+            .collect();
+        discarded.sort_by_key(|(sequence, _)| *sequence);
+        assert_eq!(
+            discarded,
+            vec![
+                (1, DiscardReason::ProducerReclaim),
+                (2, DiscardReason::ProducerReclaim),
+                (3, DiscardReason::ProducerReclaim),
+                (4, DiscardReason::ProducerReclaim),
+                (5, DiscardReason::ProducerReclaim),
+                (7, DiscardReason::ProducerReclaim),
+                (8, DiscardReason::ConsumerSuperseded),
+                (11, DiscardReason::MappingClosed),
+            ]
+        );
+        let mut disposed = selected;
+        disposed.extend(discarded.iter().map(|(sequence, _)| *sequence));
+        disposed.sort_unstable();
+        assert_eq!(disposed, (1..=11).collect::<Vec<_>>());
+        assert_eq!(report.lost, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn private_shared_blocked_publication_does_not_allocate_a_sequence() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("frames");
+        let owner = FrameSlots::new_shared(&path, 2, 1, 8)?;
+        let child = FrameSlots::open_shared(&path)?;
+        let set_states = |state| {
+            let storage = owner.shared.as_ref().unwrap().storage.lock().unwrap();
+            for index in 0..SLOT_COUNT {
+                write_slot_state(&storage, index, state);
+            }
+        };
+        set_states(READING);
+        assert!(!child.producer().try_publish_fixture(
+            2,
+            1,
+            8,
+            &frame(0),
+            FrameTiming::new(0.0, 0.0)?,
+            Some(allocation(45)),
+        )?);
+        set_states(FREE);
+        assert!(child.producer().try_publish_fixture(
+            2,
+            1,
+            8,
+            &frame(0),
+            FrameTiming::new(0.0, 0.0)?,
+            Some(allocation(45)),
+        )?);
+        assert_eq!(
+            owner.broker().take_newest()?.unwrap().fixture_correlation,
+            Some(FrameCorrelation {
+                allocation: allocation(45),
+                sequence: 1
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn private_shared_layout_and_sequence_exhaustion_fail_closed() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("frames");
+        let owner = FrameSlots::new_shared(&path, 2, 1, 8)?;
+        {
+            let mut storage = owner.shared.as_ref().unwrap().storage.lock().unwrap();
+            storage[..8].copy_from_slice(b"SLVRFRM1");
+        }
+        assert!(
+            FrameSlots::open_shared(&path).is_err(),
+            "old metadata layout accepted"
+        );
+        {
+            let mut storage = owner.shared.as_ref().unwrap().storage.lock().unwrap();
+            storage[..8].copy_from_slice(SHARED_MAGIC);
+            write_u64(&mut storage, 32, u64::MAX);
+        }
+        let child = FrameSlots::open_shared(&path)?;
+        assert!(child
+            .producer()
+            .try_publish_fixture(
+                2,
+                1,
+                8,
+                &frame(0),
+                FrameTiming::new(0.0, 0.0)?,
+                Some(allocation(1))
+            )
+            .is_err());
+        assert!(
+            owner.broker().take_newest()?.is_none(),
+            "exhaustion published wrapped sequence"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn private_publication_rejects_invalid_allocation_before_slot_claim() -> Result<()> {
+        let slots = FrameSlots::new(2, 1, 8)?;
+        let producer = slots.producer();
+        for invalid in [
+            FrameAllocation {
+                id: 0,
+                ..allocation(1)
+            },
+            FrameAllocation {
+                allocated_ns: 0,
+                ..allocation(1)
+            },
+            FrameAllocation {
+                id: u64::MAX,
+                ..allocation(1)
+            },
+            FrameAllocation {
+                token: u64::MAX,
+                ..allocation(1)
+            },
+            FrameAllocation {
+                allocated_ns: u64::MAX,
+                ..allocation(1)
+            },
+        ] {
+            assert!(producer
+                .try_publish_fixture(
+                    2,
+                    1,
+                    8,
+                    &frame(0),
+                    FrameTiming::new(0.0, 0.0)?,
+                    Some(invalid)
+                )
+                .is_err());
+        }
+        assert!(slots.broker().take_newest()?.is_none());
+        assert_eq!(slots.inner.next_sequence.load(Ordering::Relaxed), 0);
+        Ok(())
     }
 
     #[test]
