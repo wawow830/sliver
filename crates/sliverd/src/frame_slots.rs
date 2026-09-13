@@ -50,24 +50,6 @@ impl SelectionGate {
     }
 }
 
-#[cfg(test)]
-struct AcquisitionGate {
-    attempted: std::sync::Barrier,
-    resume: std::sync::Barrier,
-    active: AtomicU8,
-}
-
-#[cfg(test)]
-impl AcquisitionGate {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            attempted: std::sync::Barrier::new(2),
-            resume: std::sync::Barrier::new(2),
-            active: AtomicU8::new(1),
-        })
-    }
-}
-
 // One-shot, bounded interleaving gate for independently opened shared maps.
 #[cfg(test)]
 struct SharedSelectionGate {
@@ -192,8 +174,6 @@ struct SharedSlots {
     drop_gate: Option<Arc<DropGate>>,
     #[cfg(test)]
     selection_gate: Option<Arc<SelectionGate>>,
-    #[cfg(test)]
-    acquisition_gate: Option<Arc<AcquisitionGate>>,
 }
 
 /// The fixed-size producer/broker handoff for decoded frames.
@@ -729,8 +709,6 @@ fn make_inner(
         drop_gate: None,
         #[cfg(test)]
         selection_gate: None,
-        #[cfg(test)]
-        acquisition_gate: None,
     })
 }
 
@@ -827,21 +805,6 @@ impl FrameSlots {
         Ok(slots)
     }
 
-    #[cfg(test)]
-    fn new_with_reclamation_gates(
-        width: usize,
-        height: usize,
-        stride: usize,
-        selection_gate: Arc<SelectionGate>,
-        acquisition_gate: Arc<AcquisitionGate>,
-    ) -> Result<Self> {
-        let mut slots = Self::new_with_selection_gate(width, height, stride, selection_gate)?;
-        Arc::get_mut(&mut slots.inner)
-            .expect("new slots have one owner")
-            .acquisition_gate = Some(acquisition_gate);
-        Ok(slots)
-    }
-
     pub(crate) fn producer(&self) -> FrameProducer {
         FrameProducer {
             inner: self.inner.clone(),
@@ -920,12 +883,6 @@ impl FrameProducer {
         loop {
             if self.publish_once(pixels, timing)? {
                 return Ok(true);
-            }
-            if let Some(acquisition_gate) = &self.inner.acquisition_gate {
-                if acquisition_gate.active.swap(0, Ordering::AcqRel) != 0 {
-                    acquisition_gate.attempted.wait();
-                    acquisition_gate.resume.wait();
-                }
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -1723,40 +1680,34 @@ mod tests {
     }
 
     #[test]
-    fn producer_waits_through_all_slots_held_by_broker_reclamation() -> Result<()> {
+    fn producer_can_retry_after_all_slots_held_by_broker_reclamation() -> Result<()> {
         let selection_gate = SelectionGate::new();
-        let acquisition_gate = AcquisitionGate::new();
-        let slots = FrameSlots::new_with_reclamation_gates(
-            2,
-            1,
-            8,
-            selection_gate.clone(),
-            acquisition_gate.clone(),
-        )?;
+        let slots = FrameSlots::new_with_selection_gate(2, 1, 8, selection_gate.clone())?;
         let producer = slots.producer();
-        assert!(producer.publish(2, 1, 8, &frame(1), FrameTiming::new(1.0, 0.0)?,)?);
-        assert!(producer.publish(2, 1, 8, &frame(2), FrameTiming::new(2.0, 1.0)?,)?);
+        assert!(producer.try_publish(2, 1, 8, &frame(1), FrameTiming::new(1.0, 0.0)?)?);
+        assert!(producer.try_publish(2, 1, 8, &frame(2), FrameTiming::new(2.0, 1.0)?)?);
         let _held_writer = producer.begin_write().expect("third slot was unavailable");
         let broker = slots.broker();
         let broker_thread = std::thread::spawn(move || broker.take_newest());
 
         selection_gate.selected.wait();
-        let retry_producer = producer.clone();
-        let publish_thread = std::thread::spawn(move || {
-            retry_producer.publish(2, 1, 8, &frame(3), FrameTiming::new(3.0, 1.0).unwrap())
-        });
-        acquisition_gate.attempted.wait();
-        acquisition_gate.resume.wait();
+        // Exercise the actual nonblocking producer API. A failed attempt while
+        // all slots are held must be retryable after broker reclamation, without
+        // depending on the test-only publish helper's wall-clock deadline.
+        let blocked = producer.try_publish(2, 1, 8, &frame(3), FrameTiming::new(3.0, 1.0)?);
         selection_gate.resume.wait();
-
-        assert!(publish_thread
-            .join()
-            .expect("producer thread panicked")
-            .expect("producer publish failed"));
-        broker_thread
+        let selected = broker_thread
             .join()
             .expect("broker thread panicked")?
             .expect("broker did not select a frame");
+        assert!(!blocked?);
+        assert_eq!(selected.pixels, frame(2));
+        assert!(producer.try_publish(2, 1, 8, &frame(3), FrameTiming::new(3.0, 1.0)?)?);
+        let retried = slots
+            .broker()
+            .take_newest()?
+            .expect("retried frame was lost");
+        assert_eq!(retried.pixels, frame(3));
         Ok(())
     }
 
