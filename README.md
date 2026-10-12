@@ -6,6 +6,7 @@ what the bar shows and does: layouts, per-app contexts, widgets, gestures and ap
 app, script and desktop environment gets a standard way to put things on the bar. And the user
 is never left without Escape or the F-keys.
 
+- [docs/user-guide.md](docs/user-guide.md): install, configure, style, script; man pages in [man/](man)
 - [GOAL.md](GOAL.md): the goal, what "complete" means, and the invariants
 - [SWARM.md](SWARM.md): how the autonomous agent swarm that builds sliver works
 - [HUMAN.md](HUMAN.md): how to steer the swarm and answer it

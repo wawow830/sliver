@@ -44,7 +44,7 @@ pub use model::{
     BAR_GESTURES, BUILTIN, Bar, Config, Display, FnMode, LayerOptions, Layout, ModuleRef, Rule,
     SCHEMA_VERSION, Zone,
 };
-pub use module::{Common, Gesture, MODULE_TYPES, MenuEntry, ModuleId};
+pub use module::{COMMON_KEYS, Common, Gesture, MODULE_TYPES, MenuEntry, ModuleId};
 pub use resolve::{
     HIDDEN_WHILE_LOCKED, MAX_DEPTH, ModuleInstance, ResolveError, Resolved, ResolvedZone,
     deep_merge,

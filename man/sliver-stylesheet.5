@@ -1,0 +1,206 @@
+.\" sliver-stylesheet(5). Spec: docs/styling.md and ADR-0004 (ash).
+.TH SLIVER\-STYLESHEET 5 2026-10-12 "sliver 0.1.0" "File Formats"
+.SH NAME
+sliver\-stylesheet \- Touch Bar stylesheet (style.css)
+.SH SYNOPSIS
+.I $XDG_CONFIG_HOME/sliver/style.css
+.SH DESCRIPTION
+The Touch Bar is styled with a CSS stylesheet, like waybar's
+.BR style.css .
+The file sits next to the configuration
+.RB ( sliver\-config (5)),
+or wherever its
+.B stylesheet
+key points.
+It is loaded on top of the built\-in
+.B sliver
+theme.
+.B style\-dark.css
+and
+.B style\-light.css
+are used instead when present, following the desktop's color scheme.
+.PP
+Nothing in a stylesheet can blank the bar.
+Each problem is reported as
+.IB file : line : col : " message"\fR,
+and only the offending declaration, selector or rule is dropped.
+The built\-in safe layer of
+.BR sliverd (8)
+never uses your stylesheet.
+.SH TREE
+.EX
+bar      classes: layer\-<name>, layout\-<name>, <bar name>, locked, dimmed
++\- zone   class .zone\-<name>, plus the zone's configured class
+   +\- module  #<type>, .module, .<instance>, state classes, script and config classes
+      +\- trough       sliders only
+         +\- highlight   the filled part
+         +\- slider      the knob
+.EE
+.PP
+Module ids are the type with
+.B /
+replaced by
+.BR \- :
+.BR #clock ,
+.BR #battery ,
+.BR #custom\-vpn ,
+.BR #key\-f1 ,
+.BR #group\-control\-strip .
+An instance becomes a class
+.RB ( battery#bat2
+is
+.BR #battery.bat2 ).
+State classes include
+.BR .warning ,
+.BR .critical ,
+.BR .charging ,
+.BR .muted ,
+.BR .playing ,
+.B .on
+(toggles that are on),
+.B .error
+(a failed script) and
+.BR .drawer\-child .
+Items published by apps also get
+.BR .dbus ,
+.B .app
+or
+.BR .status ,
+their type
+.RB ( .button ,
+.BR .slider ,
+\&...), their own classes, and
+.B .focused\-app
+while their app is focused.
+.SH SELECTORS
+.BR * ,
+.BR bar ,
+.BR zone ,
+.BR module ,
+.BI # id\fR,
+.BI . class\fR,
+.B :active
+(pressed),
+.B :checked
+(a toggle that is on),
+.BR :disabled ,
+.BR :first\-child ,
+.BR :last\-child ,
+.BR :not( \fIsimple\fP ) ,
+descendant
+.RB ( "a b" )
+and child
+.RB ( "a > b" )
+combinators, and comma lists.
+.B :hover
+and
+.B :focus
+are accepted but never match on a touch strip.
+Sibling combinators aren't supported.
+Precedence is standard CSS:
+.BR !important ,
+then specificity, then later rules.
+.SH PROPERTIES
+.TP
+.B color
+Labels and symbolic icons (inherited).
+.TP
+.BR background ", " background\-color
+Plain colors only.
+.TP
+.BR border ", " border\-width ", " border\-color ", " border\-style ", " border\-radius
+.TP
+.BR padding ", " margin
+1\(en4 lengths, or the per\-side forms
+.RB ( padding\-left ,
+\&...).
+.TP
+.BR font\-family ", " font\-size ", " font\-weight
+Inherited.
+Labels shrink (down to half size) to fit, then are ellipsized.
+.TP
+.BR \-sliver\-icon\-size " (" \-gtk\-icon\-size )
+Inherited.
+.TP
+.B opacity
+0\(en1 or a percentage.
+It multiplies down the tree.
+.TP
+.BR min\-width ", " min\-height
+On modules, the floor for auto widths.
+On
+.B trough
+and
+.BR slider ,
+the track's length and thickness and the knob's size.
+.TP
+.B gap
+Between zones (on
+.BR bar ),
+between modules (on
+.BR zone ),
+and between icon and label (on
+.BR module ).
+.TP
+.B transition
+Accepted, but not animated yet.
+.PP
+Lengths are
+.BR px ,
+.BR pt ,
+.B em
+or bare numbers (pixels).
+.BR inherit ,
+.B initial
+and
+.B unset
+work everywhere.
+Colors are anything CSS accepts, plus GTK's
+.BI @ name\fR,
+.BR alpha() ,
+.BR shade() ,
+.BR mix() ,
+.B lighter()
+and
+.BR darker() .
+.SH AT\-RULES
+.TP
+.BI "@define\-color " "name value" ;
+Must come before use.
+.TP
+.BI "@import """ path """;"
+Relative to the importing file.
+.B @import """sliver:classic"";"
+imports a built\-in theme.
+Imports nest up to 8 levels deep.
+.PP
+Other at\-rules are reported and skipped.
+.SH THEMES
+.TP
+.B sliver
+The default: the macOS Touch Bar look.
+Toggles that are on and slider fills use
+.BR @accent ,
+which the agent takes from the desktop's accent color.
+.TP
+.B classic
+tiny\-dfr's look.
+.SH EXAMPLES
+.EX
+@import "sliver:classic";
+@define\-color accent #3584e4;
+
+module            { border\-radius: 10px; padding: 0 18px; }
+module:active     { background: @accent; }
+#battery.critical { background: #c01c28; }
+#custom\-vpn.connected { color: #33d17a; }
+\&.zone\-main        { background: alpha(white, 0.06); }
+bar.layer\-fn module { background: #1e1e24; }
+.EE
+.SH SEE ALSO
+.BR sliver\-config (5),
+.BR sliver\-agent (1),
+.BR waybar\-styles (5)
+.PP
+.I docs/styling.md
+in the sliver sources.

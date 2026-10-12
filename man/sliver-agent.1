@@ -1,0 +1,146 @@
+.\" sliver-agent(1). Prose: docs/agent.md, docs/api.md.
+.TH SLIVER\-AGENT 1 2026-10-12 "sliver 0.1.0" "User Commands"
+.SH NAME
+sliver\-agent \- per\-user Touch Bar session agent
+.SH SYNOPSIS
+.B sliver\-agent
+.RB [ \-\-config
+.IR file ]
+.RB [ \-\-socket
+.IR path ]
+.br
+.B sliver\-agent \-\-render
+.I prefix
+.RB [ \-\-config
+.IR file ]
+.RB [ \-\-size
+.IR W x H ]
+.SH DESCRIPTION
+.B sliver\-agent
+decides what the Touch Bar shows for the logged\-in user.
+It reads the configuration
+.RB ( sliver\-config (5))
+and the stylesheet
+.RB ( sliver\-stylesheet (5)),
+follows the focused app, workspace and session state, runs the modules, renders frames, and hands them to
+.BR sliverd (8),
+which owns the hardware.
+It also serves the public session D\-Bus API
+.RI ( io.github.wawow830.Sliver ),
+which
+.BR sliverctl (1)
+and any other app or script can use to publish items and control the bar.
+.PP
+The agent runs unprivileged as a systemd user service in the graphical session.
+If it is not running, crashes or hangs,
+.B sliverd
+shows its built\-in F\-key layer, so Escape and the F\-keys always keep working.
+.PP
+Esc, F\-keys and other plain key buttons are sent to
+.B sliverd
+as key regions.
+.B sliverd
+presses them directly, so they never wait on the agent.
+Everything else (sliders, gestures, widgets) is handled by the agent.
+.PP
+Nothing is rendered unless something changed.
+While the bar is off, the agent doesn't render and the modules' timers stop.
+.SH OPTIONS
+.TP
+.BI \-\-config " file"
+Use this configuration instead of searching the standard paths.
+.TP
+.BI \-\-socket " path"
+Path of
+.BR sliverd 's
+socket.
+The default is
+.I /run/sliver/sliverd.sock
+or
+.BR $SLIVER_SOCKET .
+.TP
+.BI \-\-render " prefix"
+Headless mode: write
+.IB prefix \-base.png
+and
+.IB prefix \-fn.png
+with what the bar would show, print every module cell (rectangle, id, CSS classes, content), and exit.
+.B sliverd
+is not needed.
+.TP
+.BI \-\-size " W\fBx\fPH"
+Bar size for
+.BR \-\-render .
+The default is 2008x60.
+.TP
+.BR \-h ", " \-\-help
+Show usage.
+.TP
+.BR \-V ", " \-\-version
+Show the version.
+.SH SIGNALS
+.TP
+.BI SIGRTMIN+ n
+Re\-run every module configured with
+.BI "signal = " n
+(like waybar).
+.TP
+.B SIGUSR2
+Reload the configuration (see BUGS).
+.TP
+.B SIGUSR1
+Toggle the whole bar, like waybar's
+.B on\-sigusr1
+(see BUGS).
+.SH FILES
+.TP
+.I ~/.config/sliver/config.toml
+User configuration.
+See
+.BR sliver\-config (5)
+for the full search path.
+.TP
+.I ~/.config/sliver/style.css
+User stylesheet.
+.TP
+.I /run/sliver/sliverd.sock
+.BR sliverd 's
+socket.
+.SH ENVIRONMENT
+.TP
+.B SLIVER_SOCKET
+Default for
+.BR \-\-socket .
+.TP
+.B XDG_CONFIG_HOME
+Where the user configuration lives (default
+.IR ~/.config ).
+.PP
+Commands run by modules get
+.BR SLIVER_MODULE ,
+.BR SLIVER_LAYER ,
+.B SLIVER_LAYOUT
+and
+.BR SLIVER_APP_ID .
+.SH BUGS
+Version 0.1.0 is a development snapshot.
+Hot reload of the configuration
+.RB ( SIGUSR2 ,
+inotify),
+.B SIGUSR1
+and the public D\-Bus API in the running agent are still being wired up.
+Until then,
+.BR sliverctl (1)
+commands other than
+.B config
+report that the agent isn't running.
+.SH SEE ALSO
+.BR sliverctl (1),
+.BR sliver\-config (5),
+.BR sliver\-stylesheet (5),
+.BR sliverd (8)
+.PP
+.I docs/agent.md
+and
+.I docs/api.md
+in the sliver sources.

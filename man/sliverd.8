@@ -1,0 +1,161 @@
+.\" sliverd(8). Prose: docs/sliverd.md, docs/api.md section 6, docs/safe-swap.md.
+.TH SLIVERD 8 2026-10-12 "sliver 0.1.0" "System Administration"
+.SH NAME
+sliverd \- Touch Bar system daemon
+.SH SYNOPSIS
+.B sliverd
+.RB [ \-\-socket
+.IR path ]
+.RB [ \-\-config
+.IR path ]
+.RB [ \-v ]
+.br
+.B sliverd \-\-fake\-hardware
+.RB [ \-\-socket
+.IR path ]
+.RB [ \-\-uid
+.IR n ]
+.RB [ \-\-frame\-png
+.IR path ]
+.RI [ panel ]
+.br
+.B sliverd \-\-headless
+.I out.png
+.RB [ \-\-fn ]
+.RI [ panel ]
+.SH DESCRIPTION
+.B sliverd
+owns the Touch Bar of Apple Silicon and Intel T2 MacBook Pros: the display, the touch digitizer, the bar's backlight, and the virtual keyboard that sends its key presses.
+It replaces
+.BR tiny\-dfr .
+.PP
+The daemon is small and doesn't know about apps, configuration or widgets.
+The logged\-in user's
+.BR sliver\-agent (1)
+renders frames and sends them over a local socket, together with the rectangles that are keys.
+Only an agent owned by the user of the active session on seat0 may drive the bar.
+.B sliverd
+treats everything the agent sends as untrusted, and it never emits SysRq.
+.PP
+When no agent is driving the bar,
+.B sliverd
+shows its built\-in layers: F1\(enF12 normally and tiny\-dfr's media row while Fn is held (swapped with
+.BR media_layer_default ).
+Esc comes first on bars without a physical Escape key.
+.SS Safe hatch
+Press Fn twice (within 400\ ms) and keep holding it.
+As long as Fn stays down,
+.B sliverd
+shows its built\-in F\-key layer, whatever the agent, the configuration or any app is doing.
+Nothing can configure or disable this.
+It is how Escape and the F\-keys stay reachable even when a configuration has removed them.
+.SS Power
+The display is dimmed after 30\ s without activity and turned off after 60\ s, unless the agent sets other values.
+It is off while the lid is closed.
+The first touch on a dark bar only wakes it.
+With nothing to do, the daemon sleeps without timers.
+.SH OPTIONS
+.TP
+.BI \-\-socket " path"
+Listen here when not socket\-activated.
+The default is
+.I /run/sliver/sliverd.sock
+(mode 0666, because each connection is authorised by its uid).
+.TP
+.BI \-\-config " path"
+Configuration file.
+The default is
+.IR /etc/sliver/sliverd.toml .
+.TP
+.BR \-\-backend " " real | fake
+Use the real hardware (the default) or the fake hardware.
+.TP
+.B \-\-fake\-hardware
+Development mode: serve the real IPC socket, but with fake hardware.
+.TP
+.BI \-\-uid " n"
+Fake mode: the uid treated as the active session (default: your own).
+.TP
+.BI \-\-frame\-png " path"
+Fake mode: rewrite this PNG every time the panel is flushed.
+.TP
+.BI \-\-headless " out.png"
+Render what the panel would show with no agent connected, then exit.
+.TP
+.B \-\-fn
+With
+.BR \-\-headless :
+render the Fn layer.
+.TP
+.BI \-\-exit\-after " seconds"
+Exit cleanly after this long (the safe\-swap test harness uses it).
+.TP
+.BR \-v ", " \-\-verbose
+Log every input, agent message, state change and key press.
+.TP
+.BR \-V ", " \-\-version
+Show the version.
+.PP
+.I panel
+options describe the hardware for fake and headless runs:
+.BI \-\-width " px"
+(default 2008),
+.BI \-\-model " name"
+(default Mac14,7),
+.BI \-\-max\-brightness " n"
+(default 255).
+.SH CONFIGURATION
+.I /etc/sliver/sliverd.toml
+is optional.
+Unknown keys and parse errors only produce warnings, and the daemon always starts.
+.TP
+.BR physical_esc " = " true | false
+Override the guess.
+Bars at least 2170\ px long are assumed to have no physical Escape key.
+.TP
+.BR media_layer_default " = " true | false
+Built\-in layers: show media keys normally and the F\-keys while Fn is held.
+.SH FILES
+.TP
+.I /run/sliver/sliverd.sock
+The agent socket.
+.TP
+.I /etc/sliver/sliverd.toml
+Daemon configuration.
+.TP
+.I sliverd.service\fR, \fPsliverd.socket
+The systemd units.
+.B sliverd
+runs as a dynamic user in the
+.B video
+and
+.B input
+groups.
+It is restarted after a crash.
+After five crashes in a minute it gives way to
+.BR tiny\-dfr.service .
+.TP
+.I 99\-z\-sliverd.rules
+The udev rule that starts
+.B sliverd
+for the Touch Bar devices in place of
+.BR tiny\-dfr .
+.SH ENVIRONMENT
+.TP
+.B SLIVER_LOG=debug
+Same as
+.BR \-v .
+.TP
+.BR SLIVER_SAFESWAP ", " SLIVER_OUT_DIR ", " SLIVER_SAFESWAP_SECONDS
+Set by the safe\-swap harness for bounded hardware test runs.
+.SH SEE ALSO
+.BR sliver\-agent (1),
+.BR sliverctl (1),
+.BR sliver\-config (5),
+.BR systemd.socket (5)
+.PP
+.IR docs/sliverd.md ,
+.I docs/hardware.md
+and
+.I docs/safe\-swap.md
+in the sliver sources.

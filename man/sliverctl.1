@@ -1,0 +1,312 @@
+.\" sliverctl(1). Source of truth for commands: crates/sliverctl/src/cli.rs (a test keeps this
+.\" page in sync with `sliverctl help`). Prose: docs/api.md, docs/customization.md.
+.TH SLIVERCTL 1 2026-10-12 "sliver 0.1.0" "User Commands"
+.SH NAME
+sliverctl \- control the Touch Bar and publish items to it
+.SH SYNOPSIS
+.B sliverctl
+.I command
+.RI [ args ...]
+.br
+.B sliverctl publish
+.RI [ options ]
+.IR type : id [: label ]...
+.br
+.B sliverctl config
+.I subcommand
+.RI [ args ...]
+.SH DESCRIPTION
+.B sliverctl
+talks to
+.BR sliver\-agent (1)
+over the session D\-Bus API
+.RI ( io.github.wawow830.Sliver ),
+the same API every app and script can use.
+It can inspect the bar, drive it the way
+.B pkill \-RTMIN+N waybar
+drives waybar, and publish buttons that stay on the bar for as long as
+.B sliverctl publish
+runs.
+.PP
+The
+.B config
+commands work offline: they edit the configuration file
+(see
+.BR sliver\-config (5))
+and never touch D\-Bus.
+The agent picks the change up by itself.
+.PP
+.I MODULE
+is any module id:
+a built\-in
+.RB ( clock ,
+.BR battery#bat2 ),
+a user module
+.RB ( custom/vpn ),
+or an item published by an app
+.RB ( app/org.example.App#item ).
+.SH INSPECTING
+.TP
+.B status
+Agent health, active layer and profile, display state (on, dimmed, off), and the API version.
+.TP
+.B modules
+Every module with its id, type, source, visibility and placement.
+.TP
+.B contexts
+Contexts published by apps and scripts: provider, scope, and whether they are on screen.
+.SH CONTROLLING
+.TP
+.B reload
+Reload the configuration.
+Errors are printed, and the exit status is 1 if there are any.
+An invalid configuration is never applied.
+.TP
+.BI validate " file"
+Check a configuration file without applying it.
+.TP
+.BI signal " n"
+Re\-run every module configured with
+.BI "signal = " n\fR.
+.B RTMIN+\fIn\fR
+is accepted too.
+.TP
+.BI refresh " module"
+Re\-run one module now.
+.TP
+.BI show " module\fR, " hide " module\fR, " toggle " module"
+Change a module's visibility until the agent restarts.
+The configuration file isn't touched.
+.TP
+.B reset\-visibility
+Undo every
+.BR show ,
+.B hide
+and
+.BR toggle .
+.TP
+.BI tap " module\fR, " hold " module\fR, " double\-tap " module"
+Fire the module's binding for that gesture, as if it had been touched.
+.TP
+.BI trigger " module gesture"
+The same for any gesture:
+.BR tap ,
+.BR hold ,
+.BR double\-tap ,
+.BR swipe\-left ,
+.BR swipe\-right ,
+.BR drag .
+.TP
+.BI update " module key" = "value ..."
+Push output to a custom module that has no
+.BR exec ,
+using the keys a script would print:
+.BR text ,
+.BR icon ,
+.BR class ,
+.BR percentage ,
+.BR alt ,
+.BR tooltip .
+.TP
+.BI "layer switch" " name"
+Make
+.I name
+the current layer.
+.TP
+.BI "layer push" " name \fR[\fPtimeout-ms\fR]"
+Open a layer on top, optionally closing it again after
+.IR timeout\-ms .
+.TP
+.B layer pop
+Close the top layer.
+.TP
+.BI "layer toggle" " name"
+Open the layer, or close it if it is open.
+.TP
+.BI layout " name"
+Force a layout until the context changes.
+.TP
+.BI profile " name"
+Switch to another profile.
+.TP
+.BR bar " " show | hide | toggle
+Blank or restore the whole bar.
+The safe hatch (press Fn twice and hold) still works while the bar is hidden.
+.TP
+.BI "var set" " name value"
+Set a user variable, usable in rule conditions.
+.TP
+.BR render " [" \-\-layout
+.IR file ]
+.B \-o
+.I out.png
+Render a layout with the agent's renderer and save it as PNG.
+.SH PUBLISHING
+.B sliverctl publish
+creates a context, puts the given items on the bar, and keeps running.
+It prints one line per event,
+.IP
+.IR "item kind " [ key = value ...]
+.PP
+for example
+.B "go tap"
+or
+.BR "vol value value=0.4 phase=change" .
+The items disappear when
+.B sliverctl
+exits.
+If
+.B sliver\-agent
+restarts, they are published again automatically.
+.PP
+Items are written
+.IR type : id [: label ]
+with
+.I type
+one of
+.BR button ,
+.BR toggle ,
+.BR label ,
+.BR slider ,
+.BR progress ,
+.BR spacer ,
+.BR segmented .
+.TP
+.BR \-\-scope " " app | status | target
+Where the items show.
+.B status
+(the default) puts them in the user's Status items.
+.B app
+shows them while one of this process's windows is focused.
+.B target
+shows them while another app is focused (see
+.BR \-\-target\-app ).
+.TP
+.BI \-\-provider " id"
+Stable reverse\-DNS id.
+The user's settings for these items (hide, reorder, pin, style) are keyed by it, and so are module ids
+.RB ( app/\fIid\fP#\fIitem\fP ).
+.TP
+.BI \-\-title " text"
+Name shown in the settings app.
+.TP
+.BI \-\-target\-app " app-id"
+For
+.BR "\-\-scope target" .
+.TP
+.B \-\-modal
+Cover the Main and Controls zones while shown, if the user allows it.
+.TP
+.BI \-p " id.key" = value
+Set any item property
+.RI ( docs/api.md
+\(sc3), for example
+.BR "\-p go.icon=media\-playback\-start" .
+This option can be repeated.
+.TP
+.B \-\-stdin
+Read
+.IR "id key" = "value ..."
+lines from standard input and apply them as updates.
+Quote values that contain spaces:
+.BR "go label='Going now'" .
+.SH CONFIGURATION
+.B sliverctl config
+edits the user configuration file.
+Comments are kept, and an edit that would make the configuration invalid is refused.
+.TP
+.B config path
+Where sliver looks for its configuration.
+The file in use is marked with
+.BR * .
+.TP
+.BR "config check " [ \fIfile\fP ]
+Parse and validate.
+The exit status is 1 if there are errors.
+.TP
+.BI "config get" " key"
+For example
+.B modules.clock.format
+or
+.BR rules[0].layout .
+.TP
+.BI "config set" " key value"
+.I value
+is TOML
+.RB ( 8 ,
+.BR true ,
+.BR """x""" ,
+.BR "{ key = ""F1"" }" )
+or a bare string.
+.TP
+.BI "config unset" " key"
+Remove a key.
+.TP
+.BR "config resolve " [ \fIlayer\fP "] [" \fIctx\fP = \fIvalue\fP ...]
+Show which layout and modules would be on the bar in a given context, for example
+.BR "app_id=foot locked=true" .
+.TP
+.BR "config import\-tiny\-dfr " [ \-\-force ]
+Write
+.B config.toml
+and
+.B style.css
+from tiny\-dfr's configuration.
+.TP
+.BR "config import\-waybar " [ \fIfile\fP "] [" \-\-force ]
+Write
+.B config.toml
+from a waybar configuration.
+.SH VALUES
+In
+.IR key = value
+arguments,
+.B true
+and
+.B false
+are booleans, integers are 32\-bit integers, decimals are doubles, and anything else is a string.
+Prefix a value with
+.B s:
+to force a string
+.RB ( text=s:42 ).
+.SH EXIT STATUS
+0 on success, 1 when the agent reports an error or isn't running, and 2 for usage errors.
+.SH ENVIRONMENT
+.TP
+.B DBUS_SESSION_BUS_ADDRESS
+The session bus to use.
+.SH EXAMPLES
+A button that runs a build:
+.PP
+.EX
+sliverctl publish \-\-provider org.example.Build button:build:Build |
+  while read \-r item kind _; do
+    [ "$kind" = tap ] && make \-C ~/src/project
+  done
+.EE
+.PP
+A label updated by a script:
+.PP
+.EX
+while sleep 2; do echo "load label='$(cut \-d' ' \-f1 /proc/loadavg)'"; done |
+  sliverctl publish \-\-provider org.example.Load \-\-stdin label:load:load
+.EE
+.PP
+waybar\-style control:
+.PP
+.EX
+sliverctl signal 8
+sliverctl update custom/status text='deploy ok' class=ok
+sliverctl layer push media 5000
+.EE
+.SH SEE ALSO
+.BR sliver\-agent (1),
+.BR sliver\-config (5),
+.BR sliver\-stylesheet (5),
+.BR sliverd (8),
+.BR busctl (1)
+.PP
+.I docs/api.md
+and
+.I docs/user\-guide.md
+in the sliver sources.

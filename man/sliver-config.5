@@ -1,0 +1,585 @@
+.\" sliver-config(5). Spec: docs/customization.md (elm). A test checks that every module type,
+.\" common module key, context key and bar gesture known to crates/sliver-config is listed here.
+.TH SLIVER\-CONFIG 5 2026-10-12 "sliver 0.1.0" "File Formats"
+.SH NAME
+sliver\-config \- Touch Bar configuration (config.toml)
+.SH SYNOPSIS
+.I $XDG_CONFIG_HOME/sliver/config.toml
+.br
+.I /etc/xdg/sliver/config.toml
+.br
+.I /usr/share/sliver/config.toml
+.SH DESCRIPTION
+The Touch Bar is configured the way waybar is: everything on it is a
+.IR module ,
+every module is shaped by configuration
+.RB ( format ,
+states, gesture bindings), the look comes from a stylesheet
+.RB ( sliver\-stylesheet (5)),
+and zones, layers, layouts and rules are all defined by the user.
+The file is TOML.
+Keys are kebab\-case and use waybar's names wherever the concept maps, so waybar module blocks port with few changes
+(or use
+.BR "sliverctl config import\-waybar" ).
+.PP
+The first file that exists in the order above is used.
+The built\-in defaults are always merged underneath it, so the
+.BR base ,
+.B fn
+and
+.B media
+layers, the
+.BR default ,
+.B fkeys
+and
+.B media
+layouts and the control strip exist even with an empty file.
+Any of them can be redefined.
+.PP
+.BR sliver\-agent (1)
+watches the file, its includes and the stylesheet, and applies changes when they are saved.
+An invalid configuration is never applied: the last good one stays live and the errors are reported.
+Unknown keys produce warnings, not errors.
+Check a file with
+.BR "sliverctl config check" .
+.SH TOP\-LEVEL KEYS
+.TP
+.BR version " = 1"
+Format version.
+.TP
+.BR include " = [" \fIpaths\fP ]
+Other files to merge in.
+Paths are relative to the including file, and
+.B ~
+and globs work.
+Tables are merged deeply, the including file wins, and earlier includes win over later ones.
+Arrays are replaced, not concatenated.
+.TP
+.BR stylesheet " = " \fIpath\fP
+Default:
+.B style.css
+next to the configuration.
+.B style\-dark.css
+and
+.B style\-light.css
+follow the desktop's color scheme when present.
+.SH [bar]
+.TP
+.B name
+Becomes a CSS class on the bar.
+.TP
+.BR spacing ", " margin
+Pixels between modules, and around the strip.
+.TP
+.BR fn\-mode " = " hold | toggle
+What the Fn key does with the
+.B fn
+layer.
+.TP
+.BR fire\-on " = " press | release
+When taps fire, by default.
+Each module can override it.
+.SH [display]
+.TP
+.BR brightness " = " adaptive | fixed
+Adaptive follows the main screen.
+.TP
+.BR max\-brightness " = " 0\-255
+.TP
+.BR dim\-after ", " off\-after
+Durations (default 30s and 60s), or
+.BR """never""" .
+.TP
+.BR pixel\-shift " = " true | false
+.SH LAYERS, LAYOUTS AND RULES
+.TP
+.B [layers]
+Maps each layer name to its default layout.
+.B base
+and
+.B fn
+are reserved (Fn shows
+.BR fn ).
+Any other name is a custom layer, opened by a
+.B layer
+action.
+.TP
+.BI [layer\-options. name ]
+.B timeout
+(a duration) and
+.B close\-button
+(a boolean).
+.TP
+.BI [layouts. name ]
+.B extends
+names a parent layout.
+.B zones
+is an ordered array of tables with
+.BR name ,
+.B modules
+(module ids or inline tables),
+.B width
+.RB ( """auto""" ,
+pixels or
+.BR """fill""" ),
+.B align
+.RB ( start ,
+.BR center ,
+.BR end ),
+.B module\-width
+(the default width for the zone's modules) and
+.BR class .
+A child layout's zone replaces the parent's zone of the same name, in place.
+.B zone\-order
+sets the order of zones the child adds.
+Zones become stylesheet classes
+.RB ( .zone\- \fIname\fP ).
+.TP
+.B [[rules]]
+.BR name ,
+.B when
+(a condition),
+.B layer
+(default
+.BR base )
+and
+.BR layout .
+Rules are checked top to bottom, and the first match wins.
+If none matches, the
+.B [layers]
+default applies.
+.SH CONDITIONS
+A condition
+.RB ( when ,
+on rules and on modules) is a table of context keys, all of which must match.
+.B any = [{...}, {...}]
+needs one of the sub\-tables to match, and
+.B not = {...}
+negates.
+A value can be a literal, an array (one of),
+.BR "{ regex = ""..."" }" ,
+.BR "{ contains = ""..."" }" ,
+.BR "{ below = N }" ,
+.B "{ above = N }"
+or
+.BR "{ between = [A, B] }" .
+Keys are case\-insensitive, and
+.B \-
+and
+.B _
+are interchangeable.
+An unknown or unavailable key never matches.
+.PP
+Context keys:
+.TP
+Focus
+.BR app_id ,
+.BR desktop_id ,
+.BR title ,
+.BR pid ,
+.BR fullscreen ,
+.BR floating ,
+.BR xwayland
+.TP
+Desktop
+.BR workspace ,
+.BR workspace_name ,
+.BR special_workspace ,
+.BR monitor ,
+.BR monitors ,
+.BR external_display ,
+.BR keyboard_layout ,
+.BR submap ,
+.B screencast
+.TP
+Session
+.BR locked ,
+.BR idle ,
+.BR sleeping ,
+.BR dnd ,
+.B caffeine
+.TP
+Power
+.BR on_battery ,
+.BR battery_pct ,
+.BR battery_state ,
+.BR lid_closed ,
+.B power_profile
+.TP
+Media and audio
+.BR media_status ,
+.BR media_player ,
+.BR media_title ,
+.BR media_artist ,
+.BR mic_muted ,
+.BR output_muted ,
+.B volume
+.TP
+Other
+.BR brightness ,
+.BR time ,
+.BR weekday ,
+.BR physical_esc ,
+.BR layer ,
+.B layout
+.PP
+User variables set with
+.B sliverctl var set
+can be used too.
+.SH MODULES
+A module reference is
+.IR type ,
+.IR type # instance
+or
+.IR namespace / name [# instance ],
+and is configured in
+.BI [modules." reference "]\fR.
+The instance becomes a CSS class.
+.B key/\fIName\fP
+(for example
+.BR key/F1 ,
+.BR key/PlayPause )
+needs no block.
+A zone's
+.B modules
+list can also contain inline tables with a
+.B type
+key.
+Built\-in modules have no powers that user modules lack.
+.SS Module types
+.BR key ,
+.BR spacer ,
+.BR clock ,
+.BR battery ,
+.BR backlight ,
+.BR backlight/slider ,
+.BR kbd\-backlight ,
+.BR kbd\-backlight/slider ,
+.BR audio ,
+.BR audio/slider ,
+.BR mpris ,
+.BR workspaces ,
+.BR window ,
+.BR mode ,
+.BR language ,
+.BR idle\-inhibitor ,
+.BR dnd ,
+.BR power\-profiles ,
+.BR cpu ,
+.BR memory ,
+.BR temperature ,
+.BR disk ,
+.BR load ,
+.BR network ,
+.BR bluetooth ,
+.B graph
+.RB ( custom\-graph/ \fIname\fP ),
+.BR privacy ,
+.BR systemd\-failed\-units ,
+.BR taskbar ,
+.BR notifications ,
+.BR emoji ,
+.BR timer ,
+.BR image ,
+.B group
+.RB ( group/ \fIname\fP ),
+.B app\-controls
+and
+.B status\-items
+(where items published by apps go;
+.B tray
+is an alias),
+.B app
+.RB ( app/ \fIprovider\fP # \fIitem\fP
+pins one published item), and
+.B custom
+.RB ( custom/ \fIname\fP ).
+waybar's names
+.RB ( pulseaudio ,
+.BR hyprland/workspaces ,
+.BR idle_inhibitor ,
+\&...) are accepted as aliases.
+.SS Common keys
+Every module accepts these.
+waybar's names are accepted as aliases:
+.BR on\-click ,
+.BR on\-double\-click ,
+.BR on\-click\-right ,
+.BR on\-click\-release ,
+.BR on\-scroll\-up ,
+.BR on\-scroll\-down ,
+.BR tooltip ,
+.BR tooltip\-format ,
+.BR smooth\-scrolling\-threshold .
+.TP
+.B format
+Text with
+.BI { placeholder }
+and
+.BI { name : spec }
+(strftime for the clock).
+A subset of Pango markup is allowed.
+.TP
+.BR format\-alt ", " format\- \fIstate\fP ", " format\- \fIstatus\fP ", " format\- \fIstatus\fP \- \fIstate\fP
+Alternatives, chosen in that order (most specific first).
+A tap toggles
+.B format\-alt
+when
+.B on\-tap
+is unset.
+.TP
+.B format\-icons
+An array (indexed by percentage), a table (by alt, status, state, then
+.BR default ),
+or a string.
+An entry can be
+.B { icon = "name\-or\-path" }
+for an image.
+.TP
+.B states
+Name to threshold, for example
+.BR "{ warning = 30, critical = 15 }" .
+Adds a class and selects
+.BR format\- \fIstate\fP .
+.TP
+.BR icon ", " icon\-theme ", " icon\-size
+XDG icon name, file path, or
+.BI tiny\-dfr: name\fR.
+.TP
+.B width
+.BR """auto""" ,
+pixels,
+.B """fill"""
+or
+.BR "{ fill = N }" .
+.B expand = true
+means
+.BR """fill""" .
+.TP
+.BR min\-length ", " max\-length ", " align ", " justify
+Label length in characters (ellipsized), and alignment.
+.TP
+.B class
+Extra CSS classes.
+.TP
+.B when
+A condition.
+The module is shown only while it holds.
+.TP
+.B hide\-empty\-text
+Hide the module when its text is empty.
+.TP
+.BR detail ", " detail\-format
+There is no hover on a touch strip.
+The detail is the accessible description and the hold\-to\-peek overlay.
+.TP
+.BR fire\-on ", " repeat ", " swipe\-threshold
+Tap on press or release, hold\-to\-repeat, and swipe distance in pixels.
+.TP
+.BR on\-tap ", " on\-double\-tap ", " on\-hold ", " on\-release ", " on\-swipe\-left ", " on\-swipe\-right ", " on\-drag ", " on\-update
+Actions (see ACTIONS).
+Binding
+.B on\-double\-tap
+delays single taps on that module.
+.TP
+.B actions
+Gesture to built\-in module action, for example
+.BR "{ on\-hold = ""mode"" }" .
+.TP
+.BR menu ", " menu\-trigger
+An array of
+.B {label, icon, on\-tap}
+shown as a temporary sub\-bar with a close button, and the gesture that opens it.
+.TP
+.B interval
+Polling period
+.RB ( """5s""" )
+or
+.BR """once""" .
+The floor is 100\ ms.
+.TP
+.B pass\-through
+For
+.B app/
+modules: also send the gesture to the app when a user
+.B on\-*
+binding exists.
+By default the user's binding replaces the app's event.
+.SS Groups
+.BI group/ name
+takes
+.BR modules ,
+.B orientation
+.RB ( horizontal
+or
+.BR vertical )
+and
+.BR drawer ,
+a table with
+.B reveal
+.RB ( tap ,
+.BR hold ,
+.BR swipe ),
+.B mode
+.RB ( inline
+or
+.BR bar ),
+.BR start\-expanded ,
+.BR collapse\-after ,
+.BR transition\-duration ,
+.B children\-class
+and
+.BR transition\-left\-to\-right .
+.SS Custom modules
+.BI custom/ name
+runs scripts the way waybar does.
+.TP
+.BR exec ", " exec\-if
+The command (run with
+.BR "sh \-c" ,
+never as root) and its guard.
+.TP
+.BR interval ", " signal
+Run on a timer, on
+.B SIGRTMIN+\fIn\fP
+or
+.BR "sliverctl signal" .
+With neither, the script runs continuously and each output line is an update.
+.TP
+.B restart\-interval
+For continuous scripts that exit (minimum 1 s, with backoff).
+.TP
+.B exec\-on\-event
+Re\-run after an
+.B on\-*
+action (default true).
+.TP
+.B return\-type
+.B """"""
+(lines: text, detail, class) or
+.B """json"""
+(one object per line with
+.BR text ,
+.BR alt ,
+.BR tooltip ,
+.BR class ,
+.BR percentage ,
+.BR icon ,
+.BR value ,
+.BR hidden ).
+.TP
+.BR escape ", " timeout ", " env
+Escape markup, per\-run timeout (default 2 s), and extra environment.
+Commands also get
+.BR SLIVER_MODULE ,
+.BR SLIVER_LAYER ,
+.B SLIVER_LAYOUT
+and
+.BR SLIVER_APP_ID .
+.SH ACTIONS
+An
+.B on\-*
+key takes one of:
+.TP
+.I """command"""
+A shell command.
+.B {value}
+is substituted for
+.BR on\-drag .
+.TP
+.B { exec = [argv] }
+No shell.
+.TP
+.BR "{ key = ""F5"" }" ", " "{ keys = [""LeftCtrl"", ""LeftAlt"", ""F1""] }"
+Key presses (combos are released in reverse).
+Key names are tiny\-dfr's
+.RB ( F1 ,
+.BR BrightnessDown ,
+.BR PlayPause ,
+\&...).
+.TP
+.BR "{ layer = ""media"", mode = ""toggle"" }" ", " "{ close\-layer = true }"
+.B mode
+is
+.BR hold ,
+.B toggle
+or
+.BR oneshot .
+.TP
+.BR "{ layout = N }" ", " "{ open = ""app.desktop"" }" ", " "{ url = U }"
+.TP
+.B { dbus = { bus, dest, path, interface, method, args } }
+.TP
+.BR "{ signal = N }" ", " "{ update = ""custom/vpn"" }" ", " "{ format = ""toggle\-alt"" }" ", " "{ module\-action = NAME }"
+.TP
+.I [ step, ... ]
+A macro.
+Steps can include
+.BR "{ sleep = ""100ms"" }" .
+Macros are capped at 32 steps and 10 s.
+.PP
+Bar\-wide gestures go in
+.BR [gestures] :
+.BR two\-finger\-swipe\-left ,
+.BR two\-finger\-swipe\-right ,
+.BR edge\-swipe\-from\-left ,
+.BR edge\-swipe\-from\-right .
+.PP
+Durations are written
+.BR """250ms""" ,
+.BR """5s""" ,
+.B """2m"""
+or as a bare number of seconds.
+.SH WHAT CANNOT BE CONFIGURED
+Every layout, including the Fn layer, is fully editable and may drop Escape and the F\-keys.
+Pressing Fn twice and holding it always shows the built\-in F1\(enF12 layer (with Esc on bars that have no physical Escape key).
+This is enforced by
+.BR sliverd (8),
+and no configuration can change it.
+.PP
+App items, custom module output and notification text are never shown on the lock screen.
+Intervals have a 100\ ms floor, and scripts have timeouts.
+A configuration error never reaches the bar.
+.SH EXAMPLES
+.EX
+version = 1
+
+[layers]
+base = "default"
+fn = "fkeys"
+
+[[layouts.default.zones]]
+name = "main"
+width = "fill"
+modules = ["app\-controls"]
+
+[[layouts.default.zones]]
+name = "controls"
+modules = ["status\-items", "battery", "clock"]
+
+[[rules]]
+name = "Terminals get F\-keys"
+when = { app\-id = ["foot", "kitty"] }
+layout = "fkeys"
+
+[modules.battery]
+states = { warning = 30, critical = 15 }
+format = "{icon} {capacity}%"
+format\-icons = ["empty", "low", "half", "high", "full"]
+
+[modules."custom/vpn"]
+exec = "~/bin/vpn\-status \-\-json"
+return\-type = "json"
+interval = "5s"
+signal = 8
+on\-tap = "~/bin/vpn\-toggle"
+.EE
+.SH SEE ALSO
+.BR sliver\-stylesheet (5),
+.BR sliverctl (1),
+.BR sliver\-agent (1),
+.BR sliverd (8),
+.BR waybar (5)
+.PP
+.I docs/customization.md
+in the sliver sources (the full specification).
