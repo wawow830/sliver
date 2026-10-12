@@ -70,6 +70,8 @@ Rules, layers and layout resolution all happen in the agent. sliverd only knows 
 Implementation: `crates/sliver-api`. `item` handles parsing, `registry` is the sans-IO policy model
 (precedence, tiers, limits, optimistic state), `identity` reads /proc, and `service` is the zbus layer
 plus `Api`, the agent core's handle. It's tested end to end on a private `dbus-daemon`.
+Machine-readable interfaces: `docs/dbus/io.github.wawow830.Sliver.xml`. A test regenerates and compares it,
+so it can't drift (`SLIVER_UPDATE_DBUS_XML=1` after an intentional change, and bump `API_MINOR`).
 In event `data`, integers are `i` (or `x` if they don't fit), reals are `d`, and lists are `av`.
 
 ## 2. `NS.TouchBar1` at `root`
