@@ -39,7 +39,7 @@ on 2026-10-12. Nothing was opened, stopped or written.
 | model | MacBook Pro 13" M2, `Mac14,7`, kernel `7.1.13-402.asahi.fc44.aarch64+16k` |
 | bar DRM | `card1` (226:1, `root:video 0660`, no ACL), driver `adp` (+`adpdrm_mipi`), `DSI-1` connected, mode `60x2008` |
 | main DRM | `card3` (`apple-drm`, `eDP-1` 2560x1600); GPU render node `card2`/`renderD128` (`asahi`) |
-| bar touch | `input2`/`event2` "Mac14,7 Touch Bar", phys `apple_z2`, bus 0x1c, `PROP=2` (INPUT_PROP_DIRECT), `EV=b` (SYN,KEY,ABS), `KEY=BTN_TOUCH`, ABS X,Y + MT slot/touch_major/minor/orientation/position_x/y/tracking_id; `ID_INPUT_WIDTH_MM=230`, `HEIGHT_MM=6`; `by-path/platform-23510c000.spi-cs-0-event` |
+| bar touch | `input2`/`event2` "Mac14,7 Touch Bar", phys `apple_z2`, bus 0x1c, `PROP=2` (INPUT_PROP_DIRECT), `EV=b` (SYN,KEY,ABS), `KEY=BTN_TOUCH`, ABS X,Y + MT SLOT, TOUCH_MAJOR/MINOR, WIDTH_MAJOR/MINOR, ORIENTATION, POSITION_X/Y, TRACKING_ID (**no PRESSURE, no DISTANCE/hover**); `ID_INPUT_WIDTH_MM=230`, `HEIGHT_MM=6`; `by-path/platform-23510c000.spi-cs-0-event` |
 | keyboard | `input1`/`event1` "Apple MTP keyboard" (dockchannel HID, 05ac:0354), reports `KEY_FN` (464) and `KEY_ESC` |
 | trackpad | `input0`/`event0` "Apple MTP multi-touch" (tiny-dfr opens it via seat0, see below) |
 | lid | `input3`/`event3` "Apple SMC power/lid events", `SW_LID` |
