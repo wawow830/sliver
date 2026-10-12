@@ -435,7 +435,7 @@ mod erased {
 }
 
 #[test]
-fn layout_override_dies_with_its_caller() {
+fn held_layout_dies_with_its_caller() {
     let Some((bus, _api, host)) = setup() else {
         return;
     };
@@ -445,7 +445,7 @@ fn layout_override_dies_with_its_caller() {
             Some(BUS_NAME),
             ROOT_PATH,
             Some(IFACE_CONTROL),
-            "SetLayout",
+            "HoldLayout",
             &("fkeys",),
         )
         .unwrap();
@@ -466,5 +466,28 @@ fn layout_override_dies_with_its_caller() {
         ),
         "override not cleared: {:?}",
         host.requests.lock().unwrap()
+    );
+}
+
+#[test]
+fn set_layout_outlives_its_caller() {
+    let Some((bus, _api, host)) = setup() else {
+        return;
+    };
+    // `sliverctl layout fkeys` connects, calls and exits at once: the layout must stay.
+    let cli = bus.client();
+    cli.call_method(
+        Some(BUS_NAME),
+        ROOT_PATH,
+        Some(IFACE_CONTROL),
+        "SetLayout",
+        &("fkeys",),
+    )
+    .unwrap();
+    cli.close().unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        *host.requests.lock().unwrap(),
+        vec![Control::SetLayout("fkeys".into())]
     );
 }

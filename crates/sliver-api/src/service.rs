@@ -117,7 +117,7 @@ pub struct Shared {
     pub policy: Policy,
     pub focus_source: FocusSource,
     focus_owner: Option<String>,
-    /// Who set the current `SetLayout` override. It's dropped when that client disconnects,
+    /// Who holds the current `HoldLayout` override. It's dropped when that client disconnects,
     /// so a crashed editor (Mirror to Touch Bar) never leaves the bar on its layout.
     layout_owner: Option<String>,
     pub workspaces: Vec<Props>,
@@ -645,7 +645,20 @@ impl ControlIface {
     ) -> Result<()> {
         self.unit(c, &h, Control::ToggleLayer(name)).await
     }
+    /// Persistent override (`sliverctl layout NAME`): stays after the caller exits.
     async fn set_layout(
+        &self,
+        #[zbus(header)] h: Header<'_>,
+        #[zbus(connection)] c: &Connection,
+        name: String,
+    ) -> Result<()> {
+        self.unit(c, &h, Control::SetLayout(name)).await?;
+        self.inner.lock().layout_owner = None;
+        Ok(())
+    }
+    /// Override held by the caller's connection (Mirror to Touch Bar): dropped when the caller
+    /// disconnects, so a crashed editor never pins the bar. `""` releases it now.
+    async fn hold_layout(
         &self,
         #[zbus(header)] h: Header<'_>,
         #[zbus(connection)] c: &Connection,

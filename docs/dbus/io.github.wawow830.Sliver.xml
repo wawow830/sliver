@@ -38,7 +38,17 @@
     <method name="ToggleLayer">
       <arg name="name" type="s" direction="in"/>
     </method>
+    <!--
+    Persistent override (`sliverctl layout NAME`): stays after the caller exits.
+    -->
     <method name="SetLayout">
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <!--
+    Override held by the caller's connection (Mirror to Touch Bar): dropped when the caller
+    disconnects, so a crashed editor never pins the bar. `""` releases it now.
+    -->
+    <method name="HoldLayout">
       <arg name="name" type="s" direction="in"/>
     </method>
     <method name="SetProfile">

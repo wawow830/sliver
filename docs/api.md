@@ -240,7 +240,11 @@ For `sliverctl`, the settings app and DE integrations. Unsandboxed clients only.
 `NS.Control1`
 ```
 SwitchLayer(s name)                 PushLayer(s name, u timeout_ms)   PopLayer()   ToggleLayer(s name)
-SetLayout(s name)                   SetProfile(s name)                ReloadConfig() -> (as errors)
+SetLayout(s name)                   force a layout until the context changes or SetLayout("")
+HoldLayout(s name)                  the same, but held by the caller's connection: released when it
+                                    disconnects or calls HoldLayout(""). Use it for live previews
+                                    (settings' Mirror to Touch Bar) so a crash never pins the bar
+SetProfile(s name)                  ReloadConfig() -> (as errors)
 Bar(s action)                       show | hide | toggle the whole bar (the hatch keeps working)
 ValidateConfig(s toml) -> (as errors)
 Preview(s layout_toml, u timeout_ms)       show on the real bar, auto-revert (settings live preview)
