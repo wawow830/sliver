@@ -2,8 +2,8 @@
 # docs/agent.md, docs/api.md §7. Enable per user: systemctl --user enable --now sliver-agent
 # (the RPM enables it by default through a user preset).
 #
-# T36 (cedar): once the agent owns io.github.wawow830.Sliver, switch to Type=dbus +
-# BusName=io.github.wawow830.Sliver and ship the D-Bus activation file.
+# Type=dbus: the unit counts as started once the agent owns io.github.wawow830.Sliver, so D-Bus
+# activation (packaging/dbus/io.github.wawow830.Sliver.service) and ordering against it are exact.
 
 [Unit]
 Description=Sliver Touch Bar session agent
@@ -15,7 +15,8 @@ After=graphical-session.target
 ConditionPathExists=/usr/libexec/sliverd
 
 [Service]
-Type=exec
+Type=dbus
+BusName=io.github.wawow830.Sliver
 ExecStart=/usr/bin/sliver-agent
 Restart=on-failure
 RestartSec=1s

@@ -13,6 +13,12 @@ use zbus::blocking::Connection;
 use zbus::zvariant::{OwnedValue, Value};
 
 fn main() -> ExitCode {
+    // Die quietly on a closed pipe (`sliverctl modules | head`), like other Unix filters, instead
+    // of panicking in println!. Rust ignores SIGPIPE by default.
+    // SAFETY: called first thing in main, before any other threads exist.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = match cli::parse(&args) {
         Ok(c) => c,
@@ -27,6 +33,15 @@ fn main() -> ExitCode {
             eprintln!("sliverctl: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Print a line to stdout. A closed pipe (`sliverctl modules | head`) ends the program quietly,
+/// like any good filter, instead of panicking the way `println!` does.
+fn out(line: &str) {
+    let mut o = std::io::stdout().lock();
+    if writeln!(o, "{line}").and_then(|_| o.flush()).is_err() {
+        std::process::exit(0);
     }
 }
 
@@ -136,11 +151,11 @@ fn property(conn: &Connection, iface: &str, name: &str) -> Result<OwnedValue, St
 fn run(cmd: Cmd) -> Result<ExitCode, String> {
     match cmd {
         Cmd::Help => {
-            print!("{}", cli::USAGE);
+            out(cli::USAGE.trim_end());
             return Ok(ExitCode::SUCCESS);
         }
         Cmd::Version => {
-            println!("sliverctl {}", env!("CARGO_PKG_VERSION"));
+            out(&format!("sliverctl {}", env!("CARGO_PKG_VERSION")));
             return Ok(ExitCode::SUCCESS);
         }
         // Offline: never touches the session bus.
@@ -161,7 +176,7 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
                 (IFACE_TOUCHBAR, "Version"),
             ] {
                 let v = property(&conn, iface, name)?;
-                println!("{name}: {}", show(&v));
+                out(&format!("{name}: {}", show(&v)));
             }
         }
         Cmd::Modules | Cmd::Contexts => {
@@ -175,7 +190,7 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
                 .deserialize()
                 .map_err(|e| e.to_string())?;
             for d in &list {
-                println!("{}", show_dict(d));
+                out(&show_dict(d));
             }
         }
         Cmd::Render { layout, out } => {

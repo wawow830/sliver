@@ -1670,6 +1670,7 @@ dependencies = [
 name = "sliverctl"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "sliver-api",
  "sliver-client",

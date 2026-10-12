@@ -19,6 +19,7 @@ toml.workspace = true
 sliver-client.workspace = true
 zbus = "5"
 serde.workspace = true
+libc = "0.2"
 
 [dev-dependencies]
 sliver-api.workspace = true

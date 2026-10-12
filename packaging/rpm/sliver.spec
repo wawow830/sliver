@@ -103,8 +103,7 @@ install -Dpm0644 packaging/systemd/sliverd.socket %{buildroot}%{_unitdir}/sliver
 install -Dpm0644 packaging/udev/99-z-sliverd.rules %{buildroot}%{_udevrulesdir}/99-z-sliverd.rules
 install -Dpm0644 packaging/systemd/user/sliver-agent.service %{buildroot}%{_userunitdir}/sliver-agent.service
 install -Dpm0644 packaging/systemd/user-preset/90-sliver.preset %{buildroot}%{_userpresetdir}/90-sliver.preset
-# T36: D-Bus activation once the agent owns the bus name:
-# install -Dpm0644 packaging/dbus/io.github.wawow830.Sliver.service %%{buildroot}%%{_datadir}/dbus-1/services/io.github.wawow830.Sliver.service
+install -Dpm0644 packaging/dbus/io.github.wawow830.Sliver.service %{buildroot}%{_datadir}/dbus-1/services/io.github.wawow830.Sliver.service
 
 install -Dpm0644 man/sliverctl.1 %{buildroot}%{_mandir}/man1/sliverctl.1
 install -Dpm0644 man/sliver-agent.1 %{buildroot}%{_mandir}/man1/sliver-agent.1
@@ -173,6 +172,7 @@ fi
 %{_mandir}/man1/sliver-agent.1*
 %{_mandir}/man5/sliver-config.5*
 %{_mandir}/man5/sliver-stylesheet.5*
+%{_datadir}/dbus-1/services/io.github.wawow830.Sliver.service
 
 %files -n sliverctl
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies

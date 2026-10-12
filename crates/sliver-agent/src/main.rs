@@ -147,6 +147,15 @@ struct Live {
 
 impl Live {
     fn start(config: &Config) -> std::io::Result<Live> {
+        // The API first: owning the bus name is what tells systemd (Type=dbus) and D-Bus
+        // activation that the agent is up, so it must not wait on slow session sources.
+        let api = match ApiLink::start() {
+            Ok(a) => Some(a),
+            Err(e) => {
+                eprintln!("sliver-agent: public D-Bus API unavailable: {e}");
+                None
+            }
+        };
         let mut feeds = Feeds::new()?;
         feeds.start_desktop(|k| std::env::var(k).ok());
         feeds.start_session();
@@ -160,13 +169,6 @@ impl Live {
                 None
             }
         });
-        let api = match ApiLink::start() {
-            Ok(a) => Some(a),
-            Err(e) => {
-                eprintln!("sliver-agent: public D-Bus API unavailable: {e}");
-                None
-            }
-        };
         Ok(Live {
             feeds,
             agg: Aggregate::from_env(),
