@@ -263,6 +263,8 @@ struct Live {
     published: Published,
     /// cpu/memory/... sampler, kept across frames for CPU deltas.
     stats: sliver_agent::modules::Stats,
+    /// Installed applications (taskbar icons).
+    apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
 }
 
 impl Live {
@@ -298,6 +300,9 @@ impl Live {
             api,
             published: Published::default(),
             stats: Default::default(),
+            apps: std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::from_paths(
+                &sliver_icons::SearchPaths::from_env(|k| std::env::var(k).ok()),
+            )),
         })
     }
 
@@ -359,6 +364,7 @@ impl Live {
             published: self.published.clone(),
             preview: false,
             stats: self.stats.clone(),
+            apps: self.apps.clone(),
         }
     }
 
@@ -594,6 +600,15 @@ fn apply(
                 if let Some(api) = &live.api {
                     api.interact(context, &item, what);
                 }
+            }
+            Effect::Desktop(action) => {
+                // A compositor round trip: keep it off the main loop.
+                std::thread::spawn(move || {
+                    if let Err(e) = sliver_desktop::control::run(|k| std::env::var(k).ok(), &action)
+                    {
+                        eprintln!("sliver-agent: {action:?}: {e}");
+                    }
+                });
             }
             Effect::Redraw => redraw = true,
             Effect::EmitKeys(keys, mode) => link.emit_keys(&keys, mode)?,

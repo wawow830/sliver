@@ -109,6 +109,7 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
             gestures: Vec::new(),
         }),
         pass_through: false,
+        target: None,
     }
 }
 
@@ -200,6 +201,7 @@ fn push(
             gestures: item.gestures.clone(),
         }),
         pass_through: false,
+        target: None,
     };
     match &item.kind {
         ItemKind::Button | ItemKind::Popover { .. } => out.push(base(

@@ -63,6 +63,8 @@ pub struct World {
     pub preview: bool,
     /// cpu, memory, load, temperature, disk.
     pub stats: Stats,
+    /// Installed applications, for taskbar icons.
+    pub apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
 }
 
 impl World {
@@ -77,6 +79,7 @@ impl World {
             published: Default::default(),
             preview: false,
             stats: Stats::default(),
+            apps: Default::default(),
         }
     }
 
@@ -173,6 +176,8 @@ pub struct Cell {
     pub published: Option<crate::published::PubRef>,
     /// Published items: also send the app its event when a user binding handled the gesture.
     pub pass_through: bool,
+    /// What a workspaces/taskbar cell does to the compositor (focus; hold closes a window).
+    pub target: Option<sliver_desktop::control::Action>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -278,11 +283,57 @@ fn cells_in(
             }
             continue;
         }
+        if m.id.kind == "workspaces" || m.id.kind == "taskbar" {
+            for i in listed(m, world) {
+                let id = match m.id.kind.as_str() {
+                    "workspaces" => world.desktop.workspaces[i].id.to_string(),
+                    _ => world.desktop.windows[i].address.clone(),
+                };
+                let item_key = format!("{key}/{id}");
+                let state = ui(&item_key);
+                if let Some(c) = cell(m, item_key, world, icons, icon_size, &state, Some(i)) {
+                    out.push(c);
+                }
+            }
+            continue;
+        }
         let state = ui(&key);
-        if let Some(c) = cell(m, key, world, icons, icon_size, &state) {
+        if let Some(c) = cell(m, key, world, icons, icon_size, &state, None) {
             out.push(c);
         }
     }
+}
+
+/// Which workspaces/windows a `workspaces` / `taskbar` module shows (indexes into the lists).
+/// Waybar semantics: workspaces of the focused output unless `all-outputs`; windows of the
+/// active workspace unless `all-workspaces`.
+fn listed(m: &ModuleInstance, world: &World) -> Vec<usize> {
+    let flag = |k: &str| m.config.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let d = &world.desktop;
+    if m.id.kind == "workspaces" {
+        let here = d.monitor.as_deref();
+        return (0..d.workspaces.len())
+            .filter(|&i| {
+                flag("all-outputs")
+                    || here.is_none()
+                    || d.workspaces[i].monitor.is_none()
+                    || d.workspaces[i].monitor.as_deref() == here
+            })
+            .collect();
+    }
+    let active = d.workspace.as_ref().map(|w| w.id);
+    // niri's window workspace ids are niri ids: match against the active workspace's info.
+    let active = d
+        .workspaces
+        .iter()
+        .find(|w| w.active)
+        .map(|w| w.id)
+        .or(active);
+    (0..d.windows.len())
+        .filter(|&i| {
+            flag("all-workspaces") || active.is_none() || Some(d.windows[i].workspace) == active
+        })
+        .collect()
 }
 
 /// What a module contributes before the shared formatting path.
@@ -305,6 +356,8 @@ struct Spec {
     raw: bool,
     /// Polled modules: redraw after this long.
     refresh: Option<std::time::Duration>,
+    /// Workspaces/taskbar items: what tapping does.
+    target: Option<sliver_desktop::control::Action>,
 }
 
 impl Spec {
@@ -322,6 +375,7 @@ impl Spec {
             extra_classes: Vec::new(),
             raw: false,
             refresh: None,
+            target: None,
         }
     }
 
@@ -342,7 +396,7 @@ fn esc(s: &str) -> FmtValue {
 }
 
 /// The module's spec for this world, or `None` to hide it (no data, nothing to show).
-fn spec(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) -> Option<Spec> {
     let s = &world.session;
     let kind = m.id.kind.as_str();
     let pct = |v: Option<u8>| v.map(f64::from);
@@ -511,6 +565,55 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
             Spec::new(ValueMap::new().with("", esc(m)), "{}")
         }
         "cpu" | "memory" | "temperature" | "disk" | "load" => return stat_spec(m, world),
+        "workspaces" => {
+            let ws = world.desktop.workspaces.get(item?)?;
+            let status = if ws.urgent {
+                "urgent"
+            } else if ws.active {
+                "active"
+            } else if ws.windows == 0 {
+                "empty"
+            } else {
+                "default"
+            };
+            let v = ValueMap::new()
+                .with("name", esc(&ws.name))
+                .with("id", ws.id)
+                .with("windows", ws.windows as i64)
+                .with("", esc(&ws.name));
+            let mut sp = Spec::new(v, "{name}").on(Gesture::Tap, "focus");
+            sp.status = Some(status);
+            sp.checked = ws.active;
+            sp.target = Some(sliver_desktop::control::Action::FocusWorkspace(ws.clone()));
+            sp
+        }
+        "taskbar" => {
+            let w = world.desktop.windows.get(item?)?;
+            let v = ValueMap::new()
+                .with("title", esc(&w.title))
+                .with("app_id", esc(&w.class))
+                .with("", esc(&w.title));
+            // Icon only by default: the bar is too narrow for titles.
+            let mut sp = Spec::new(v, "")
+                .on(Gesture::Tap, "focus")
+                .on(Gesture::Hold, "close");
+            let entry = world.apps.find_by_app_id(&w.class);
+            sp.default_icon = Some(
+                entry
+                    .and_then(|e| e.icon.clone())
+                    .unwrap_or_else(|| w.class.clone()),
+            );
+            sp.checked = w.focused;
+            sp.extra_classes = [(w.focused, "focused"), (w.urgent, "urgent")]
+                .into_iter()
+                .filter(|(on, _)| *on)
+                .map(|(_, c)| c.to_string())
+                .collect();
+            sp.target = Some(sliver_desktop::control::Action::FocusWindow {
+                address: w.address.clone(),
+            });
+            sp
+        }
         // No data source wired yet: show nothing rather than a broken placeholder.
         _ => return None,
     })
@@ -691,9 +794,10 @@ fn cell(
     icons: &mut Icons,
     icon_size: u32,
     ui: &UiState,
+    item: Option<usize>,
 ) -> Option<Cell> {
     let c = &m.common;
-    let sp = spec(m, world, ui)?;
+    let sp = spec(m, world, ui, item)?;
     let next_change = if m.id.kind == "clock" {
         Some(next_clock_tick(
             world.now,
@@ -737,6 +841,17 @@ fn cell(
             (None, Some(i), true) => Content::Icon(i),
             (None, Some(i), false) => Content::IconMarkup(i, f.text),
             (None, None, false) => Content::Markup(f.text),
+            // A window whose app has no icon: its name's first letters.
+            (None, None, true) if m.id.kind == "taskbar" => {
+                let name = world
+                    .desktop
+                    .windows
+                    .get(item.unwrap_or(usize::MAX))
+                    .map_or("", |w| w.class.as_str());
+                Content::Markup(sliver_render::markup::escape(
+                    &name.chars().take(2).collect::<String>(),
+                ))
+            }
             (None, None, true) => Content::Blank,
         }
     };
@@ -781,6 +896,7 @@ fn cell(
         background: None,
         published: None,
         pass_through: false,
+        target: sp.target,
         drawer: (collapsed_slider
             || m.id.kind.ends_with("/slider") && ui.expanded && is_collapsible(m))
         .then(|| Drawer {
@@ -977,6 +1093,93 @@ mod tests {
     }
 
     #[test]
+    fn workspaces_and_taskbar_follow_the_compositor_lists() {
+        use sliver_desktop::{WindowInfo, WorkspaceInfo};
+        let ws = |id: i64, name: &str, windows: u32, active: bool, mon: &str| WorkspaceInfo {
+            id,
+            name: name.into(),
+            active,
+            urgent: false,
+            monitor: Some(mon.into()),
+            windows,
+        };
+        let win = |addr: &str, class: &str, ws: i64, focused: bool, urgent: bool| WindowInfo {
+            address: addr.into(),
+            class: class.into(),
+            title: format!("{class} window"),
+            workspace: ws,
+            focused,
+            urgent,
+            pid: None,
+        };
+        let mut w = world();
+        let d = &mut w.desktop;
+        d.connected = true;
+        d.monitor = Some("eDP-1".into());
+        d.workspace = Some(sliver_desktop::Workspace {
+            id: 2,
+            name: "web".into(),
+        });
+        d.workspaces = vec![
+            ws(1, "1", 1, false, "eDP-1"),
+            ws(2, "web", 2, true, "eDP-1"),
+            ws(3, "3", 0, false, "eDP-1"),
+            ws(4, "ext", 1, false, "HDMI-A-1"),
+        ];
+        d.windows = vec![
+            win("a1", "kitty", 1, false, false),
+            win("b2", "firefox", 2, true, false),
+            win("c3", "mpv", 2, false, true),
+        ];
+        let cells = stat_cells(
+            r#"
+            [[layouts.default.zones]]
+            name = "main"
+            modules = ["workspaces", "taskbar"]
+            [modules.workspaces]
+            format = "{name}:{windows}"
+            "#,
+            &w,
+        );
+        let text = |c: &Cell| match &c.content {
+            Content::Markup(t) | Content::Text(t) => t.clone(),
+            Content::IconMarkup(_, t) => t.clone(),
+            other => format!("{other:?}"),
+        };
+        let wsc: Vec<&Cell> = cells.iter().filter(|c| c.kind == "workspaces").collect();
+        assert_eq!(
+            wsc.iter().map(|c| text(c)).collect::<Vec<_>>(),
+            ["1:1", "web:2", "3:0"],
+            "other output hidden"
+        );
+        assert!(wsc[1].checked && wsc[1].classes.contains(&"active".to_string()));
+        assert!(wsc[2].classes.contains(&"empty".to_string()));
+        assert_eq!(wsc[0].touch, Touch::Agent);
+        assert_eq!(wsc[1].key, "workspaces/2");
+        assert!(
+            matches!(&wsc[0].target, Some(sliver_desktop::control::Action::FocusWorkspace(x)) if x.id == 1)
+        );
+        let tb: Vec<&Cell> = cells.iter().filter(|c| c.kind == "taskbar").collect();
+        assert_eq!(tb.len(), 2, "only the active workspace's windows");
+        assert!(tb[0].classes.contains(&"focused".to_string()) && tb[0].checked);
+        assert!(tb[1].classes.contains(&"urgent".to_string()));
+        // no icon theme in tests: the app's first letters stand in
+        assert_eq!(text(tb[0]), "fi");
+        let hold = tb[0]
+            .on
+            .iter()
+            .find(|(g, _)| *g == sliver_config::Gesture::Hold)
+            .map(|(_, a)| a.clone());
+        assert!(matches!(hold, Some(sliver_config::Action::ModuleAction(n)) if n == "close"));
+        // no compositor list (no backend): the modules show nothing
+        let none = stat_cells(
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"workspaces\", \"taskbar\"]\n",
+            &world(),
+        );
+        assert!(none.is_empty());
+    }
+
+    #[test]
     fn clock_formats_and_ticks() {
         let cells = build(
             r#"
@@ -1080,6 +1283,7 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
         background: None,
         published: None,
         pass_through: false,
+        target: None,
     }
 }
 

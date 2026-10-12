@@ -41,6 +41,8 @@ pub enum Effect {
     Signal(u32),
     /// Re-run one user module now (`{ update = "custom/x" }`).
     Update(String),
+    /// Switch workspace or focus/close a window on the compositor (workspaces, taskbar).
+    Desktop(sliver_desktop::control::Action),
     /// Tell the app that owns a published item what the user did (api.md §5).
     Api {
         context: sliver_api::registry::ContextId,
@@ -856,6 +858,23 @@ impl Agent {
             ("mpris", "next", _) => SessionOp::Media(Command::Next),
             ("mpris", "previous", _) => SessionOp::Media(Command::Previous),
             ("idle-inhibitor", "toggle", _) => SessionOp::ToggleCaffeine,
+            ("workspaces" | "taskbar", "focus", _) => {
+                if let Some(t) = &cell.target {
+                    fx.push(Effect::Desktop(t.clone()));
+                }
+                return;
+            }
+            ("taskbar", "close", _) => {
+                if let Some(sliver_desktop::control::Action::FocusWindow { address }) = &cell.target
+                {
+                    fx.push(Effect::Desktop(
+                        sliver_desktop::control::Action::CloseWindow {
+                            address: address.clone(),
+                        },
+                    ));
+                }
+                return;
+            }
             (_, "expand", _) => {
                 let ui = self.ui(&cell.key);
                 ui.expanded = !ui.expanded;

@@ -567,3 +567,57 @@ fn runtime_layout_visibility_and_pushed_output() {
     a.render(&w);
     assert_eq!(a.frame(Layer::Base).unwrap().cells.len(), 1);
 }
+
+/// Tapping a workspace button asks the compositor to switch; holding a taskbar item closes it.
+#[test]
+fn workspaces_and_taskbar_buttons_drive_the_compositor() {
+    use sliver_agent::agent::Effect;
+    use sliver_desktop::control::Action as Desk;
+    use sliver_desktop::{WindowInfo, WorkspaceInfo};
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"workspaces\", \"taskbar\"]\n",
+    );
+    let mut w = world(9, 41);
+    w.desktop.connected = true;
+    w.desktop.workspaces = vec![WorkspaceInfo {
+        id: 3,
+        name: "3".into(),
+        active: true,
+        windows: 1,
+        ..Default::default()
+    }];
+    w.desktop.workspace = Some(sliver_desktop::Workspace {
+        id: 3,
+        name: "3".into(),
+    });
+    w.desktop.windows = vec![WindowInfo {
+        address: "ab12".into(),
+        class: "kitty".into(),
+        title: "sh".into(),
+        workspace: 3,
+        focused: true,
+        ..Default::default()
+    }];
+    a.render(&w);
+    let (id, x) = region(&a, "workspaces/3");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 40_000));
+    fx.extend(a.tick(400_000));
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Desktop(Desk::FocusWorkspace(ws)) if ws.id == 3)),
+        "{fx:?}"
+    );
+    // hold on the taskbar item
+    let (id, x) = region(&a, "taskbar/ab12");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 500_000);
+    fx.extend(a.tick(2_000_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 2_100_000));
+    assert!(
+        fx.iter().any(
+            |e| matches!(e, Effect::Desktop(Desk::CloseWindow { address }) if address == "ab12")
+        ),
+        "{fx:?}"
+    );
+}

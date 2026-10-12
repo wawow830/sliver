@@ -178,7 +178,7 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 | `kbd-backlight`, `kbd-backlight/slider` | (none) | P0/P1 | |
 | `audio`, `audio/slider` | `pulseaudio`, `wireplumber`, `pulseaudio/slider` | P0/P1 | `audio#mic` with `node = "source"` for the mic. |
 | `mpris` | `mpris` | P1 | `{title}`, `{artist}`, `{status_icon}`, `player`, `ignored-players`. |
-| `workspaces` | `hyprland/workspaces`, `sway/workspaces`, `niri/workspaces` | P1 | The backend is chosen automatically. The waybar names are accepted as aliases. |
+| `workspaces` | `hyprland/workspaces`, `sway/workspaces`, `niri/workspaces` | P1 | Done. One button per workspace (the focused output's, or all with `all-outputs = true`); classes `.active` `.urgent` `.empty` `.default`, `:checked` on the active one; `{name}` `{id}` `{windows}`; tap switches workspace. The backend is chosen automatically (Hyprland, sway, niri). The waybar names are accepted as aliases. |
 | `window` | `hyprland/window`… | P2 | Focused app/title. `rewrite` rules as in waybar. |
 | `mode` | `hyprland/submap`, `sway/mode` | P2 | |
 | `language` | `hyprland/language`, `sway/language` | P2 | Tap = next layout. |
@@ -190,7 +190,7 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 | `graph` (`custom-graph/<name>`) | `custom-graph` | P2 | A sparkline over `percentage` history. Suits the strip well. |
 | `privacy` | `privacy` | P2 | Screenshare/mic/camera in-use indicator. |
 | `systemd-failed-units` | same | P3 | |
-| `taskbar` | `wlr/taskbar` | P2 | App switcher/dock. |
+| `taskbar` | `wlr/taskbar` | P2 | Done. One icon per window of the active workspace (`all-workspaces = true` for all), icon from the app's `.desktop` entry (first letters if none); `.focused` / `.urgent`; `{title}` `{app_id}` for a custom `format`; tap focuses, hold closes the window. |
 | `notifications` | (none) | P2 | |
 | `emoji` | (none) | P2 | A scrolling strip that opens a layer. |
 | `timer` | (none) | P2 | Pomodoro. |
