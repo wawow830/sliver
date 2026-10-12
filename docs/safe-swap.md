@@ -90,6 +90,20 @@ refuses root, so the target unit can't be redirected (e.g. to `Conflicts=sshd`).
 Remove: `sudo harness/safeswap/uninstall.sh` (restores tiny-dfr, deletes the three files and
 `/run/sliver-safeswap`).
 
+## First runs: `sliver-hwprobe` (T23)
+`crates/sliver-hw` is real-hardware access (discovery, DRM, evdev, backlight). It will hold the
+real sliverd backends. Its `sliver-hwprobe` binary refuses to open any device unless
+`SLIVER_SAFESWAP=1` (only `--sysfs-only` works anywhere). Any code that opens bar devices should
+call `sliver_hw::require_harness()` the same way. Planned order, each step a `hardware` ask:
+```
+cargo build -p sliver-hw
+harness/safeswap/bar snap tinydfr.png                                      # 1. snap tiny-dfr, check orientation
+harness/safeswap/bar run target/debug/sliver-hwprobe --seconds 20          # 2. read-only: caps/planes/props/touch ranges
+harness/safeswap/bar run target/debug/sliver-hwprobe --seconds 40 -- --draw 15 --touch 15
+                                                                            # 3. test pattern (white block top-left,
+                                                                            #    green bottom-right) + raw touches; snap during it
+```
+
 ## Known gaps / first-run checklist
 - SELinux: the staged binary gets `chcon -t bin_t` so PID 1 can exec it from `/run`. Unverified
   on the real system. If the run fails with 203/EXEC, check `ausearch -m avc -ts recent`.

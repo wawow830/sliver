@@ -1,0 +1,15 @@
+[package]
+name = "sliver-hw"
+description = "Real Touch Bar hardware access (DRM, evdev, backlight) + sliver-hwprobe. Only ever run on the bar via the safe-swap harness."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+drm = "0.15"
+libc = "0.2"
