@@ -330,7 +330,15 @@ Touch `event2` ("Mac14,7 Touch Bar"):
 Drawing: a tiny-dfr-style atomic modeset (`ALLOW_MODESET`, XR24 dumb buffer 60x2008) committed in
 **16 ms**. A full-frame DIRTYFB took **34 ms** (~2 frames). So keep partial updates small, and
 expect roughly 30 fps max for full-bar animations through DIRTYFB. The orientation test pattern
-showed up correctly (white top-left, green bottom-right; `sliver_hw::geom` mapping confirmed).
+showed up correctly *in the snap* (white top-left, green bottom-right; `sliver_hw::geom` mapping
+confirmed). That run used the unpadded buffer, and nobody checked it by eye; see the stride note below.
+
+**Buffer stride (tentative, pending H25):** with a 60x2008 dumb buffer (240-byte pitch) the first
+sliverd run looked **static but garbled** on the real panel: boxes right, labels striped. A CPU
+readback (`snap`) of the same buffer was perfect. tiny-dfr allocates **64x2008** and scans out 60,
+so `sliver_hw::panel` now pads the width to a multiple of 64 px (pitch 256). The working theory is
+that adp needs a 64-byte-aligned stride. **Lesson: `snap` shows what's in the buffer, not what
+the panel shows.** Confirm visuals by eye or photo.
 
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
