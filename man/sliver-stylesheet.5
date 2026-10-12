@@ -12,9 +12,10 @@ The file sits next to the configuration
 or wherever its
 .B stylesheet
 key points.
-It is loaded on top of the built\-in
-.B sliver
-theme.
+It is loaded on top of the built\-in theme chosen by the configuration's
+.B theme
+key (default
+.BR sliver ).
 .B style\-dark.css
 and
 .B style\-light.css
@@ -183,8 +184,23 @@ Toggles that are on and slider fills use
 .BR @accent ,
 which the agent takes from the desktop's accent color.
 .TP
+.B light
+Dark text on light keys, also with
+.BR @accent .
+The Touch Bar is an OLED panel, so lit pixels cost power: this theme draws more than the dark ones.
+.TP
+.B high\-contrast
+White outlines and larger bold text on black.
+A pressed key inverts, and a toggle that is on is solid yellow, so no state depends on hue alone.
+.TP
 .B classic
 tiny\-dfr's look.
+.PP
+Every theme gets the desktop's
+.BR @accent .
+An unknown name is reported and
+.B sliver
+is used.
 .SH EXAMPLES
 .EX
 @import "sliver:classic";

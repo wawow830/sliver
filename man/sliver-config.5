@@ -63,6 +63,12 @@ next to the configuration.
 and
 .B style\-light.css
 follow the desktop's color scheme when present.
+.TP
+.BR theme " = " sliver | light | high\-contrast | classic
+The built\-in theme under the stylesheet (default
+.BR sliver ).
+See
+.BR sliver\-stylesheet (5).
 .SH [bar]
 .TP
 .B name
@@ -91,6 +97,37 @@ Durations (default 30s and 60s), or
 .BR """never""" .
 .TP
 .BR pixel\-shift " = " true | false
+.SH [apps], [providers] AND [api]
+What apps and scripts that use the D\-Bus API may put on the bar.
+Your own layouts and rules always win over them.
+.TP
+.BR [apps."\fIapp\-id\fP"]
+.B controls
+(default true): the app's items may fill
+.BR app\-controls .
+.B whole\-bar
+(default true): it may take over the whole bar.
+.B pin
+= \fIprovider\fP: only that provider fills the app's controls.
+App ids match case\-insensitively, with a
+.B .desktop
+suffix ignored.
+.B [apps."*"]
+sets the defaults for every app.
+.TP
+.BR [providers."\fIid\fP"]
+.B show
+(default true): show this provider's items.
+.B allow
+(default false): let a sandboxed (Flatpak or Snap) provider show status items.
+.B order
+= \fIn\fP: its place among status items.
+.TP
+.B [api]
+.B target
+(default true): let clients put controls on the bar for another app.
+.PP
+The agent applies changes to these tables on reload, without restarting clients.
 .SH LAYERS, LAYOUTS AND RULES
 .TP
 .B [layers]
