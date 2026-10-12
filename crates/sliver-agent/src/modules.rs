@@ -732,6 +732,8 @@ struct Spec {
     /// Workspaces/taskbar items: what tapping does.
     target: Option<sliver_desktop::control::Action>,
     timer_total: Option<std::time::Duration>,
+    /// A sub-bar built from live data (the `language` picker), used when the config has no `menu`.
+    menu: Vec<sliver_config::MenuEntry>,
 }
 
 impl Spec {
@@ -751,6 +753,7 @@ impl Spec {
             refresh: None,
             target: None,
             timer_total: None,
+            menu: Vec::new(),
         }
     }
 
@@ -979,6 +982,24 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             let mut sp = Spec::new(ValueMap::new().with("", esc(l)).with("long", esc(l)), "{}")
                 .on(Gesture::Tap, "next");
             sp.target = Some(sliver_desktop::control::Action::NextLayout);
+            // Hold lists the configured layouts (when the compositor says what they are).
+            let d = &world.desktop;
+            if d.keyboard_layouts.len() > 1 {
+                sp.menu = d
+                    .keyboard_layouts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| sliver_config::MenuEntry {
+                        label: if d.keyboard_layout_index == Some(i) {
+                            format!("✓ {name}")
+                        } else {
+                            name.clone()
+                        },
+                        icon: None,
+                        on_tap: Action::ModuleAction(format!("language:set:{i}")),
+                    })
+                    .collect();
+            }
             sp
         }
         "window" => {
@@ -1483,7 +1504,7 @@ fn cell(
     item: Option<usize>,
 ) -> Option<Cell> {
     let c = &m.common;
-    let sp = spec(m, world, ui, item)?;
+    let mut sp = spec(m, world, ui, item)?;
     let next_change = if m.id.kind == "clock" {
         Some(next_clock_tick(
             world.now,
@@ -1555,7 +1576,12 @@ fn cell(
     }
     // `menu = [...]`: the trigger gesture (default: tap, or hold when the module also taps) opens
     // the sub-bar instead of whatever that gesture did.
-    if !m.common.menu.is_empty() {
+    let menu = if m.common.menu.is_empty() {
+        std::mem::take(&mut sp.menu)
+    } else {
+        m.common.menu.clone()
+    };
+    if !menu.is_empty() {
         let has_tap = on.iter().any(|(g, _)| *g == Gesture::Tap);
         let trigger =
             m.common
@@ -1595,7 +1621,7 @@ fn cell(
         pass_through: false,
         target: sp.target,
         timer_total: sp.timer_total,
-        menu: m.common.menu.clone(),
+        menu,
         drawer: (collapsed_slider
             || m.id.kind.ends_with("/slider") && ui.expanded && is_collapsible(m))
         .then(|| Drawer {

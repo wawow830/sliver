@@ -246,6 +246,28 @@ pub fn keyboard_layout(list: &Value) -> Option<String> {
         .find_map(|i| str_of(i, "xkb_active_layout_name").map(str::to_string))
 }
 
+/// All layouts of the first keyboard in `GET_INPUTS`, and the active one's index.
+pub fn keyboard_layouts(list: &Value) -> (Vec<String>, Option<usize>) {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|i| str_of(i, "type") == Some("keyboard"))
+        .find_map(|i| {
+            let names: Vec<String> = i
+                .get("xkb_layout_names")?
+                .as_array()?
+                .iter()
+                .filter_map(|n| n.as_str().map(str::to_string))
+                .collect();
+            let idx = i
+                .get("xkb_active_layout_index")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
+            Some((names, idx))
+        })
+        .unwrap_or_default()
+}
+
 /// What the watcher must do after folding an event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Followup {
@@ -312,6 +334,11 @@ pub fn apply_event(state: &mut DesktopState, ty: u32, body: &Value) -> (bool, Fo
                 if let Some(l) = str_of(&input, "xkb_active_layout_name") {
                     state.keyboard_layout = Some(l.to_string());
                 }
+                let (names, idx) = keyboard_layouts(&Value::Array(vec![input.clone()]));
+                if !names.is_empty() {
+                    state.keyboard_layouts = names;
+                    state.keyboard_layout_index = idx;
+                }
             }
         }
         EV_SHUTDOWN => follow = Followup::Disconnect,
@@ -367,6 +394,9 @@ impl Watcher {
             if let Some(l) = keyboard_layout(&v) {
                 self.state.keyboard_layout = Some(l);
             }
+            let (names, idx) = keyboard_layouts(&v);
+            self.state.keyboard_layouts = names;
+            self.state.keyboard_layout_index = idx;
         }
         self.state.sync_flags();
     }
@@ -435,6 +465,19 @@ mod tests {
     use serde_json::json;
     use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn layout_list_and_index() {
+        let inputs = json!([{"type":"pointer"},{"type":"keyboard","xkb_layout_names":["English (US)","German"],"xkb_active_layout_index":1}]);
+        assert_eq!(
+            keyboard_layouts(&inputs),
+            (
+                vec!["English (US)".to_string(), "German".to_string()],
+                Some(1)
+            )
+        );
+        assert_eq!(keyboard_layouts(&json!([])), (vec![], None));
+    }
 
     #[test]
     fn frame_roundtrip() {

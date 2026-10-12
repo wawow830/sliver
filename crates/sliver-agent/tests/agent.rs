@@ -899,6 +899,64 @@ fn language_tap_switches_layout() {
     assert!(fx.contains(&Effect::Desktop(Desk::NextLayout)), "{fx:?}");
 }
 
+/// Holding the layout indicator lists the layouts; picking one switches to it by position.
+#[test]
+fn language_hold_lists_and_picks_a_layout() {
+    use sliver_agent::agent::Effect;
+    use sliver_desktop::control::Action as Desk;
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"language\"]\n",
+    );
+    let mut w = world(9, 41);
+    w.desktop.connected = true;
+    w.desktop.keyboard_layout = Some("English (US)".into());
+    w.desktop.keyboard_layouts = vec!["English (US)".into(), "German".into(), "Greek".into()];
+    w.desktop.keyboard_layout_index = Some(0);
+    a.render(&w);
+    let keys = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|c| c.key.clone())
+            .collect::<Vec<_>>()
+    };
+    let (id, x) = region(&a, "language");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    fx.extend(a.tick(1_000_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 1_100_000));
+    assert!(fx.contains(&Effect::Redraw), "{fx:?}");
+    assert!(
+        !fx.contains(&Effect::Desktop(Desk::NextLayout)),
+        "a hold is not a tap"
+    );
+    a.render(&w);
+    assert_eq!(
+        keys(&a),
+        ["language", "menu/0", "menu/1", "menu/2", "menu/close"]
+    );
+    let (id, x) = region(&a, "menu/2");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 2_000_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 2_040_000));
+    fx.extend(a.tick(2_400_000));
+    assert!(fx.contains(&Effect::Desktop(Desk::SetLayout(2))), "{fx:?}");
+    a.render(&w);
+    assert!(
+        !keys(&a).contains(&"menu/0".to_string()),
+        "closed after the pick"
+    );
+    // one layout only: nothing to list, hold does nothing special
+    w.desktop.keyboard_layouts = vec!["English (US)".into()];
+    a.render(&w);
+    let (id, x) = region(&a, "language");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 4_000_000);
+    fx.extend(a.tick(5_000_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 5_100_000));
+    a.render(&w);
+    assert!(!keys(&a).contains(&"menu/0".to_string()));
+}
+
 /// Tapping the network, bluetooth and dnd modules asks for the matching switch.
 #[test]
 fn network_bluetooth_dnd_taps_toggle() {

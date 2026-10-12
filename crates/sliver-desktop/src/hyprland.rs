@@ -423,6 +423,48 @@ pub fn layout_from_devices_json(json: &str) -> Option<String> {
     pick.get("active_keymap")?.as_str().map(str::to_string)
 }
 
+/// The layouts configured on the same keyboard, as `us`, `de(nodeadkeys)` (Hyprland only gives
+/// the comma-separated `layout` and `variant` options, not the long names, and not which one is
+/// active, so the picker labels by code).
+pub fn layouts_from_devices_json(json: &str) -> Vec<String> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(kbs) = v.get("keyboards").and_then(|k| k.as_array()) else {
+        return Vec::new();
+    };
+    let virt = |k: &serde_json::Value| {
+        let n = k.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        n.starts_with("hl-virtual") || n.contains("virtual") || n.ends_with("lid-events")
+    };
+    let Some(pick) = kbs
+        .iter()
+        .find(|k| k.get("main").and_then(|m| m.as_bool()) == Some(true))
+        .or_else(|| kbs.iter().find(|k| !virt(k)))
+        .or_else(|| kbs.first())
+    else {
+        return Vec::new();
+    };
+    let field = |name: &str| {
+        pick.get(name)
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>()
+    };
+    let (layouts, variants) = (field("layout"), field("variant"));
+    layouts
+        .into_iter()
+        .enumerate()
+        .filter(|(_, l)| !l.is_empty())
+        .map(|(i, l)| match variants.get(i).filter(|v| !v.is_empty()) {
+            Some(v) => format!("{l}({v})"),
+            None => l,
+        })
+        .collect()
+}
+
 /// One request/response on the command socket.
 pub fn request(path: &Path, command: &str) -> io::Result<String> {
     let mut s = UnixStream::connect(path)?;
@@ -474,6 +516,7 @@ impl Watcher {
             if let Some(l) = layout_from_devices_json(&j) {
                 self.state.keyboard_layout = Some(l);
             }
+            self.state.keyboard_layouts = layouts_from_devices_json(&j);
         }
         if let Ok(s) = request(&self.paths.command, "submap") {
             let s = s.trim();
@@ -723,6 +766,15 @@ mod tests {
         assert_eq!(s.window, None);
         // fullscreen with no window is harmless
         assert!(!apply(&mut s, &ev("fullscreen>>0")));
+    }
+
+    #[test]
+    fn layouts_from_devices() {
+        let devs = r#"{"keyboards":[
+            {"name":"hl-virtual-keyboard","layout":"us","variant":"","main":false},
+            {"name":"apple-mtp-keyboard","layout":"us,de,gr","variant":"intl,,","active_keymap":"English (US, intl.)","main":false}]}"#;
+        assert_eq!(layouts_from_devices_json(devs), ["us(intl)", "de", "gr"]);
+        assert!(layouts_from_devices_json("nope").is_empty());
     }
 
     #[test]

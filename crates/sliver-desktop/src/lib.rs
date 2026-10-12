@@ -129,6 +129,11 @@ pub struct DesktopState {
     pub monitor: Option<String>,
     /// Active keyboard layout, human readable (`English (US)`).
     pub keyboard_layout: Option<String>,
+    /// Every configured layout, in switch order (what the `language` picker lists). Empty when
+    /// the backend can't say.
+    pub keyboard_layouts: Vec<String>,
+    /// Position of the active layout in `keyboard_layouts`, when the backend knows it.
+    pub keyboard_layout_index: Option<usize>,
     /// Active keybind submap / sway mode. `None` = default.
     pub submap: Option<String>,
     /// Something is screen-sharing (a recording indicator widget can use it).

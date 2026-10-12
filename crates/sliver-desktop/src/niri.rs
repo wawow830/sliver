@@ -232,6 +232,9 @@ impl Model {
             .collect();
         st.set_monitors(outputs.into_iter().collect());
         st.keyboard_layout = self.layouts.get(self.layout_idx).cloned();
+        st.keyboard_layouts = self.layouts.clone();
+        st.keyboard_layout_index =
+            (self.layout_idx < self.layouts.len()).then_some(self.layout_idx);
         st
     }
 }
@@ -366,6 +369,8 @@ mod tests {
         assert_eq!(s.monitor.as_deref(), Some("eDP-1"));
         assert_eq!((s.monitors, s.external_display), (2, true));
         assert_eq!(s.keyboard_layout.as_deref(), Some("English (US)"));
+        assert_eq!(s.keyboard_layouts, ["English (US)", "German"]);
+        assert_eq!(s.keyboard_layout_index, Some(0));
         assert_eq!(s.backend, Backend::Niri);
         assert_eq!(
             s.workspaces

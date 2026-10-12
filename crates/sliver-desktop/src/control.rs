@@ -24,6 +24,8 @@ pub enum Action {
     },
     /// Cycle the keyboard layout (the `language` module's tap).
     NextLayout,
+    /// Switch to the keyboard layout at this position in `DesktopState::keyboard_layouts`.
+    SetLayout(usize),
 }
 
 /// Hyprland dispatcher command (`socket1`, without the `/dispatch` prefix hyprctl adds).
@@ -36,6 +38,7 @@ pub fn hyprland_command(a: &Action) -> String {
         Action::FocusWindow { address } => format!("dispatch focuswindow address:0x{address}"),
         Action::CloseWindow { address } => format!("dispatch closewindow address:0x{address}"),
         Action::NextLayout => "dispatch switchxkblayout all next".into(),
+        Action::SetLayout(i) => format!("dispatch switchxkblayout all {i}"),
     }
 }
 
@@ -50,6 +53,7 @@ pub fn sway_command(a: &Action) -> String {
         Action::FocusWindow { address } => format!("[con_id={address}] focus"),
         Action::CloseWindow { address } => format!("[con_id={address}] kill"),
         Action::NextLayout => "input type:keyboard xkb_switch_layout next".into(),
+        Action::SetLayout(i) => format!("input type:keyboard xkb_switch_layout {i}"),
     }
 }
 
@@ -66,6 +70,7 @@ pub fn niri_request(a: &Action) -> Option<serde_json::Value> {
             json!({"Action": {"CloseWindow": {"id": address.parse::<u64>().ok()?}}})
         }
         Action::NextLayout => json!({"Action": {"SwitchLayout": {"layout": "Next"}}}),
+        Action::SetLayout(i) => json!({"Action": {"SwitchLayout": {"layout": {"Index": i}}}}),
     })
 }
 
@@ -189,6 +194,22 @@ mod tests {
     use super::*;
     use std::io::Read;
     use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn set_layout_commands() {
+        assert_eq!(
+            hyprland_command(&Action::SetLayout(2)),
+            "dispatch switchxkblayout all 2"
+        );
+        assert_eq!(
+            sway_command(&Action::SetLayout(1)),
+            "input type:keyboard xkb_switch_layout 1"
+        );
+        assert_eq!(
+            niri_request(&Action::SetLayout(1)).unwrap()["Action"]["SwitchLayout"]["layout"],
+            json!({"Index": 1})
+        );
+    }
 
     #[test]
     fn gnome_and_kde_bus_calls() {

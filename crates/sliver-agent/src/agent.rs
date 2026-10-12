@@ -1106,6 +1106,16 @@ impl Agent {
                     self.menu = None;
                     fx.extend(self.cancel_touches());
                     fx.push(Effect::Redraw);
+                    // The `language` picker's entries are not config actions.
+                    if let sliver_config::Action::ModuleAction(a) = &entry.on_tap
+                        && let Some(i) =
+                            a.strip_prefix("language:set:").and_then(|n| n.parse().ok())
+                    {
+                        fx.push(Effect::Desktop(sliver_desktop::control::Action::SetLayout(
+                            i,
+                        )));
+                        return;
+                    }
                     self.execute(&entry.on_tap, None, None, now, fx);
                 }
                 return;
