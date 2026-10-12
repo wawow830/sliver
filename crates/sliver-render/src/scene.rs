@@ -1,9 +1,9 @@
-use crate::{Color, Icon, Width};
+use crate::{Align, Color, Icon, Width};
 
 /// What one item shows.
 #[derive(Clone, Debug, Default)]
 pub enum Content {
-    /// Empty space that draws nothing (tiny-dfr's spacer).
+    /// Empty space that draws nothing, whatever the stylesheet says (tiny-dfr's spacer).
     #[default]
     Spacer,
     /// A button with no content.
@@ -14,15 +14,23 @@ pub enum Content {
     IconText(Icon, String),
 }
 
-/// One item on the bar.
+/// One item (a `module` in the stylesheet).
 #[derive(Clone, Debug)]
 pub struct Item {
     pub content: Content,
+    /// CSS `#id`. Waybar-style: module `battery` → `battery`, `custom/vpn` → `custom-vpn`.
+    pub id: Option<String>,
+    /// CSS classes: instance names (`battery#bat2` → `bat2`), states (`charging`, `critical`) and
+    /// classes returned by scripts.
+    pub classes: Vec<String>,
     pub width: Width,
+    /// Matches `:active` in the stylesheet.
     pub pressed: bool,
-    /// Overrides the theme's button fill (e.g. a charging battery turns green).
+    /// Matches `:disabled` (e.g. a control with nothing to control).
+    pub disabled: bool,
+    /// Inline override of the computed `background-color` (like a `style` attribute).
     pub background: Option<Color>,
-    /// Overrides the theme's label and symbolic icon color.
+    /// Inline override of the computed `color` (labels and symbolic icons).
     pub foreground: Option<Color>,
 }
 
@@ -31,8 +39,11 @@ impl Item {
     pub fn new(content: Content) -> Item {
         Item {
             content,
+            id: None,
+            classes: Vec::new(),
             width: Width::Auto,
             pressed: false,
+            disabled: false,
             background: None,
             foreground: None,
         }
@@ -48,6 +59,16 @@ impl Item {
 
     pub fn spacer() -> Item {
         Item::new(Content::Spacer)
+    }
+
+    pub fn id(mut self, id: impl Into<String>) -> Item {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn class(mut self, class: impl Into<String>) -> Item {
+        self.classes.push(class.into());
+        self
     }
 
     pub fn width(mut self, width: Width) -> Item {
@@ -76,49 +97,66 @@ impl Item {
     }
 }
 
-/// A run of items laid out together. Zones are separated by the theme's zone gap.
-#[derive(Clone, Debug, Default)]
+/// A run of items laid out together (a `zone` in the stylesheet).
+#[derive(Clone, Debug)]
 pub struct Zone {
+    /// Becomes the CSS class `.zone-<name>` (`#id` is only for modules).
+    pub name: Option<String>,
+    pub classes: Vec<String>,
+    pub width: Width,
+    /// Where items sit when none of them is `Fill` and there's room left.
+    pub align: Align,
     pub items: Vec<Item>,
-    /// Takes the leftover space (at its end) when no item is `Fill`.
-    pub grow: bool,
+}
+
+impl Zone {
+    pub fn new(name: impl Into<String>, width: Width, align: Align, items: Vec<Item>) -> Zone {
+        Zone {
+            name: Some(name.into()),
+            classes: Vec::new(),
+            width,
+            align,
+            items,
+        }
+    }
 }
 
 /// One frame of the bar: zones from left to right.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
+    /// Classes on the `bar` element, e.g. the current layer or context (`layer-fn`).
+    pub classes: Vec<String>,
     pub zones: Vec<Zone>,
 }
 
 impl Scene {
-    /// A single growing zone.
+    /// A single zone `main` that fills the bar.
     pub fn new(items: Vec<Item>) -> Scene {
         Scene {
-            zones: vec![Zone { items, grow: true }],
+            classes: Vec::new(),
+            zones: vec![Zone::new("main", Width::Fill(1), Align::Start, items)],
         }
     }
 
-    /// The standard layout (ux.md §2): Esc (left), Main (grows), Controls (pushed right).
+    /// The default layout (ux.md §2): `esc` (Auto), `main` (Fill, items from the left),
+    /// `controls` (Auto, pushed to the right edge).
     pub fn zoned(esc: Vec<Item>, main: Vec<Item>, controls: Vec<Item>) -> Scene {
         Scene {
+            classes: Vec::new(),
             zones: vec![
-                Zone {
-                    items: esc,
-                    grow: false,
-                },
-                Zone {
-                    items: main,
-                    grow: true,
-                },
-                Zone {
-                    items: controls,
-                    grow: false,
-                },
+                Zone::new("esc", Width::Auto, Align::Start, esc),
+                Zone::new("main", Width::Fill(1), Align::Start, main),
+                Zone::new("controls", Width::Auto, Align::End, controls),
             ],
         }
     }
 
-    /// All items, in layout order. [`crate::Renderer::layout`] returns rects in this order.
+    pub fn class(mut self, class: impl Into<String>) -> Scene {
+        self.classes.push(class.into());
+        self
+    }
+
+    /// All items, in layout order. [`crate::Layout::items`] is in this order.
     pub fn items(&self) -> impl Iterator<Item = &Item> {
         self.zones.iter().flat_map(|z| z.items.iter())
     }
