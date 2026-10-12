@@ -279,6 +279,9 @@ pub struct Common {
     pub menu_trigger: Option<Gesture>,
     pub swipe_threshold: Option<u32>,
     pub interval: Option<Interval>,
+    /// For app-published modules: also deliver the gesture to the app when a user `on-*`
+    /// binding exists (api.md §5). Default false, so the user binding replaces the app event.
+    pub pass_through: bool,
 }
 
 impl Common {
@@ -334,6 +337,7 @@ impl Common {
         if let Some(v) = r.get("interval") {
             c.interval = Interval::parse(v, &r.path("interval"), d);
         }
+        c.pass_through = r.bool("pass-through", d).unwrap_or(false);
         if let Some(states) = r.table("states", d) {
             for (name, v) in states {
                 match v.as_float().or(v.as_integer().map(|i| i as f64)) {
@@ -475,6 +479,7 @@ const COMMON_KEYS: &[&str] = &[
     "on-scroll-up",
     "on-drag",
     "on-update",
+    "pass-through",
 ];
 
 fn parse_menu(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<MenuEntry> {

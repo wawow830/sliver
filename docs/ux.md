@@ -13,7 +13,7 @@ config block. The app is GTK4 + libadwaita (ADR-0001).
    It's never a GTK approximation. "Mirror to Touch Bar" puts the edit on the real bar live.
 2. **Never strand the user.** Everything is editable, including the Fn layer (Q2/H4 revised).
    Safety comes from sliverd's hard-wired **safe hatch** (double-press Fn and hold shows built-in
-   F-keys; pending H14), from warnings, and from undo, not from locked items (§7).
+   F-keys; decided in H14), from warnings, and from undo, not from locked items (§7).
 3. **The 90% path is one click.** For example, "Customize for Firefox…" lives in the editor.
    Rules, inheritance and priorities exist but stay out of the way.
 4. **Config is the truth.** The settings app writes the same TOML a human would and keeps comments.
@@ -212,7 +212,7 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 
 | Rule | Enforcement |
 |---|---|
-| Esc and F-keys are reachable | **Nothing is locked** (Q2/H4 revised to fully editable). sliverd's safe hatch (double-press Fn and hold → built-in F1–F12, plus Esc on no-physical-Esc bars; pending H14) always works, whatever the config says. The editor shows a non-blocking banner when Base ∪ Fn has no F1–F12, or when a no-physical-Esc bar has no Esc: "F-keys only via Fn-Fn-hold. [Add F-keys back]". |
+| Esc and F-keys are reachable | **Nothing is locked** (Q2/H4 revised to fully editable). sliverd's safe hatch (double-press Fn and hold → built-in F1–F12, plus Esc on no-physical-Esc bars; decided in H14) always works, whatever the config says. The editor shows a non-blocking banner when Base ∪ Fn has no F1–F12, or when a no-physical-Esc bar has no Esc: "F-keys only via Fn-Fn-hold. [Add F-keys back]". |
 | Every item is touchable | Advice only: a warning below 80 px and a stronger one below 60 px. |
 | A dark bar doesn't fire | The first touch on a dimmed-off bar only wakes it. |
 | A broken config never reaches the bar | The settings app validates before writing. The agent re-validates and keeps the last good config. The daemon's safe layer is the final backstop. |

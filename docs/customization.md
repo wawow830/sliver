@@ -149,6 +149,7 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
 | `actions` | table gesture → module-action name | same | Bind gestures to a module's *built-in* actions, e.g. `actions = { on-hold = "mode" }` on clock. |
 | `menu` / `menu-trigger` | array of `{label, icon, on-tap}` / gesture | ≈ `menu` + `menu-file` | Opens a temporary sub-bar with these entries and a ✕. Replaces GtkBuilder menus. |
 | `swipe-threshold` | px | `smooth-scrolling-threshold` | |
+| `pass-through` | bool | (none) | App-published modules (`app/<provider>#<id>`): also send the gesture to the app when a user `on-*` binding exists. Default false: the user binding replaces the app's event (api.md §5). |
 | `interval` | duration or `"once"` | same | For modules that poll. The floor is 100 ms and anything under 1 s gets a warning (invariant 3). |
 
 Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar compat).
@@ -307,7 +308,8 @@ These are the selectors sliver guarantees, mirroring waybar:
    and every layout are **fully editable** (Q2/H4, revised to "fully editable"). A config may
    drop the F-keys and Esc entirely. Reachability is guaranteed by **the safe hatch in sliverd**:
    double-press Fn and hold, and the built-in F1–F12 safe layer shows while Fn is held, with Esc
-   first on bars that have no physical Esc. Pending H14; this is the recommended option. No
+   first on bars that have no physical Esc. Decided in H14 (the human delegated it; elm picked this). ≤400 ms between the two
+   presses, implemented in `sliver_ipc::hatch` (api.md §6). No
    config can change or disable the hatch. The validator only **warns** when `base ∪ fn` has no
    F1–F12, or when a no-physical-Esc bar has no Esc.
 2. **Esc default on bars with no physical Esc** (2170 px models): the shipped default config and

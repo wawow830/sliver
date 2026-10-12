@@ -33,8 +33,8 @@ We need one config language that the agent, settings app, sliverctl, importers a
    F-keys or Esc on the bar**.
 8. **Invariant 1 moves out of config** (follows from H4 revised to C). The Fn layer and all
    layouts are fully editable. Reachability comes from sliverd's hard-wired **safe hatch**
-   (double-press Fn and hold → built-in F-keys, plus Esc on bars with no physical Esc; pending
-   H14), so sliverd must not reject frames that lack F-keys. The validator only warns.
+   (double-press Fn and hold → built-in F-keys, plus Esc on bars with no physical Esc; decided
+   in H14, implemented in `sliver_ipc::hatch`), so sliverd must not reject frames that lack F-keys. The validator only warns.
 9. **Context-only Esc:** the defaults place `key/Esc#auto` with `when = { not = { physical-esc =
    true } }`. Unknown hardware fails safe (Esc shown), and this reproduces tiny-dfr's "Esc only on
    bars ≥ 2170 px".
