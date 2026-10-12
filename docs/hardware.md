@@ -242,7 +242,7 @@ The px column comes from tiny-dfr's rule (Esc is added when the bar is ≥2170 p
 hardware history. Only the Mac14,7 row has been observed directly. `apple_z2` binds
 `apple,j293-touchbar` and `apple,j493-touchbar` (from `modinfo`). Treat everything else as
 "believed" until a user with that machine confirms it. That's an `external` ask later (t2linux
-community testers).
+community testers). T2 readiness, what's covered headless and a tester's checklist: `docs/t2.md`.
 
 What changes per family, and what sliverd has to handle:
 - **Esc:** the 2170 px bars have no physical Esc. The built-in safe layer *must* put Esc first

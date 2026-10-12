@@ -18,6 +18,12 @@ pub const DISPLAY_BACKLIGHT_NAMES: &[&str] = &[
 /// Touch digitizer names: "Mac14,7 Touch Bar", "MacBookPro17,1 Touch Bar",
 /// "Apple Inc. Touch Bar Display Touchpad" (T2). tiny-dfr matches " Touch Bar".
 pub const TOUCH_NAME_NEEDLE: &str = " Touch Bar";
+/// The digitizers' exact names (packaging/udev/99-z-sliverd.rules and tiny-dfr's seat rules).
+pub const TOUCH_NAMES: &[&str] = &[
+    "Apple Inc. Touch Bar Display Touchpad",
+    "MacBookPro17,1 Touch Bar",
+    "Mac14,7 Touch Bar",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Backlight {
@@ -86,16 +92,26 @@ pub fn display_backlight(sys_bl: &Path) -> Option<Backlight> {
 
 /// `(/dev/input/eventN, name)` of the bar digitizer. `sys_input` is normally `/sys/class/input`.
 pub fn touch_device(sys_input: &Path) -> Option<(PathBuf, String)> {
-    sorted_entries(sys_input).into_iter().find_map(|e| {
-        let ev = e.file_name()?.to_str()?.to_owned();
-        if !ev.starts_with("event") {
-            return None;
-        }
-        let name = fs::read_to_string(e.join("device/name")).ok()?;
-        let name = name.trim();
-        name.contains(TOUCH_NAME_NEEDLE)
-            .then(|| (PathBuf::from("/dev/input").join(&ev), name.to_owned()))
-    })
+    let all: Vec<(PathBuf, String)> = sorted_entries(sys_input)
+        .into_iter()
+        .filter_map(|e| {
+            let ev = e.file_name()?.to_str()?.to_owned();
+            if !ev.starts_with("event") {
+                return None;
+            }
+            let name = fs::read_to_string(e.join("device/name")).ok()?;
+            Some((
+                PathBuf::from("/dev/input").join(&ev),
+                name.trim().to_owned(),
+            ))
+        })
+        .collect();
+    // Exact known names first (the ones udev puts on seat-touchbar), so a sibling interface whose
+    // name merely contains "Touch Bar" can't win; then tiny-dfr's substring, for unknown models.
+    let exact = all.iter().find(|(_, n)| TOUCH_NAMES.contains(&n.as_str()));
+    exact
+        .or_else(|| all.iter().find(|(_, n)| n.contains(TOUCH_NAME_NEEDLE)))
+        .cloned()
 }
 
 /// Connector modes as listed in sysfs, e.g. `["60x2008"]`, without opening the card.
@@ -172,6 +188,49 @@ mod tests {
         fs::write(d.join("appletb_backlight/max_brightness"), "2\n").unwrap();
         assert_eq!(bar_backlight(&d).unwrap().max, 2);
         assert!(display_backlight(&d).is_none());
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    /// T96: an Intel T2 MacBook Pro has the main GPU (i915, sometimes amdgpu too) plus the bar's
+    /// USB display (appletbdrm). Only the latter is the bar.
+    #[test]
+    fn finds_t2_card_and_digitizer() {
+        let d = tmp("t2");
+        for (card, drv) in [
+            ("card0", "i915"),
+            ("card1", "amdgpu"),
+            ("card2", "appletbdrm"),
+        ] {
+            fs::create_dir_all(d.join("drivers").join(drv)).unwrap();
+            fs::create_dir_all(d.join("class").join(card).join("device")).unwrap();
+            symlink(
+                d.join("drivers").join(drv),
+                d.join("class").join(card).join("device/driver"),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            bar_card(&d.join("class")),
+            Some(PathBuf::from("/dev/dri/card2"))
+        );
+        let inp = d.join("input");
+        for (ev, name) in [
+            ("event3", "Apple Inc. Apple Internal Keyboard / Trackpad"),
+            // A sibling interface that sorts first and also contains "Touch Bar".
+            ("event6", "Apple Inc. Touch Bar Display Touchpad Keyboard"),
+            ("event7", "Apple Inc. Touch Bar Display Touchpad"),
+        ] {
+            fs::create_dir_all(inp.join(ev).join("device")).unwrap();
+            fs::write(inp.join(ev).join("device/name"), format!("{name}\n")).unwrap();
+        }
+        assert_eq!(
+            touch_device(&inp),
+            Some((
+                PathBuf::from("/dev/input/event7"),
+                "Apple Inc. Touch Bar Display Touchpad".to_owned()
+            )),
+            "the digitizer, not its keyboard sibling"
+        );
         fs::remove_dir_all(d).unwrap();
     }
 

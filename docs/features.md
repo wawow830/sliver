@@ -145,7 +145,7 @@ tiering only.
 | sway/wlroots, GNOME extension, KWin script | P2 | partial | sway, niri and the KWin script (tested nested) done; the GNOME extension is untested on a real shell; no generic wlroots backend. |
 | MPRIS, PipeWire, logind backlight, UPower, notifications | P1/P2 | done | Plus Bluetooth, network and the tray. |
 | RPM + COPR, udev, polkit, SELinux-clean, man pages | P1 (RPM) / P2 (rest) | partial | An RPM spec exists (T41) and installs the man pages (T42: sliverctl(1), sliver-agent(1), sliverd(8), sliver-config(5), sliver-stylesheet(5)), kept in sync with the code by `crates/sliverctl/tests/man_pages.rs` (T61). SELinux-clean and polkit-free, verified on the installed system (T76, docs/packaging.md). The package is installed and running on the dev machine (H42). COPR: not now (H46); the spec is ready for it. |
-| Intel T2 (t2linux) | P2 | todo |  |
+| Intel T2 (t2linux) | P2 | partial | Ready but untested on a T2 (T96, docs/t2.md): appletbdrm discovery, 2170 px safe layer with Esc, 0–2 backlight with dim/adaptive/curve all covered headless; the udev rule now does the T2 USB display switch and the bar seat itself, so tiny-dfr isn't required. Needs a t2linux tester. |
 
 ## 9. Hardware facts that shape features (from birch, docs/hardware.md)
 

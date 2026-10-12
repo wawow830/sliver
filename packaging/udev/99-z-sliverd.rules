@@ -1,8 +1,20 @@
 # sliverd replaces tiny-dfr as the Touch Bar daemon (docs/decisions/0005-sliverd-system-integration.md).
 #
 # Sorts after 99-touchbar-tiny-dfr.rules on purpose. We override only its SYSTEMD_WANTS on the
-# digitizers and keep its T2 USB config switch and /dev/tiny_dfr_* aliases, so tiny-dfr can still
-# start as sliverd's OnFailure= fallback. Removing this file gives the bar back to tiny-dfr.
+# digitizers and keep its /dev/tiny_dfr_* aliases, so tiny-dfr can still start as sliverd's
+# OnFailure= fallback. Removing this file gives the bar back to tiny-dfr.
+#
+# tiny-dfr is only Recommended, so the two things its package does that the bar needs whatever
+# daemon drives it are repeated here (T96). With tiny-dfr installed they are no-ops: the seat
+# values are the same, and the USB switch only fires while the configuration is still 1.
+
+# T2 (USB 05ac:8302): configuration 2 exposes the display (appletbdrm); 1 is keyboard-only.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="05ac", ATTR{idProduct}=="8302", ATTR{bConfigurationValue}=="1", ATTR{bConfigurationValue}="0", ATTR{bConfigurationValue}="2"
+
+# The bar is not part of the user's seat: the compositor must neither take its DRM card as a
+# display nor its digitizer as a touchscreen (tiny-dfr's 99-touchbar-seat.rules).
+SUBSYSTEM=="drm", KERNEL=="card*", DRIVERS=="adp|appletbdrm", TAG-="master-of-seat", ENV{ID_SEAT}="seat-touchbar"
+SUBSYSTEM=="input", ATTR{name}=="Apple Inc. Touch Bar Display Touchpad|MacBookPro17,1 Touch Bar|Mac14,7 Touch Bar", ENV{ID_SEAT}="seat-touchbar"
 
 # Start sliverd when the digitizer appears (T2, M1, M2).
 SUBSYSTEM=="input", ATTR{name}=="Apple Inc. Touch Bar Display Touchpad|MacBookPro17,1 Touch Bar|Mac14,7 Touch Bar", TAG+="systemd", ENV{SYSTEMD_WANTS}="sliverd.service"

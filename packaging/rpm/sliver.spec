@@ -147,6 +147,13 @@ done
 udevadm trigger --action=change --subsystem-match=backlight \
     --sysname-match=228600000.dsi.0 --sysname-match=228200000.display-pipe.0 \
     --sysname-match=appletb_backlight >/dev/null 2>&1 || :
+# Without tiny-dfr, our rules also own the bar's seat (the digitizers) and the T2 USB switch to
+# the display configuration (an add-only rule; it acts only while the configuration is still 1).
+for name in "Apple Inc. Touch Bar Display Touchpad" "MacBookPro17,1 Touch Bar" "Mac14,7 Touch Bar"; do
+    udevadm trigger --action=change --subsystem-match=input --attr-match=name="$name" >/dev/null 2>&1 || :
+done
+udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=05ac \
+    --attr-match=idProduct=8302 >/dev/null 2>&1 || :
 udevadm settle --timeout=5 >/dev/null 2>&1 || :
 # No takeover at install time: the bar switches to sliverd at the next boot, or now with
 # `systemctl start sliverd` (Conflicts= stops tiny-dfr). docs/packaging.md.

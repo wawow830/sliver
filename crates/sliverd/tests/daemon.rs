@@ -381,6 +381,45 @@ fn t2_bar_without_physical_esc() {
     assert_eq!(rig.hw.backlight.current(), Some(1), "T2 dim step");
 }
 
+/// T96: the T2's backlight has three steps (0 off, 1 dim, 2 full). Adaptive brightness, a custom
+/// curve and the timers must land on them and never turn the bar off while it's on.
+#[test]
+fn t2_three_step_backlight_with_adaptive_and_curve() {
+    let mut rig = Rig::with(2170, "MacBookPro15,1", 2, Config::default());
+    rig.connect(A, UID);
+    rig.hw.backlight.set_screen(Some(1.0));
+    let policy = |curve: Vec<[u16; 2]>| {
+        AgentMsg::DisplayPolicy(DisplayPolicy {
+            brightness: Some(2),
+            follow_screen: Some(true),
+            curve: Some(curve),
+            ..Default::default()
+        })
+    };
+    for curve in [
+        vec![],
+        vec![[0, 0], [1000, 1000]],
+        vec![[0, 500], [500, 1000]],
+    ] {
+        rig.send(A, policy(curve.clone()));
+        for screen in [0.0, 0.01, 0.3, 0.7, 1.0] {
+            rig.hw.backlight.set_screen(Some(screen));
+            rig.input(Input::ScreenBacklight);
+            let v = rig.hw.backlight.current().unwrap();
+            assert!((1..=2).contains(&v), "curve {curve:?} screen {screen}: {v}");
+        }
+        assert_eq!(
+            rig.hw.backlight.current(),
+            Some(2),
+            "full screen = full bar ({curve:?})"
+        );
+    }
+    rig.advance(30_000);
+    assert_eq!(rig.hw.backlight.current(), Some(1), "dim step");
+    rig.advance(30_000);
+    assert_eq!(rig.hw.backlight.current(), Some(0), "off");
+}
+
 // ---- display power ------------------------------------------------------------------------------
 
 #[test]
