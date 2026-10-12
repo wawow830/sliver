@@ -54,7 +54,8 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full rel
 
 ## COPR
 The spec is COPR-ready (SRPM upload, or the "SCM" source type running `scripts/rpm-build`).
-Creating the COPR project is an `external` ask for the human. Chroots: `fedora-*-aarch64`
+Creating the COPR project is an `external` ask for the human (H46, 2026-10-12: not now; local RPMs
+via `scripts/rpm-build --binary`). Chroots: `fedora-*-aarch64`
 (Asahi) and `fedora-*-x86_64` (t2linux).
 
 ## Still open
