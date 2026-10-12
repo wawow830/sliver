@@ -360,6 +360,13 @@ debug agent renders a full frame in ~37 ms vs ~2 ms in release): `cargo build --
 Debug-build latencies from that run: touch → agent present 27–38 ms, touch → panel 46–63 ms.
 ash's press fast path (8cdca17) plus a release build should bring it to ~10–15 ms.
 
+**First real install** (RPM .198, H42): sliverd from `sliverd.service` runs in cgroup
+`0::/system.slice/sliverd.service` (the hardware gate checks this), bar backlight `root:video 0664`
+via 99-z-sliverd.rules, agent connected, Hyprland lists `sliver-touch-bar-keys`, no AVCs.
+**Harness on the installed system** (H43, d9789ad): a 30 s run held the bar with sliverd *and*
+sliverd.socket stopped (the agent waited instead of re-activating sliverd), then restore brought back
+both and the agent reconnected.
+
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
 
