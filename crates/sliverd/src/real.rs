@@ -84,6 +84,7 @@ pub fn input(ev: HwEvent) -> Input {
         HwEvent::Fn(held) => Input::FnKey { held },
         HwEvent::Activity => Input::Activity,
         HwEvent::Lid { closed } => Input::Lid { closed },
+        HwEvent::ScreenBacklight => Input::ScreenBacklight,
     }
 }
 
@@ -97,6 +98,7 @@ impl crate::backend::InputSource for HwInput {
                 HwEvent::Fn(held) => E::FnKey { held },
                 HwEvent::Activity => E::Activity,
                 HwEvent::Lid { closed } => E::Lid { closed },
+                HwEvent::ScreenBacklight => E::ScreenBacklight,
             })
             .collect()
     }

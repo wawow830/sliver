@@ -929,6 +929,45 @@ fn policy_change_applies_in_current_state() {
     assert_eq!(rig.hw.backlight.current(), Some(200));
 }
 
+/// The main screen's brightness changing (a udev event, no polling) re-applies an adaptive bar's
+/// brightness at once, and does nothing for a fixed one.
+#[test]
+fn screen_backlight_change_follows_without_a_touch() {
+    let (mut rig, _) = rig_with_agent();
+    rig.hw.backlight.set_screen(Some(1.0));
+    rig.send(
+        A,
+        AgentMsg::DisplayPolicy(DisplayPolicy {
+            brightness: Some(128),
+            follow_screen: Some(true),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(rig.hw.backlight.current(), Some(129), "sqrt(1) * 128 + 1");
+    rig.hw.backlight.set_screen(Some(0.25));
+    rig.input(Input::ScreenBacklight);
+    assert_eq!(rig.hw.backlight.current(), Some(65), "sqrt(0.25) * 128 + 1");
+    let n = rig.hw.backlight.writes().len();
+    rig.input(Input::ScreenBacklight);
+    assert_eq!(rig.hw.backlight.writes().len(), n, "unchanged: no write");
+
+    rig.send(
+        A,
+        AgentMsg::DisplayPolicy(DisplayPolicy {
+            follow_screen: Some(false),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(rig.hw.backlight.current(), Some(128));
+    rig.hw.backlight.set_screen(Some(1.0));
+    rig.input(Input::ScreenBacklight);
+    assert_eq!(
+        rig.hw.backlight.current(),
+        Some(128),
+        "fixed: ignores the screen"
+    );
+}
+
 #[test]
 fn emit_keys_tap_and_up_only_releases_own_keys() {
     let (mut rig, regions) = rig_with_agent();

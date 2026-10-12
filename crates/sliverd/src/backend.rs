@@ -70,6 +70,8 @@ pub enum HwEvent {
     Lid {
         closed: bool,
     },
+    /// The main display's brightness changed (adaptive bar brightness, no polling).
+    ScreenBacklight,
 }
 
 /// A pollable input source. The event loop polls [`std::os::fd::AsFd::as_fd`] for readability

@@ -35,6 +35,9 @@ pub enum HwEvent {
     Lid {
         closed: bool,
     },
+    /// The main display's backlight changed (a udev `change` event on it, e.g. the user's
+    /// brightness keys). For adaptive bar brightness without polling. At most one per drain.
+    ScreenBacklight,
 }
 
 /// A parsed sysfs capability bitmap (`device/capabilities/{ev,key,sw}`): hex words, most
@@ -213,6 +216,28 @@ pub fn input_change(props: &[(String, String)]) -> Option<(bool, PathBuf)> {
         "remove" => Some((false, PathBuf::from(node))),
         _ => None,
     }
+}
+
+/// Whether a udev message is a brightness change on the main display's backlight (names as in
+/// [`crate::discover::DISPLAY_BACKLIGHT_NAMES`]). The kernel sends one for every sysfs brightness
+/// write (`SOURCE=sysfs`, measured on the Mac14,7). The bar's own backlight never matches, so our
+/// writes don't come back to us.
+pub fn screen_backlight_change(props: &[(String, String)]) -> bool {
+    let get = |k: &str| {
+        props
+            .iter()
+            .find(|(pk, _)| pk == k)
+            .map(|(_, v)| v.as_str())
+    };
+    get("SUBSYSTEM") == Some("backlight")
+        && get("ACTION") == Some("change")
+        && get("DEVPATH")
+            .and_then(|p| p.rsplit('/').next())
+            .is_some_and(|name| {
+                crate::discover::DISPLAY_BACKLIGHT_NAMES
+                    .iter()
+                    .any(|n| name.contains(n))
+            })
 }
 
 /// A non-blocking socket on udev's netlink monitor group. Opens no devices (safe anywhere).
@@ -402,10 +427,16 @@ impl HwInput {
             if n <= 0 {
                 return; // EAGAIN (drained) or error
             }
-            let Some((add, node)) = parse_udev_msg(&buf[..n as usize])
-                .as_deref()
-                .and_then(input_change)
-            else {
+            let Some(props) = parse_udev_msg(&buf[..n as usize]) else {
+                continue;
+            };
+            if screen_backlight_change(&props) {
+                if !self.pending.contains(&HwEvent::ScreenBacklight) {
+                    self.pending.push(HwEvent::ScreenBacklight);
+                }
+                continue;
+            }
+            let Some((add, node)) = input_change(&props) else {
                 continue;
             };
             if add {
@@ -617,6 +648,34 @@ mod tests {
         m.extend([0u8; 16]); // filter hashes
         m.extend(body);
         m
+    }
+
+    #[test]
+    fn screen_backlight_changes() {
+        let p = |props: &[&str]| parse_udev_msg(&udev_msg(props)).unwrap();
+        // Exactly what the Mac14,7 sends for a brightness key press.
+        let main = "DEVPATH=/devices/platform/soc/231c00000.dcp/backlight/apple-panel-bl";
+        let bar =
+            "DEVPATH=/devices/platform/soc/228600000.dsi/228600000.dsi.0/backlight/228600000.dsi.0";
+        let change = ["ACTION=change", "SUBSYSTEM=backlight", "SOURCE=sysfs"];
+        assert!(screen_backlight_change(
+            &p(&[&change[..], &[main]].concat())
+        ));
+        assert!(
+            !screen_backlight_change(&p(&[&change[..], &[bar]].concat())),
+            "our own bar writes must not echo"
+        );
+        assert!(!screen_backlight_change(&p(&[
+            "ACTION=add",
+            "SUBSYSTEM=backlight",
+            main
+        ])));
+        assert!(!screen_backlight_change(&p(&[
+            "ACTION=change",
+            "SUBSYSTEM=input",
+            main
+        ])));
+        assert!(input_change(&p(&[&change[..], &[main]].concat())).is_none());
     }
 
     #[test]

@@ -77,6 +77,8 @@ pub enum Input {
     Lid {
         closed: bool,
     },
+    /// The main display's brightness changed: re-apply the bar's if it follows the screen.
+    ScreenBacklight,
     /// The uid owning the active seat0 session changed (logind).
     SessionChanged {
         active_uid: Option<u32>,
@@ -317,6 +319,11 @@ impl Daemon {
             Input::Lid { closed } => {
                 let s = self.idle.set_lid(closed, now);
                 self.display_changed(now, s);
+            }
+            Input::ScreenBacklight => {
+                if self.idle.follow_screen() {
+                    self.apply_backlight();
+                }
             }
             Input::SessionChanged { active_uid } => self.session_changed(now, active_uid),
             Input::Tick => {}

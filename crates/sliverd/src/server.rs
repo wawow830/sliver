@@ -283,6 +283,7 @@ fn log_input(input: &Input) {
         Input::FnKey { held } => crate::debug!("fn {}", if *held { "down" } else { "up" }),
         Input::Activity => {}
         Input::Lid { closed } => crate::debug!("lid {}", if *closed { "closed" } else { "open" }),
+        Input::ScreenBacklight => crate::debug!("screen backlight changed"),
         Input::SessionChanged { active_uid } => crate::debug!("seat0 active uid {active_uid:?}"),
         Input::Tick => crate::debug!("tick"),
     }
@@ -317,5 +318,6 @@ fn hw_input(e: HwEvent) -> Input {
         HwEvent::FnKey { held } => Input::FnKey { held },
         HwEvent::Activity => Input::Activity,
         HwEvent::Lid { closed } => Input::Lid { closed },
+        HwEvent::ScreenBacklight => Input::ScreenBacklight,
     }
 }
