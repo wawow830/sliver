@@ -41,15 +41,18 @@ sudo dnf install target/rpmbuild/RPMS/*/*.rpm   # sliver, sliverd, sliver-agent,
 ```
 `sliver-browser` (§10) is in the same folder; leave it out if you don't want it.
 
-Installing changes nothing until the next boot: tiny-dfr keeps the bar. To switch right away:
+Installing takes nothing over (no reboot needed either): sliverd takes the bar from the next boot.
+To switch right away:
 ```sh
 sudo systemctl start sliverd          # stops tiny-dfr and takes the bar
-systemctl --user start sliver-agent   # normally starts with your graphical session
+systemctl --user start sliver-agent   # from the next login on, it starts with your session
 ```
-**Back to tiny-dfr** at any time: `sudo systemctl start tiny-dfr` (it stops sliverd). If sliverd
-keeps crashing, systemd hands the bar back to tiny-dfr by itself. `sudo dnf remove sliverd
-sliver-agent` gives the bar back to tiny-dfr immediately. Upgrades restart sliverd (about half a
-second of bar) and the agent on their own.
+**Back to tiny-dfr:** `sudo systemctl start tiny-dfr` stops sliverd until the next boot. For good,
+uninstall: `sudo dnf remove sliver sliverd sliver-agent sliverctl sliver-settings` hands the bar to
+tiny-dfr at once. (`systemctl disable` doesn't help: udev starts sliverd, not an enabled unit.)
+If sliverd crashes 5 times within a minute, systemd brings tiny-dfr back by itself; run
+`sudo systemctl reset-failed sliverd` before starting sliverd again. Upgrades (`dnf upgrade`)
+restart sliverd (about half a second of bar) and running agents on their own.
 
 From source without packages, see `docs/sliverd.md` (the units and udev rule in `packaging/` are
 what make `sliverd` take over).
@@ -173,7 +176,8 @@ A preset's scripts run as you, so read the `runs` list before you say yes, or im
 ## 9. The lock screen and privacy
 
 While the screen is locked, the bar shows the `locked` layout: media controls, brightness, volume,
-mute (and Esc on Macs without one). Whatever your config says, it never shows buttons from apps,
+mute (and Esc on Macs without one). That comes from a built-in rule; your own `rules` list replaces
+it (the settings app keeps it at the top for you, and `rules = []` removes it). Whatever your config says, it never shows buttons from apps,
 script output, notification text or window titles there. Notification text also stays off the bar
 while you share your screen.
 
@@ -214,9 +218,15 @@ and whether the display is on, dimmed or off.
 | My change didn't apply | `sliverctl config check`. Invalid configs are never applied, and the last good one stays. |
 | The wrong layout shows | `sliverctl status` names the rule that won; rules match top to bottom. |
 | A custom module shows `!` | Its script failed or timed out (default 2 s). Run it by hand. |
-| Bar is dark | It dims after 30 s and turns off after 60 s idle. A touch wakes it. See `[display]`. |
+| Bar is dark | It dims after 30 s and turns off after 60 s idle; the first touch only wakes it. With the lid closed it's off by design. See `[display]`. |
 | An app's buttons are missing | The settings app's **Apps** page: is it hidden or not allowed? `sliverctl contexts` lists what's published. |
-| Want tiny-dfr back | `sudo systemctl start tiny-dfr` (or uninstall sliverd). |
+| tiny-dfr has the bar after a crash | sliverd failed 5 times: read `journalctl -u sliverd -b`, then `sudo systemctl reset-failed sliverd && sudo systemctl start sliverd`. |
+| `refusing to open` in sliverd's log | Its safety gate found something else using the bar (another tiny-dfr, a test run). |
+| `backlight not writable` | `sudo udevadm trigger --action=change` on the bar's backlight, or reboot once after installing. |
+| Want tiny-dfr back | `sudo systemctl start tiny-dfr` until the next boot; uninstall for good (§3). |
 
-Logs: `journalctl -u sliverd` (the daemon; `sliverd -v` or `SLIVER_LOG=debug` for more) and
-`journalctl --user -u sliver-agent` (config errors, failing scripts, compositor connection).
+Logs: `journalctl -u sliverd -b` (the daemon) and `journalctl --user -u sliver-agent` (config
+errors, failing scripts, compositor connection). For a debug log from the daemon, add
+`Environment=SLIVER_LOG=debug` in a runtime drop-in
+(`/run/systemd/system/sliverd.service.d/debug.conf`) and restart it. Run the agent by hand with
+`sliver-agent -v`.
