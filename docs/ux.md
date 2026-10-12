@@ -303,6 +303,13 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   edited shows on the real bar (`Control1.HoldLayout` on one connection kept for the window's
   lifetime). It's released when focus leaves, the window closes, or the switch is turned off. If
   the app crashes or is killed, the hold dies with its connection. Verified with `kill -9`.
+- **Banners and shortcuts (T91).** Above every page: "The config has errors" [Open file], "F1–F12
+  aren't on the bar any more" [Add F-keys back] (puts the missing `key/Fn` into the Fn layer's
+  `main` zone), and "sliver-agent isn't running" [Start] (`systemctl --user start sliver-agent`).
+  Ctrl+Z undoes and Ctrl+Shift+Z or Ctrl+Y redoes the last edit (`history.rs`: the file's text on
+  each side of the edit, so it's exact); a focused text field keeps its own Ctrl+Z. A new edit
+  clears the redo chain. There's no "selected module" in the Bar editor yet, so Delete on the
+  selection isn't done: a module's inspector has its remove button.
 - **Display & Power, Appearance, Gestures** are editable (T52). Appearance picks the theme (`theme`)
   from a list that previews your own base layer in each one, with your stylesheet on top (T60),
   and opens the stylesheet in your editor, showing its problems. Gestures has tap timing, the Fn

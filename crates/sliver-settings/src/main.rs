@@ -9,6 +9,7 @@ mod bar;
 mod curve;
 mod dbus_presets;
 mod edit;
+mod history;
 mod live;
 mod look;
 mod pages;
@@ -88,7 +89,7 @@ pub(crate) struct Ui {
     pub app: RefCell<String>,
     pub locked: Cell<bool>,
     /// Earlier contents of the user's file (`None` = it didn't exist), newest last.
-    undo: RefCell<Vec<(Option<String>, String)>>,
+    history: RefCell<history::History>,
     /// Watch the config's directories so hand edits (or `sliverctl config set`) refresh the window.
     monitors: RefCell<Vec<gtk::gio::FileMonitor>>,
     /// A refresh is already scheduled (debounce).
@@ -189,7 +190,7 @@ fn main() -> glib::ExitCode {
             layer: RefCell::new("base".into()),
             app: RefCell::default(),
             locked: Cell::new(false),
-            undo: RefCell::default(),
+            history: RefCell::default(),
             monitors: RefCell::default(),
             refresh_pending: Cell::new(false),
             last_text: RefCell::default(),
@@ -219,6 +220,7 @@ fn main() -> glib::ExitCode {
                 glib::Propagation::Proceed
             });
         }
+        shortcuts(&ui);
         rebuild(&ui);
         win.present();
         WINDOW.set(Some(ui.clone()));
@@ -251,7 +253,7 @@ pub(crate) fn apply(ui: &Rc<Ui>, op: impl FnOnce(&mut Editor, &Table) -> Result<
     };
     match ed.save(state.hw) {
         Ok(_) => {
-            ui.undo.borrow_mut().push((before, msg.clone()));
+            ui.history.borrow_mut().record(before, msg.clone());
             let toast = adw::Toast::builder()
                 .title(glib::markup_escape_text(&msg))
                 .button_label("Undo")
@@ -274,17 +276,43 @@ pub(crate) fn apply(ui: &Rc<Ui>, op: impl FnOnce(&mut Editor, &Table) -> Result<
 }
 
 fn undo(ui: &Rc<Ui>) {
-    let Some((before, msg)) = ui.undo.borrow_mut().pop() else {
-        return;
-    };
+    step(ui, true);
+}
+
+fn redo(ui: &Rc<Ui>) {
+    step(ui, false);
+}
+
+/// Undo or redo one edit by restoring the file's text.
+fn step(ui: &Rc<Ui>, back: bool) {
     let (path, _) = ui.state().edit_target();
-    let result = match before {
+    let current = std::fs::read_to_string(&path).ok();
+    let entry = {
+        let mut h = ui.history.borrow_mut();
+        if back {
+            h.undo(current)
+        } else {
+            h.redo(current)
+        }
+    };
+    let verb = if back { "Undid" } else { "Redid" };
+    let Some((text, msg)) = entry else {
+        return ui.toast(if back {
+            "Nothing to undo"
+        } else {
+            "Nothing to redo"
+        });
+    };
+    let result = match text {
         Some(text) => std::fs::write(&path, text),
         None => std::fs::remove_file(&path),
     };
     match result {
-        Ok(()) => ui.toast(&format!("Undid: {msg}")),
-        Err(e) => ui.toast(&format!("Couldn't undo: {e}")),
+        Ok(()) => ui.toast(&format!("{verb}: {msg}")),
+        Err(e) => ui.toast(&format!(
+            "Couldn't {}: {e}",
+            if back { "undo" } else { "redo" }
+        )),
     }
     rebuild(ui);
 }
@@ -399,7 +427,111 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     split.set_sidebar(Some(&sidebar_page));
     split.set_content(Some(&content_page));
     split.set_min_sidebar_width(220.0);
-    ui.toasts.set_child(Some(&split));
+    split.set_vexpand(true);
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    for b in banners(ui, &state) {
+        root.append(&b);
+    }
+    root.append(&split);
+    ui.toasts.set_child(Some(&root));
+}
+
+/// Things worth saying above every page (ux.md §7, §10), each with the one button that fixes it.
+fn banners(ui: &Rc<Ui>, state: &Rc<State>) -> Vec<adw::Banner> {
+    let mut out = Vec::new();
+    // The config can't be used: the agent keeps the last good one, but the user should know.
+    if !state.problems.ok() {
+        let b = adw::Banner::new(
+            "The config has errors, so changes can't take effect. The bar keeps using the last good one.",
+        );
+        b.set_button_label(Some("Open file"));
+        b.set_revealed(true);
+        let file = state.path.clone().unwrap_or_else(|| state.edit_target().0);
+        let ui = ui.clone();
+        b.connect_button_clicked(move |_| open_file(&ui, &file));
+        out.push(b);
+    }
+    // F1–F12 only through the hatch.
+    if edit::fkeys_missing_warning(&state.problems)
+        && let Some((layout, missing)) = edit::missing_fkeys(&state.loaded.config)
+        && !missing.is_empty()
+    {
+        let b = adw::Banner::new(
+            "F1–F12 aren't on the bar any more. They stay reachable by double-pressing Fn and holding.",
+        );
+        b.set_button_label(Some("Add F-keys back"));
+        b.set_revealed(true);
+        let ui = ui.clone();
+        b.connect_button_clicked(move |_| {
+            let (layout, missing) = (layout.clone(), missing.clone());
+            apply(&ui, move |ed, merged| {
+                edit::add_keys(ed, merged, &layout, &missing)
+            });
+        });
+        out.push(b);
+    }
+    // No agent: nothing here reaches the bar until it runs.
+    let agent = adw::Banner::new("sliver-agent isn't running, so the bar can't show your layouts.");
+    agent.set_button_label(Some("Start"));
+    {
+        let (agent, ui) = (agent.clone(), ui.clone());
+        agent.connect_button_clicked(move |b| {
+            let started = std::process::Command::new("systemctl")
+                .args(["--user", "start", "sliver-agent"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success());
+            if started {
+                b.set_revealed(false);
+                ui.toast("Started sliver-agent");
+            } else {
+                ui.toast("Couldn't start it: run `systemctl --user start sliver-agent`");
+            }
+        });
+    }
+    {
+        let agent = agent.clone();
+        live::agent_status(move |a| {
+            if let live::Agent::Absent(why) = a
+                && why.contains("not running")
+            {
+                agent.set_revealed(true);
+            }
+        });
+    }
+    out.push(agent);
+    out
+}
+
+fn open_file(ui: &Rc<Ui>, file: &std::path::Path) {
+    let launcher = gtk::FileLauncher::new(Some(&gtk::gio::File::for_path(file)));
+    let ui2 = ui.clone();
+    launcher.launch(Some(&ui.win), gtk::gio::Cancellable::NONE, move |r| {
+        if let Err(e) = r {
+            ui2.toast(&format!("Couldn't open an editor: {e}"));
+        }
+    });
+}
+
+/// Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y on the window. A focused text field keeps its own Ctrl+Z.
+fn shortcuts(ui: &Rc<Ui>) {
+    let controller = gtk::ShortcutController::new();
+    let add = |trigger: &str, f: fn(&Rc<Ui>)| {
+        let ui = ui.clone();
+        let action = gtk::CallbackAction::new(move |_, _| {
+            f(&ui);
+            glib::Propagation::Stop
+        });
+        if let Some(t) = gtk::ShortcutTrigger::parse_string(trigger) {
+            controller.add_shortcut(gtk::Shortcut::new(Some(t), Some(action)));
+        }
+    };
+    add("<Control>z", undo);
+    add("<Control><Shift>z", redo);
+    add("<Control>y", redo);
+    ui.win.add_controller(controller);
 }
 
 /// First launch (ux.md §8): no config file of the user's yet. Explains the safe hatch and offers a

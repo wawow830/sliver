@@ -432,6 +432,58 @@ pub fn set_rule_key(
     Ok(format!("Changed {k} of rule {label}"))
 }
 
+/// Does this report say F1–F12 are only reachable through the safe hatch? (The validator's
+/// warning for a config whose base and Fn layers both lack them.)
+pub fn fkeys_missing_warning(d: &sliver_config::Diagnostics) -> bool {
+    d.warnings
+        .iter()
+        .any(|w| w.message.contains("F1, F2") && w.message.contains("safe hatch"))
+}
+
+/// The layout the Fn layer shows and the F-keys it lacks, as `key/F1`…
+pub fn missing_fkeys(config: &sliver_config::Config) -> Option<(String, Vec<String>)> {
+    fn keys(m: &sliver_config::ModuleInstance, out: &mut Vec<String>) {
+        if m.id.kind == "key" {
+            out.extend(m.id.name.clone());
+        }
+        for c in &m.children {
+            keys(c, out);
+        }
+    }
+    let layout = config.layers.get("fn")?.clone();
+    let r = config
+        .resolve(
+            "fn",
+            &sliver_config::Context::new().with("physical_esc", true),
+        )
+        .ok()?;
+    let mut have = Vec::new();
+    for z in &r.zones {
+        for m in &z.modules {
+            keys(m, &mut have);
+        }
+    }
+    let missing = (1..=12)
+        .map(|n| format!("F{n}"))
+        .filter(|k| !have.contains(k))
+        .map(|k| format!("key/{k}"))
+        .collect();
+    Some((layout, missing))
+}
+
+/// Puts the given keys back at the end of the layout's `main` zone.
+pub fn add_keys(
+    ed: &mut Editor,
+    merged: &Table,
+    layout: &str,
+    keys: &[String],
+) -> Result<String, String> {
+    for k in keys {
+        add_module(ed, merged, layout, "main", k)?;
+    }
+    Ok(format!("Added {} F-keys to the Fn layer", keys.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,5 +741,24 @@ mod tests {
         assert_eq!(layouts, ["locked", "foot"]);
         let ctx = Context::new().with("app_id", "foot").with("locked", true);
         assert_eq!(l.config.resolve("base", &ctx).unwrap().layout, "locked");
+    }
+
+    #[test]
+    fn fkeys_can_be_put_back() {
+        // an Fn layer with only some F-keys
+        let src = "version = 1\n[layers]\nfn = \"mine\"\n[[layouts.mine.zones]]\nname = \"main\"\nmodules = [\"key/F1\", \"key/F2\"]\n";
+        let (mut ed, merged) = fresh(src);
+        let config = ed.load().config;
+        let (layout, missing) = missing_fkeys(&config).unwrap();
+        assert_eq!(layout, "mine");
+        assert_eq!(missing.len(), 10);
+        assert_eq!(missing[0], "key/F3");
+        add_keys(&mut ed, &merged, &layout, &missing).unwrap();
+        let l = ed.load();
+        assert!(l.diagnostics.ok(), "{:#?}", l.diagnostics);
+        assert_eq!(missing_fkeys(&l.config).unwrap().1.len(), 0);
+        // the built-in Fn layer is complete already
+        let (ed2, _) = fresh("version = 1\n");
+        assert!(missing_fkeys(&ed2.load().config).unwrap().1.is_empty());
     }
 }
