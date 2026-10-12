@@ -363,7 +363,7 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   and start-open. Edits copy the group's effective member list into your file first (arrays
   replace). "Group modules…" on a zone header turns checked modules into a new `group/<name>`
   where the first of them was. Not done: entering a group on the preview with a breadcrumb, and
-  grouping a selection made on the preview (that waits on the selection model in T114).
+  grouping a multi-selection made on the preview.
 - **Testing headless** (never on the live session): `scripts/settings-headless OUT.png [STEP...]`.
   It runs the app on GTK's Broadway backend with a sandboxed `XDG_CONFIG_HOME`
   (`target/test-tmp/xdg-ui`), on a **private D-Bus**, and drives it through agent-browser: clicks
