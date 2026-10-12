@@ -1077,15 +1077,21 @@ fn run(
                 reloader.watch_fd(),
                 reloader.usr2.as_ref().map(|r| r.as_fd()),
             ];
-            let mut fds = vec![
-                PollFd::new(&fd, PollFlags::IN),
-                PollFd::new(&wake, PollFlags::IN),
-            ];
+            // While a content change is held back (T99), more changes can't make it sooner:
+            // don't let a storm on the feeds or the API wake us, only touches and the deadline
+            // (idea from fir's RenderGate). Control calls wait at most one frame interval.
+            let holding = pacer.pending() && !pacer.due(std::time::Instant::now());
+            let content = if holding {
+                PollFlags::empty()
+            } else {
+                PollFlags::IN
+            };
+            let mut fds = vec![PollFd::new(&fd, PollFlags::IN), PollFd::new(&wake, content)];
             let mut at = [None; 3];
-            for (slot, f) in at.iter_mut().zip(&optional) {
+            for (i, (slot, f)) in at.iter_mut().zip(&optional).enumerate() {
                 if let Some(f) = f {
                     *slot = Some(fds.len());
-                    fds.push(PollFd::new(f, PollFlags::IN));
+                    fds.push(PollFd::new(f, if i == 0 { content } else { PollFlags::IN }));
                 }
             }
             match poll(&mut fds, timeout.as_ref()) {
