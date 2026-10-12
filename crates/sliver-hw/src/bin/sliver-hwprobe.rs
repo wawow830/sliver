@@ -436,13 +436,24 @@ fn touchviz(card: &Path, touch: &Path, secs: u64) -> std::io::Result<()> {
     use sliver_hw::input::{HwEvent, HwInput};
     use sliver_hw::mt::Phase;
     use sliver_hw::panel::DrmPanel;
-    let mut panel = DrmPanel::open(card)?;
-    let (len, thick) = panel.logical_size();
+    // Diagnostic order (T30): input BEFORE the modeset, then halfway through reopen the input
+    // (i.e. after the modeset), so we learn whether open order matters for apple_z2.
+    let (len, thick) = (2008, 60); // checked against the panel below
     let mut input = HwInput::open(touch, len, thick)?;
+    println!("input opened (before modeset): {:?}", input.device_names());
+    let mut panel = DrmPanel::open(card)?;
+    if panel.logical_size() != (len, thick) {
+        return Err(std::io::Error::other(format!(
+            "unexpected panel size {:?}",
+            panel.logical_size()
+        )));
+    }
     println!(
-        "== touchviz {secs}s on {len}x{thick}, devices: {:?}",
-        input.device_names()
+        "== touchviz {secs}s on {len}x{thick}; input reopened at {}s",
+        secs / 2
     );
+    let reopen_at = Instant::now() + Duration::from_secs(secs / 2);
+    let mut reopened = false;
     let mut fingers: std::collections::HashMap<u8, f32> = std::collections::HashMap::new();
     let draw = |panel: &mut DrmPanel,
                 fingers: &std::collections::HashMap<u8, f32>|
@@ -475,7 +486,20 @@ fn touchviz(card: &Path, touch: &Path, secs: u64) -> std::io::Result<()> {
     };
     draw(&mut panel, &fingers)?;
     let deadline = Instant::now() + Duration::from_secs(secs);
+    let mut last_stats = Instant::now();
     while Instant::now() < deadline {
+        if last_stats.elapsed() >= Duration::from_secs(5) {
+            println!("stats {:?}", input.stats());
+            last_stats = Instant::now();
+        }
+        if !reopened && Instant::now() >= reopen_at {
+            println!("stats before reopen {:?}", input.stats());
+            drop(input);
+            input = HwInput::open(touch, len, thick)?;
+            println!("== input reopened (after modeset)");
+            fingers.clear();
+            reopened = true;
+        }
         let left = deadline
             .saturating_duration_since(Instant::now())
             .as_millis() as i32;
@@ -506,6 +530,7 @@ fn touchviz(card: &Path, touch: &Path, secs: u64) -> std::io::Result<()> {
                     }
                     changed = true;
                 }
+                HwEvent::Activity => {} // counted in stats; too chatty to log
                 other => println!("{other:?}"),
             }
         }
@@ -515,6 +540,7 @@ fn touchviz(card: &Path, touch: &Path, secs: u64) -> std::io::Result<()> {
             println!("frame in {:?}", t.elapsed());
         }
     }
+    println!("stats {:?}", input.stats());
     Ok(())
 }
 

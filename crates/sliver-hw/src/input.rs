@@ -122,6 +122,8 @@ struct Dev {
     kind: Kind,
     name: String,
     node: PathBuf,
+    /// Raw evdev events read so far (diagnostics).
+    events: u64,
 }
 
 /// Token for the udev monitor socket in the epoll set (device tokens are their index).
@@ -291,6 +293,7 @@ impl HwInput {
             kind: Kind::Touch(Box::new(Decoder::new(map))),
             name: self.touch_node.display().to_string(),
             node: self.touch_node.clone(),
+            events: 0,
         })
     }
 
@@ -312,6 +315,7 @@ impl HwInput {
             kind: Kind::Seat0,
             name: d.name,
             node: d.node,
+            events: 0,
         })
     }
 
@@ -361,6 +365,15 @@ impl HwInput {
     /// Whether hot-plug monitoring is active.
     pub fn hotplug(&self) -> bool {
         self.monitor.is_some()
+    }
+
+    /// `(device name, raw events read)` for every open device (diagnostics).
+    pub fn stats(&self) -> Vec<(String, u64)> {
+        self.devs
+            .iter()
+            .flatten()
+            .map(|d| (d.name.clone(), d.events))
+            .collect()
     }
 
     /// Names of the devices being read (for logs).
@@ -457,6 +470,7 @@ fn read_dev(
         match dev.file.read(&mut buf) {
             Ok(0) => return true,
             Ok(n) => {
+                dev.events += (n / 24) as u64;
                 for chunk in buf[..n].chunks_exact(24) {
                     let (sec, usec, ty, code, value) =
                         evdev::decode_event(chunk.try_into().unwrap());
