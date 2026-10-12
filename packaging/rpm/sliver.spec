@@ -176,6 +176,11 @@ fi
 %preun -n sliver-agent
 %systemd_user_preun sliver-agent.service
 
+# Upgrades restart running agents (systemd-update-helper, every user manager), so nobody keeps
+# the old agent against a new sliverd until their next login (seen in T94).
+%postun -n sliver-agent
+%systemd_user_postun_with_restart sliver-agent.service
+
 %files
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies cargo-vendor.txt
 %doc README.md GOAL.md docs/user-guide.md docs/api.md docs/customization.md docs/styling.md
