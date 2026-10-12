@@ -21,8 +21,8 @@ on 2026-10-12. Nothing was opened, stopped or written.
 - Only one process can be DRM master on card1. tiny-dfr holds it for its whole lifetime.
 - **Esc question:** tiny-dfr only adds an Esc button when the bar is ≥2170 px long. This bar is
   2008, which matches Apple's 2020+ 13" design that has a **physical Esc key** beside the bar.
-  GOAL.md says there's no physical Esc; asked the human to confirm (see "Open questions").
-  Either way there are **no physical F-keys**, so the invariant stands.
+  **Confirmed by the human (H2): this Mac has a physical Esc.** There are **no physical F-keys**,
+  so the invariant stands.
 
 ## Hazards for peers (read this)
 - Our user `wawow` is in the **`input` (104) and `video` (39)** groups. So peers *can* open
@@ -294,14 +294,36 @@ What changes per family, and what sliverd has to handle:
   kekrby). Fine to ship with the Apache notice.
 - Cargo says `license = "MIT AND Apache-2.0"` for that reason.
 
+## Measured on real hardware (2026-10-12, sliver-hwprobe via safe-swap)
+DRM `card1` (driver `adp`, "Apple Display Pipe DRM Driver"):
+- Caps: DUMB_BUFFER=1, DUMB_PREFERRED_DEPTH=24, DUMB_PREFER_SHADOW=0, PRIME=3, ASYNC_PAGE_FLIP=0,
+  ADDFB2_MODIFIERS=1, CRTC_IN_VBLANK_EVENT=1. UNIVERSAL_PLANES and ATOMIC client caps are accepted.
+  A non-root process became master just by opening the card once tiny-dfr was gone, as expected.
+- One connector (`DSI`, id 39): mode `60x2008@60`, `size_mm` unknown. Props: EDID, DPMS,
+  link-status, **`non-desktop=1`** (why compositors leave it alone), TILE, CRTC_ID.
+- One CRTC (id 37): props ACTIVE, MODE_ID, OUT_FENCE_PTR, VRR_ENABLED. After tiny-dfr exits it
+  stays `ACTIVE=1` with the mode set, but the plane has no fb.
+- One plane (id 35, primary): **formats `XR24` only**. Props: type, FB_ID, IN_FENCE_FD, CRTC_*,
+  SRC_*, IN_FORMATS. **No `FB_DAMAGE_CLIPS` and no `rotation`**: the rotation is ours to do in
+  software, and partial updates go through legacy `DIRTYFB` (what tiny-dfr does). Atomic
+  page-flip events with vblank are available if we ever want frame pacing.
+
+Touch `event2` ("Mac14,7 Touch Bar"):
+- ABS_X/MT_POSITION_X 0..23044, ABS_Y/MT_POSITION_Y 0..639, **resolution 100 units/mm**, so the
+  active area is **230.4 x 6.4 mm**, ~11.5 units per pixel along the bar and ~10.7 across.
+- MT_SLOT 0..255 (the kernel's slot cap, not the physical finger limit). TOUCH_MAJOR/MINOR,
+  WIDTH_MAJOR 0..65535, ORIENTATION ±32767, TRACKING_ID 0..65535. No pressure, no hover.
+- Which way X runs (left to right or reversed) and how many fingers really register: pending the
+  `--touch` run.
+
+Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
+`snap`'s ioctl layouts and un-rotation are confirmed.
+
 ## Open questions (need hardware or the human)
-1. Physical Esc present on this Mac14,7? (asked the human, `--kind hardware`). Affects the
-   default layout and how hard invariant 1 has to work for Esc specifically (F-keys are
-   bar-only regardless).
-2. DRM caps on card1: plane formats, `FB_DAMAGE_CLIPS` support vs DIRTYFB-only, whether DPMS
-   off or `ACTIVE=0` actually powers the panel down (a power win over brightness 0). First
-   harness run.
-3. Touch ABS ranges and resolution for event2 (needs an open fd, so a harness run or a
-   human-run `libinput list-devices`, which is read-only and safe).
+1. ~~Physical Esc?~~ **Yes** (H2).
+2. ~~DRM caps~~: measured above. Still open: whether DPMS off or `ACTIVE=0` actually powers the
+   panel down (a power win over brightness 0), and what the panel shows while nobody owns it.
+3. ~~Touch ranges~~: measured above. Still open: X direction, real max fingers, and how the
+   contact-size values behave.
 4. Does `systemd-backlight` for the bar fight a daemon that writes brightness? Probably not (it
    only acts at boot and shutdown).
