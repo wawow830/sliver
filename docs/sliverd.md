@@ -32,7 +32,7 @@ conn per wakeup. A conn whose socket won't take a reply is dropped. Received fds
 ## Backends (`backend.rs`)
 | trait | real impl (birch, `sliver-hw`) | fake (`fake.rs`) |
 |---|---|---|
-| `Display::flush(&Pixmap, &[Span])`: landscape frame + damaged bar columns | DRM dumb buffer, rotate via `panel::blit_xrgb8888`, DIRTYFB | real rotated XRGB fb; `frame()` reads it back as PNG |
+| `Display::flush(&Pixmap, &[Span])`: landscape frame + damaged bar columns | `sliver_hw::panel::DrmPanel` (`real.rs`): rotate via `panel::blit_xrgb8888`, DIRTYFB | real rotated XRGB fb; `frame()` reads it back as PNG |
 | `Backlight::set(u32)`, `screen_fraction()` | sysfs fd from `OpenFile=` | records writes |
 | `Keys::key(code, down)`, `sync()` | uinput, every key registered up front | records `KeyEvent`s |
 | `InputSource` (`AsFd` + `drain() -> Vec<HwEvent>`) | evdev bar digitizer + seat0 (Fn, lid, activity) | `FakeInput` + handle |
@@ -81,7 +81,7 @@ Tests: `crates/sliverd/tests/daemon.rs` (core), `tests/server.rs` (real socket +
 (`SLIVER_BLESS=1` to update, then look at them).
 
 ## Not yet
-- Real backends and the real-hardware mode of `main` (T30, birch).
+- First full `sliverd` run on the real bar through the safe-swap harness (real mode exists, needs `SLIVER_SAFESWAP=1`).
 - systemd units, udev and tiny-dfr coexistence (packaging).
 - Merge cedar's `FakeDaemon` into `sliverd::Daemon` + fake hardware (agreed, once this is stable).
 - Pixel shift, `follow_screen` reading the main backlight on change (it's read on activity now).
