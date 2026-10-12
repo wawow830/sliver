@@ -26,6 +26,7 @@ const LIBRARY: &[(&str, &str)] = &[
     ("key/Esc", "Esc key"),
     ("idle-inhibitor", "Caffeine"),
     ("dnd", "Do not disturb"),
+    ("dark-mode", "Dark mode"),
     ("language", "Keyboard layout"),
     ("window", "Window title"),
     ("cpu", "CPU"),

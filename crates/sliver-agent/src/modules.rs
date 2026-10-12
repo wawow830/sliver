@@ -1229,6 +1229,24 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
                 .push((Gesture::Tap, Action::ModuleAction("toggle".into())));
             sp
         }
+        // Light/dark colour scheme, when the portal reports one.
+        "dark-mode" => {
+            let dark = s.appearance.dark?;
+            let mut sp = Spec::new(
+                ValueMap::new().with("state", if dark { "dark" } else { "light" }),
+                "",
+            )
+            .icon(if dark {
+                "weather-clear-night-symbolic"
+            } else {
+                "weather-clear-symbolic"
+            });
+            sp.status = Some(if dark { "dark" } else { "light" });
+            sp.checked = dark;
+            sp.defaults
+                .push((Gesture::Tap, Action::ModuleAction("toggle".into())));
+            sp
+        }
         "workspaces" => {
             let ws = world.desktop.workspaces.get(item?)?;
             let status = if ws.urgent {

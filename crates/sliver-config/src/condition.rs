@@ -113,6 +113,7 @@ pub const CONTEXT_KEYS: &[&str] = &[
     "output_muted",
     "volume",
     "dnd",
+    "dark_mode",
     "caffeine",
     "brightness",
     // agent

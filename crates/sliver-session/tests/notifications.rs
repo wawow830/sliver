@@ -14,6 +14,8 @@ use common::Bus;
 struct Server {
     next_id: u32,
     inhibited: bool,
+    inhibits: u32,
+    uninhibits: u32,
 }
 struct Mock(Arc<Mutex<Server>>);
 
@@ -39,6 +41,18 @@ impl Mock {
         s.next_id
     }
     fn close_notification(&self, _id: u32) {}
+    fn inhibit(&self, _app: &str, _reason: &str, _hints: HashMap<String, OwnedValue>) -> u32 {
+        let mut s = self.0.lock().unwrap();
+        s.inhibits += 1;
+        s.inhibited = true;
+        41
+    }
+    fn un_inhibit(&self, cookie: u32) {
+        let mut s = self.0.lock().unwrap();
+        assert_eq!(cookie, 41);
+        s.uninhibits += 1;
+        s.inhibited = false;
+    }
     #[zbus(property)]
     fn inhibited(&self) -> bool {
         self.0.lock().unwrap().inhibited
@@ -152,4 +166,12 @@ fn counts_notifications_and_reads_dnd() {
         )
         .unwrap();
     assert_eq!(next(&rx).notifications.dnd, Some(true));
+
+    // Our own switch on a KDE-style server holds an Inhibit, and releases it
+    state.lock().unwrap().inhibited = false;
+    handle.set_dnd(&client, true).unwrap();
+    handle.set_dnd(&client, true).unwrap();
+    assert_eq!(state.lock().unwrap().inhibits, 1, "held once");
+    handle.set_dnd(&client, false).unwrap();
+    assert_eq!(state.lock().unwrap().uninhibits, 1);
 }

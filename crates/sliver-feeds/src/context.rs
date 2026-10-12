@@ -110,6 +110,9 @@ pub fn add_session(ctx: &mut Context, s: &SessionState) {
     if let Some(d) = s.notifications.dnd {
         ctx.set("dnd", d);
     }
+    if let Some(d) = s.appearance.dark {
+        ctx.set("dark_mode", d);
+    }
     if let Some(b) = s.brightness.screen_pct {
         ctx.set("brightness", f64::from(b));
     }

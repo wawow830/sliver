@@ -638,6 +638,9 @@ fn apply(
                             None => continue,
                         }
                     }
+                    SessionOp::ToggleDark => {
+                        Op::Dark(!live.agg.session.appearance.dark.unwrap_or(false))
+                    }
                     SessionOp::ToggleDnd => {
                         Op::Dnd(!live.agg.session.notifications.dnd.unwrap_or(false))
                     }

@@ -43,6 +43,7 @@ pub enum Op {
         on: bool,
     },
     Dnd(bool),
+    Dark(bool),
     /// Open (invoke) or close notification `id`.
     OpenNotification(u32),
     CloseNotification(u32),
@@ -111,7 +112,8 @@ fn run_ops(
             }
             Op::CloseNotification(id) => sliver_session::notifications::close(&ses, id),
             Op::OpenNotification(id) => open_notification(&ses, id),
-            Op::Dnd(on) => sliver_session::notifications::set_dnd(&ses, on),
+            Op::Dnd(on) => handle.set_dnd(&ses, on),
+            Op::Dark(on) => sliver_session::appearance::set_dark(on),
         };
         if let Err(e) = r {
             eprintln!("sliver-agent: {e}");

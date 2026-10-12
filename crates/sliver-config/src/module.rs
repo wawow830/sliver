@@ -35,6 +35,7 @@ pub const MODULE_TYPES: &[&str] = &[
     "language",
     "idle-inhibitor",
     "dnd",
+    "dark-mode",
     "power-profiles",
     "cpu",
     "memory",

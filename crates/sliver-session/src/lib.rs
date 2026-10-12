@@ -189,6 +189,8 @@ pub struct Handle {
     hub: Hub,
     system: zbus::blocking::Connection,
     caffeine: Arc<Mutex<Option<zbus::zvariant::OwnedFd>>>,
+    /// KDE's `Inhibit` cookie while Do Not Disturb is on (see [`Handle::set_dnd`]).
+    dnd_cookie: Arc<Mutex<Option<u32>>>,
 }
 
 impl Handle {
@@ -239,6 +241,7 @@ impl Session {
             hub: hub.clone(),
             system: system.clone(),
             caffeine: Arc::default(),
+            dnd_cookie: Arc::default(),
         };
         let h = hub.clone();
         std::thread::Builder::new()

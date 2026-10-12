@@ -67,7 +67,10 @@ pub fn is_device_event(line: &str) -> bool {
 const TOOL_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// `cmd.output()` with a deadline. Returns `None` on spawn failure or timeout (the child is killed).
-fn output_with_timeout(mut cmd: Command, limit: Duration) -> Option<std::process::Output> {
+pub(crate) fn output_with_timeout(
+    mut cmd: Command,
+    limit: Duration,
+) -> Option<std::process::Output> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

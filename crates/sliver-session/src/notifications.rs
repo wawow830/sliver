@@ -129,7 +129,79 @@ pub const MONITOR_RULES: [&str; 6] = [
     "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path='/org/freedesktop/Notifications'",
 ];
 
-/// Read DND from the first supported daemon on the bus.
+/// Daemons whose Do Not Disturb switch is their own command-line tool (no D-Bus property).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cli {
+    Mako,
+    Swaync,
+}
+
+impl Cli {
+    /// From the `GetServerInformation` name.
+    pub fn from_server(name: &str) -> Option<Cli> {
+        match name {
+            "mako" => Some(Cli::Mako),
+            "SwayNotificationCenter" | "swaync" => Some(Cli::Swaync),
+            _ => None,
+        }
+    }
+
+    /// The program and arguments that switch DND.
+    pub fn set_args(self, on: bool) -> (&'static str, &'static [&'static str]) {
+        match (self, on) {
+            (Cli::Mako, true) => ("makoctl", &["mode", "-a", "do-not-disturb"]),
+            (Cli::Mako, false) => ("makoctl", &["mode", "-r", "do-not-disturb"]),
+            (Cli::Swaync, true) => ("swaync-client", &["--dnd-on", "-sw"]),
+            (Cli::Swaync, false) => ("swaync-client", &["--dnd-off", "-sw"]),
+        }
+    }
+
+    /// The program and arguments that print the current state.
+    pub fn get_args(self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            Cli::Mako => ("makoctl", &["mode"]),
+            Cli::Swaync => ("swaync-client", &["--get-dnd"]),
+        }
+    }
+
+    /// DND from the output of [`Cli::get_args`].
+    pub fn parse(self, out: &str) -> Option<bool> {
+        match self {
+            Cli::Mako => Some(out.lines().any(|l| l.trim() == "do-not-disturb")),
+            Cli::Swaync => match out.trim() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// `GetServerInformation().name`, without starting a server.
+fn server_name(conn: &Connection) -> Option<String> {
+    props::call_no_autostart::<_, (String, String, String, String)>(
+        conn,
+        SERVER,
+        "/org/freedesktop/Notifications",
+        SERVER,
+        "GetServerInformation",
+        &(),
+    )
+    .map(|t| t.0)
+}
+
+fn cli_read(cli: Cli) -> Option<bool> {
+    let (prog, args) = cli.get_args();
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(args);
+    let out = crate::audio::output_with_timeout(cmd, std::time::Duration::from_secs(2))?;
+    out.status
+        .success()
+        .then(|| cli.parse(&String::from_utf8_lossy(&out.stdout)))?
+}
+
+/// Read DND from the first supported daemon on the bus: dunst, KDE (`Inhibited`), then mako and
+/// swaync through their tools (so only when one of those is the running server).
 pub fn read_dnd(conn: &Connection) -> Option<bool> {
     let dunst = props::get_all(
         conn,
@@ -138,14 +210,29 @@ pub fn read_dnd(conn: &Connection) -> Option<bool> {
         "org.dunstproject.cmd0",
     )
     .and_then(|p| props::boolean(&p, "paused"));
-    dunst.or_else(|| {
-        props::get_all(conn, SERVER, "/org/freedesktop/Notifications", SERVER)
-            .and_then(|p| props::boolean(&p, "Inhibited"))
-    })
+    dunst
+        .or_else(|| {
+            props::get_all(conn, SERVER, "/org/freedesktop/Notifications", SERVER)
+                .and_then(|p| props::boolean(&p, "Inhibited"))
+        })
+        .or_else(|| cli_read(Cli::from_server(&server_name(conn)?)?))
 }
 
-/// Turn Do Not Disturb on or off where the daemon allows it: dunst (`paused`). Other daemons
-/// (KDE, mako, swaync, quickshell) have no standard control; the error says so.
+fn set_dnd_cli(conn: &Connection, on: bool) -> Option<Result<(), String>> {
+    let cli = Cli::from_server(&server_name(conn)?)?;
+    let (prog, args) = cli.set_args(on);
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(args);
+    Some(
+        match crate::audio::output_with_timeout(cmd, std::time::Duration::from_secs(3)) {
+            Some(o) if o.status.success() => Ok(()),
+            _ => Err(format!("{prog} failed or is not installed")),
+        },
+    )
+}
+
+/// Turn Do Not Disturb on or off. dunst has a property; mako and swaync have a tool; KDE is
+/// handled by [`Handle::set_dnd`] (a held `Inhibit`).
 pub fn set_dnd(conn: &Connection, on: bool) -> Result<(), String> {
     let dunst = props::set_no_autostart(
         conn,
@@ -155,9 +242,14 @@ pub fn set_dnd(conn: &Connection, on: bool) -> Result<(), String> {
         "paused",
         zbus::zvariant::Value::from(on),
     );
-    dunst.map_err(|e| {
-        format!("no notification daemon with a Do Not Disturb switch (dunst supported): {e}")
-    })
+    match dunst {
+        Ok(()) => Ok(()),
+        Err(e) => set_dnd_cli(conn, on).unwrap_or_else(|| {
+            Err(format!(
+                "no notification daemon with a Do Not Disturb switch (dunst, mako, swaync, KDE supported): {e}"
+            ))
+        }),
+    }
 }
 
 /// Dismiss notification `id` (`CloseNotification`; the server answers with `NotificationClosed`).
@@ -175,6 +267,48 @@ pub fn close(conn: &Connection, id: u32) -> Result<(), String> {
 }
 
 impl Handle {
+    /// Switch Do Not Disturb and record the result in the session state at once (mako and
+    /// swaync announce nothing on the bus). KDE has no setter, only an `Inhibit` that lasts as
+    /// long as our connection, so that is held here.
+    pub fn set_dnd(&self, conn: &Connection, on: bool) -> Result<(), String> {
+        let kde = props::get_all(conn, SERVER, "/org/freedesktop/Notifications", SERVER)
+            .and_then(|p| props::boolean(&p, "Inhibited"))
+            .is_some();
+        let r = if kde {
+            let mut held = self.dnd_cookie.lock().unwrap_or_else(|e| e.into_inner());
+            if on && held.is_none() {
+                let hints: HashMap<String, zbus::zvariant::Value<'_>> = HashMap::new();
+                *held = props::call_no_autostart::<_, u32>(
+                    conn,
+                    SERVER,
+                    "/org/freedesktop/Notifications",
+                    SERVER,
+                    "Inhibit",
+                    &("Sliver", "Do Not Disturb toggle", hints),
+                );
+                if held.is_none() {
+                    return Err("the notification server refused Inhibit".into());
+                }
+            } else if let Some(c) = (!on).then(|| held.take()).flatten() {
+                props::call_no_autostart::<_, ()>(
+                    conn,
+                    SERVER,
+                    "/org/freedesktop/Notifications",
+                    SERVER,
+                    "UnInhibit",
+                    &(c,),
+                );
+            }
+            Ok(())
+        } else {
+            set_dnd(conn, on)
+        };
+        if r.is_ok() {
+            self.hub.update(|s| s.notifications.dnd = Some(on));
+        }
+        r
+    }
+
     /// Start tracking notifications.
     ///
     /// `monitor` must be a **fresh** connection to the session bus: it is turned into a
@@ -285,6 +419,27 @@ fn notify_args(msg: &zbus::Message) -> (u32, String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dnd_cli_adapters() {
+        assert_eq!(Cli::from_server("mako"), Some(Cli::Mako));
+        assert_eq!(
+            Cli::from_server("SwayNotificationCenter"),
+            Some(Cli::Swaync)
+        );
+        assert_eq!(Cli::from_server("dunst"), None);
+        assert_eq!(Cli::Mako.parse("default\ndo-not-disturb\n"), Some(true));
+        assert_eq!(Cli::Mako.parse("default\n"), Some(false));
+        assert_eq!(Cli::Swaync.parse("true\n"), Some(true));
+        assert_eq!(Cli::Swaync.parse("false"), Some(false));
+        assert_eq!(Cli::Swaync.parse("???"), None);
+        assert_eq!(Cli::Mako.set_args(true).1, ["mode", "-a", "do-not-disturb"]);
+        assert_eq!(
+            Cli::Mako.set_args(false).1,
+            ["mode", "-r", "do-not-disturb"]
+        );
+        assert_eq!(Cli::Swaync.set_args(false).0, "swaync-client");
+    }
 
     #[test]
     fn counts_new_replaced_and_closed() {

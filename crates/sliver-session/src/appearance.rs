@@ -93,6 +93,45 @@ pub fn read_into(conn: &Connection, a: &mut Appearance, kdeglobals: Option<&Path
     }
 }
 
+/// The commands that switch the colour scheme, in the order to try them. KDE has its own
+/// tool; elsewhere the GNOME setting is what the GTK/GNOME portals report as `color-scheme`.
+pub fn dark_commands(desktop: &str, dark: bool) -> Vec<(&'static str, Vec<&'static str>)> {
+    let kde = desktop.split(':').any(|d| d.eq_ignore_ascii_case("KDE"));
+    let mut v = Vec::new();
+    if kde {
+        v.push((
+            "plasma-apply-colorscheme",
+            vec![if dark { "BreezeDark" } else { "BreezeLight" }],
+        ));
+    }
+    v.push((
+        "gsettings",
+        vec![
+            "set",
+            "org.gnome.desktop.interface",
+            "color-scheme",
+            if dark { "prefer-dark" } else { "default" },
+        ],
+    ));
+    v
+}
+
+/// Switch between the dark and light colour scheme. The new value comes back through the
+/// portal's `SettingChanged` (so the toggle shows what the desktop really did).
+pub fn set_dark(dark: bool) -> Result<(), String> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    for (prog, args) in dark_commands(&desktop, dark) {
+        let mut cmd = std::process::Command::new(prog);
+        cmd.args(args);
+        if let Some(o) = crate::audio::output_with_timeout(cmd, std::time::Duration::from_secs(3)) {
+            if o.status.success() {
+                return Ok(());
+            }
+        }
+    }
+    Err("could not switch the colour scheme (needs gsettings or plasma-apply-colorscheme)".into())
+}
+
 impl crate::Handle {
     /// Track the accent colour and colour scheme. `conn` is a session-bus connection dedicated
     /// to this. Missing portal: values stay unknown (`kdeglobals` still supplies a KDE accent).
@@ -136,6 +175,20 @@ mod tests {
                 .build()
                 .unwrap(),
         )
+    }
+
+    #[test]
+    fn dark_mode_commands() {
+        let c = dark_commands("GNOME", true);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].1.last(), Some(&"prefer-dark"));
+        let c = dark_commands("KDE", false);
+        assert_eq!(
+            (c[0].0, c[0].1[0]),
+            ("plasma-apply-colorscheme", "BreezeLight")
+        );
+        assert_eq!(c[1].1.last(), Some(&"default"), "gsettings as a fallback");
+        assert_eq!(dark_commands("ubuntu:GNOME", false).len(), 1);
     }
 
     #[test]
