@@ -112,7 +112,7 @@ we want, if the hardware allows them.
 |---|---|---|---|---|
 | Outlines on/off, font (fontconfig pattern), icons (SVG/PNG, XDG theme) | P0 | done | dfr |  |
 | Pixel shift (±11 px x, ±2 px y) | P0 | partial | dfr | Default off, like dfr. Exposed as an *advanced* option. The OLED burn-in risk is real, but idle dim/off is the main protection. **Now:** Implemented in sliverd/config; not verified on the real panel. |
-| Themes: built-in light/dark/high-contrast/"dfr classic", plus user TOML themes | P1 | partial | BTT | `classic` and `sliver` built in, plus user CSS stylesheets. No light/high-contrast presets yet. |
+| Themes: built-in light/dark/high-contrast/"dfr classic", plus user TOML themes | P1 | done | BTT | `sliver` (dark, default), `light`, `high-contrast` and `classic` built in (T60), plus user CSS stylesheets on top. The settings app picks between them with live previews of your own bar. |
 | Accent color from the desktop (GNOME/KDE accent, else a fixed default) | P1 | done | (none) | The settings portal's `accent-color` (with live changes) feeds `@accent` in the default theme; KDE's `kdeglobals` `AccentColor` is the fallback. Tested against a mock portal; no portal runs on the dev machine, so not yet seen live. |
 | Per-item colors (background, foreground, state colors) | P1 | done | MTMR, BTT | Stylesheets and `class`/state selectors. |
 | Emoji and symbolic icons (recolored to the foreground) | P1 | done | mac | Colour emoji (COLRv1 and bitmap) and XDG symbolic icons. |

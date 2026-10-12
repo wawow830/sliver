@@ -1,0 +1,72 @@
+/* light: dark text on light keys, with your desktop's accent on active toggles and sliders.
+   The Touch Bar is an OLED panel, so lit pixels cost power: this theme draws more than the dark
+   ones, and is brighter in a dark room. Import it with  @import "sliver:light";  and override. */
+
+bar {
+  background-color: #d8d8dd;
+  color: #1c1c1e;
+  font-family: "Adwaita Sans", "Inter", "Noto Sans", sans-serif;
+  font-size: 26px;
+  font-weight: 500;
+  -sliver-icon-size: 36px;
+  padding: 2px 0;
+  gap: 24px; /* between zones */
+}
+
+zone {
+  gap: 8px; /* between modules */
+}
+
+module {
+  background-color: #fafafa;
+  border-radius: 10px;
+  padding: 0 20px;
+  min-width: 76px;
+  gap: 10px; /* between icon and label */
+}
+
+module:active { background-color: #b8b8bf; }
+module { transition: background-color 150ms ease-out; }
+module:active { transition: none; }
+module:disabled { opacity: 0.4; }
+
+module:checked, module.on, module.activated { background-color: @accent; color: #fff; }
+module:checked:active, module.on:active, module.activated:active {
+  background-color: shade(@accent, 0.8);
+}
+
+trough {
+  background-color: #c7c7cc;
+  border-radius: 4px;
+  min-height: 8px;
+  min-width: 220px;
+}
+highlight {
+  background-color: @accent;
+  border-radius: 4px;
+}
+slider {
+  background-color: #fff;
+  border: 1px solid #aeaeb2;
+  border-radius: 13px;
+  min-width: 26px;
+  min-height: 26px;
+}
+module:active trough { background-color: #aeaeb2; }
+
+.warning { color: #9c6e00; }
+.critical, .urgent { background-color: #c01c28; color: #fff; }
+#battery.charging { color: #1a7f37; }
+.error { color: #c01c28; }
+
+module.placeholder {
+  background-color: transparent;
+  border: 2px solid alpha(black, 0.3);
+  color: alpha(black, 0.5);
+  font-weight: normal;
+}
+
+module.emoji { font-size: 32px; padding: 0; }
+module.emoji-tab { font-size: 26px; padding: 0; background-color: transparent; }
+module.emoji-tab:checked { background-color: @accent; }
+module.emoji-close { font-size: 24px; padding: 0; }

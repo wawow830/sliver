@@ -197,13 +197,14 @@ fn waybar_style_stylesheet() {
     check("stylesheet", &scene, &sheet);
 }
 
-#[test]
-fn sliver_theme() {
+fn theme_fkeys() -> Scene {
     let mut fkeys = fkeys();
     fkeys[3].pressed = true;
-    check("sliver-fkeys", &Scene::new(fkeys), &Stylesheet::sliver());
+    Scene::new(fkeys)
+}
 
-    let scene = Scene::zoned(
+fn theme_controls() -> Scene {
+    Scene::zoned(
         vec![Item::text("esc").id("esc")],
         vec![
             Item::icon(icon("brightness_high")).class("on"),
@@ -226,8 +227,29 @@ fn sliver_theme() {
             Item::icon(icon("mic_off")).disabled(true),
             Item::text("12:34").id("clock"),
         ],
+    )
+}
+
+#[test]
+fn sliver_theme() {
+    check("sliver-fkeys", &theme_fkeys(), &Stylesheet::sliver());
+    check("sliver-controls", &theme_controls(), &Stylesheet::sliver());
+}
+
+#[test]
+fn light_and_high_contrast_themes() {
+    for name in ["light", "high-contrast"] {
+        let (sheet, warning) = Stylesheet::theme(Some(name), None);
+        assert_eq!(warning, None);
+        check(&format!("{name}-fkeys"), &theme_fkeys(), &sheet);
+        check(&format!("{name}-controls"), &theme_controls(), &sheet);
+    }
+    let (_, warning) = Stylesheet::theme(Some("nope"), None);
+    assert!(
+        warning
+            .unwrap()
+            .contains("sliver, light, high-contrast, classic")
     );
-    check("sliver-controls", &scene, &Stylesheet::sliver());
 }
 
 #[test]

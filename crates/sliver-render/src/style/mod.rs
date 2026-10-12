@@ -49,8 +49,13 @@ pub const DEFAULT_ACCENT: Color = Color::rgb(0x35, 0x84, 0xe4);
 
 /// Built-in themes, importable as `@import "sliver:NAME";`.
 pub const BUILTIN_THEMES: &[(&str, &str)] = &[
-    ("classic", include_str!("../../assets/themes/classic.css")),
     ("sliver", include_str!("../../assets/themes/sliver.css")),
+    ("light", include_str!("../../assets/themes/light.css")),
+    (
+        "high-contrast",
+        include_str!("../../assets/themes/high-contrast.css"),
+    ),
+    ("classic", include_str!("../../assets/themes/classic.css")),
 ];
 
 mod transition;
@@ -235,16 +240,42 @@ impl Stylesheet {
     /// The default theme with `@accent` set to the desktop's accent colour. The accent has to be
     /// known when the theme is parsed, so a changed accent means building the sheet again.
     pub fn sliver_with_accent(accent: Color) -> Stylesheet {
-        let (_, text) = BUILTIN_THEMES
-            .iter()
-            .find(|(n, _)| *n == "sliver")
-            .expect("sliver theme exists");
+        Stylesheet::builtin_with_accent("sliver", accent).expect("sliver theme exists")
+    }
+
+    /// A built-in theme with `@accent` set (the desktop's accent colour). The accent has to be
+    /// known when the theme is parsed.
+    pub fn builtin_with_accent(name: &str, accent: Color) -> Option<Stylesheet> {
+        let (_, text) = BUILTIN_THEMES.iter().find(|(n, _)| *n == name)?;
         let mut sheet = Stylesheet::empty();
         sheet.define_color("accent", accent);
         let mut diags = Vec::new();
-        sheet.add_str("sliver:sliver", text, None, &mut diags);
-        debug_assert!(diags.is_empty(), "built-in theme: {diags:?}");
-        sheet
+        sheet.add_str(&format!("sliver:{name}"), text, None, &mut diags);
+        debug_assert!(diags.is_empty(), "built-in theme {name}: {diags:?}");
+        Some(sheet)
+    }
+
+    /// The config's `theme = …` (`None` = `sliver`) with the desktop's accent if known. An
+    /// unknown name falls back to `sliver` and returns a warning naming the built-in themes.
+    pub fn theme(name: Option<&str>, accent: Option<Color>) -> (Stylesheet, Option<String>) {
+        let get = |n: &str| match accent {
+            Some(c) => Stylesheet::builtin_with_accent(n, c),
+            None => Stylesheet::builtin(n),
+        };
+        let name = name.unwrap_or("sliver");
+        match get(name) {
+            Some(sheet) => (sheet, None),
+            None => {
+                let names: Vec<&str> = BUILTIN_THEMES.iter().map(|t| t.0).collect();
+                (
+                    get("sliver").expect("sliver theme exists"),
+                    Some(format!(
+                        "theme {name:?} isn't a built-in theme ({}); using sliver",
+                        names.join(", ")
+                    )),
+                )
+            }
+        }
     }
 
     /// A built-in theme by name (see [`BUILTIN_THEMES`]).

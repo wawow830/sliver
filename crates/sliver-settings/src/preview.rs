@@ -39,19 +39,15 @@ impl Preview {
     /// The user's stylesheet on top of the default theme, plus any problems for the Status page.
     pub fn stylesheet(config: &Config, config_dir: Option<&Path>) -> (Stylesheet, Vec<String>) {
         let mut problems = Vec::new();
-        let mut sheet = match config.theme.as_deref() {
-            None => Stylesheet::sliver(),
-            Some(t) => Stylesheet::builtin(t).unwrap_or_else(|| {
-                problems.push(format!("theme {t:?} isn't a built-in theme; using sliver"));
-                Stylesheet::sliver()
-            }),
+        let (mut sheet, warning) = Stylesheet::theme(config.theme.as_deref(), None);
+        problems.extend(warning);
+        // Like the agent (sliver-reload): `stylesheet = …`, else `style.css` beside the config.
+        let path = match (&config.stylesheet, config_dir) {
+            (Some(s), Some(d)) => d.join(s),
+            (Some(s), None) => s.into(),
+            (None, Some(d)) if d.join("style.css").is_file() => d.join("style.css"),
+            (None, _) => return (sheet, problems),
         };
-        let Some(name) = &config.stylesheet else {
-            return (sheet, problems);
-        };
-        let path = config_dir
-            .map(|d| d.join(name))
-            .unwrap_or_else(|| name.into());
         match Stylesheet::load(&path) {
             Ok((user, diags)) => {
                 problems.extend(diags.iter().map(|d| d.to_string()));

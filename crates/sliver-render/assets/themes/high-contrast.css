@@ -1,0 +1,72 @@
+/* high-contrast: white outlines and bold white text on black, larger text, and states shown by
+   inverting (pressed) or solid yellow (on) rather than by a hue alone. Black keys keep it as cheap
+   on power as the default. Import it with  @import "sliver:high-contrast";  and override. */
+
+bar {
+  background-color: #000;
+  color: #fff;
+  font-family: "Adwaita Sans", "Inter", "Noto Sans", sans-serif;
+  font-size: 30px;
+  font-weight: 700;
+  -sliver-icon-size: 40px;
+  padding: 2px 0;
+  gap: 20px; /* between zones */
+}
+
+zone {
+  gap: 8px; /* between modules */
+}
+
+module {
+  background-color: #000;
+  border: 2px solid #fff;
+  border-radius: 10px;
+  padding: 0 16px;
+  min-width: 76px;
+  gap: 10px; /* between icon and label */
+}
+
+/* No fades: a state is either shown or not. */
+module:active { background-color: #fff; color: #000; }
+module:disabled { border-color: #8e8e93; color: #8e8e93; }
+
+module:checked, module.on, module.activated { background-color: #ffd60a; border-color: #ffd60a; color: #000; }
+module:checked:active, module.on:active, module.activated:active { background-color: #fff; border-color: #fff; }
+
+trough {
+  background-color: #000;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  min-height: 12px;
+  min-width: 220px;
+}
+highlight {
+  background-color: #fff;
+  border-radius: 4px;
+}
+slider {
+  background-color: #ffd60a;
+  border: 2px solid #000;
+  border-radius: 15px;
+  min-width: 30px;
+  min-height: 30px;
+}
+module:active trough { background-color: #fff; border-color: #000; }
+module:active highlight { background-color: #000; }
+
+.warning { color: #ffd60a; border-color: #ffd60a; }
+.critical, .urgent { background-color: #ff453a; border-color: #ff453a; color: #000; }
+#battery.charging { color: #30d158; border-color: #30d158; }
+.error { color: #ff453a; border-color: #ff453a; }
+
+module.placeholder {
+  background-color: transparent;
+  border: 2px dashed #fff;
+  color: #fff;
+  font-weight: normal;
+}
+
+module.emoji { font-size: 32px; padding: 0; border-width: 0; }
+module.emoji-tab { font-size: 26px; padding: 0; border-width: 0; }
+module.emoji-tab:checked { background-color: #ffd60a; }
+module.emoji-close { font-size: 24px; padding: 0; }

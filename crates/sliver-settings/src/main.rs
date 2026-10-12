@@ -34,6 +34,8 @@ pub(crate) struct State {
     pub loaded: Loaded,
     pub hw: Hardware,
     pub sheet: sliver_render::Stylesheet,
+    /// Where `stylesheet = …` / `style.css` is looked up (the config's directory).
+    pub style_dir: Option<PathBuf>,
     pub problems: sliver_config::Diagnostics,
     pub style_problems: Vec<String>,
 }
@@ -50,13 +52,14 @@ impl State {
         if problems.ok() {
             problems.extend(loaded.config.validate(hw));
         }
-        let dir = path.as_deref().and_then(|p| p.parent());
-        let (sheet, style_problems) = Preview::stylesheet(&loaded.config, dir);
+        let style_dir = path.as_deref().and_then(|p| p.parent()).map(PathBuf::from);
+        let (sheet, style_problems) = Preview::stylesheet(&loaded.config, style_dir.as_deref());
         State {
             path,
             loaded,
             hw,
             sheet,
+            style_dir,
             problems,
             style_problems,
         }

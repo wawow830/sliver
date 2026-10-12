@@ -301,7 +301,8 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   edited shows on the real bar (`Control1.HoldLayout` on one connection kept for the window's
   lifetime). It's released when focus leaves, the window closes, or the switch is turned off. If
   the app crashes or is killed, the hold dies with its connection. Verified with `kill -9`.
-- **Display & Power, Appearance, Gestures** are editable (T52). Appearance has the theme (`theme`)
+- **Display & Power, Appearance, Gestures** are editable (T52). Appearance picks the theme (`theme`)
+  from a list that previews your own base layer in each one, with your stylesheet on top (T60),
   and opens the stylesheet in your editor, showing its problems. Gestures has tap timing, the Fn
   mode and whole-bar gestures.
 - **Profiles & Presets**: import tiny-dfr (config + style.css) or a waybar config, export the

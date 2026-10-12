@@ -58,19 +58,8 @@ fn load_sheet(
     // The base theme (`theme = "classic"`), then the user's stylesheet on top. The default
     // `sliver` theme gets the desktop's accent.
     let mut warnings = Vec::new();
-    let sliver = || match accent {
-        Some(c) => Stylesheet::sliver_with_accent(c),
-        None => Stylesheet::sliver(),
-    };
-    let mut sheet = match config.theme.as_deref() {
-        None | Some("sliver") => sliver(),
-        Some(t) => Stylesheet::builtin(t).unwrap_or_else(|| {
-            warnings.push(format!(
-                "theme {t:?} isn't a built-in theme (sliver, classic); using sliver"
-            ));
-            sliver()
-        }),
-    };
+    let (mut sheet, warning) = Stylesheet::theme(config.theme.as_deref(), accent);
+    warnings.extend(warning);
     let dir = config_path.and_then(Path::parent);
     let user = match (&config.stylesheet, dir) {
         (Some(s), Some(d)) => Some(d.join(s)),

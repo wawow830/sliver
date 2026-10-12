@@ -37,7 +37,7 @@ are the invariants in §9.
 version = 1
 include = ["modules.toml"]   # optional; the built-in defaults are always underneath
 stylesheet = "style.css"
-theme = "sliver"          # base theme under your stylesheet: sliver (default) | classic (tiny-dfr's look)
+theme = "sliver"          # base theme under your stylesheet: sliver (default) | light | high-contrast | classic
 
 [bar]                     # bar-wide options (waybar's per-bar options that make sense here)
 name = "main"             # becomes a CSS class on the bar
@@ -339,10 +339,16 @@ These are the selectors sliver guarantees, mirroring waybar:
   `border-color`, `border-width`, `padding`, `margin`, `font-family`, `font-size`, `font-weight`,
   `opacity`, `min-width`, `transition`. GTK-isms that waybar users paste are accepted: `@define-color`, `@import`, `alpha()`, `shade()`,
   `mix()`. Unsupported properties or selectors warn with file:line and never fail the load.
-  Themes are just stylesheets. `theme = "classic"` in config.toml picks the built-in base theme
-  (default `sliver`); your stylesheet goes on top of it, and can also `@import "sliver:NAME"`. The default `sliver` theme
-  (Q8/H10: macOS look plus the desktop accent) is a stylesheet using `@accent`, which the agent
-  defines from the desktop.
+  Themes are just stylesheets. `theme = "…"` in config.toml picks the built-in base theme; your
+  stylesheet goes on top of it, and can also `@import "sliver:NAME"`. Built in:
+  - `sliver` (default; Q8/H10): the macOS look with `@accent`, which the agent defines from the desktop.
+  - `light`: dark text on light keys, also with `@accent`. Lit pixels cost power on the OLED
+    panel, so this one draws more than the dark themes.
+  - `high-contrast`: white outlines, bold larger text, pressed inverts and "on" is solid yellow, so
+    no state depends on hue alone. Black background, so as cheap on power as the default.
+  - `classic`: tiny-dfr 0.3.7's look (what the tiny-dfr importer picks).
+
+  Every theme gets the desktop's `@accent`. An unknown name warns and falls back to `sliver`.
 
 ## 8. Scripting from outside
 

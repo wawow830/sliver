@@ -10,6 +10,7 @@ use sliver_config::{BAR_GESTURES, parse_cli_value, writer::inline};
 use toml::Value;
 
 use crate::pages::{group, row};
+use crate::preview::{BAR, Preview};
 use crate::{Ui, apply};
 
 fn set_key(ui: &Rc<Ui>, path: impl Into<String>, label: String, value: Option<Value>) {
@@ -185,7 +186,103 @@ pub fn display_page(ui: &Rc<Ui>) -> gtk::Widget {
     page.upcast()
 }
 
-const THEMES: &[(&str, &str)] = &[("sliver", "Sliver"), ("classic", "Classic (tiny-dfr)")];
+const THEMES: &[(&str, &str, &str)] = &[
+    (
+        "sliver",
+        "Sliver",
+        "The macOS look, with your desktop's accent",
+    ),
+    (
+        "light",
+        "Light",
+        "Dark on light keys. Lit pixels use more power on the OLED bar",
+    ),
+    (
+        "high-contrast",
+        "High contrast",
+        "Outlined, bold and large; states inverted or yellow",
+    ),
+    ("classic", "Classic", "tiny-dfr's look"),
+];
+
+/// One theme choice: its name, and the user's own base layer drawn in it (with their stylesheet
+/// on top), so the choice is seen rather than guessed.
+fn theme_row(ui: &Rc<Ui>, id: &'static str, name: &str, what: &str, current: &str) -> gtk::Widget {
+    let state = ui.state();
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    let title = gtk::Label::builder().label(name).xalign(0.0).build();
+    let sub = gtk::Label::builder()
+        .label(what)
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    sub.add_css_class("dim-label");
+    sub.add_css_class("caption");
+    text.append(&title);
+    text.append(&sub);
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    head.append(&text);
+    if id == current {
+        head.append(&gtk::Image::from_icon_name("object-select-symbolic"));
+    }
+    let col = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(10)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    col.append(&head);
+
+    let mut config = state.loaded.config.clone();
+    config.theme = Some(id.to_owned());
+    let (sheet, _) = Preview::stylesheet(&config, state.style_dir.as_deref());
+    let ctx = sliver_config::Context::new().with("physical_esc", state.hw.physical_esc);
+    if let Ok(p) = Preview::new(config, sheet).render("base", ctx)
+        && let Some(s) = crate::pages::surface(&p)
+    {
+        // A quarter of the bar's pixel size, at the panel's aspect ratio.
+        let area = gtk::DrawingArea::builder()
+            .content_width((BAR.0 / 4) as i32)
+            .content_height((BAR.1 / 4) as i32)
+            .halign(gtk::Align::Start)
+            .build();
+        area.set_draw_func(move |_, cr, _, _| {
+            cr.scale(0.25, 0.25);
+            let _ = cr.set_source_surface(&s, 0.0, 0.0);
+            cr.source().set_filter(gtk::cairo::Filter::Best);
+            let _ = cr.paint();
+        });
+        col.append(&area);
+    }
+
+    let row = adw::PreferencesRow::builder()
+        .title(name)
+        .activatable(id != current)
+        .child(&col)
+        .build();
+    if id != current {
+        let choose = {
+            let ui = ui.clone();
+            move || {
+                set_key(
+                    &ui,
+                    "theme",
+                    "Theme".into(),
+                    Some(Value::String(id.to_owned())),
+                )
+            }
+        };
+        let click = gtk::GestureClick::new();
+        let c2 = choose.clone();
+        click.connect_released(move |_, _, _, _| c2());
+        row.add_controller(click);
+        row.connect_activate(move |_| choose());
+    }
+    row.upcast()
+}
 
 pub fn appearance_page(ui: &Rc<Ui>) -> gtk::Widget {
     let state = ui.state();
@@ -195,14 +292,10 @@ pub fn appearance_page(ui: &Rc<Ui>) -> gtk::Widget {
         "Theme",
         Some("The base look. Your stylesheet goes on top of it; the accent follows your desktop."),
     );
-    combo(
-        ui,
-        &g,
-        "Theme",
-        "theme",
-        THEMES,
-        c.theme.as_deref().unwrap_or("sliver"),
-    );
+    let current = c.theme.as_deref().unwrap_or("sliver");
+    for (id, name, what) in THEMES {
+        g.add(&theme_row(ui, id, name, what, current));
+    }
     page.add(&g);
 
     let css = group(
