@@ -376,19 +376,57 @@ fn export_preset(ui: &Rc<Ui>) {
 }
 
 /// Shows everything the preset would run (ux.md §9) and installs it only after a choice.
+/// A free profile name from a preset's name: `My desk` → `my-desk`, then `my-desk-2`, ….
+fn profile_name_for(preset_name: &str) -> String {
+    let mut base: String = preset_name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    base = base
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    base.truncate(56);
+    if base.is_empty() || base == profile::DEFAULT {
+        base = "preset".into();
+    }
+    let taken = profile::list();
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{n}")
+            }
+        })
+        .find(|n| !taken.contains(n))
+        .expect("some name is free")
+}
+
+/// Shows everything the preset would run (ux.md §9) and installs it only after a choice. By
+/// default it becomes a new profile, so trying one never overwrites your setup.
 fn review_preset(ui: &Rc<Ui>, b: Bundle) {
     let runs = b.runs();
     let name = b.name.clone().unwrap_or_else(|| "this preset".into());
     let files: Vec<&str> = b.files.keys().map(String::as_str).collect();
     let body = format!(
-        "It replaces your main config with {} file{} ({}). Replaced files are backed up, and you can undo right after.{}",
+        "{} file{}: {}.{}",
         files.len(),
         if files.len() == 1 { "" } else { "s" },
         files.join(", "),
         if runs.is_empty() {
-            "\n\nIt runs no commands.".to_owned()
+            " It runs no commands.".to_owned()
         } else {
-            "\n\nIt runs these as you. Read them before choosing Use it, or import it without them:"
+            " It runs these as you. Read them before choosing Use it, or import it without them:"
                 .to_owned()
         }
     );
@@ -396,6 +434,7 @@ fn review_preset(ui: &Rc<Ui>, b: Bundle) {
         .heading(format!("Use {name}?"))
         .body(body)
         .build();
+    let extra = gtk::Box::new(gtk::Orientation::Vertical, 12);
     if !runs.is_empty() {
         let list = gtk::Label::builder()
             .label(
@@ -412,20 +451,37 @@ fn review_preset(ui: &Rc<Ui>, b: Bundle) {
         let scroll = gtk::ScrolledWindow::builder()
             .child(&list)
             .min_content_height(80)
-            .max_content_height(260)
+            .max_content_height(220)
             .propagate_natural_height(true)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
-        dialog.set_extra_child(Some(&scroll));
+        extra.append(&scroll);
+    }
+    let as_profile = gtk::CheckButton::builder()
+        .label("As a new profile (keeps your current setup)")
+        .active(true)
+        .build();
+    let profile_name = gtk::Entry::builder()
+        .text(profile_name_for(&name))
+        .placeholder_text("profile name")
+        .build();
+    as_profile
+        .bind_property("active", &profile_name, "sensitive")
+        .sync_create()
+        .build();
+    extra.append(&as_profile);
+    extra.append(&profile_name);
+    dialog.set_extra_child(Some(&extra));
+    if runs.is_empty() {
+        dialog.add_responses(&[("cancel", "Cancel"), ("use", "Use it")]);
+        dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
+    } else {
         dialog.add_responses(&[
             ("cancel", "Cancel"),
             ("safe", "Without commands"),
             ("use", "Use it"),
         ]);
         dialog.set_response_appearance("use", adw::ResponseAppearance::Destructive);
-    } else {
-        dialog.add_responses(&[("cancel", "Cancel"), ("use", "Use it")]);
-        dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
     }
     dialog.set_default_response(Some("cancel"));
     let ui2 = ui.clone();
@@ -435,38 +491,83 @@ fn review_preset(ui: &Rc<Ui>, b: Bundle) {
             "safe" => b.without_commands().0,
             _ => return,
         };
-        install_preset(&ui2, &b, &name);
+        let target = as_profile
+            .is_active()
+            .then(|| profile_name.text().trim().to_owned());
+        install_preset(&ui2, &b, &name, target);
     });
     dialog.present(Some(&ui.win_widget()));
 }
 
-fn install_preset(ui: &Rc<Ui>, b: &Bundle, name: &str) {
+/// Installs as the main config (backed up), or as a new profile `profiles/<p>.toml` with its
+/// other files in `profiles/<p>/` (as `sliverctl preset import --profile`). Either way it
+/// becomes active, with Undo.
+fn install_preset(ui: &Rc<Ui>, b: &Bundle, name: &str, as_profile: Option<String>) {
     let Some(dir) = profile::user_dir() else {
         return ui.toast("No home directory to install into");
     };
-    let installed = match b.install(&dir) {
-        Ok(i) => i,
-        Err(e) => return ui.toast(&format!("Not applied: {e}")),
-    };
-    // A preset is a main config: an active profile would hide it.
     let left = profile::active();
-    let note = if left != profile::DEFAULT && profile::set_active(profile::DEFAULT).is_ok() {
-        format!(" (switched from {left} to Default)")
-    } else {
-        String::new()
-    };
+    let undo: Box<dyn Fn() -> Result<(), String>>;
+    let msg;
+    match as_profile {
+        Some(p) => {
+            if let Err(e) = profile::valid_name(&p) {
+                return ui.toast(&e);
+            }
+            let Some(config) = profile::path(&p) else {
+                return ui.toast("\"default\" is your main config");
+            };
+            if config.exists() {
+                return ui.toast(&format!("There's already a profile {p}"));
+            }
+            let files = config.with_extension("");
+            if let Err(e) = b.install_at(&config, &files, &dir) {
+                return ui.toast(&format!("Not applied: {e}"));
+            }
+            if let Err(e) = profile::set_active(&p) {
+                return ui.toast(&e);
+            }
+            msg = format!("Using {name} as profile {p}");
+            let left = left.clone();
+            undo = Box::new(move || {
+                profile::set_active(&left)?;
+                profile::remove(&p)?;
+                match std::fs::remove_dir_all(&files) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        Err(format!("{}: {e}", files.display()))
+                    }
+                    _ => Ok(()),
+                }
+            });
+        }
+        None => {
+            let installed = match b.install(&dir) {
+                Ok(i) => i,
+                Err(e) => return ui.toast(&format!("Not applied: {e}")),
+            };
+            // A preset installed as the main config: an active profile would hide it.
+            let switched =
+                left != profile::DEFAULT && profile::set_active(profile::DEFAULT).is_ok();
+            msg = if switched {
+                format!("Using {name} (switched from {left} to Default)")
+            } else {
+                format!("Using {name}")
+            };
+            let left = left.clone();
+            undo = Box::new(move || {
+                undo_install(&dir, &installed)?;
+                profile::set_active(&left)
+            });
+        }
+    }
     let toast = adw::Toast::builder()
-        .title(glib::markup_escape_text(&format!("Using {name}{note}")))
+        .title(glib::markup_escape_text(&msg))
         .button_label("Undo")
         .timeout(8)
         .build();
     let ui2 = ui.clone();
     toast.connect_button_clicked(move |_| {
-        let r = undo_install(&dir, &installed);
-        if left != profile::DEFAULT {
-            let _ = profile::set_active(&left);
-        }
-        match r {
+        match undo() {
             Ok(()) => ui2.toast("Restored your previous setup"),
             Err(e) => ui2.toast(&format!("Couldn't undo: {e}")),
         }

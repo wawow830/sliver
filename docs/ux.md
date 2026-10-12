@@ -311,8 +311,9 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
 - **Profiles & Presets**: import tiny-dfr (config + style.css) or a waybar config. Presets are
   cedar's `.sliver` bundles (T67, T69): export the setup in use; Use a preset… (or
   `sliver-settings FILE.sliver`) lists everything it would run, then Use it / Without commands /
-  Cancel. It installs as the main config (backed up), switches to Default if a profile was active,
-  and Undo restores both.
+  Cancel. By default it installs as a **new profile** (named from the preset, editable), so trying
+  one never overwrites your setup. Unchecking that installs it as the main config (backed up),
+  switching to Default if a profile was active. Undo restores either way.
 - **Profiles** (T64): list with Use, rename and delete; "New profile from the active one". The
   app always edits the active profile, and the Bar page says which one.
 - **Apps** (T53): defaults for all apps (whole-bar takeover, scripts targeting other apps),
