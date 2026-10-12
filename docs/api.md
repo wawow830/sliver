@@ -1,7 +1,7 @@
 # Sliver API
 
 Owner: **cedar** (ADR-0003). Changes to anything in this file: message cedar or amend the ADR.
-Status: **draft v1**. Nothing here is public until the bus name is settled (H1) and a release ships.
+Status: **draft v1**. Nothing here is public until a release ships. Bus name settled by the human (H1).
 
 Sliver has two API surfaces:
 
@@ -13,7 +13,7 @@ Sliver has two API surfaces:
 | stability | versioned, documented, permanent | versioned, may change between releases (both ship together) |
 | trust | same uid; sandboxed apps restricted | sliverd trusts nothing the agent says |
 
-Names (pending H1, all defined once in the `sliver-ipc` crate):
+Names (all defined once in `sliver_ipc::dbus`):
 
 ```
 NS       = io.github.wawow830.Sliver
@@ -294,10 +294,11 @@ highlight if absent.
   agent-region touch if it hasn't pinged in the last 5 s. No `pong` within 2 s, a disconnect, `bye`, or a
   malformed frame → built-in safe layer at once. Key regions of the last good frame keep working until then.
 - **Escape floor:** a frame is accepted only if `base ∪ fn` (with the built-in fn layer standing in
-  for a cleared one) contains key regions for `KEY_ESC` and `KEY_F1`–`KEY_F12`, each ≥ 32 px wide and
-  fully on screen. (If H2 confirms a physical Esc, the floor becomes system config with Esc optional.
-  The UX still keeps Esc on the bar.) Otherwise sliverd replaces the `fn` layer with its built-in one and sends
-  `error{code:"escape_floor"}`. User config can't remove Escape; the settings app warns first.
+  for a cleared one) contains single-key regions for `KEY_F1`–`KEY_F12`, plus `KEY_ESC` on machines
+  without a physical Esc. Each must be ≥ 32 px wide and fully on screen. Physical Esc follows tiny-dfr's
+  heuristic: bars ≥ 2170 px (2016–19) have none, and the 2008 px bars (this Mac14,7, confirmed in H2)
+  have one. `/etc/sliver/sliverd.toml` can override it. Otherwise sliverd replaces the `fn` layer with
+  its built-in one and sends `error{code:"escape_floor"}`. The settings editor is stricter (docs/ux.md §7).
 - **Validation:** geometry in bounds, ≤ 128 regions, no overlapping key regions, keycodes in range.
   **`KEY_SYSRQ` is refused** in regions and `emit_keys` (a same-uid process must not get kernel SysRq).
 - **No trust in the buffer:** sealed memfds only, copied before use, mmap failures and short sizes → reject.

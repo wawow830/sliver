@@ -1,6 +1,6 @@
 //! Names and limits of the public session D-Bus API (`docs/api.md` §2–5).
 //!
-//! The namespace is pending the human's answer (H1). Change it here and only here.
+//! The namespace `io.github.wawow830.Sliver` was chosen by the human (H1). Change it here and only here.
 
 /// Bus name owned by `sliver-agent` on the session bus.
 pub const BUS_NAME: &str = "io.github.wawow830.Sliver";

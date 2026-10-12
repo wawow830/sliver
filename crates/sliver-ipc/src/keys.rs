@@ -24,11 +24,24 @@ pub const F_KEYS: [u16; 12] = [
     KEY_F12,
 ];
 
-/// Keys that must always be reachable as single-key regions in `base ∪ fn` (invariant 1).
+/// Keys that must always be reachable as single-key regions in `base ∪ fn` (invariant 1) on a
+/// machine *without* a physical Esc.
 pub const ESCAPE_FLOOR: [u16; 13] = [
     KEY_ESC, KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10,
     KEY_F11, KEY_F12,
 ];
+
+/// Bars at least this long (2016–19 MacBook Pros) have no physical Esc (tiny-dfr's heuristic).
+pub const NO_PHYSICAL_ESC_MIN_WIDTH: u32 = 2170;
+
+/// The floor for a panel of this logical width. sliverd's system config may override it.
+pub fn floor_for_panel(width: u32) -> &'static [u16] {
+    if width >= NO_PHYSICAL_ESC_MIN_WIDTH {
+        &ESCAPE_FLOOR
+    } else {
+        &F_KEYS
+    }
+}
 
 /// Keys sliverd refuses to emit, in regions and in `emit_keys`.
 pub const FORBIDDEN: [u16; 1] = [KEY_SYSRQ];
@@ -36,4 +49,16 @@ pub const FORBIDDEN: [u16; 1] = [KEY_SYSRQ];
 /// Whether `code` is a key sliverd may emit (in range, not 0/`KEY_RESERVED`, not forbidden).
 pub fn emittable(code: u16) -> bool {
     code != 0 && code <= KEY_MAX && !FORBIDDEN.contains(&code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn floor_depends_on_physical_esc() {
+        assert_eq!(floor_for_panel(2008), &F_KEYS); // Mac14,7: physical Esc (H2)
+        assert_eq!(floor_for_panel(2170), &ESCAPE_FLOOR);
+        assert!(!emittable(KEY_SYSRQ) && !emittable(0) && emittable(KEY_ESC));
+    }
 }

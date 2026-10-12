@@ -1,6 +1,6 @@
 # ADR-0003: Public D-Bus API and sliverd⇄agent IPC
 
-Status: accepted (cedar, T5). The full spec is in `docs/api.md`. Bus name prefix is pending human answer H1.
+Status: accepted (cedar, T5). The full spec is in `docs/api.md`. Bus name prefix `io.github.wawow830.Sliver` (human, H1).
 
 ## Ownership
 **cedar owns both API surfaces** (D-Bus schema and IPC wire format) and the `sliver-ipc` crate that
@@ -30,7 +30,7 @@ because these are the only interfaces other people's code will depend on.
    and survive an agent hang. Everything else (sliders, gestures, widgets) is an `agent` region and gets
    raw touch events.
 6. **sliverd enforces invariant 1 itself:** hangup or a missed on-demand ping (2 s; no idle timers) → safe layer; an "escape floor"
-   (Esc + F1–F12 must exist as key regions in base ∪ fn, else the built-in fn layer is substituted);
+   (F1–F12, plus Esc if there's no physical Esc, must exist as key regions in base ∪ fn, else the built-in fn layer is substituted);
    strict validation; `KEY_SYSRQ` refused; only the active seat0 session's uid can drive the bar.
 
 ## Consequences
