@@ -47,6 +47,8 @@ pub enum Action {
     },
     CloseLayer,
     Layout(String),
+    /// Switch to a named profile (a whole config; see [`crate::profile`]).
+    Profile(String),
     Open(String),
     Url(String),
     DBus(DBusCall),
@@ -133,6 +135,7 @@ impl Action {
             "layer",
             "close-layer",
             "layout",
+            "profile",
             "open",
             "url",
             "dbus",
@@ -210,6 +213,16 @@ impl Action {
             }
             "close-layer" => r.bool("close-layer", d).map(|_| Action::CloseLayer),
             "layout" => r.string("layout", d).map(Action::Layout),
+            "profile" => {
+                r.string("profile", d)
+                    .and_then(|n| match crate::profile::valid_name(&n) {
+                        Ok(()) => Some(Action::Profile(n)),
+                        Err(e) => {
+                            d.error(key_path.clone(), e);
+                            None
+                        }
+                    })
+            }
             "open" => r.string("open", d).map(Action::Open),
             "url" => r.string("url", d).map(Action::Url),
             "dbus" => r
@@ -350,5 +363,14 @@ mod tests {
         assert!(!parse(r#"[{ sleep = "11s" }]"#).1.ok());
         assert!(!parse(r#"{ dbus = { dest = "a" } }"#).1.ok());
         assert!(!parse(r#""""#).1.ok());
+        assert!(!parse(r#"{ profile = "../etc" }"#).1.ok());
+    }
+
+    #[test]
+    fn profile_action() {
+        assert_eq!(
+            parse(r#"{ profile = "work" }"#).0,
+            Some(Action::Profile("work".into()))
+        );
     }
 }

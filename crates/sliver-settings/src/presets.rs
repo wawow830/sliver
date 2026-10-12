@@ -7,7 +7,9 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::gio;
 
-use crate::pages::{group, row};
+use sliver_config::profile;
+
+use crate::pages::group;
 use crate::{Ui, apply};
 
 /// Replace the user's config with `text` (an import), after asking.
@@ -45,6 +47,7 @@ fn config_dir(ui: &Ui) -> PathBuf {
 
 pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     let page = adw::PreferencesPage::new();
+    page.add(&profiles_group(ui));
 
     let import = group(
         "Import",
@@ -195,8 +198,137 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     presets.add(&open);
     page.add(&presets);
 
-    let profiles = group("Profiles", None);
-    profiles.add(&row("Profiles", "Switchable named configs come with the agent's profile support. Until then, presets do the job."));
-    page.add(&profiles);
     page.upcast()
+}
+
+/// A profile operation, then a toast and a rebuild (the window follows the active profile).
+fn profile_op(ui: &Rc<Ui>, done: String, op: impl FnOnce() -> Result<(), String>) {
+    match op() {
+        Ok(()) => ui.toast(&done),
+        Err(e) => ui.toast(&e),
+    }
+    crate::rebuild(ui);
+}
+
+/// Profiles (ux.md §9): whole configs, one active. Switching rewrites `active-profile`, which the
+/// agent watches, so the bar follows at once.
+fn profiles_group(ui: &Rc<Ui>) -> adw::PreferencesGroup {
+    let g = group(
+        "Profiles",
+        Some(
+            "Whole configs to switch between, like Work and Presenting. Everything in this app edits the active one.",
+        ),
+    );
+    let active = profile::active();
+    for name in profile::list() {
+        let is_default = name == profile::DEFAULT;
+        let r = adw::ActionRow::builder()
+            .title(if is_default {
+                "Default".to_owned()
+            } else {
+                name.clone()
+            })
+            .subtitle(if is_default {
+                "config.toml"
+            } else {
+                "your main config plus its own changes"
+            })
+            .build();
+        if name == active {
+            r.add_suffix(&gtk::Image::from_icon_name("object-select-symbolic"));
+        } else {
+            let use_ = gtk::Button::builder()
+                .label("Use")
+                .valign(gtk::Align::Center)
+                .build();
+            let (ui, n) = (ui.clone(), name.clone());
+            use_.connect_clicked(move |_| {
+                let n = n.clone();
+                profile_op(&ui, format!("Now using {n}"), || profile::set_active(&n));
+            });
+            r.add_suffix(&use_);
+        }
+        if !is_default {
+            let rename = gtk::Button::builder()
+                .icon_name("document-edit-symbolic")
+                .tooltip_text("Rename")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .build();
+            let (ui2, n) = (ui.clone(), name.clone());
+            rename.connect_clicked(move |_| rename_dialog(&ui2, &n));
+            r.add_suffix(&rename);
+            let del = gtk::Button::builder()
+                .icon_name("user-trash-symbolic")
+                .tooltip_text("Delete")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .build();
+            let (ui2, n) = (ui.clone(), name.clone());
+            del.connect_clicked(move |_| delete_dialog(&ui2, &n));
+            r.add_suffix(&del);
+        }
+        g.add(&r);
+    }
+    let add = adw::EntryRow::builder()
+        .title("New profile from the active one: name")
+        .show_apply_button(true)
+        .build();
+    {
+        let ui = ui.clone();
+        add.connect_apply(move |e| {
+            let name = e.text().trim().to_owned();
+            let from = profile::active();
+            profile_op(&ui, format!("Created {name} and switched to it"), || {
+                profile::create(&name, Some(&from))?;
+                profile::set_active(&name)
+            });
+        });
+    }
+    g.add(&add);
+    g
+}
+
+fn rename_dialog(ui: &Rc<Ui>, name: &str) {
+    let entry = gtk::Entry::builder()
+        .text(name)
+        .activates_default(true)
+        .build();
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Rename {name}"))
+        .extra_child(&entry)
+        .build();
+    dialog.add_responses(&[("cancel", "Cancel"), ("rename", "Rename")]);
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("rename"));
+    let (ui2, name) = (ui.clone(), name.to_owned());
+    dialog.connect_response(None, move |_, r| {
+        if r == "rename" {
+            let to = entry.text().trim().to_owned();
+            profile_op(&ui2, format!("Renamed {name} to {to}"), || {
+                profile::rename(&name, &to)
+            });
+        }
+    });
+    dialog.present(Some(&ui.win_widget()));
+}
+
+fn delete_dialog(ui: &Rc<Ui>, name: &str) {
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Delete the {name} profile?"))
+        .body(if profile::active() == name {
+            "It's active: the bar switches back to Default. Its file is deleted."
+        } else {
+            "Its file is deleted."
+        })
+        .build();
+    dialog.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    let (ui2, name) = (ui.clone(), name.to_owned());
+    dialog.connect_response(None, move |_, r| {
+        if r == "delete" {
+            profile_op(&ui2, format!("Deleted {name}"), || profile::remove(&name));
+        }
+    });
+    dialog.present(Some(&ui.win_widget()));
 }

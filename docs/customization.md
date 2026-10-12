@@ -31,6 +31,26 @@ are the invariants in §9.
   settings Status page and `sliverctl status`, with an optional desktop notification.
 - Unknown keys produce a **warning** (they catch typos), not an error.
 
+## 1b. Profiles
+
+A profile is a whole config you can switch to, like "Work" or "Presenting" (ux.md §9). Owner:
+`sliver_config::profile`.
+
+- `default` is the ordinary config above. Any other profile is
+  `~/.config/sliver/profiles/<name>.toml` (names: letters, digits, `-`, `_`).
+- The active one is named in `~/.config/sliver/active-profile`. It's a file so every way of
+  switching works the same and survives restarts. A name whose file is missing means `default`.
+- A new profile starts as `include = ["../config.toml"]` (plus your stylesheet), so it's your main
+  config with its own changes on top. Settings and `sliverctl config profile new --from P`
+  instead copy another profile.
+- While a profile is active, `sliverctl config set` and the settings app edit **its** file.
+- Switch with `sliverctl profile NAME` (asks the agent, reports errors), the settings app,
+  `sliverctl config profile use NAME` (offline), `Control1.SetProfile`, or a
+  `{ profile = "NAME" }` action on the bar. The agent watches `active-profile` and hot-reloads.
+  A profile that doesn't validate is refused by `SetProfile` (the old one stays active) and, when
+  switched to via the file, never applied: the last good config stays live.
+- Rules don't switch profiles (ux.md §9): rules switch layouts.
+
 ## 2. Shape of a config
 
 ```toml
@@ -267,6 +287,7 @@ Every `on-*` key takes one of these:
 | `{ layer = L, mode = M }` | `{ layer = "media", mode = "toggle" }` | `M` is `hold` / `toggle` / `oneshot`. |
 | `{ close-layer = true }` | | Returns to the layer underneath. |
 | `{ layout = N }` | | Forces a layout until the context changes. |
+| `{ profile = N }` | `{ profile = "presenting" }` | Switches to a whole other config (§1b). |
 | `{ open = desktop-id }` / `{ url = U }` | `{ open = "org.gnome.Nautilus.desktop" }` | Launches through the portal or xdg-open. |
 | `{ dbus = { bus, dest, path, interface, method, args } }` | | `bus` is `session` (default) or `system`. |
 | `{ signal = N }` / `{ update = "custom/vpn" }` | | Refreshes modules. |

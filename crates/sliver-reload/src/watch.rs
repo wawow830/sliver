@@ -32,11 +32,15 @@ pub struct Watcher {
     debounce: Duration,
 }
 
+/// The directory to watch (canonical, so `profiles/../` or a symlinked config dir and the plain
+/// path share one entry: inotify gives one watch descriptor per inode, and two keys for it would
+/// lose one key's names) and the file name in it.
 fn split(p: &Path) -> (PathBuf, OsString) {
     let dir = match p.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
         _ => PathBuf::from("."),
     };
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
     (
         dir,
         p.file_name().map(|n| n.to_os_string()).unwrap_or_default(),

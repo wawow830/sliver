@@ -44,8 +44,21 @@ pub fn search_path() -> Vec<PathBuf> {
     v
 }
 
+/// The config in use: the active profile's file (see [`crate::profile`]), else the first file on
+/// the search path.
 pub fn find_config() -> Option<PathBuf> {
-    search_path().into_iter().find(|p| p.is_file())
+    crate::profile::active_path().or_else(|| search_path().into_iter().find(|p| p.is_file()))
+}
+
+/// The file user edits go to (`sliverctl config set`, the settings app): the active profile's
+/// file, else the user's `config.toml` (which may not exist yet).
+pub fn edit_path() -> PathBuf {
+    crate::profile::active_path().unwrap_or_else(|| {
+        search_path()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| PathBuf::from("config.toml"))
+    })
 }
 
 /// Loads the first config on the search path, or just the built-ins if there is none.

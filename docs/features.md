@@ -70,7 +70,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Open app (desktop ID) / open URL or file (xdg-open, portal) | P1 | done | BTT | `{ open = "id" }` (gtk-launch) and `{ url = "…" }` (xdg-open) actions. |
 | Toggle with state (bound to a toggle widget) | P1 | done | MTMR | Mute, mic mute, caffeine, Wi-Fi, Bluetooth, DND, dark mode. |
 | D-Bus method call | P2 | done | BTT | Includes a picker for common targets (MPRIS, logind, notifications). **Now:** Picker in the settings app is not built. |
-| Switch layout or profile | P2 | partial | BTT | Layout switching done (config, API, sliverctl); profiles exist in the API but have no editor. |
+| Switch layout or profile | P2 | done | BTT | Layouts and profiles both switch from config actions (`{ layout }`, `{ profile }`), the API, sliverctl and the settings app (T64). |
 | Macro: a sequence of actions with delays | P2 | done | BTT | Max length and total time are capped. |
 | Open group / close group | P1 | done | MTMR |  |
 | Send to app: an app's own published item callback | P1 | done | mac | Via the API (cedar). **Now:** Published items deliver interactions to their owner. |
@@ -125,7 +125,7 @@ we want, if the hardware allows them.
 | Feature | Tier | Status | Notes |
 |---|---|---|---|
 | tiny-dfr import | P0 | done | Also offered in the settings onboarding. |
-| Profiles: switchable named full configs | P2 | partial | For example "Work" and "Presenting". **Now:** The API has `SetProfile`; no profile editor or storage UX. |
+| Profiles: switchable named full configs | P2 | done | For example "Work" and "Presenting". `profiles/<name>.toml`, the active one persisted; switch from the bar, sliverctl, D-Bus or settings, which also creates, renames and deletes them (T64, customization.md §1b). |
 | Export/import a preset (`.sliver` bundle = TOML + icons) | P2 | done (CLI) | On import, list the scripts and commands and require a review (ux.md §Presets). `sliver_config::preset` + `sliverctl preset export|show|import` (T67): config, includes, stylesheet and icons in one readable TOML file; `env` left out; import lists everything it runs, needs `yes` (or `no-commands` to strip them), refuses a config that doesn't load, and backs up what it replaces. The settings page still exports/imports a bare config.toml. |
 | Shareable gallery | P3 | todo | External, so ask the human first. |
 | Config readable and editable by hand. The settings app preserves comments (toml_edit) | P1 | done | Settings and hand edits can coexist. **Now:** The writer preserves comments (toml_edit). |

@@ -213,13 +213,19 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 }
             }
             picture.queue_draw();
-            why.set_text(&match rule {
+            let profile = sliver_config::profile::active();
+            let in_profile = if profile == sliver_config::profile::DEFAULT {
+                String::new()
+            } else {
+                format!("Profile “{profile}”: ")
+            };
+            why.set_text(&format!("{in_profile}{}", match rule {
                 Some(i) => format!(
                     "Editing layout “{layout}”, picked by rules[{i}]{}. Click a module to edit it; changes apply instantly.",
                     config.rules[i].name.as_deref().map(|n| format!(" ({n})")).unwrap_or_default()
                 ),
                 None => format!("Editing layout “{layout}”, the {layer} layer's default. Click a module to edit it; changes apply instantly."),
-            });
+            }));
             zone_groups(&ui, &zones, &layout);
         })
     };

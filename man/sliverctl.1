@@ -134,7 +134,9 @@ Open the layer, or close it if it is open.
 Force a layout until the context changes.
 .TP
 .BI profile " name"
-Switch to another profile.
+Switch to another profile (see
+.BR sliver\-config (5)).
+The agent refuses a profile that doesn't validate and keeps the current one.
 .TP
 .BR bar " " show | hide | toggle
 Blank or restore the whole bar.
@@ -264,6 +266,29 @@ from tiny\-dfr's configuration.
 Write
 .B config.toml
 from a waybar configuration.
+.TP
+.BR "config profile " [ list ]
+List profiles; the active one is marked with
+.BR * .
+.B default
+is
+.BR config.toml .
+.TP
+.BI "config profile use" " name"
+Make
+.I name
+the active profile without asking the agent; a running agent follows.
+.TP
+.BR "config profile new " \fIname\fP " [" \-\-from " \fIprofile\fP]"
+Create a profile: your main configuration plus its own changes, or a copy of
+.IR profile .
+.TP
+.BI "config profile rename" " old new"
+.TQ
+.BI "config profile rm" " name"
+Rename or delete a profile.
+Deleting the active one switches to
+.BR default .
 .SH PRESETS
 A preset is one
 .B .sliver

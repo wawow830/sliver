@@ -309,7 +309,9 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   mode and whole-bar gestures.
 - **Profiles & Presets**: import tiny-dfr (config + style.css) or a waybar config, export the
   config as a preset, and use a preset, which lists the commands it would run first. All go
-  through a confirmation and Undo. Named profiles wait on agent support.
+  through a confirmation and Undo.
+- **Profiles** (T64): list with Use, rename and delete; "New profile from the active one". The
+  app always edits the active profile, and the Bar page says which one.
 - **Apps** (T53): defaults for all apps (whole-bar takeover, scripts targeting other apps),
   providers publishing right now (live `ListContexts`) with a Show switch, per-app App controls
   switches, and adding an app to block. It writes `[apps]`/`[providers]`/`[api]`

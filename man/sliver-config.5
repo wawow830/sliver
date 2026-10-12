@@ -35,6 +35,23 @@ and
 .B media
 layouts and the control strip exist even with an empty file.
 Any of them can be redefined.
+.SS Profiles
+A profile is a whole configuration to switch to.
+.B default
+is the file above; any other profile is
+.BI ~/.config/sliver/profiles/ name .toml
+and starts as
+.B include = ["../config.toml"]
+(your main configuration plus its own changes).
+The active one is named in
+.BR ~/.config/sliver/active\-profile ;
+while one is active, edits go to its file.
+Switch with
+.BI "sliverctl profile" " name" ,
+.BI "sliverctl config profile use" " name" ,
+the settings app, or a
+.B { profile = \fIname\fP }
+action.
 .PP
 .BR sliver\-agent (1)
 watches the file, its includes and the stylesheet, and applies changes when they are saved.
@@ -561,7 +578,7 @@ is
 or
 .BR oneshot .
 .TP
-.BR "{ layout = N }" ", " "{ open = ""app.desktop"" }" ", " "{ url = U }"
+.BR "{ layout = N }" ", " "{ profile = P }" ", " "{ open = ""app.desktop"" }" ", " "{ url = U }"
 .TP
 .B { dbus = { bus, dest, path, interface, method, args } }
 .TP

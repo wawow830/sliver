@@ -68,10 +68,8 @@ impl State {
     /// The file edits go to: always the user's own config. If the active config is a system file,
     /// the user's new file includes it, so nothing is lost.
     fn edit_target(&self) -> (PathBuf, Option<PathBuf>) {
-        let user = sliver_config::search_path()
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| "config.toml".into());
+        // The active profile's file, else config.toml.
+        let user = sliver_config::edit_path();
         let include = self.path.clone().filter(|p| *p != user);
         (user, include)
     }

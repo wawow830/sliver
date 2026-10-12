@@ -276,6 +276,11 @@ ListModules() -> (aa{sv})           id, type, source (builtin/config/dbus), visi
 Properties: `ActiveLayer` s, `Layers` as, `ActiveProfile` s, `Profiles` as, `Variables` a{sv}, `Healthy` b
 (agent connected to sliverd and driving the bar).
 
+`SetProfile` writes `~/.config/sliver/active-profile` and reloads. It fails, leaving the old profile
+active, if the name is unknown or the profile doesn't validate. `default` is `config.toml`.
+`Profiles` lists `default` first. Both are empty when the agent runs with `--config FILE`
+(customization.md §1b).
+
 `NS.Desktop1`: lets a compositor integration that the agent can't query directly (GNOME extension, KWin
 script) feed it state.
 ```

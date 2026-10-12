@@ -102,6 +102,9 @@ struct Reloader {
     errors: Vec<String>,
     /// SIGUSR2 arrives here (signal-hook's self-pipe).
     usr2: Option<UnixStream>,
+    /// The active profile and all profiles, read on (re)load rather than every frame. Empty with
+    /// `--config FILE`.
+    profile: (String, Vec<String>),
 }
 
 impl Reloader {
@@ -145,13 +148,32 @@ impl Reloader {
                 .ok()?;
             Some(r)
         });
-        Reloader {
+        let mut me = Reloader {
             inner,
             config: applied.config,
             sheet: applied.sheet,
             errors: applied.errors,
             usr2,
-        }
+            profile: Default::default(),
+        };
+        me.read_profiles();
+        me
+    }
+
+    fn read_profiles(&mut self) {
+        self.profile = if self.explicit() {
+            Default::default()
+        } else {
+            (
+                sliver_config::profile::active(),
+                sliver_config::profile::list(),
+            )
+        };
+    }
+
+    /// Running with `--config FILE` (no profiles).
+    fn explicit(&self) -> bool {
+        self.inner.as_ref().is_some_and(|r| r.explicit().is_some())
     }
 
     fn watch_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
@@ -230,6 +252,7 @@ impl Reloader {
         live: &mut Live,
     ) -> bool {
         use sliver_reload::Outcome;
+        self.read_profiles();
         match o {
             Outcome::Applied(a) => {
                 let src = a
@@ -682,6 +705,12 @@ fn apply(
                     rt.signal(n.min(u8::MAX as u32) as u8);
                 }
             }
+            Effect::Profile(name) => {
+                // The reloader watches `active-profile`, so writing it is the switch.
+                if let Err(e) = sliver_config::profile::set_active(&name) {
+                    eprintln!("sliver-agent: profile: {e}");
+                }
+            }
             Effect::Update(key) => {
                 if !live.modules().is_some_and(|rt| rt.trigger(&key)) {
                     eprintln!("sliver-agent: update: no user module {key:?}");
@@ -872,7 +901,31 @@ fn control(
             fx.push(Effect::Redraw);
             done
         }
-        Control::SetProfile(_) => Err("profiles aren't supported yet".into()),
+        Control::SetProfile(name) => {
+            if reloader.explicit() {
+                Err("the agent runs with --config FILE, so profiles are off".into())
+            } else {
+                let before = sliver_config::profile::active();
+                match sliver_config::profile::set_active(&name) {
+                    Err(e) => Err(e),
+                    Ok(()) => {
+                        let errors = reloader.reload(Some(agent), live);
+                        fx.push(Effect::Redraw);
+                        if errors.is_empty() {
+                            Ok(ControlReply::Done)
+                        } else {
+                            // Keep the profile that works, and say why the new one didn't.
+                            let _ = sliver_config::profile::set_active(&before);
+                            reloader.reload(Some(agent), live);
+                            Err(format!(
+                                "profile {name:?} not applied: {}",
+                                errors.join("; ")
+                            ))
+                        }
+                    }
+                }
+            }
+        }
         Control::ReloadConfig => {
             let errors = reloader.reload(Some(agent), live);
             fx.push(Effect::Redraw);
@@ -937,8 +990,8 @@ fn run(
                 api.set_control_state(ControlState {
                     active_layer: agent.base_layer().to_owned(),
                     layers: agent.config.layers.keys().cloned().collect(),
-                    active_profile: "default".into(),
-                    profiles: vec!["default".into()],
+                    active_profile: reloader.profile.0.clone(),
+                    profiles: reloader.profile.1.clone(),
                     variables: Default::default(),
                     healthy: agent.errors.is_empty() && reloader.errors.is_empty(),
                 });

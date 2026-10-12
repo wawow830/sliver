@@ -157,7 +157,11 @@ impl Reloader {
         files.extend(self.applied.sheet.files().iter().cloned());
         match &self.explicit {
             Some(p) => files.push(p.clone()),
-            None => files.extend(sliver_config::search_path()),
+            None => {
+                files.extend(sliver_config::search_path());
+                // `active-profile` switches profiles (sliver_config::profile).
+                files.extend(sliver_config::profile::watch_paths());
+            }
         }
         if let (Some(cfg), Some(dir)) = (
             &self.applied.config.stylesheet,
@@ -180,6 +184,11 @@ impl Reloader {
         let changed = self.accent != accent;
         self.accent = accent;
         changed
+    }
+
+    /// `--config FILE`, which turns profiles off.
+    pub fn explicit(&self) -> Option<&Path> {
+        self.explicit.as_deref()
     }
 
     pub fn current(&self) -> &Applied {

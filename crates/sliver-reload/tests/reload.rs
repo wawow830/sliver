@@ -240,3 +240,41 @@ fn a_new_accent_rebuilds_the_stylesheet_and_unchanged_is_unchanged() {
     let at = (5 * 120 + 8) * 4;
     assert_eq!(&px.data()[at..at + 3], &[200, 30, 90], "accent background");
 }
+
+#[test]
+fn writing_active_profile_switches_the_config() {
+    // The only test here that uses the search path (and so the environment).
+    let root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp/reload-profile");
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("sliver");
+    std::fs::create_dir_all(dir.join("profiles")).unwrap();
+    // SAFETY: no other test in this binary reads XDG_CONFIG_HOME or HOME.
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", &root) };
+    std::fs::write(dir.join("config.toml"), "[bar]\nname = \"main\"\n").unwrap();
+    std::fs::write(
+        dir.join("profiles/talk.toml"),
+        "include = [\"../config.toml\"]\n[bar]\nname = \"talk\"\n",
+    )
+    .unwrap();
+    let (mut r, _) = Reloader::start(None).unwrap();
+    assert_eq!(bar_name(&r).as_deref(), Some("main"));
+
+    sliver_config::profile::set_active("talk").unwrap();
+    assert!(matches!(next_outcome(&mut r, 5), Some(Outcome::Applied(_))));
+    assert_eq!(bar_name(&r).as_deref(), Some("talk"));
+    // Edits to the active profile reload too.
+    std::fs::write(
+        dir.join("profiles/talk.toml"),
+        "include = [\"../config.toml\"]\n[bar]\nname = \"talk2\"\n",
+    )
+    .unwrap();
+    assert!(matches!(next_outcome(&mut r, 5), Some(Outcome::Applied(_))));
+    assert_eq!(bar_name(&r).as_deref(), Some("talk2"));
+
+    sliver_config::profile::set_active("default").unwrap();
+    let o = next_outcome(&mut r, 5);
+    assert!(matches!(o, Some(Outcome::Applied(_))), "{}", describe(&o));
+    assert_eq!(bar_name(&r).as_deref(), Some("main"));
+    let _ = std::fs::remove_dir_all(&root);
+}

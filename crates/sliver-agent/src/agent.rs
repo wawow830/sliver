@@ -45,6 +45,8 @@ pub enum Effect {
     Signal(u32),
     /// Re-run one user module now (`{ update = "custom/x" }`).
     Update(String),
+    /// Switch to a named profile (`{ profile = "work" }`): persisted, then hot-reloaded.
+    Profile(String),
     /// Switch workspace or focus/close a window on the compositor (workspaces, taskbar).
     Desktop(sliver_desktop::control::Action),
     /// Tell the app that owns a published item what the user did (api.md §5).
@@ -796,6 +798,7 @@ impl Agent {
                 }
                 Err(e) => fx.push(Effect::Log(format!("layout: {e}"))),
             },
+            Action::Profile(name) => fx.push(Effect::Profile(name.clone())),
             Action::Signal(n) => fx.push(Effect::Signal(*n)),
             Action::Update(m) => fx.push(Effect::Update(m.clone())),
             Action::ModuleAction(name) => {

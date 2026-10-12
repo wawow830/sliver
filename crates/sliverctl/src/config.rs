@@ -19,18 +19,48 @@ Config (offline, edits files; comments are kept, and invalid edits are refused)
   config resolve [LAYER] [CTX=VALUE...]   which layout and modules show, e.g. app_id=foot locked=true
   config import-tiny-dfr [--force]        write config.toml + style.css from tiny-dfr's config
   config import-waybar [FILE] [--force]   write config.toml from a waybar config (default ~/.config/waybar/config.jsonc|config)
+  config profile [list]           profiles (* = active); `default` is config.toml
+  config profile use NAME         switch (a running agent follows; `sliverctl profile NAME` asks it directly)
+  config profile new NAME [--from PROFILE]   your main config plus changes, or a copy of PROFILE
+  config profile rename OLD NEW | rm NAME
 ";
 
-/// The file `set`/`unset`/`import` edit: the first entry of the search path (the user's).
+/// The file `set`/`unset`/`import` edit: the active profile's, else the user's config.toml.
 fn user_config() -> PathBuf {
-    search_path()
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| PathBuf::from("config.toml"))
+    sliver_config::edit_path()
 }
 
 fn active_config() -> Option<PathBuf> {
-    search_path().into_iter().find(|p| p.is_file())
+    sliver_config::find_config()
+}
+
+fn profile_cmd(rest: &[&str]) -> Result<ExitCode, String> {
+    use sliver_config::profile;
+    match rest {
+        [] | ["list"] => {
+            let active = profile::active();
+            for n in profile::list() {
+                let mark = if n == active { "*" } else { " " };
+                let file = match profile::path(&n) {
+                    Some(p) => p.display().to_string(),
+                    None => "config.toml".into(),
+                };
+                println!("{mark} {n:<16} {file}");
+            }
+        }
+        ["use", name] => {
+            profile::set_active(name)?;
+            println!("active profile: {name}");
+        }
+        ["new", name] => println!("{}", profile::create(name, None)?.display()),
+        ["new", name, "--from", from] => {
+            println!("{}", profile::create(name, Some(from))?.display())
+        }
+        ["rename", from, to] => profile::rename(from, to)?,
+        ["rm" | "remove", name] => profile::remove(name)?,
+        _ => return Err(format!("bad profile command\n\n{USAGE}")),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn hardware() -> Hardware {
@@ -77,6 +107,7 @@ fn run_inner(args: &[String]) -> Result<ExitCode, String> {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
         }
+        ("profile" | "profiles", rest) => profile_cmd(rest),
         ("path", []) => {
             let active = active_config();
             for p in search_path() {
@@ -86,6 +117,13 @@ fn run_inner(args: &[String]) -> Result<ExitCode, String> {
                     " "
                 };
                 println!("{mark} {}", p.display());
+            }
+            if let Some(p) = sliver_config::profile::active_path() {
+                println!(
+                    "* {} (profile {})",
+                    p.display(),
+                    sliver_config::profile::active()
+                );
             }
             if active.is_none() {
                 println!("(none found: using the built-in defaults)");
