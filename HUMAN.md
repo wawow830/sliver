@@ -11,6 +11,7 @@ swarm status                         # everything at a glance
 swarm human                          # answer open questions one at a time (a / b / ok / any text)
 swarm human list [--brief]           # read them all (--brief: one line each, * = recommended)
 swarm human answer H3 b              # reply directly; the peer that asked gets woken
+swarm human edit [H3 c]              # change an earlier answer; the peer is told it changed
 swarm send ash "please prioritize per-app layouts"   # talk to one peer
 swarm say "new priority: ..."        # talk to everyone
 swarm task add "..." --body "..."    # add work

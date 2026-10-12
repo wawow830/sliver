@@ -306,7 +306,7 @@ def letter(i):
     return chr(ord("a") + i)
 
 
-def render_human(h):
+def render_human(h, hint=True):
     meta = " · ".join(x for x in (h["kind"], h["by"], f"{ago(h['at'])} ago", h.get("task")) if x)
     out = [f"{color('1;33', h['id'])}  {color('2', meta)}"]
     out += wrap(h["text"], "  ", style="1")
@@ -322,7 +322,11 @@ def render_human(h):
             out += lines
     if h["status"] == "answered":
         out += [""] + wrap(h.get("answer", ""), "    ", first="  ✓ ", style="32")
-    else:
+        for r in h.get("revisions", []):
+            out += wrap(r["answer"], "    ", first="  ✗ was: ", style="2")
+        if hint:
+            out += ["", color("2", f"  → swarm human edit {h['id']}")]
+    elif hint:
         choices = "/".join(letter(i) for i in range(len(opts)))
         hint = f"swarm human answer {h['id']} " + (f"{choices}" + ("/ok" if pick is not None else "") + " or text" if opts else '"..."')
         out += ["", color("2", f"  → {hint}")]
@@ -334,6 +338,9 @@ def brief_human(h):
     choice = " [" + "/".join(letter(i) + ("*" if i == pick else "") for i in range(len(opts))) + "]" if opts else ""
     q = h["text"].split("\n")[0]
     q = q if len(q) <= 70 else q[:67] + "..."
+    if h["status"] == "answered":
+        ans = h.get("answer", "")
+        choice = color("32", "  ✓ " + (ans if len(ans) <= 40 else ans[:37] + "..."))
     return f"{h['id']:>4} {h['kind']:<9} {h['by']:<7} {q}{choice}"
 
 
@@ -353,16 +360,30 @@ def expand_answer(h, text):
 
 
 def answer_human(hid, text):
+    """Answer, or revise an earlier answer (the asker is told it changed)."""
+    hid = hid.upper()
     with state() as s:
         h = s["humans"].get(hid) or sys.exit(f"no {hid}")
         ans = expand_answer(h, text)
+        old = h.get("answer") if h["status"] == "answered" else None
+        if old == ans:
+            return ans + "  (unchanged)"
+        if old is not None:
+            h.setdefault("revisions", []).append({"answer": old, "at": h.get("answered_at")})
         h.update(status="answered", answer=ans, answered_at=now())
         asker = h["by"]
         if s["peers"].get(asker, {}).get("status") == "waiting":
             s["peers"][asker]["status"] = "active"
-    channel("human", f"{hid} answered: {ans}", by="human")
-    deliver(asker, "human", f"answer to {hid} ({h['text'][:100]}): {ans}", kind="human-answer")
-    return ans
+    q = h["text"][:100]
+    if old is None:
+        channel("human", f"{hid} answered: {ans}", by="human")
+        deliver(asker, "human", f"answer to {hid} ({q}): {ans}", kind="human-answer")
+    else:
+        channel("human", f"{hid} answer CHANGED: {old} → {ans}", by="human")
+        deliver(asker, "human", f"REVISED answer to {hid} ({q}): now {ans!r} (previously {old!r}). "
+                "Revisit anything you did based on the old answer, and tell peers who relied on it.",
+                kind="human-answer", now_=True)
+    return ans if old is None else f"{old}  →  {ans}"
 
 
 def open_humans(s, all_=False):
@@ -411,10 +432,10 @@ def cmd_human(a):
         with state(write=False) as s:
             hs = open_humans(s)
         if not hs:
-            print("(nothing needs you)"); return
+            print("(nothing needs you. `swarm human edit` changes an earlier answer)"); return
         print(color("2", "Enter = skip, q = quit. Reply with a letter, 'ok' for the recommendation, or any text.\n"))
         for n, h in enumerate(hs, 1):
-            print(color("2", f"[{n}/{len(hs)}]"), render_human(h).rsplit("\n", 2)[0])
+            print(color("2", f"[{n}/{len(hs)}]"), render_human(h, hint=False))
             try:
                 ans = input(color("1;36", "\n  answer› ")).strip()
             except (EOFError, KeyboardInterrupt):
@@ -424,6 +445,28 @@ def cmd_human(a):
             if ans:
                 print(color("32", "  ✓ " + answer_human(h["id"], ans)))
             print()
+    elif sub == "edit":
+        if a.id and a.text:
+            print(answer_human(a.id, a.text)); return
+        with state(write=False) as s:
+            done = [h for h in open_humans(s, True) if h["status"] == "answered"]
+        if not done:
+            print("(nothing answered yet)"); return
+        hid = a.id
+        try:
+            if not hid:
+                print("\n".join(brief_human(h) for h in done))
+                hid = input(color("1;36", "\n  which one? ")).strip()
+                if not hid:
+                    return
+            hid = hid.upper() if hid.upper().startswith("H") else f"H{hid}"
+            h = next((h for h in done if h["id"] == hid), None) or sys.exit(f"{hid} isn't an answered question")
+            print("\n" + render_human(h, hint=False))
+            ans = input(color("1;36", "\n  new answer (Enter = keep)› ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            print(); return
+        if ans:
+            print(color("32", "  ✓ " + answer_human(hid, ans)))
 
 
 # ---------------------------------------------------------------- peers
@@ -784,6 +827,8 @@ def main():
     x.add_argument("--task"); x.add_argument("--block", action="store_true", help="mark yourself waiting until answered")
     x = hs.add_parser("list"); x.add_argument("--all", action="store_true"); x.add_argument("--brief", action="store_true")
     hs.add_parser("go", help="answer open questions one by one")
+    x = hs.add_parser("edit", help="change an earlier answer (asker is told)")
+    x.add_argument("id", nargs="?"); x.add_argument("text", nargs="?")
     x = hs.add_parser("answer"); x.add_argument("id"); x.add_argument("text")
     h.set_defaults(f=cmd_human)
 
