@@ -288,9 +288,21 @@ impl HwInput {
             len,
             thickness,
         };
+        let mut dec = Decoder::new(map);
+        // Seed with the current MT state: fingers already down must not fire (mt::Decoder::sync).
+        let fd = touch.as_raw_fd();
+        let n = crate::mt::MAX_SLOTS;
+        if let (Ok(slot), Ok(ids)) = (
+            evdev::abs_info(fd, evdev::ABS_MT_SLOT),
+            evdev::mt_slots(fd, evdev::ABS_MT_TRACKING_ID, n),
+        ) {
+            let xs = evdev::mt_slots(fd, ABS_MT_POSITION_X, n).unwrap_or_default();
+            let ys = evdev::mt_slots(fd, ABS_MT_POSITION_Y, n).unwrap_or_default();
+            dec.sync(slot.value, &ids, &xs, &ys);
+        }
         self.add(Dev {
             file: touch,
-            kind: Kind::Touch(Box::new(Decoder::new(map))),
+            kind: Kind::Touch(Box::new(dec)),
             name: self.touch_node.display().to_string(),
             node: self.touch_node.clone(),
             events: 0,

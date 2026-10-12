@@ -68,6 +68,26 @@ pub fn abs_info(fd: RawFd, abs: u16) -> std::io::Result<AbsInfo> {
     }
 }
 
+/// `EVIOCGMTSLOTS(len)` = `_IOC(_IOC_READ, 'E', 0x0a, len)`.
+pub const fn eviocgmtslots(len: usize) -> u64 {
+    ioc(2, b'E', 0x0a, len)
+}
+
+/// Current per-slot values of one MT axis (`code`), for `n` slots.
+pub fn mt_slots(fd: RawFd, code: u16, n: usize) -> std::io::Result<Vec<i32>> {
+    // struct input_mt_request_layout { __u32 code; __s32 values[n]; }
+    let mut buf = vec![0i32; n + 1];
+    buf[0] = i32::from(code);
+    let len = buf.len() * 4;
+    // SAFETY: the kernel writes at most `len` bytes into `buf`.
+    let r = unsafe { libc::ioctl(fd, eviocgmtslots(len) as _, buf.as_mut_ptr()) };
+    if r < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(buf[1..].to_vec())
+    }
+}
+
 /// Decode one `struct input_event` (64-bit timeval layout: 24 bytes).
 pub fn decode_event(b: &[u8; 24]) -> (i64, i64, u16, u16, i32) {
     let sec = i64::from_ne_bytes(b[0..8].try_into().unwrap());
@@ -87,6 +107,7 @@ mod tests {
         assert_eq!(eviocgabs(ABS_X), 0x8018_4540);
         assert_eq!(eviocgabs(ABS_MT_POSITION_X), 0x8018_4575);
         assert_eq!(eviocgname(256), 0x8100_4506);
+        assert_eq!(eviocgmtslots(4 * 17), 0x8044_450a);
     }
 
     #[test]

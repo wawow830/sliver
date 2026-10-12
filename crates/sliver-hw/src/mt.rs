@@ -59,6 +59,9 @@ impl Mapping {
 struct Slot {
     /// Contact is down (as of the last SYN_REPORT).
     live: bool,
+    /// Down since before we started reading ([`Decoder::sync`]): tracked but never reported, so a
+    /// finger resting on the bar at startup can't fire a key.
+    foreign: bool,
     /// Pending state since the last SYN_REPORT.
     tracking: Option<bool>, // Some(true)=new contact, Some(false)=lifted
     x: i32,
@@ -86,6 +89,24 @@ impl Decoder {
 
     pub fn mapping(&self) -> Mapping {
         self.map
+    }
+
+    /// Seeds the state from the kernel's current MT state at open (`EVIOCGABS(ABS_MT_SLOT)` and
+    /// `EVIOCGMTSLOTS`). evdev doesn't replay contacts to a new reader, and doesn't resend
+    /// `ABS_MT_SLOT` if the device's current slot is unchanged. Contacts already down become
+    /// *foreign*: tracked until lifted, never reported.
+    pub fn sync(&mut self, current_slot: i32, tracking_ids: &[i32], xs: &[i32], ys: &[i32]) {
+        self.cur = current_slot.max(0) as usize;
+        for (i, &tid) in tracking_ids.iter().enumerate().take(MAX_SLOTS) {
+            let s = &mut self.slots[i];
+            *s = Slot {
+                live: tid >= 0,
+                foreign: tid >= 0,
+                ..Slot::default()
+            };
+            s.x = xs.get(i).copied().unwrap_or(0);
+            s.y = ys.get(i).copied().unwrap_or(0);
+        }
     }
 
     /// Feed one evdev event. Returns the contacts that changed, emitted on `SYN_REPORT`.
@@ -137,6 +158,27 @@ impl Decoder {
     fn report(&mut self, time_us: u64, out: &mut Vec<Contact>) {
         for i in 0..MAX_SLOTS {
             let s = self.slots[i];
+            if s.foreign {
+                let s = &mut self.slots[i];
+                match s.tracking.take() {
+                    Some(false) => {
+                        *s = Slot {
+                            x: s.x,
+                            y: s.y,
+                            ..Slot::default()
+                        }
+                    } // lifted: forget it
+                    Some(true) => {
+                        // replaced by a new contact: that one is ours
+                        s.foreign = false;
+                        s.live = true;
+                        out.push(self.contact(i, Phase::Down, time_us));
+                    }
+                    None => {}
+                }
+                self.slots[i].moved = false;
+                continue;
+            }
             let phase = match (s.live, s.tracking) {
                 (false, Some(true)) => Some(Phase::Down),
                 (true, Some(false)) => Some(Phase::Up),
@@ -162,7 +204,7 @@ impl Decoder {
     /// Cancel every live contact (SYN_DROPPED, device gone).
     pub fn cancel_all(&mut self, time_us: u64, out: &mut Vec<Contact>) {
         for i in 0..MAX_SLOTS {
-            if self.slots[i].live {
+            if self.slots[i].live && !self.slots[i].foreign {
                 out.push(self.contact(i, Phase::Cancel, time_us));
             }
             self.slots[i] = Slot {
@@ -296,6 +338,47 @@ mod tests {
             phases(&out),
             vec![(0, Phase::Down), (0, Phase::Up), (0, Phase::Down)]
         );
+    }
+
+    #[test]
+    fn finger_down_before_open_is_foreign() {
+        let mut d = Decoder::new(MAP);
+        // At open: device's current slot is 1, slot 1 has a contact, slot 0 is free.
+        d.sync(1, &[-1, 42], &[0, 5000], &[0, 300]);
+        let out = run(
+            &mut d,
+            &[
+                (EV_ABS, ABS_MT_POSITION_X, 5100), // slot 1 (no ABS_MT_SLOT resent): foreign, silent
+                SYN,
+                (EV_ABS, ABS_MT_SLOT, 0),
+                (EV_ABS, ABS_MT_TRACKING_ID, 43), // a new finger on slot 0: ours
+                (EV_ABS, ABS_MT_POSITION_X, 800),
+                SYN,
+                (EV_ABS, ABS_MT_SLOT, 1),
+                (EV_ABS, ABS_MT_TRACKING_ID, -1), // the foreign finger lifts: no Up
+                SYN,
+                (EV_ABS, ABS_MT_TRACKING_ID, 44), // next contact on slot 1 is ours
+                SYN,
+            ],
+        );
+        assert_eq!(phases(&out), vec![(0, Phase::Down), (1, Phase::Down)]);
+        assert!((out[0].x - 800.0 * 2008.0 / 23044.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn sync_current_slot_routes_unslotted_events() {
+        let mut d = Decoder::new(MAP);
+        d.sync(2, &[-1, -1, -1], &[], &[]);
+        let out = run(&mut d, &[(EV_ABS, ABS_MT_TRACKING_ID, 9), SYN]);
+        assert_eq!(phases(&out), vec![(2, Phase::Down)]);
+    }
+
+    #[test]
+    fn foreign_contacts_never_cancel() {
+        let mut d = Decoder::new(MAP);
+        d.sync(0, &[5], &[100], &[100]);
+        let out = run(&mut d, &[(EV_SYN, SYN_DROPPED, 0), SYN]);
+        assert!(out.is_empty());
     }
 
     #[test]
