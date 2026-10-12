@@ -562,6 +562,16 @@ fn agent_death_releases_held_keys_and_shows_safe_layer() {
     rig.mv(0, slot_x(0, 12));
     rig.up(0, slot_x(0, 12));
     assert!(rig.keys().is_empty());
+    // A tap landing right after the agent vanished was aimed at an agent button: swallowed.
+    rig.now += 22;
+    rig.down(1, slot_x(9, 12));
+    rig.up(1, slot_x(9, 12));
+    assert!(rig.keys().is_empty(), "no surprise F10");
+    // Once the safe layer has been visible for a moment, it works normally.
+    rig.now += 200;
+    rig.down(1, slot_x(9, 12));
+    rig.up(1, slot_x(9, 12));
+    assert_eq!(rig.keys(), vec![Down(KEY_F10), Up(KEY_F10)]);
 }
 
 #[test]

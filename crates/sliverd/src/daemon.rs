@@ -34,6 +34,10 @@ pub const MAX_CLIENTS: usize = 8;
 pub const EMIT_KEYS_PER_SEC: u32 = 100;
 /// `wake` at most this often.
 pub const WAKE_MIN_INTERVAL_MS: u64 = 1_000;
+/// After the agent's frames vanish (crash, hang, demotion) touch-downs are ignored this long: the
+/// finger was aiming at an agent button, not at whatever safe-layer key now sits under it
+/// (birch saw a tap 22 ms after a hangup press F10 on the real bar).
+pub const AGENT_LOSS_SETTLE_MS: u64 = 200;
 /// Damage spans closer than this are merged into one flush clip.
 const DAMAGE_MERGE_GAP: u32 = 16;
 
@@ -161,6 +165,10 @@ pub struct Daemon {
     router: TouchRouter,
     /// Whose regions the router's captures refer to: the driving agent, or `None` (built-in).
     touch_source: Option<ClientId>,
+    /// Latest time seen by [`Daemon::handle`].
+    now: u64,
+    /// Touch-downs before this are swallowed ([`AGENT_LOSS_SETTLE_MS`]).
+    settle_until: u64,
     /// Keys held by `emit_keys` (touch keys are refcounted by the router).
     keys: KeyState,
     scratch: Vec<u8>,
@@ -227,6 +235,8 @@ impl Daemon {
             next_nonce: 0,
             router: TouchRouter::new(),
             touch_source: None,
+            now,
+            settle_until: 0,
             keys: KeyState::default(),
             scratch: Vec::new(),
             fn_held: false,
@@ -290,6 +300,7 @@ impl Daemon {
     }
 
     pub fn handle(&mut self, now: u64, input: Input) -> Vec<Out> {
+        self.now = self.now.max(now);
         self.run_timers(now);
         match input {
             Input::Connected { client, uid } => self.connected(client, uid),
@@ -771,9 +782,9 @@ impl Daemon {
     fn touch(&mut self, now: u64, ev: TouchEvent) {
         let was_off = self.idle.state() == DisplayState::Off;
         self.activity(now);
-        if was_off && ev.phase == TouchPhase::Down {
-            // The touch that wakes the bar is swallowed. The router never sees its down, so the
-            // rest of it is ignored too.
+        if ev.phase == TouchPhase::Down && (was_off || now < self.settle_until) {
+            // The touch that wakes the bar, or one landing right after the agent vanished, is
+            // swallowed. The router never sees its down, so the rest of it is ignored too.
             return;
         }
         let regions = match self.shown_view() {
@@ -894,6 +905,11 @@ impl Daemon {
             .then_some(self.active)
             .flatten();
         if source != self.touch_source {
+            // The agent's frames vanished without the user asking (not the hatch): give the eye a
+            // moment before the safe layer takes taps.
+            if self.touch_source.is_some() && source.is_none() && !self.hatch.active() {
+                self.settle_until = self.now + AGENT_LOSS_SETTLE_MS;
+            }
             // Captures refer to the old source's regions: release everything.
             self.touch_source = source;
             let routed = self.router.cancel_all();

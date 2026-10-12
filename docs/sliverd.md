@@ -71,6 +71,9 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
 - Touch semantics: `sliver_ipc::router::TouchRouter` (shared with cedar's `FakeDaemon`). Any change
   of frame source (agent ⇄ built-in, agent A → B, hatch open/close) and display-off call
   `cancel_all`, which releases every held key.
+- Agent loss settle: after the agent's frames vanish (crash, hang, demotion; not the hatch), touch-downs
+  are ignored for 200 ms, so a tap aimed at an agent button can't press the safe-layer key that
+  appeared under it (seen on the real bar: F10 22 ms after a hangup).
 - Pressed feedback: built-ins re-render with the item pressed. Agent frames blit the region from
   `pressed`, or lighten it 25% if there's no pressed image. A region is highlighted only if its id
   **and** rect match the capture.
