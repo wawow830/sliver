@@ -184,7 +184,7 @@ with the config schema (T11/T20/T21/T22, owned by elm and the config peers). Thi
 | module id | `app/<provider>#<item-id>` (the group module `app/<provider>` is the whole context). Configure it under that id like any module. |
 | placement | the user can put the id in any zone or layer. Placed items leave the placeholders. Not placed → App controls / Status items. |
 | `format`, `format-icons`, `states` | applied to the item's `values`. The defaults are `text` (= `label`), `icon`, `percentage` (0–100), `alt`, `tooltip`, and any app-defined key. With no user `format`, `label`/`icon` render as published. |
-| stylesheet | selectors match the module id, the type class (`.button`, `.slider`, …), `.dbus`, `.app`/`.status`, the item's `classes`, and states `:active` (pressed), `:checked` (toggle on), `:disabled`, `:focused-app`. |
+| stylesheet | selectors match the module id, the type class (`.button`, `.slider`, …), `.dbus`, `.app`/`.status`, the item's `classes`, the states `:active` (pressed), `:checked` (toggle on) and `:disabled`, and the class `.focused-app`, which the agent adds to items of the focused app's context (ADR-0004 has no such pseudo-class). |
 | gesture bindings (`on-tap`, `on-hold`, `on-swipe-left/right`, `on-drag`, …) | a user binding **replaces** the app's `Event` for that gesture. With `pass-through = true` the event is also sent. Unbound gestures behave as published. |
 | show/hide, signal | `Control1.Show/Hide/Toggle` work on these ids. `Signal(n)` sends `Event("", "signal", {n: i})` to every context whose user config sets `signal = n`. |
 
