@@ -90,18 +90,23 @@ class Live:
                 break
             body.append(l)
         paras, cur = [], []
-        for l in body:
+        for i, l in enumerate(body):
             if not l.strip():
                 if cur:
                     paras.append(cur); cur = []
             else:
+                if not cur:
+                    cur_start = i
                 cur.append(l.strip())
+                if len(cur) == 1 and cur_start == 0:
+                    cur.append("\0cut")  # began above the screen: probably missing its start
         if cur:
             paras.append(cur)
+        paras = [p for p in paras if "\0cut" not in p]
         info["cmd"] = ""
         for p in paras:  # chronological: remember the last thought and any command after it
             first = p[0]
-            if re.match(r"^(Took \d|Elapsed \d|\.\.\. \(|\d+[-:]\s)", first):
+            if re.match(r"^(Took \d|Elapsed \d|Command exited|Command (failed|timed out)|\.\.\. \(|\d+[-:]\s)", first):
                 continue
             if first.startswith("$ "):
                 info["cmd"] = re.sub(r"\s*\(timeout \d+s\)\s*$", "", " ".join(p[:2])[2:])[:110]
@@ -129,9 +134,15 @@ class Live:
                 st = load_state()
                 names = [k for k, v in st.get("peers", {}).items() if v.get("status") != "gone"]
                 fresh = {k: self.peer(k) for k in names}
+                for k in names:
+                    p = st["peers"][k]
+                    cost, ctx = USAGE.of(p.get("worktree"), p.get("model", ""))
+                    if cost is not None:
+                        fresh[k]["cost"], fresh[k]["ctx"] = cost, ctx if ctx is not None else fresh[k].get("ctx")
                 for k, v in fresh.items():  # keep the last thought while the screen shows only tool output
-                    if not v.get("activity") and self.data.get(k, {}).get("activity"):
-                        v["activity"] = self.data[k]["activity"]
+                    for key in ("activity", "cost", "ctx"):
+                        if not v.get(key) and self.data.get(k, {}).get(key):
+                            v[key] = self.data[k][key]
                 self.data = fresh
                 if n % 5 == 0:
                     subprocess.run(["git", "fetch", "-q", "origin"], cwd=MAIN, capture_output=True, timeout=30)
@@ -143,6 +154,59 @@ class Live:
 
 
 LIVE = None
+SESSIONS = Path.home() / ".pi" / "agent" / "sessions"
+
+
+class Usage:
+    """Per-agent spend and context, read incrementally from pi's session logs."""
+
+    def __init__(self):
+        self.files = {}   # path -> [offset, cost, last_ctx_tokens]
+
+    def of(self, worktree, model=""):
+        if not worktree:
+            return None, None
+        d = SESSIONS / ("--" + str(worktree).strip("/").replace("/", "-") + "--")
+        if not d.is_dir():
+            return None, None
+        total, ctx, newest = 0.0, None, -1
+        for f in d.glob("*.jsonl"):
+            off, cost, last = self.files.get(f, [0, 0.0, None])
+            try:
+                with open(f, "rb") as fh:
+                    fh.seek(off)
+                    chunk = fh.read()
+            except OSError:
+                continue
+            end = chunk.rfind(b"\n") + 1
+            for line in chunk[:end].splitlines():
+                if b'"usage"' not in line:
+                    continue
+                try:
+                    u = json.loads(line).get("message", {}).get("usage") or {}
+                except json.JSONDecodeError:
+                    continue
+                cost += (u.get("cost") or {}).get("total", 0) or 0
+                last = (u.get("input", 0) or 0) + (u.get("cacheRead", 0) or 0) + (u.get("cacheWrite", 0) or 0)
+            self.files[f] = [off + end, cost, last]
+            total += cost
+            mt = f.stat().st_mtime
+            if mt > newest and last is not None:
+                newest, ctx = mt, last
+        window = 1_000_000 if re.search(r"-5(-\d)?$", model or "") else 200_000
+        return round(total, 2), (round(100 * ctx / window, 1) if ctx else None)
+
+
+USAGE = Usage()
+
+
+def font_file():
+    """Google Sans Flex (OFL, Fedora package) from this machine, so LAN viewers get it too."""
+    try:
+        p = subprocess.run(["fc-match", "-f", "%{file}", "Google Sans Flex"], capture_output=True, text=True).stdout
+        return Path(p) if "GoogleSansFlex" in p and Path(p).exists() else None
+    except Exception:
+        return None
 
 
 def snapshot():
@@ -212,6 +276,11 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
             return self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if path == "/font/flex.ttf":
+            f = font_file()
+            if f:
+                return self.send(200, f.read_bytes(), "font/ttf")
+            return self.send(404, b"font not installed", "text/plain")
         if path == "/api/snapshot":
             return self.send(200, json.dumps(snapshot()).encode(), "application/json")
         if path.startswith("/snap/"):

@@ -3,614 +3,556 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sliver · swarm</title>
+<title>sliver, built live</title>
 <style>
+  /* The page is the MacBook's keyboard deck. Every agent is a Touch Bar.
+     Only the strips emit light and color; the aluminum stays colorless. */
+  @font-face {
+    font-family: "Flex"; src: url(/font/flex.ttf) format("truetype");
+    font-weight: 100 1000; font-stretch: 25% 151%; font-display: swap;
+  }
   :root {
-    --bg: #07080c; --panel: rgba(255,255,255,0.025); --line: rgba(255,255,255,0.07);
-    --text: #e6e8ee; --dim: #8a90a0; --faint: #4a4f5c;
-    --gold: #fbbf24; --green: #4ade80; --accent: #7dd3fc;
-    --sans: "Inter", "SF Pro Text", system-ui, sans-serif;
-    --mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    --deck: #cdd0d4;        /* deck silver */
+    --edge: #a9adb3;        /* milled edge */
+    --graphite: #2a2c30;    /* text on aluminum */
+    --graphite-2: #4b4e55;  /* secondary text on aluminum */
+    --oled: #000;           /* screen black */
+    --key: #2c2c2e;         /* touch bar key */
+    --you: #ffd60a;
+    --font: "Flex", "Google Sans Flex", "Cantarell", system-ui, sans-serif;
+    --names: 168px; --meta: 150px; --gap: 28px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); overflow: hidden; }
+  html { background: var(--deck); }
   body {
-    display: grid; grid-template-rows: 64px 1fr auto; grid-template-columns: 300px 1fr 340px;
-    grid-template-areas: "top top top" "board mesh feed" "bar bar bar";
-    background: radial-gradient(ellipse 80% 70% at 50% 45%, #0d1220 0%, var(--bg) 70%);
+    min-height: 100vh; color: var(--graphite); font: 400 15px/1.45 var(--font);
+    font-variation-settings: "ROND" 0, "opsz" 14;
+    background: linear-gradient(180deg, #d6d9dc 0%, var(--deck) 38%, #c6c9cd 100%);
+    -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
   }
+  .deck { max-width: 1560px; margin: 0 auto; padding: 36px 56px 48px; }
 
-  /* header */
-  header { grid-area: top; display: flex; align-items: center; gap: 28px; padding: 0 28px; border-bottom: 1px solid var(--line); }
-  .brand { display: flex; align-items: baseline; gap: 10px; }
-  .brand b { font-size: 20px; font-weight: 700; letter-spacing: -0.02em;
-    background: linear-gradient(90deg, #e0f2fe, #a5b4fc); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .brand span { font: 500 12px var(--mono); color: var(--dim); letter-spacing: 0.12em; text-transform: uppercase; }
-  .live { display: flex; align-items: center; gap: 8px; font: 600 11px var(--mono); letter-spacing: 0.14em; color: var(--green); }
-  .live i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; animation: breathe 2s ease-in-out infinite; }
-  .live.replay { color: var(--gold); }
-  .live.paused { color: var(--dim); }
-  @keyframes breathe { 50% { opacity: 0.35; } }
-  .stats { margin-left: auto; display: flex; gap: 34px; }
-  .stat { text-align: right; }
-  .stat .v { font: 600 20px var(--mono); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-  .stat .k { font-size: 10px; color: var(--dim); letter-spacing: 0.12em; text-transform: uppercase; margin-top: 1px; }
-  button.ghost { background: none; border: 1px solid var(--line); color: var(--dim); font: 500 11px var(--mono); letter-spacing: 0.1em;
-    padding: 7px 12px; border-radius: 8px; cursor: pointer; transition: all .2s; }
-  button.ghost:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+  /* top line */
+  .top { display: flex; align-items: center; gap: 22px; }
+  .wordmark { font-size: 24px; font-weight: 260; font-stretch: 151%; letter-spacing: 0.06em; font-variation-settings: "ROND" 0, "opsz" 36; }
+  .led { width: 7px; height: 7px; border-radius: 50%; background: #30d158; box-shadow: 0 0 6px #30d158; display: inline-block; }
+  .status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--graphite-2); }
+  .status.replay .led { background: var(--you); box-shadow: 0 0 6px var(--you); }
+  .status.paused .led { background: #8e9298; box-shadow: none; }
+  button {
+    font: 500 14px var(--font); color: var(--graphite); background: transparent; cursor: pointer;
+    border: 1px solid var(--edge); border-radius: 999px; padding: 6px 16px; transition: background .2s, border-color .2s;
+  }
+  button:hover { background: rgba(255,255,255,0.35); border-color: #8e9298; }
+  button:focus-visible, .key:focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; }
 
-  /* side panels */
-  aside { padding: 22px 22px 16px; overflow: hidden; display: flex; flex-direction: column; gap: 18px; min-height: 0; }
-  #board { grid-area: board; border-right: 1px solid var(--line); }
-  #feedwrap { grid-area: feed; border-left: 1px solid var(--line); }
-  h3 { font: 600 10px var(--mono); color: var(--dim); letter-spacing: 0.16em; text-transform: uppercase; display: flex; justify-content: space-between; }
-  h3 em { font-style: normal; color: var(--faint); }
-  .progress { height: 4px; background: rgba(255,255,255,0.06); border-radius: 4px; overflow: hidden; margin-top: 10px; }
-  .progress div { height: 100%; width: 0; border-radius: 4px; background: linear-gradient(90deg, #38bdf8, #a78bfa); transition: width 1s cubic-bezier(.2,.8,.2,1); }
-  .list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; overflow: hidden; }
-  .task { display: grid; grid-template-columns: 8px 34px 1fr; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 1.35; color: #c8ccd6;
-    animation: rise .5s cubic-bezier(.2,.8,.2,1); }
-  .task .dot { width: 6px; height: 6px; border-radius: 50%; align-self: center; }
-  .task .id { font: 500 11px var(--mono); color: var(--dim); }
-  .task .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .task.open .t { color: var(--dim); }
-  .ask { font-size: 12px; line-height: 1.4; color: #e9d9b0; padding: 8px 10px; border-radius: 8px; background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.15); }
-  .ask b { font: 600 11px var(--mono); color: var(--gold); margin-right: 6px; }
-  #board .grow { flex: 1; min-height: 0; overflow: hidden; }
+  /* the sentence */
+  .story { margin: 30px 0 30px; max-width: 34ch; font-size: clamp(26px, 2.3vw, 36px); line-height: 1.18; font-weight: 340; text-wrap: balance;
+    letter-spacing: -0.012em; font-variation-settings: "ROND" 0, "opsz" 48; }
+  .story + .sub { margin: -16px 0 30px; font-size: 16px; color: var(--graphite-2); max-width: 75ch; text-wrap: pretty; }
 
-  #feed { display: flex; flex-direction: column; gap: 2px; overflow: hidden; flex: 1; min-height: 0;
-    mask-image: linear-gradient(to bottom, black 75%, transparent); -webkit-mask-image: linear-gradient(to bottom, black 75%, transparent); }
-  .ev { display: grid; grid-template-columns: 38px 1fr; gap: 10px; padding: 7px 0; font-size: 12.5px; line-height: 1.4; border-bottom: 1px solid rgba(255,255,255,0.035);
-    animation: rise .55s cubic-bezier(.2,.8,.2,1); }
-  .ev time { font: 11px var(--mono); color: var(--faint); padding-top: 1px; }
-  .ev .who { font-weight: 600; margin-right: 6px; }
-  .ev .kind { font: 600 9.5px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; margin-right: 6px; background: rgba(255,255,255,0.05); color: var(--dim); }
-  .ev .kind.k-land { color: var(--green); background: rgba(74,222,128,0.1); }
-  .ev .kind.k-human { color: var(--gold); background: rgba(251,191,36,0.1); }
-  .ev .kind.k-msg { color: #c4b5fd; background: rgba(196,181,253,0.08); }
-  .ev .txt { color: #b7bcc8; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  @keyframes rise { from { opacity: 0; transform: translateY(-6px); } }
+  /* strips */
+  .strip { position: relative; aspect-ratio: 2008 / 60; background: var(--oled); border-radius: clamp(4px, 0.45vw, 7px); overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.55), 0 0 0 3px #b8bcc1, 0 1px 0 3px #e4e6e8; }
+  .strip > * { opacity: 0; transition: opacity .9s ease-out, filter 1.6s ease; }
+  .strip.on > * { opacity: 1; }
+  .strip canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 
-  /* mesh */
-  #mesh { grid-area: mesh; position: relative; min-width: 0; min-height: 0; }
-  canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: default; }
-  #spot { position: absolute; left: 24px; right: 24px; bottom: 20px; max-width: 760px; margin: 0 auto; padding: 14px 18px; border-radius: 14px;
-    background: rgba(12,15,24,0.72); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-    transition: opacity .5s; min-height: 70px; }
-  #spot .hd { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dim); margin-bottom: 6px; }
-  #spot .hd b { color: var(--text); font-size: 13px; }
-  #spot .hd .sw { width: 8px; height: 8px; border-radius: 50%; }
-  #spot .hd .meta { margin-left: auto; font: 11px var(--mono); color: var(--faint); }
-  #spot p { font: 13px/1.55 var(--mono); color: #cfd5e2; min-height: 40px; }
-  #spot p::after { content: "▍"; color: var(--accent); animation: breathe 1s steps(1) infinite; margin-left: 2px; }
-  #spot .cmd { font: 12px var(--mono); color: var(--faint); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .4s; }
-  #spot .cmd b { color: #6b7385; font-weight: 500; }
+  .hero { display: grid; grid-template-columns: var(--names) 1fr var(--meta); column-gap: var(--gap); align-items: center; }
+  .hero .strip img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 1.1s ease; }
+  .hero .strip.on img.show { opacity: 1; }
+  .caption { grid-column: 2; margin-top: 12px; display: flex; justify-content: space-between; gap: 24px; font-size: 13.5px; color: var(--graphite-2); }
+  .caption span:last-child { flex: none; }
+  .label { font-size: 15px; font-weight: 600; }
+  .hint { font-size: 13px; color: var(--graphite-2); }
 
-  /* touch bar */
-  #bar { grid-area: bar; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 0 16px; border-top: 1px solid var(--line);
-    background: linear-gradient(to bottom, rgba(255,255,255,0.015), transparent); }
-  .tb { position: relative; width: min(1180px, 82vw); aspect-ratio: 2008 / 60; border-radius: 6px; background: #000; overflow: hidden;
-    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 0 0 5px #15171c, 0 0 0 6px rgba(255,255,255,0.06), 0 14px 40px rgba(0,0,0,0.6); }
-  .tb img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 1.1s ease; image-rendering: auto; }
-  .tb img.on { opacity: 1; }
-  .tbcap { font: 11px var(--mono); color: var(--faint); letter-spacing: 0.04em; }
-  .tbcap b { color: var(--dim); font-weight: 500; }
+  .lanes { position: relative; margin-top: 34px; }
+  #threads { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .row { position: relative; display: grid; grid-template-columns: var(--names) 1fr var(--meta); column-gap: var(--gap); align-items: center; margin-bottom: 16px; }
+  .row .who { min-width: 0; transition: opacity 1s; }
+  .row .name { font-size: 15px; font-weight: 620; }
+  .row .task { font-size: 13px; color: var(--graphite-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .meta { font-size: 14px; white-space: nowrap; }
+  .row .meta small { display: block; font-size: 12.5px; color: var(--graphite-2); }
+  .row.unborn .who, .row.unborn .meta { opacity: 0.35; }
 
-  #toasts { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; width: 80%; }
-  .toast { padding: 9px 16px; border-radius: 999px; font-size: 12.5px;
-    background: rgba(74,222,128,0.1); border: 1px solid rgba(74,222,128,0.28); color: #bbf7d0; white-space: nowrap; max-width: 80%; overflow: hidden; text-overflow: ellipsis;
-    animation: toast 4.2s cubic-bezier(.2,.8,.2,1) forwards; }
-  @keyframes toast { 0% { opacity: 0; transform: translateY(-8px); } 10%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+  /* dimming, like the real Touch Bar when it idles */
+  .row[data-state="idle"] .strip > *, .row[data-state="done"] .strip > * { filter: brightness(0.62); }
+  .row[data-state="resting"] .strip > * { filter: brightness(0.38); }
+  .row[data-state="absent"] .strip > * { filter: brightness(0.2); }
 
-  @media (max-width: 1100px) { body { grid-template-columns: 0 1fr 300px; } #board { display: none; } .stats { gap: 20px; } }
+  /* the control strip end of each bar: what the agent is doing right now */
+  .now { position: absolute; top: 0; bottom: 0; right: 0; width: 42%; display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    border-left: 1px solid #1c1c1e; color: rgba(255,255,255,0.9); font-size: clamp(11.5px, 0.85vw, 14px); overflow: hidden;
+    font-variation-settings: "ROND" 100, "opsz" 12; font-stretch: 92%; }
+  .now .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #48484a; }
+  .row[data-state="working"] .now .dot { background: var(--c); box-shadow: 0 0 8px var(--c); }
+  .now .text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+    mask-image: linear-gradient(90deg, black 88%, transparent); -webkit-mask-image: linear-gradient(90deg, black 88%, transparent); }
+  .now .text span { display: inline-block; padding-right: 64px; }
+  .now .text.scroll span { animation: marquee var(--dur, 20s) linear infinite; }
+  .now.quiet { color: rgba(255,255,255,0.5); }
+  .now.ask { color: var(--you); }
+  @keyframes marquee { 0%, 12% { transform: translateX(0); } 100% { transform: translateX(var(--shift)); } }
+
+  .axis { display: grid; grid-template-columns: var(--names) 1fr var(--meta); column-gap: var(--gap); margin-top: -8px; font-size: 12.5px; color: var(--graphite-2); }
+  .axis div { position: relative; height: 18px; }
+  .axis span { position: absolute; top: 0; white-space: nowrap; }
+
+  /* up next: open work as Touch Bar keys */
+  .next .strip > div { position: absolute; inset: 0; display: flex; align-items: center; gap: 0.5%; padding: 0 0.6%;
+    mask-image: linear-gradient(90deg, black 90%, transparent); -webkit-mask-image: linear-gradient(90deg, black 90%, transparent); }
+  .key { flex: none; height: 74%; display: flex; align-items: center; padding: 0 14px; border-radius: 5px; background: var(--key);
+    color: rgba(255,255,255,0.88); font-size: clamp(11px, 0.8vw, 13.5px); white-space: nowrap; font-variation-settings: "ROND" 100, "opsz" 12; font-stretch: 92%; }
+
+  .tip { position: fixed; z-index: 10; pointer-events: none; max-width: 420px; padding: 9px 12px; border-radius: 8px; background: #000; color: #fff;
+    font-size: 13px; line-height: 1.4; font-variation-settings: "ROND" 100; box-shadow: 0 6px 24px rgba(0,0,0,0.25); opacity: 0; transition: opacity .15s; }
+  .tip time { color: rgba(255,255,255,0.55); margin-right: 8px; }
+
+  @media (max-width: 900px) {
+    .deck { padding: 24px 18px; }
+    :root { --names: 1fr; --meta: 0px; --gap: 0px; }
+    .hero, .row, .axis { grid-template-columns: 1fr; row-gap: 8px; }
+    .caption { grid-column: 1; }
+    .row .meta, .hero > .label, .axis > div:first-child, .axis > div:last-child { display: none; }
+    .now { width: 55%; }
+    .row .strip { aspect-ratio: auto; height: 30px; }
+    #threads, .long { display: none; }
+    .top { gap: 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .strip > * { transition: none; }
+    .now .text.scroll span { animation: none; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <div class="brand"><b>sliver</b><span>swarm</span></div>
-  <div class="live" id="live"><i></i><span>LIVE</span></div>
-  <div class="stats">
-    <div class="stat"><div class="v" id="s-agents">0</div><div class="k">agents</div></div>
-    <div class="stat"><div class="v" id="s-tasks">0</div><div class="k">tasks done</div></div>
-    <div class="stat"><div class="v" id="s-landed">0</div><div class="k">landed</div></div>
-    <div class="stat"><div class="v" id="s-loc">0</div><div class="k">lines of rust</div></div>
-    <div class="stat"><div class="v" id="s-msgs">0</div><div class="k">messages</div></div>
-    <div class="stat"><div class="v" id="s-cost">$0</div><div class="k">spent</div></div>
+<div class="deck">
+  <div class="top">
+    <div class="wordmark">sliver</div>
+    <div class="status" id="status"><span class="led"></span><span id="statusText">Live</span></div>
+    <button id="replay" type="button">Replay<span class="long"> from the start</span></button>
   </div>
-  <button class="ghost" id="replayBtn">▶ REPLAY</button>
-</header>
 
-<aside id="board">
-  <div>
-    <h3>Board <em id="b-count"></em></h3>
-    <div class="progress"><div id="b-prog"></div></div>
-  </div>
-  <div class="grow">
-    <h3>In progress</h3>
-    <div class="list" id="b-doing"></div>
-    <h3 style="margin-top:18px">Up next</h3>
-    <div class="list" id="b-open"></div>
-  </div>
-  <div id="b-human-wrap">
-    <h3>Needs you <em id="b-hcount"></em></h3>
-    <div class="list" id="b-human"></div>
-  </div>
-</aside>
+  <h1 class="story" id="story">Connecting to the swarm…</h1>
+  <p class="sub" id="sub"></p>
 
-<main id="mesh">
-  <canvas id="c"></canvas>
-  <div id="toasts"></div>
-  <div id="spot"><div class="hd"><span class="sw"></span><b></b><span class="st"></span><span class="meta"></span></div><p></p><div class="cmd"></div></div>
-</main>
+  <section class="hero" aria-label="What the swarm has built">
+    <div class="label">The bar so far</div>
+    <div class="strip" id="hero"></div>
+    <div></div>
+    <div class="caption"><span id="heroCap">Frames drawn by sliver's renderer appear here once it has some.</span><span id="heroCount"></span></div>
+  </section>
 
-<aside id="feedwrap">
-  <h3>Activity <em id="f-count"></em></h3>
-  <div id="feed"></div>
-</aside>
+  <section class="lanes" id="lanes" aria-label="Agents">
+    <canvas id="threads"></canvas>
+  </section>
+  <div class="axis" id="axis"><div></div><div id="axisMarks"></div><div></div></div>
 
-<section id="bar">
-  <div class="tb" id="tb"></div>
-  <div class="tbcap" id="tbcap">Touch Bar frames rendered by the swarm's own code</div>
-</section>
+  <section class="row next" aria-label="Open tasks">
+    <div class="who"><div class="name">Up next</div><div class="task" id="nextCount"></div></div>
+    <div class="strip" id="nextStrip"><div id="nextKeys"></div></div>
+    <div></div>
+  </section>
+</div>
+<div class="tip" id="tip"></div>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const PALETTE = ["#7dd3fc", "#c4b5fd", "#f9a8d4", "#86efac", "#fdba74", "#a5b4fc", "#5eead4", "#fca5a5", "#d9f99d", "#93c5fd"];
-const GOLD = "#fbbf24", GREEN = "#4ade80";
-const CSSV = getComputedStyle(document.documentElement);
-const SANS = CSSV.getPropertyValue("--sans").trim(), MONO = CSSV.getPropertyValue("--mono").trim();
-const colorOf = {};
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const SYSTEM = ["#0a84ff", "#30d158", "#ff375f", "#ff9f0a", "#bf5af2", "#64d2ff", "#5e5ce6", "#ff6961", "#a2845e"];
+const YOU = "#ffd60a";
+const TIMELINE = 0.58;           // the left 58% of each strip is the timeline; the rest is "now"
+const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+
+// ------------------------------------------------------------------ data
+let snap = null, events = [], replay = null;
+const colorOf = {}, joinOrder = [];
 function color(name) {
-  if (name === "human" || name === "?") return GOLD;
-  if (!colorOf[name]) colorOf[name] = PALETTE[Object.keys(colorOf).length % PALETTE.length];
+  if (name === "human") return YOU;
+  if (!colorOf[name]) { colorOf[name] = SYSTEM[joinOrder.length % SYSTEM.length]; joinOrder.push(name); }
   return colorOf[name];
 }
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const hhmm = (t) => new Date(t * 1000).toTimeString().slice(0, 5);
-
-// ------------------------------------------------------------------ animated counters
-const counters = {};
-function setStat(id, value, fmt = (v) => Math.round(v).toLocaleString()) {
-  const c = counters[id] || (counters[id] = { from: 0, to: 0, t0: 0, fmt });
-  if (c.to === value) return;
-  c.from = c.cur ?? 0; c.to = value; c.t0 = performance.now(); c.fmt = fmt;
-}
-function tickCounters(now) {
-  for (const [id, c] of Object.entries(counters)) {
-    const k = Math.min(1, (now - c.t0) / 1200), e = 1 - Math.pow(1 - k, 3);
-    c.cur = c.from + (c.to - c.from) * e;
-    $(id).textContent = c.fmt(c.cur);
-  }
+const who = (by) => (by === "?" ? "human" : by);
+function spawnedName(ev) { const m = ev.kind === "peer" && /spawned ([a-z][\w-]*)/.exec(ev.text); return m && m[1]; }
+function laneOf(ev) {
+  const b = who(ev.by);
+  if (ev.kind === "human" && b !== "human") return b;     // a question: the asking agent's lane (threaded to you)
+  return b;
 }
 
-// ------------------------------------------------------------------ world
-const world = {
-  nodes: new Map(),      // name -> {name, x, y, tx, ty, born, status, agent, ...}
-  fx: [],                // transient effects
-  pulses: new Map(),     // "a|b" -> last message time (edge glow)
-  stats: { landed: 0, done: 0, msgs: 0 },
-};
-const human = { name: "you", x: 0, y: 0, open: 0, flash: 0 };
+// ------------------------------------------------------------------ rows
+const rows = new Map();          // name -> {el, strip, canvas, now, ...}
+function row(name) {
+  let r = rows.get(name);
+  if (r) return r;
+  const el = document.createElement("div");
+  el.className = "row"; el.dataset.state = "idle";
+  el.style.setProperty("--c", color(name));
+  el.innerHTML = `<div class="who"><div class="name"></div><div class="task"></div></div>
+    <div class="strip"><canvas></canvas><div class="now"><span class="dot"></span><div class="text"><span></span></div></div></div>
+    <div class="meta"></div>`;
+  el.querySelector(".name").textContent = name === "human" ? "You" : name;
+  const lanes = $("lanes"), you = rows.get("human");
+  if (you && name !== "human") lanes.insertBefore(el, you.el); else lanes.appendChild(el);
+  r = { name, el, strip: el.querySelector(".strip"), canvas: el.querySelector("canvas"), now: el.querySelector(".now"),
+        text: el.querySelector(".now .text"), born: performance.now() };
+  rows.set(name, r);
+  sizeCanvas(r.canvas);
+  wake(r.strip, 260 + rows.size * 90);
+  return r;
+}
+function wake(strip, delay) {
+  if (REDUCED) { strip.classList.add("on"); return; }
+  setTimeout(() => strip.classList.add("on"), delay);
+}
+const ro = new ResizeObserver((entries) => { for (const e of entries) sizeCanvas(e.target); });
+function sizeCanvas(c) {
+  const r = c.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  c.width = Math.max(1, Math.round(r.width * dpr)); c.height = Math.max(1, Math.round(r.height * dpr));
+  c.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (!c._observed) { ro.observe(c); c._observed = true; }
+}
 
-function ensureNode(name, from) {
-  if (name === "human" || name === "?" || name === "pulse") return null;
-  let n = world.nodes.get(name);
-  if (!n) {
-    const src = from && world.nodes.get(from);
-    n = { name, x: src ? src.x : W / 2, y: src ? src.y : H / 2, tx: 0, ty: 0, born: performance.now(),
-          status: "active", agent: "idle", tasks: [], activity: "", lastEv: 0, parent: from };
-    world.nodes.set(name, n);
-    color(name);
-    layout();
-  }
-  return n;
-}
-function nodePos(name) {
-  if (name === "human" || name === "?") return human;
-  return world.nodes.get(name);
-}
-
-let W = 0, H = 0, DPR = 1;
-const cv = $("c"), ctx = cv.getContext("2d");
-function resize() {
-  const r = $("mesh").getBoundingClientRect();
-  DPR = window.devicePixelRatio || 1; W = r.width; H = r.height;
-  cv.width = W * DPR; cv.height = H * DPR; ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  layout();
-}
-function layout() {
-  const list = [...world.nodes.values()].sort((a, b) => a.born - b.born);
-  const cx = W / 2, cy = H * 0.42, R = Math.min(W * 0.36, H * 0.27);
-  list.forEach((n, i) => {
-    const a = -Math.PI / 2 + (i / Math.max(1, list.length)) * Math.PI * 2;
-    n.tx = cx + Math.cos(a) * R; n.ty = cy + Math.sin(a) * R; n.angle = a;
+function setNow(r, text, kind = "") {
+  r.now.className = "now " + kind;
+  const span = r.text.querySelector("span");
+  if (span.textContent === text) return;
+  span.textContent = text;
+  r.text.classList.remove("scroll");
+  requestAnimationFrame(() => {
+    const over = span.scrollWidth - r.text.clientWidth;
+    if (over > 8 && !REDUCED) {
+      r.text.style.setProperty("--shift", `${-(span.scrollWidth - r.text.clientWidth * 0.5)}px`);
+      r.text.style.setProperty("--dur", `${Math.max(12, span.scrollWidth / 38)}s`);
+      r.text.classList.add("scroll");
+    }
   });
-  human.x = cx; human.y = cy;
-}
-window.addEventListener("resize", resize);
-
-// ------------------------------------------------------------------ effects
-function fxMessage(from, to, col) { world.fx.push({ type: "msg", from, to, col, t0: performance.now(), dur: 1300 }); world.pulses.set([from, to].sort().join("|"), performance.now()); }
-function fxRing(at, col, big = false) { world.fx.push({ type: "ring", at, col, t0: performance.now(), dur: big ? 1800 : 1200, big }); }
-function fxLabel(at, text, col) {
-  const now = performance.now(), busy = world.fx.filter((e) => e.type === "label" && e.at === at && now - e.t0 < 900).length;
-  world.fx.push({ type: "label", at, text, col, t0: now, dur: 2200, dy: busy * 16 });
-}
-function toast(html) {
-  const d = document.createElement("div"); d.className = "toast"; d.innerHTML = html;
-  const box = $("toasts"); box.prepend(d); setTimeout(() => d.remove(), 4300);
-  while (box.children.length > 1) box.lastChild.remove();
 }
 
-// ------------------------------------------------------------------ events -> visuals
-const KIND_LABEL = { land: "landed", task: "task", say: "says", peer: "peer", human: "human", msg: "dm", system: "system" };
-let feedCount = 0;
-function feed(ev, animate = true) {
-  const d = document.createElement("div"); d.className = "ev";
-  if (!animate) d.style.animation = "none";
-  const who = ev.by === "?" ? "human" : ev.by;
-  let text = ev.text;
-  if (ev.kind === "msg") text = `→ <b style="color:${color(ev.to)}">${esc(ev.to)}</b> ${esc(ev.text)}`; else text = esc(text);
-  d.innerHTML = `<time>${hhmm(ev.at)}</time><div><span class="who" style="color:${color(who)}">${esc(who)}</span>` +
-    `<span class="kind k-${ev.kind}">${KIND_LABEL[ev.kind] || ev.kind}</span><span class="txt">${text}</span></div>`;
-  const f = $("feed"); f.prepend(d);
-  while (f.children.length > 70) f.lastChild.remove();
-  $("f-count").textContent = (++feedCount).toLocaleString();
+// ------------------------------------------------------------------ the sentence
+const shown = {};
+function tween(key, to, fmt, el) {
+  const s = shown[key] || (shown[key] = { v: to, from: to, to, t0: 0 });
+  if (s.to !== to) { s.from = s.v; s.to = to; s.t0 = performance.now(); }
+  const k = REDUCED ? 1 : Math.min(1, (performance.now() - s.t0) / 1100);
+  s.v = s.from + (s.to - s.from) * (1 - Math.pow(1 - k, 3));
+  return fmt(s.v);
 }
-
-function apply(ev, animate = true) {
-  const by = ev.by === "?" ? "human" : ev.by;
-  const src = nodePos(by);
-  if (src && src !== human) src.lastEv = performance.now();
-  const spawn = ev.kind === "peer" && /spawned ([a-z][\w-]*)/.exec(ev.text);
-  if (spawn) {
-    const n = ensureNode(spawn[1], by === "human" ? null : by);
-    if (n && animate) { n.born = performance.now(); fxRing(n, color(n.name), true); if (src) fxMessage(by, n.name, color(by)); }
-  } else if (by !== "human" && by !== "pulse") ensureNode(by);
-
-  if (ev.kind === "msg") {
-    world.stats.msgs++;
-    if (animate) { ensureNode(ev.to); fxMessage(by, ev.to, color(by)); }
-  } else if (ev.kind === "land") {
-    world.stats.landed++;
-    if (animate && src) {
-      fxRing(src, GREEN, true); fxLabel(src, "landed", GREEN);
-      toast(`<b style="color:${color(by)}">${esc(by)}</b> ${esc(ev.text.replace(/^landed on main: [0-9a-f]+ /, "landed "))}`);
-    }
-  } else if (ev.kind === "task") {
-    const m = /^(added|claimed|done|released|dropped) (T\d+)/.exec(ev.text);
-    if (m && m[1] === "done") { world.stats.done++; if (animate && src) { fxRing(src, color(by)); fxLabel(src, `✓ ${m[2]}`, color(by)); } }
-    else if (m && m[1] === "claimed" && animate && src) fxLabel(src, m[2], color(by));
-    else if (m && m[1] === "added" && animate && src) fxLabel(src, `+ ${m[2]}`, "#8a90a0");
-  } else if (ev.kind === "say") {
-    if (animate && src) { fxRing(src, color(by), true); for (const n of world.nodes.values()) if (n !== src) fxMessage(by, n.name, color(by)); }
-  } else if (ev.kind === "human") {
-    if (animate) {
-      if (/answered|CHANGED/.test(ev.text)) { human.flash = performance.now(); fxRing(human, GOLD); }
-      else if (src && src !== human) { fxMessage(by, "human", GOLD); human.flash = performance.now(); }
-    }
+const int = (v) => Math.round(v).toLocaleString("en-US");
+function duration(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  const hs = `${h} hour${h === 1 ? "" : "s"}`, ms = `${m} minute${m === 1 ? "" : "s"}`;
+  return h === 0 ? ms : m === 0 ? hs : `${hs} and ${ms}`;
+}
+function count(evs) {
+  let landed = 0, done = 0, msgs = 0; const agents = new Set();
+  for (const e of evs) {
+    if (e.kind === "land") landed++;
+    if (e.kind === "msg") msgs++;
+    if (e.kind === "task" && /^done T\d+/.test(e.text)) done++;
+    const s = spawnedName(e); if (s) agents.add(s);
   }
-  if (feedEnabled) feed(ev, animate);
+  return { landed, done, msgs, agents: agents.size };
+}
+function story() {
+  if (!events.length) return;
+  const t0 = events[0].at;
+  if (replay) {
+    const seen = events.filter((e) => e.at <= replay.at), c = count(seen);
+    const clock = new Date(replay.at * 1000).toTimeString().slice(0, 5);
+    $("story").textContent = `At ${clock}, ${WORDS[c.agents]?.toLowerCase() ?? c.agents} agent${c.agents === 1 ? " had" : "s had"} landed ` +
+      `${tween("landed", c.landed, int)} changes and finished ${tween("done", c.done, int)} tasks.`;
+    $("sub").textContent = `Replaying ${duration(replay.t1 - t0)} of work in under a minute. ${int(c.msgs)} messages passed between them so far.`;
+    return;
+  }
+  if (!snap) return;
+  const c = count(events), n = snap.peers.length, loc = snap.repo.loc || 0;
+  const elapsed = Date.now() / 1000 - t0;
+  $("story").textContent = `${WORDS[n] ?? n} agents have written ${tween("loc", loc, int)} lines of Rust and landed ` +
+    `${tween("landed", c.landed, int)} changes in ${duration(elapsed)}.`;
+  const tasks = snap.tasks.filter((t) => t.status !== "dropped"), done = tasks.filter((t) => t.status === "done").length;
+  $("sub").textContent = `${done} of ${tasks.length} tasks are done. They have sent each other ${int(c.msgs)} messages, ` +
+    `and it has cost $${tween("cost", snap.cost || 0, (v) => v.toFixed(2))} so far.`;
 }
 
 // ------------------------------------------------------------------ drawing
-function drawNode(n, now) {
-  const c = color(n.name), age = (now - n.born) / 900;
-  const s = Math.min(1, age < 1 ? 1 - Math.pow(1 - age, 3) : 1);
-  const r = 24 * s;
-  if (r <= 0.5) return;
-  const live = n.agent, working = live === "working", away = !live || live === "absent";
-  const resting = n.status === "resting", waiting = n.status === "waiting" || live === "blocked";
-  const recent = Math.max(0, 1 - (now - n.lastEv) / 2500);
-  ctx.save();
-  ctx.globalAlpha = away ? 0.35 : resting ? 0.55 : 1;
-  // glow
-  const glow = ctx.createRadialGradient(n.x, n.y, r * 0.4, n.x, n.y, r * (2.6 + recent));
-  glow.addColorStop(0, hexA(c, working ? 0.22 : 0.08 + recent * 0.15)); glow.addColorStop(1, hexA(c, 0));
-  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(n.x, n.y, r * (2.6 + recent), 0, Math.PI * 2); ctx.fill();
-  // body
-  ctx.fillStyle = "#0b0e16"; ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2); ctx.fill();
-  ctx.lineWidth = 1.5; ctx.strokeStyle = hexA(c, working ? 0.9 : 0.45);
-  if (waiting) { ctx.strokeStyle = GOLD; ctx.setLineDash([3, 4]); }
-  ctx.stroke(); ctx.setLineDash([]);
-  // working: orbiting arc
-  if (working) {
-    const a = now / 700 + n.born;
-    ctx.lineWidth = 2; ctx.strokeStyle = c; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.arc(n.x, n.y, r + 6, a, a + 1.1); ctx.stroke();
-    ctx.globalAlpha *= 0.4; ctx.beginPath(); ctx.arc(n.x, n.y, r + 6, a + Math.PI, a + Math.PI + 0.5); ctx.stroke();
+function windowTimes() {
+  if (!events.length) return [0, 1];
+  const t0 = events[0].at;
+  const t1 = replay ? replay.t1 : Math.max(Date.now() / 1000, t0 + 60);
+  return [t0, t1 + (t1 - t0) * 0.015];
+}
+function xOf(t, w, [t0, t1]) { const pad = 10; return pad + ((t - t0) / (t1 - t0)) * (w * TIMELINE - pad * 2); }
+function visible() { return replay ? events.filter((e) => e.at <= replay.at) : events; }
+function age(e) { return replay ? (replay.at - e.at) / replay.rate : Date.now() / 1000 - e.at; }   // seconds of viewing time
+
+function drawStrip(r, evs, win, now) {
+  const c = r.canvas, ctx = c.getContext("2d"), w = c.clientWidth, h = c.clientHeight;
+  ctx.clearRect(0, 0, w, h);
+  const col = color(r.name);
+  // faint baseline
+  ctx.fillStyle = "rgba(255,255,255,0.06)"; ctx.fillRect(10, h / 2, w * TIMELINE - 20, 1);
+  for (const e of evs) {
+    const x = xOf(e.at, w, win), a = age(e), fresh = !REDUCED && a < 2.4 ? 1 - a / 2.4 : 0;
+    const mine = laneOf(e) === r.name, toMe = e.kind === "msg" && e.to === r.name;
+    if (!mine && !toMe && !(r.name === "human" && e.kind === "human")) continue;
+    let mh = 0, mw = 2, fill = null, y = h / 2;
+    if (r.name === "human" && e.kind === "human" && who(e.by) !== "human") { mh = 0.5; fill = YOU; }
+    else if (r.name === "human" && e.kind === "human") { mh = 0.5; fill = "rgba(255,255,255,0.85)"; }
+    else if (toMe) { y = 5; mh = 0; fill = "rgba(255,255,255,0.55)"; }
+    else if (e.kind === "land") { mh = 0.64; mw = 3; fill = col; }
+    else if (e.kind === "task" && /^done/.test(e.text)) { mh = 0.38; fill = "rgba(255,255,255,0.8)"; }
+    else if (e.kind === "task" && /^claimed/.test(e.text)) { mh = 0.38; fill = col; ctx.globalAlpha = 0.55; }
+    else if (e.kind === "task") { y = h - 7; fill = "rgba(255,255,255,0.3)"; }
+    else if (e.kind === "msg") { y = h - 5; fill = col; }
+    else if (e.kind === "say") { y = 7; fill = col; mw = 3; }
+    else if (e.kind === "human") { mh = 0.5; fill = YOU; }
+    else continue;
+    if (fresh) {
+      const g = ctx.createRadialGradient(x, h / 2, 0, x, h / 2, 26);
+      g.addColorStop(0, hexA(e.kind === "land" ? col : fill.startsWith("#") ? fill : "#ffffff", 0.55 * fresh)); g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g; ctx.fillRect(x - 26, 0, 52, h);
+    }
+    ctx.fillStyle = fill;
+    if (mh) { const hh = h * mh; roundRect(ctx, x - mw / 2, (h - hh) / 2, mw, hh, mw / 2); }
+    else { ctx.beginPath(); ctx.arc(x, y, mw === 3 ? 1.8 : 1.4, 0, Math.PI * 2); ctx.fill(); }
     ctx.globalAlpha = 1;
   }
-  // context usage arc (inner)
-  if (n.ctx != null && r > 8) {
-    ctx.lineWidth = 2; ctx.strokeStyle = hexA(c, 0.35); ctx.lineCap = "round";
-    ctx.beginPath(); ctx.arc(n.x, n.y, r - 4, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, n.ctx / 100)); ctx.stroke();
+  // playhead / now edge
+  const px = replay ? xOf(replay.at, w, win) : xOf(Date.now() / 1000, w, win);
+  ctx.fillStyle = replay ? "rgba(255,214,10,0.8)" : "rgba(255,255,255,0.14)";
+  ctx.fillRect(Math.round(px), 4, 1, h - 8);
+}
+function roundRect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); ctx.fill(); }
+function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; }
+
+function drawThreads(evs, win) {
+  const c = $("threads"), ctx = c.getContext("2d"), box = $("lanes").getBoundingClientRect();
+  if (c.width !== Math.round(box.width * devicePixelRatio) || c.height !== Math.round(box.height * devicePixelRatio)) sizeCanvas(c);
+  ctx.clearRect(0, 0, box.width, box.height);
+  const any = rows.values().next().value; if (!any) return;
+  const sr = any.strip.getBoundingClientRect(), left = sr.left - box.left, w = sr.width;
+  const mid = (name) => { const r = rows.get(name); if (!r) return null; const b = r.strip.getBoundingClientRect(); return b.top - box.top + b.height / 2; };
+  for (const e of evs) {
+    let a, b;
+    if (e.kind === "msg") { a = who(e.by); b = e.to; }
+    else if (e.kind === "human" && who(e.by) !== "human") { a = who(e.by); b = "human"; }
+    else if (e.kind === "human" && /answered|CHANGED/.test(e.text)) continue;
+    else continue;
+    const ya = mid(a), yb = mid(b);
+    if (ya == null || yb == null) continue;
+    const x = left + xOf(e.at, w, win), f = REDUCED ? 0 : Math.max(0, 1 - age(e) / 4);
+    ctx.strokeStyle = f > 0 ? hexA(color(a), 0.35 + 0.6 * f) : "rgba(42,44,48,0.13)";
+    ctx.lineWidth = f > 0 ? 1.5 : 1;
+    ctx.beginPath(); ctx.moveTo(x + 0.5, ya); ctx.lineTo(x + 0.5, yb); ctx.stroke();
   }
-  // initial
-  ctx.fillStyle = c; ctx.font = `600 ${Math.round(17 * s)}px ${SANS}`;
-  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(n.name[0].toUpperCase(), n.x, n.y + 1);
-  // labels
-  const below = n.y + r + 18;
-  ctx.font = `600 13px ${SANS}`; ctx.fillStyle = "#e6e8ee";
-  ctx.fillText(n.name, n.x, below);
-  ctx.font = `11px ${MONO}`; ctx.fillStyle = "#8a90a0";
-  const model = /sonnet/.test(n.model || "") ? "sonnet" : /haiku/.test(n.model || "") ? "haiku" : "opus";
-  const st = waiting ? "waiting on you" : resting ? "resting" : away ? "offline" : (live || "idle");
-  ctx.fillText(`${model} · ${st}`, n.x, below + 16);
-  if (n.tasks && n.tasks.length) {
-    const t = n.tasks[0]; let s2 = `${t.id} ${t.title}`; if (s2.length > 34) s2 = s2.slice(0, 33) + "…";
-    ctx.fillStyle = hexA(c, 0.85); ctx.fillText(s2, n.x, below + 31);
-  }
-  ctx.restore();
 }
 
-function drawHuman(now) {
-  const open = human.open, f = Math.max(0, 1 - (now - human.flash) / 1500);
-  const r = 13 + f * 3;
-  ctx.save();
-  const pulse = open ? 0.5 + 0.5 * Math.sin(now / 500) : 0;
-  const g = ctx.createRadialGradient(human.x, human.y, 2, human.x, human.y, 46);
-  g.addColorStop(0, hexA(GOLD, 0.10 + 0.12 * pulse + 0.2 * f)); g.addColorStop(1, hexA(GOLD, 0));
-  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(human.x, human.y, 46, 0, Math.PI * 2); ctx.fill();
-  ctx.translate(human.x, human.y); ctx.rotate(Math.PI / 4);
-  ctx.fillStyle = "#0b0e16"; ctx.strokeStyle = hexA(GOLD, 0.8); ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.rect(-r / 1.4, -r / 1.4, r * 1.41, r * 1.41); ctx.fill(); ctx.stroke();
-  ctx.rotate(-Math.PI / 4);
-  ctx.fillStyle = GOLD; ctx.font = `600 10px ${MONO}`;
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(open ? String(open) : "", 0, 1);
-  ctx.font = `600 11px ${MONO}`; ctx.fillStyle = hexA(GOLD, 0.85);
-  ctx.fillText(open ? `you · ${open} waiting` : "you", 0, r + 16);
-  ctx.restore();
+function axis(win) {
+  const el = $("axisMarks"), w = el.clientWidth;
+  if (!events.length || !w) return;
+  const t = (s) => new Date(s * 1000).toTimeString().slice(0, 5);
+  const end = replay ? replay.t1 : Date.now() / 1000;
+  const html = `<span style="left:${xOf(win[0], w, win)}px">Started ${t(win[0])}</span>` +
+    `<span style="left:${xOf(end, w, win)}px;transform:translateX(-50%)">${replay ? t(end) : "Now"}</span>` +
+    `<span style="left:${w * TIMELINE + 14}px">${replay ? "" : "What each agent is doing"}</span>`;
+  if (el.innerHTML !== html) el.innerHTML = html;
 }
 
-function hexA(hex, a) {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
-
+let last = 0;
 function frame(now) {
-  try { draw(now); } catch (e) { console.error(e); }
   requestAnimationFrame(frame);
+  if (now - last < 33) return;      // ~30 fps is plenty
+  last = now;
+  try {
+    const win = windowTimes(), evs = visible();
+    for (const r of rows.values()) drawStrip(r, evs, win, now);
+    drawThreads(evs, win);
+    axis(win);
+    story();
+  } catch (e) { console.error(e); }
 }
 
-function draw(now) {
-  tickCounters(now);
-  ctx.clearRect(0, 0, W, H);
-  // subtle dot grid
-  ctx.fillStyle = "rgba(255,255,255,0.035)";
-  for (let x = 20; x < W; x += 28) for (let y = 20; y < H; y += 28) ctx.fillRect(x, y, 1, 1);
-
-  const nodes = [...world.nodes.values()];
-  for (const n of nodes) {
-    n.x += (n.tx + Math.sin(now / 2400 + n.born) * 5 - n.x) * 0.06;
-    n.y += (n.ty + Math.cos(now / 2900 + n.born) * 5 - n.y) * 0.06;
-  }
-  // mesh edges
-  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
-    const a = nodes[i], b = nodes[j];
-    const p = world.pulses.get([a.name, b.name].sort().join("|"));
-    const k = p ? Math.max(0, 1 - (now - p) / 2500) : 0;
-    ctx.strokeStyle = `rgba(160,180,220,${0.06 + k * 0.25})`; ctx.lineWidth = 1 + k;
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-  }
-  // human links (faint, dashed)
-  ctx.setLineDash([2, 6]); ctx.strokeStyle = "rgba(251,191,36,0.08)"; ctx.lineWidth = 1;
-  for (const n of nodes) { ctx.beginPath(); ctx.moveTo(human.x, human.y); ctx.lineTo(n.x, n.y); ctx.stroke(); }
-  ctx.setLineDash([]);
-
-  // effects under nodes
-  world.fx = world.fx.filter((e) => now - e.t0 < e.dur);
-  for (const e of world.fx) {
-    const k = (now - e.t0) / e.dur;
-    if (e.type === "ring") {
-      const at = e.at, R = (e.big ? 90 : 55) * (1 - Math.pow(1 - k, 3)) + 24;
-      ctx.strokeStyle = hexA(e.col, 0.55 * (1 - k)); ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(at.x, at.y, R, 0, Math.PI * 2); ctx.stroke();
-    } else if (e.type === "msg") {
-      const a = nodePos(e.from), b = nodePos(e.to);
-      if (!a || !b) continue;
-      const ease = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-      // slight curve
-      const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12, my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
-      for (let t = 0; t < 7; t++) {
-        const q = Math.max(0, ease - t * 0.018), u = 1 - q;
-        const x = u * u * a.x + 2 * u * q * mx + q * q * b.x, y = u * u * a.y + 2 * u * q * my + q * q * b.y;
-        ctx.fillStyle = hexA(e.col, (t === 0 ? 0.95 : 0.35 * (1 - t / 7)) * (k > 0.9 ? (1 - k) * 10 : 1));
-        ctx.beginPath(); ctx.arc(x, y, Math.max(0.5, t === 0 ? 3 : 2.2 - t * 0.2), 0, Math.PI * 2); ctx.fill();
-      }
-    }
-  }
-  drawHuman(now);
-  for (const n of nodes) drawNode(n, now);
-  for (const e of world.fx) if (e.type === "label") {
-    const k = (now - e.t0) / e.dur;
-    ctx.save(); ctx.globalAlpha = k < 0.15 ? k / 0.15 : 1 - Math.max(0, (k - 0.6) / 0.4);
-    ctx.fillStyle = e.col; ctx.font = `600 12px ${MONO}`; ctx.textAlign = "center";
-    ctx.fillText(e.text, e.at.x, e.at.y - 36 - (e.dy || 0) - k * 24); ctx.restore();
-  }
-}
-
-// ------------------------------------------------------------------ live data
-let replaying = false, feedEnabled = true, snap = null;
+// ------------------------------------------------------------------ live state
 async function refresh() {
-  if (replaying) return;
-  try { snap = await (await fetch("/api/snapshot")).json(); } catch { return; }
-  if (replaying) return;
-  for (const p of snap.peers) {
-    const n = ensureNode(p.name, p.spawned_by);
-    Object.assign(n, { status: p.status, agent: p.agent || "absent", model: p.model, tasks: p.tasks, activity: p.activity, cmd: p.cmd,
-                       ctx: p.ctx, cost: p.cost, knows: p.knows });
+  let s;
+  try { s = await (await fetch("/api/snapshot")).json(); } catch { return; }
+  snap = s;
+  hero(s.repo.snapshots || []);
+  upNext(s.tasks);
+  const st = $("status");
+  if (!replay) { st.className = "status" + (s.paused ? " paused" : ""); $("statusText").textContent = s.paused ? "Paused" : "Live"; }
+  if (replay) return;
+  for (const p of s.peers) liveRow(p);
+  for (const [name, r] of rows) if (name !== "human" && !s.peers.some((p) => p.name === name)) { r.el.remove(); rows.delete(name); }
+  youRow(s.humans);
+}
+function liveRow(p) {
+  const r = row(p.name);
+  r.el.classList.remove("unborn");
+  const state = p.status === "waiting" || p.agent === "blocked" ? "waiting" : p.status === "resting" ? "resting"
+    : !p.agent || p.agent === "absent" ? "absent" : p.agent === "working" ? "working" : "idle";
+  r.el.dataset.state = state;
+  const t = p.tasks[0];
+  r.el.querySelector(".task").textContent = t ? `${t.id} ${t.title}` : p.knows ? `Knows ${p.knows}` : "";
+  r.el.querySelector(".task").title = t ? t.title : p.knows || "";
+  const model = /sonnet/.test(p.model) ? "Sonnet" : /haiku/.test(p.model) ? "Haiku" : "Opus";
+  r.el.querySelector(".meta").innerHTML = `${p.cost != null ? "$" + p.cost.toFixed(2) : ""}<small>${model}${p.ctx != null ? `, ${Math.round(p.ctx)}% context` : ""}</small>`;
+  if (state === "working") setNow(r, p.activity || (p.cmd ? `Running ${p.cmd}` : "Working"), "");
+  else if (state === "waiting") setNow(r, "Waiting for your answer", "ask");
+  else if (state === "resting") setNow(r, "Resting until there's new work", "quiet");
+  else if (state === "absent") setNow(r, "Offline", "quiet");
+  else setNow(r, p.activity ? `Idle. Last thought: ${p.activity}` : "Idle", "quiet");
+}
+function youRow(humans) {
+  const r = row("human");
+  r.el.dataset.state = humans.length ? "working" : "idle";
+  r.el.style.setProperty("--c", YOU);
+  r.el.querySelector(".task").textContent = humans.length ? `${humans.length} question${humans.length > 1 ? "s" : ""} waiting` : "Nothing waiting";
+  r.el.querySelector(".meta").innerHTML = humans.length ? `<small>Run swarm human</small>` : "";
+  if (humans.length) setNow(r, humans.map((h) => `${h.id}: ${h.text}`).join("     "), "ask");
+  else setNow(r, "Nothing needs you right now", "quiet");
+}
+
+// the hero: real frames from sliver-render
+let heroList = [], heroIdx = -1;
+const pretty = (p) => { const n = p.split("/").pop().replace(/\.png$/, "").replace(/[-_]+/g, " "); return n[0].toUpperCase() + n.slice(1); };
+function hero(list) {
+  const imgs = list.filter((p) => !/failure/.test(p));
+  if (imgs.join() === heroList.join()) return;
+  heroList = imgs; const box = $("hero"); box.innerHTML = "";
+  imgs.sort((a, b) => /sliver-render/.test(b) - /sliver-render/.test(a));
+  for (const p of imgs) {
+    const im = new Image(); im.alt = pretty(p); im.dataset.path = p;
+    im.onload = () => { if (lit(im) > 0.12) { box.appendChild(im); if (heroIdx < 0) nextHero(); } };
+    im.src = "/snap/" + p.split("/").pop();
   }
-  const live = new Set(snap.peers.map((p) => p.name));
-  for (const name of [...world.nodes.keys()]) if (!live.has(name)) { world.nodes.delete(name); layout(); }
-  human.open = snap.humans.length;
-  renderBoard(snap.tasks, snap.humans);
-  setStat("s-agents", snap.peers.length);
-  setStat("s-loc", snap.repo.loc || 0);
-  setStat("s-cost", snap.cost || 0, (v) => "$" + v.toFixed(2));
-  setStat("s-landed", world.stats.landed);
-  setStat("s-msgs", world.stats.msgs);
-  setTB(snap.repo.snapshots || []);
-  const l = $("live"); l.className = "live" + (snap.paused ? " paused" : ""); l.querySelector("span").textContent = snap.paused ? "PAUSED" : "LIVE";
+  heroIdx = -1;
 }
-
-function renderBoard(tasks, humans) {
-  const done = tasks.filter((t) => t.status === "done").length, total = tasks.filter((t) => t.status !== "dropped").length;
-  setStat("s-tasks", done);
-  $("b-count").textContent = `${done} / ${total}`;
-  $("b-prog").style.width = total ? `${(100 * done) / total}%` : "0";
-  const doing = tasks.filter((t) => t.status === "claimed").sort((a, b) => +a.id.slice(1) - +b.id.slice(1));
-  const open = tasks.filter((t) => t.status === "open").sort((a, b) => +a.id.slice(1) - +b.id.slice(1));
-  diffList($("b-doing"), doing.map((t) => [t.id + t.owner, `<span class="dot" style="background:${color(t.owner)};box-shadow:0 0 8px ${color(t.owner)}"></span><span class="id">${t.id}</span><span class="t" title="${esc(t.title)}">${esc(t.title)}</span>`]), "task");
-  diffList($("b-open"), open.slice(0, 8).map((t) => [t.id, `<span class="dot" style="background:#2a2f3a"></span><span class="id">${t.id}</span><span class="t">${esc(t.title)}</span>`]), "task open");
-  $("b-hcount").textContent = humans.length || "";
-  $("b-human-wrap").style.display = humans.length ? "" : "none";
-  diffList($("b-human"), humans.slice(0, 3).map((h) => [h.id, `<b>${h.id}</b>${esc(h.text)}`]), "ask");
+function lit(im) {   // share of columns with anything drawn in them; skips near-empty test frames
+  const c = document.createElement("canvas"); c.width = 400; c.height = 12;
+  const x = c.getContext("2d"); x.drawImage(im, 0, 0, 400, 12);
+  const d = x.getImageData(0, 0, 400, 12).data; let cols = 0;
+  for (let i = 0; i < 400; i++) { for (let j = 0; j < 12; j++) { const k = (j * 400 + i) * 4; if (d[k] + d[k + 1] + d[k + 2] > 90) { cols++; break; } } }
+  return cols / 400;
 }
-function diffList(el, items, cls) {
-  const key = items.map((i) => i[0]).join(",");
-  if (el.dataset.key === key) return;
-  const old = new Set((el.dataset.key || "").split(","));
-  el.dataset.key = key; el.innerHTML = "";
-  for (const [k, html] of items) {
-    const d = document.createElement("div"); d.className = cls; d.innerHTML = html;
-    if (old.has(k)) d.style.animation = "none";
-    el.appendChild(d);
-  }
-}
-
-// ------------------------------------------------------------------ spotlight
-let spotName = null, spotPinned = false, spotSince = 0, typed = "", target = "";
-function pickSpot(now) {
-  const nodes = [...world.nodes.values()].filter((n) => n.activity);
-  if (!nodes.length) return;
-  if (spotPinned && world.nodes.has(spotName)) return;
-  if (spotName && now - spotSince < 9000 && world.nodes.has(spotName)) return;
-  const working = nodes.filter((n) => n.agent === "working");
-  const pool = working.length ? working : nodes;
-  const i = pool.findIndex((n) => n.name === spotName);
-  spotName = pool[(i + 1) % pool.length].name; spotSince = now; typed = "";
-}
-function spotTick(now) {
-  pickSpot(now);
-  const n = world.nodes.get(spotName), el = $("spot");
-  if (!n || !n.activity) { el.style.opacity = 0; return; }
-  el.style.opacity = 1;
-  const c = color(n.name);
-  el.querySelector(".sw").style.cssText = `background:${c};box-shadow:0 0 10px ${c}`;
-  el.querySelector("b").textContent = n.name;
-  el.querySelector(".st").textContent = n.agent === "working" ? "is thinking" : `is ${n.agent || "idle"}`;
-  el.querySelector(".meta").textContent = [n.ctx != null ? `${n.ctx.toFixed(0)}% context` : "", n.cost != null ? `$${n.cost.toFixed(2)}` : "", spotPinned ? "pinned" : ""].filter(Boolean).join(" · ");
-  if (target !== n.activity) { target = n.activity; if (!target.startsWith(typed.slice(0, 20))) typed = ""; }
-  if (typed.length < target.length) typed = target.slice(0, typed.length + 3);
-  else if (typed.length > target.length) typed = target;
-  el.querySelector("p").textContent = typed;
-  const cmd = el.querySelector(".cmd");
-  cmd.innerHTML = n.cmd ? `<b>running ›</b> ${esc(n.cmd)}` : "";
-  cmd.style.opacity = n.cmd && typed.length >= target.length ? 1 : 0;
-}
-cv.addEventListener("click", (e) => {
-  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  const hit = [...world.nodes.values()].find((n) => Math.hypot(n.x - x, n.y - y) < 32);
-  if (hit && spotPinned && spotName === hit.name) spotPinned = false;
-  else if (hit) { spotName = hit.name; spotPinned = true; typed = ""; spotSince = performance.now(); }
-  else spotPinned = false;
-});
-cv.addEventListener("mousemove", (e) => {
-  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  cv.style.cursor = [...world.nodes.values()].some((n) => Math.hypot(n.x - x, n.y - y) < 32) ? "pointer" : "default";
-});
-
-// ------------------------------------------------------------------ touch bar strip
-let tbList = [], tbIdx = -1;
-function setTB(list) {
-  const pretty = list.filter((p) => !/failure/.test(p));
-  if (pretty.join() === tbList.join()) return;
-  tbList = pretty; const tb = $("tb"); tb.innerHTML = "";
-  for (const p of tbList) { const img = new Image(); img.src = "/snap/" + p.split("/").pop(); img.dataset.path = p; tb.appendChild(img); }
-  if (tbIdx < 0) cycleTB();
-}
-function cycleTB() {
-  const imgs = $("tb").querySelectorAll("img");
+function nextHero() {
+  const imgs = $("hero").querySelectorAll("img");
   if (!imgs.length) return;
-  tbIdx = (tbIdx + 1) % imgs.length;
-  imgs.forEach((im, i) => im.classList.toggle("on", i === tbIdx));
-  const p = imgs[tbIdx].dataset.path, crate = (p.match(/crates\/([^/]+)/) || [])[1] || "";
-  $("tbcap").innerHTML = `Touch Bar frame <b>${esc(p.split("/").pop().replace(".png", ""))}</b>, rendered by <b>${esc(crate)}</b>, code the swarm wrote · ${tbIdx + 1}/${imgs.length}`;
+  heroIdx = (heroIdx + 1) % imgs.length;
+  imgs.forEach((im, i) => im.classList.toggle("show", i === heroIdx));
+  const p = imgs[heroIdx].dataset.path, crate = (p.match(/crates\/([^/]+)/) || [])[1] || "the renderer";
+  $("heroCap").textContent = `${pretty(p)}, drawn by ${crate}. The swarm wrote every line of it.`;
+  $("heroCount").textContent = `${heroIdx + 1} of ${imgs.length}`;
 }
-setInterval(cycleTB, 4500);
+setInterval(nextHero, 6000);
 
-// ------------------------------------------------------------------ stream + replay
-let history = [];
+function upNext(tasks) {
+  const open = tasks.filter((t) => t.status === "open").sort((a, b) => +a.id.slice(1) - +b.id.slice(1));
+  $("nextCount").textContent = open.length ? `${open.length} open task${open.length > 1 ? "s" : ""}` : "Nothing open";
+  const short = (s) => { s = s.replace(/^[\w-]+: /, "").split(/ [(—-] |: /)[0]; return s.length > 34 ? s.slice(0, 33) + "…" : s; };
+  const html = open.map((t) => `<span class="key" title="${esc(t.id + " " + t.title)}">${esc(short(t.title))}</span>`).join("");
+  if ($("nextKeys").innerHTML !== html) $("nextKeys").innerHTML = html;
+}
+
+// ------------------------------------------------------------------ events
+function ingest(ev) {
+  events.push(ev);
+  const s = spawnedName(ev);
+  if (s) color(s);
+  else if (ev.by && !["human", "?", "pulse"].includes(ev.by)) color(ev.by);
+}
 function connect() {
   const es = new EventSource("/api/stream");
   es.addEventListener("history", (m) => {
-    history = JSON.parse(m.data);
-    if (replaying) return;
-    world.stats = { landed: 0, done: 0, msgs: 0 }; $("feed").innerHTML = ""; feedCount = 0;
-    for (const ev of history) apply(ev, false);
-    setStat("s-landed", world.stats.landed); setStat("s-msgs", world.stats.msgs);
-    if (new URLSearchParams(location.search).has("replay")) replay();
+    events = []; JSON.parse(m.data).forEach(ingest);
+    if (new URLSearchParams(location.search).has("replay")) startReplay();
   });
-  es.onmessage = (m) => {
-    const ev = JSON.parse(m.data); history.push(ev);
-    if (replaying) return;
-    apply(ev, true);
-    setStat("s-landed", world.stats.landed); setStat("s-msgs", world.stats.msgs);
-  };
+  es.onmessage = (m) => ingest(JSON.parse(m.data));
   es.onerror = () => { es.close(); setTimeout(connect, 2000); };
 }
 
-async function replay() {
-  if (replaying || !history.length) return;
-  replaying = true;
-  const l = $("live"); l.className = "live replay"; l.querySelector("span").textContent = "REPLAY";
-  $("replayBtn").textContent = "■ STOP";
-  world.nodes.clear(); world.fx = []; world.stats = { landed: 0, done: 0, msgs: 0 }; $("feed").innerHTML = ""; feedCount = 0;
-  for (const k of ["s-agents", "s-tasks", "s-landed", "s-msgs"]) setStat(k, 0);
-  human.open = 0; layout();
-  try { const s = await (await fetch("/api/snapshot")).json(); setStat("s-loc", s.repo.loc || 0); setStat("s-cost", s.cost || 0, (v) => "$" + v.toFixed(2)); setTB(s.repo.snapshots || []); } catch {}
-  const board = new Map();
-  const evs = history.slice(), t0 = evs[0].at, span = Math.max(1, evs[evs.length - 1].at - t0);
-  const scale = 75000 / span;          // whole history in about 75 s, gaps compressed
-  for (let i = 0; i < evs.length && replaying; i++) {
-    const ev = evs[i], dt = i ? (ev.at - evs[i - 1].at) * scale : 0;
-    await new Promise((r) => setTimeout(r, Math.max(70, Math.min(1400, dt))));
-    if (!replaying) break;
-    apply(ev, true);
-    const m = ev.kind === "task" && /^(added|claimed|done|released|dropped) (T\d+)(?:: (.*))?/.exec(ev.text);
-    if (m) {
-      const tk = board.get(m[2]) || { id: m[2], title: m[3] || m[2], status: "open", owner: null };
-      if (m[1] === "claimed") Object.assign(tk, { status: "claimed", owner: ev.by });
-      else if (m[1] === "done") tk.status = "done";
-      else if (m[1] === "released") Object.assign(tk, { status: "open", owner: null });
-      else if (m[1] === "dropped") tk.status = "dropped";
-      board.set(m[2], tk);
-      for (const n of world.nodes.values()) n.tasks = [...board.values()].filter((t) => t.status === "claimed" && t.owner === n.name);
-      renderBoard([...board.values()], []);
+// ------------------------------------------------------------------ replay
+function startReplay() {
+  if (!events.length) return;
+  const t0 = events[0].at, t1 = events[events.length - 1].at, seconds = 50;
+  replay = { at: t0, t1, rate: Math.max(1, (t1 - t0) / seconds), started: performance.now(), t0 };
+  $("status").className = "status replay"; $("statusText").textContent = "Replay";
+  $("replay").innerHTML = "Back to live";
+  // every agent that ever existed gets a dark strip; it lights up when spawned
+  for (const name of joinOrder) { const r = row(name); r.el.classList.add("unborn"); r.el.dataset.state = "absent"; setNow(r, "", "quiet"); }
+  row("human");
+  const tick = () => {
+    if (!replay) return;
+    replay.at = Math.min(replay.t1, t0 + ((performance.now() - replay.started) / 1000) * replay.rate);
+    const seen = events.filter((e) => e.at <= replay.at);
+    const born = new Set(seen.map(spawnedName).filter(Boolean));
+    for (const name of joinOrder) {
+      const r = rows.get(name); if (!r) continue;
+      const lastEv = seen.filter((e) => laneOf(e) === name).pop();
+      const busy = lastEv && (replay.at - lastEv.at) / replay.rate < 1.6;
+      r.el.classList.toggle("unborn", !born.has(name));
+      r.el.dataset.state = !born.has(name) ? "absent" : busy ? "working" : "idle";
+      if (lastEv && born.has(name)) setNow(r, plain(lastEv), busy ? "" : "quiet");
+      const claimed = seen.filter((e) => e.by === name && e.kind === "task" && /^claimed T\d+: /.test(e.text)).pop();
+      r.el.querySelector(".task").textContent = claimed ? claimed.text.replace(/^claimed /, "") : "";
     }
-    if (ev.kind === "human" && !/answered|CHANGED/.test(ev.text)) human.open++;
-    if (ev.kind === "human" && /answered/.test(ev.text)) human.open = Math.max(0, human.open - 1);
-    for (const n of world.nodes.values()) n.agent = performance.now() - n.lastEv < 6000 ? "working" : "idle";
-    setStat("s-agents", world.nodes.size); setStat("s-tasks", world.stats.done);
-    setStat("s-landed", world.stats.landed); setStat("s-msgs", world.stats.msgs);
-  }
-  replaying = false; $("replayBtn").textContent = "▶ REPLAY";
-  world.nodes.clear(); layout();
-  world.stats = { landed: 0, done: 0, msgs: 0 }; $("feed").innerHTML = ""; feedCount = 0;
-  for (const ev of history) apply(ev, false);
+    if (replay.at >= replay.t1) { setTimeout(stopReplay, 2500); return; }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+function stopReplay() {
+  if (!replay) return;
+  replay = null; $("replay").innerHTML = 'Replay<span class="long"> from the start</span>';
+  for (const r of rows.values()) r.el.classList.remove("unborn");
   refresh();
 }
-$("replayBtn").addEventListener("click", () => { if (replaying) replaying = false; else replay(); });
+$("replay").addEventListener("click", () => (replay ? stopReplay() : startReplay()));
 
-// ------------------------------------------------------------------ go
-resize();
+// ------------------------------------------------------------------ words for an event
+function plain(e) {
+  const t = e.text;
+  switch (e.kind) {
+    case "land": return "Landed " + t.replace(/^landed on main: [0-9a-f]+ /, "");
+    case "msg": return `To ${e.to}: ${t}`;
+    case "say": return "To everyone: " + t.replace(/^[a-z]+: /, "");
+    case "human": return who(e.by) === "human" ? "You answered " + t.replace(/^H\d+ answered: /, "") : "Asked you " + t.replace(/^(H\d+) \(\w+\) /, "$1: ");
+    case "task": return t[0].toUpperCase() + t.slice(1);
+    case "peer": return t[0].toUpperCase() + t.slice(1);
+    default: return t;
+  }
+}
+
+// ------------------------------------------------------------------ hover
+const tip = $("tip");
+document.addEventListener("mousemove", (m) => {
+  const r = [...rows.values()].find((r) => { const b = r.canvas.getBoundingClientRect(); return m.clientX >= b.left && m.clientX <= b.right && m.clientY >= b.top - 4 && m.clientY <= b.bottom + 4; });
+  if (!r) { tip.style.opacity = 0; return; }
+  const b = r.canvas.getBoundingClientRect(), x = m.clientX - b.left, win = windowTimes();
+  let best = null, bd = 7;
+  for (const e of visible()) {
+    if (!(laneOf(e) === r.name || (e.kind === "msg" && e.to === r.name) || (r.name === "human" && e.kind === "human"))) continue;
+    const d = Math.abs(xOf(e.at, b.width, win) - x);
+    if (d < bd) { bd = d; best = e; }
+  }
+  if (!best) { tip.style.opacity = 0; return; }
+  const from = who(best.by) === "human" ? "You" : who(best.by);
+  const line = best.kind === "msg" && best.to === r.name && laneOf(best) !== r.name ? `From ${from}: ${best.text}` : plain(best);
+  tip.innerHTML = `<time>${new Date(best.at * 1000).toTimeString().slice(0, 5)}</time>${esc(line.length > 280 ? line.slice(0, 279) + "…" : line)}`;
+  tip.style.left = Math.min(innerWidth - 440, m.clientX + 14) + "px"; tip.style.top = b.bottom + 10 + "px"; tip.style.opacity = 1;
+});
+
+// ------------------------------------------------------------------ go: the strips power on, top to bottom
+wake($("hero"), 150);
+wake($("nextStrip"), 700);
+sizeCanvas($("threads"));
 requestAnimationFrame(frame);
-setInterval(() => spotTick(performance.now()), 40);
-refresh(); setInterval(refresh, 2500);
 connect();
+refresh(); setInterval(refresh, 2500);
 </script>
 </body>
 </html>
