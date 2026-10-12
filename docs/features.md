@@ -126,7 +126,7 @@ we want, if the hardware allows them.
 |---|---|---|---|
 | tiny-dfr import | P0 | done | Also offered in the settings onboarding. |
 | Profiles: switchable named full configs | P2 | partial | For example "Work" and "Presenting". **Now:** The API has `SetProfile`; no profile editor or storage UX. |
-| Export/import a preset (`.sliver` bundle = TOML + icons) | P2 | todo | On import, list the scripts and commands and require a review (ux.md §Presets). **Now:** A waybar config importer exists (`sliverctl config import-waybar`); `.sliver` bundles do not. |
+| Export/import a preset (`.sliver` bundle = TOML + icons) | P2 | done (CLI) | On import, list the scripts and commands and require a review (ux.md §Presets). `sliver_config::preset` + `sliverctl preset export|show|import` (T67): config, includes, stylesheet and icons in one readable TOML file; `env` left out; import lists everything it runs, needs `yes` (or `no-commands` to strip them), refuses a config that doesn't load, and backs up what it replaces. The settings page still exports/imports a bare config.toml. |
 | Shareable gallery | P3 | todo | External, so ask the human first. |
 | Config readable and editable by hand. The settings app preserves comments (toml_edit) | P1 | done | Settings and hand edits can coexist. **Now:** The writer preserves comments (toml_edit). |
 

@@ -28,6 +28,7 @@ mod keys_table;
 mod load;
 mod model;
 mod module;
+pub mod preset;
 mod resolve;
 pub mod tinydfr;
 mod validate;

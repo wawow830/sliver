@@ -83,6 +83,14 @@ Everything, the Fn layer included, can be changed. The full reference is `man sl
 Try a config without the bar: `sliver-agent --render /tmp/preview --config my.toml` writes
 `/tmp/preview-base.png` and `/tmp/preview-fn.png`.
 
+Share a whole setup (config, includes, stylesheet, icons) as one `.sliver` file:
+```sh
+sliverctl preset export desk --name "My desk"   # writes desk.sliver; env tables stay home
+sliverctl preset show desk.sliver               # files, everything it runs, does it load
+sliverctl preset import desk.sliver             # asks: yes / no-commands; backs up what it replaces
+```
+A preset's scripts run as you, so read the `runs` list before you say yes.
+
 ## 5. Style
 
 `~/.config/sliver/style.css`, like waybar's:

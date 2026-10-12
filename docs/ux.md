@@ -231,8 +231,10 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 
 ## 9. Presets and profiles
 
-- **Export** writes a `.sliver` file (zip of TOML + referenced icons). Absolute paths are
-  rewritten and secrets or env aren't included.
+- **Export** writes a `.sliver` file: one TOML document holding the config, its includes, the
+  stylesheet and the referenced icons (binary files as base64), so it can be read before use.
+  Absolute paths are rewritten and `env` tables aren't included (`sliver_config::preset`,
+  `sliverctl preset`).
 - **Import** previews the render, then lists **every command, script and D-Bus call** in the
   preset with an "I've reviewed these" checkbox before enabling. Imported scripts start disabled
   if unchecked.

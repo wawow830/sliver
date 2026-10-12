@@ -29,6 +29,11 @@ Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.
 Config (offline: edits ~/.config/sliver/config.toml, keeps comments; `sliverctl config help`)
   config path|check|get|set|unset|resolve|import-tiny-dfr ...
 
+Presets (offline: a .sliver file holds a config, its includes, stylesheet and icons)
+  preset export FILE [--name NAME] [--config PATH]   share your setup (env tables are left out)
+  preset show FILE                list its files and everything it runs; check that it loads
+  preset import FILE [--yes] [--no-commands] [--dir DIR]   use it (replaced files are backed up)
+
 Publish (stays connected; prints `ITEM KIND [KEY=VALUE...]` per event)
   publish [--scope app|status|target] [--provider ID] [--title T] [--target-app APP_ID]
           [--modal] [--stdin] ITEM...
@@ -151,6 +156,8 @@ pub enum Cmd {
     Publish(Publish),
     /// `config …`: offline, handled by `config::run` (elm).
     Config(Vec<String>),
+    /// `preset …`: offline, handled by `preset::run`.
+    Preset(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -194,6 +201,7 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         "modules" => Ok(Cmd::Modules),
         "contexts" => Ok(Cmd::Contexts),
         "config" => Ok(Cmd::Config(rest.to_vec())),
+        "preset" => Ok(Cmd::Preset(rest.to_vec())),
         "reload" => c(Call::Reload),
         "validate" => {
             let path = one(rest, "FILE")?;

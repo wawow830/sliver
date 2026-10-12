@@ -2,6 +2,7 @@
 
 mod cli;
 mod config;
+mod preset;
 
 use cli::{Call, Cmd, ItemSpec, KeyVals, Publish, Val};
 use sliver_client::{Client, ContextOptions, Item};
@@ -160,11 +161,12 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
         }
         // Offline: never touches the session bus.
         Cmd::Config(args) => return Ok(config::run(&args)),
+        Cmd::Preset(args) => return Ok(preset::run(&args)),
         _ => {}
     }
     let conn = Connection::session().map_err(|e| format!("session bus: {e}"))?;
     match cmd {
-        Cmd::Help | Cmd::Version | Cmd::Config(_) => unreachable!(),
+        Cmd::Help | Cmd::Version | Cmd::Config(_) | Cmd::Preset(_) => unreachable!(),
         Cmd::Status => {
             for (iface, name) in [
                 (IFACE_CONTROL, "Healthy"),

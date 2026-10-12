@@ -15,6 +15,11 @@ sliverctl \- control the Touch Bar and publish items to it
 .B sliverctl config
 .I subcommand
 .RI [ args ...]
+.br
+.B sliverctl preset
+.BR export | show | import
+.I file
+.RI [ options ]
 .SH DESCRIPTION
 .B sliverctl
 talks to
@@ -30,6 +35,8 @@ runs.
 .PP
 The
 .B config
+and
+.B preset
 commands work offline: they edit the configuration file
 (see
 .BR sliver\-config (5))
@@ -257,6 +264,72 @@ from tiny\-dfr's configuration.
 Write
 .B config.toml
 from a waybar configuration.
+.SH PRESETS
+A preset is one
+.B .sliver
+file holding a whole setup: the configuration, its includes, the stylesheet with its imports, and
+the icons and images the configuration points at.
+It is a TOML document
+.RB ( [preset] " and " [files] ;
+binary files are base64), so you can read it before using it.
+.TP
+.BR "preset export" " \fIfile\fP [" \-\-name " \fIname\fP] [" \-\-config " \fIpath\fP]"
+Bundle the configuration in use (or
+.IR path ).
+Files outside the configuration directory are copied into
+.B assets/
+or
+.BR include/ ,
+and the references to them are rewritten.
+System files under
+.BR /usr ,
+.B /etc
+and
+.B /opt
+are referenced, not copied.
+.B env
+tables are left out, since that's where secrets live.
+Commands that mention your home directory are pointed out.
+A configuration with errors is refused.
+.I file
+gets the
+.B .sliver
+extension if it has none;
+.B \-
+writes to standard output.
+.TP
+.BI "preset show" " file"
+List the files and everything the preset would run as you:
+module scripts
+.RB ( exec ,
+.BR exec\-if ),
+and the commands, D\-Bus calls, files and URLs opened by its gestures and menus.
+Then check that it loads.
+The exit status is 1 if it doesn't.
+.TP
+.BR "preset import" " \fIfile\fP [" \-\-yes "] [" \-\-no\-commands "] [" \-\-dir " \fIdir\fP]"
+Replace your configuration with the preset.
+It shows what
+.B preset show
+shows and asks first:
+answer
+.B yes
+to import it as it is, or
+.B no\-commands
+to import it with every script and command removed.
+.B \-\-yes
+and
+.B \-\-no\-commands
+answer in advance; without a terminal, one of them is required.
+A preset whose configuration doesn't load is refused and nothing changes.
+Files it replaces are copied to
+.BI backups/ time /
+in the configuration directory first, and
+.B config.toml
+is written last, so the agent reloads a complete setup.
+.B \-\-dir
+installs somewhere other than
+.BR ~/.config/sliver .
 .SH VALUES
 In
 .IR key = value
@@ -270,7 +343,8 @@ Prefix a value with
 to force a string
 .RB ( text=s:42 ).
 .SH EXIT STATUS
-0 on success, 1 when the agent reports an error or isn't running, and 2 for usage errors.
+0 on success, 1 when the agent reports an error or isn't running (or a preset doesn't load or an
+import is cancelled), and 2 for usage errors.
 .SH ENVIRONMENT
 .TP
 .B DBUS_SESSION_BUS_ADDRESS
