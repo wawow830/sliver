@@ -170,7 +170,7 @@ default true).
 | `progress` | `value` d in [0,1], or `indeterminate` b |
 | `spacer` | `size` s: `small`, `large`, `flexible` |
 | `group` | `items` aa{sv} (one level of nesting, laid out together, overflow as a unit) |
-| `popover` | `items` aa{sv}; tapping shows them full-width with a close button (NSPopoverTouchBarItem) |
+| `popover` | `items` aa{sv}; tapping shows them full-width with a close button (NSPopoverTouchBarItem). Only the user's first zone stays, over a modal context too. Taps inside reach the child items and the popover stays open until its ✕ (or until the item or context goes away). Events `popover open=true/false`. Classes `.popover-item`, `.popover-close`, zone `.menu.popover` |
 
 Reserved for later minors: `color-picker`, `image`. Unknown types are skipped with a warning.
 

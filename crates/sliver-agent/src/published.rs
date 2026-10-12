@@ -81,6 +81,10 @@ pub enum PubKind {
     },
     /// A scrubber's ‹ / › arrow: scroll to this offset.
     ScrollTo(i32),
+    /// A popover item: a tap opens its items full-width (NSPopoverTouchBarItem).
+    Popover,
+    /// The ✕ that closes an open popover (`item` is the popover's id).
+    PopoverClose,
     /// The ✕ that closes a modal context.
     Close,
 }
@@ -122,6 +126,49 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
         timer_total: None,
         menu: Vec::new(),
     }
+}
+
+/// An open popover: its items as cells (`class` is the context's, `app` or `status`), then a ✕.
+/// `None` when the popover is gone (the context or item was removed): the caller closes it.
+pub fn popover_cells(
+    ctx: &PubContext,
+    popover: &str,
+    class: &str,
+    icons: &mut Icons,
+    icon_size: u32,
+) -> Option<Vec<Cell>> {
+    let item = ctx.items.iter().find(|i| i.id == popover && i.visible)?;
+    let ItemKind::Popover { items } = &item.kind else {
+        return None;
+    };
+    let mut out = Vec::new();
+    for child in items {
+        push(
+            ctx,
+            child,
+            class,
+            class == "app",
+            icons,
+            icon_size,
+            &mut out,
+        );
+    }
+    for c in &mut out {
+        c.classes.push("popover-item".into());
+    }
+    let mut close = close_cell(ctx, icons, icon_size);
+    close.key = format!("popover/{}#{popover}.close", ctx.provider);
+    close.id = format!("app/{}#{popover}.close", ctx.provider);
+    close.css_id = "popover-close".into();
+    close.classes = vec![class.to_owned(), "popover-close".into()];
+    close.published = Some(PubRef {
+        context: ctx.id,
+        item: popover.to_owned(),
+        kind: PubKind::PopoverClose,
+        gestures: Vec::new(),
+    });
+    out.push(close);
+    Some(out)
 }
 
 /// Cells for a context's items. `class` is `app` or `status`; `focused` adds `.focused-app`.
@@ -217,9 +264,15 @@ fn push(
         menu: Vec::new(),
     };
     match &item.kind {
-        ItemKind::Button | ItemKind::Popover { .. } => out.push(base(
+        ItemKind::Button => out.push(base(
             label_content(icon, label),
             Some(PubKind::Button),
+            false,
+            &item.id,
+        )),
+        ItemKind::Popover { .. } => out.push(base(
+            label_content(icon, label),
+            Some(PubKind::Popover),
             false,
             &item.id,
         )),

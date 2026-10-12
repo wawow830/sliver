@@ -140,6 +140,9 @@ pub struct Agent {
     emoji: modules::EmojiHandle,
     /// An open `menu` sub-bar: the entries it shows.
     menu: Option<Vec<sliver_config::MenuEntry>>,
+    /// An open popover a published item showed (api.md §3): context, popover item id, and the
+    /// context's class (`app` / `status`).
+    popover: Option<(sliver_api::registry::ContextId, String, String)>,
     /// An open bar-mode drawer: the group's key.
     subbar: Option<String>,
     /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
@@ -215,6 +218,7 @@ impl Agent {
             errors: Vec::new(),
             emoji: Default::default(),
             menu: None,
+            popover: None,
             subbar: None,
         }
     }
@@ -345,11 +349,46 @@ impl Agent {
         let modal = (id_base == 0 && world.published.modal)
             .then(|| world.published.app.clone())
             .flatten();
+        // An open popover replaces everything but the first zone, over a modal context too.
+        let mut popover = match (id_base, self.popover.clone()) {
+            (0, Some((ctx, item, class))) => {
+                let cells = world
+                    .published
+                    .contexts()
+                    .find(|c| c.id == ctx)
+                    .and_then(|c| {
+                        crate::published::popover_cells(
+                            c,
+                            &item,
+                            &class,
+                            &mut self.icons,
+                            ICON_LOOKUP_SIZE,
+                        )
+                    });
+                if cells.is_none() {
+                    // Its context or item went away (app closed, focus moved): it's closed.
+                    self.popover = None;
+                }
+                cells
+            }
+            _ => None,
+        };
+        let modal = if popover.is_some() { None } else { modal };
         let mut zones = r.zones.clone();
-        let menu = (id_base == 0 && modal.is_none())
+        if popover.is_some() && !zones.is_empty() {
+            zones.truncate(1);
+            zones.push(sliver_config::ResolvedZone {
+                name: "popover".into(),
+                width: sliver_config::Width::Fill(1),
+                align: sliver_config::Align::Start,
+                class: vec!["menu".into(), "popover".into()],
+                modules: Vec::new(),
+            });
+        }
+        let menu = (id_base == 0 && modal.is_none() && popover.is_none())
             .then(|| self.menu.clone())
             .flatten();
-        let subbar = (id_base == 0 && modal.is_none())
+        let subbar = (id_base == 0 && modal.is_none() && popover.is_none())
             .then(|| self.subbar.clone())
             .flatten();
         if (menu.is_some() || subbar.is_some()) && !zones.is_empty() {
@@ -378,6 +417,14 @@ impl Agent {
         let per_zone: Vec<Vec<Cell>> = zones
             .iter()
             .map(|z| {
+                if z.name == "popover"
+                    && let Some(mut cells) = popover.take()
+                {
+                    for c in &mut cells {
+                        c.pressed = self.pressed.contains(&c.key);
+                    }
+                    return cells;
+                }
                 if z.name == "menu"
                     && menu.is_none()
                     && let Some(key) = &subbar
@@ -1116,6 +1163,24 @@ impl Agent {
             (PubKind::Candidate { .. }, _) => {}
             (PubKind::ScrollTo(to), AG::Tap) => send(I::Scroll(to), fx),
             (PubKind::ScrollTo(_), _) => {}
+            (PubKind::Popover, AG::Tap) => {
+                let class = cell
+                    .classes
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "app".into());
+                self.popover = Some((p.context, p.item.clone(), class));
+                fx.extend(self.cancel_touches());
+                fx.push(Effect::Redraw);
+                send(I::Popover(true), fx);
+            }
+            (PubKind::PopoverClose, AG::Tap) => {
+                self.popover = None;
+                fx.extend(self.cancel_touches());
+                fx.push(Effect::Redraw);
+                send(I::Popover(false), fx);
+            }
+            (PubKind::PopoverClose, _) => {}
             (PubKind::Slider { .. }, AG::Tap) => {}
             _ => send(I::Gesture(ag), fx),
         }

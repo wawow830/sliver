@@ -590,3 +590,172 @@ fn scrubber_scrolls_and_picks() {
         ["‹", "Tab 6", "Tab 7", "[Tab 8]", "Tab 9"]
     );
 }
+
+/// T80: a popover item opens its items full-width with a ✕ (NSPopoverTouchBarItem); the app
+/// hears `popover open=true/false`, and taps inside reach the child items.
+#[test]
+fn popover_opens_and_closes() {
+    let Some(bus) = bus() else {
+        eprintln!("dbus-daemon not installed; skipping");
+        return;
+    };
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.addr.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let api = ApiLink::serve(conn, true).unwrap();
+    let app = zbus::blocking::connection::Builder::address(bus.addr.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let app_events = events(&app);
+    let path: OwnedObjectPath = app
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_TOUCHBAR),
+            "CreateContext",
+            &(opts(&[
+                ("provider", Value::from("org.example.Editor")),
+                ("modal", Value::from(true)),
+            ]),),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    let button = |id: &str, label: &str| {
+        opts(&[
+            ("id", Value::from(id.to_owned())),
+            ("type", Value::from("button")),
+            ("label", Value::from(label.to_owned())),
+        ])
+    };
+    let items = vec![
+        button("bold", "B"),
+        opts(&[
+            ("id", Value::from("more")),
+            ("type", Value::from("popover")),
+            ("label", Value::from("More")),
+            (
+                "items",
+                Value::from(vec![button("strike", "S"), button("code", "Code")]),
+            ),
+        ]),
+    ];
+    let warnings: Vec<String> = app
+        .call_method(
+            Some(BUS_NAME),
+            path.as_str(),
+            Some(IFACE_CONTEXT),
+            "SetItems",
+            &(items,),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    api.set_focus(Focus {
+        window: Some(Window {
+            class: "editor".into(),
+            pid: Some(std::process::id()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut world = World::at(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 0).unwrap());
+    world.published = Published::snapshot(&api.api);
+    let loaded = sliver_config::load_str("", std::path::Path::new("."));
+    let mut a = Agent::new(
+        loaded.config,
+        Stylesheet::sliver(),
+        Renderer::new(Fonts::embedded()),
+        Icons::builtin_only(),
+        2008,
+        60,
+    );
+    let keys = |a: &mut Agent, world: &World| {
+        a.render(world);
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .filter(|c| c.published.is_some())
+            .map(|c| c.key.rsplit_once('#').unwrap().1.to_owned())
+            .collect::<Vec<_>>()
+    };
+    let tap = |a: &mut Agent, key_end: &str, t: u64| {
+        let f = a.frame(Layer::Base).unwrap();
+        let r = f
+            .cells
+            .iter()
+            .position(|c| c.key.ends_with(key_end))
+            .unwrap() as u32
+            + 1;
+        let mut fx = a.touch(r, 0, TouchPhase::Down, 1.0, t);
+        fx.extend(a.touch(r, 0, TouchPhase::Up, 1.0, t + 40_000));
+        fx.extend(a.tick(t + 500_000));
+        for e in &fx {
+            if let Effect::Api {
+                context,
+                item,
+                what,
+            } = e
+            {
+                api.interact(*context, item, *what);
+            }
+        }
+    };
+    let next = || {
+        let (item, kind, data) = app_events.recv_timeout(Duration::from_secs(3)).unwrap();
+        let open = data.get("open").map(|v| bool::try_from(v).unwrap());
+        (item, kind, open)
+    };
+    assert_eq!(keys(&mut a, &world), ["bold", "more", "close"]);
+
+    tap(&mut a, "#more", 1_000);
+    assert_eq!(next(), ("more".into(), "popover".into(), Some(true)));
+    world.published = Published::snapshot(&api.api);
+    assert_eq!(keys(&mut a, &world), ["strike", "code", "more.close"]);
+    let f = a.frame(Layer::Base).unwrap();
+    assert!(
+        f.cells[f.cells.len() - 1]
+            .classes
+            .contains(&"popover-close".to_owned())
+    );
+    while let Some(due) = a.animation_deadline() {
+        std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
+        a.render(&world);
+    }
+    check("api-popover", &a.frame(Layer::Base).unwrap().image);
+
+    // A tap inside reaches the child item; the popover stays open.
+    tap(&mut a, "#code", 1_000_000);
+    assert_eq!(next(), ("code".into(), "tap".into(), None));
+    assert_eq!(keys(&mut a, &world), ["strike", "code", "more.close"]);
+
+    tap(&mut a, "#more.close", 2_000_000);
+    assert_eq!(next(), ("more".into(), "popover".into(), Some(false)));
+    assert_eq!(keys(&mut a, &world), ["bold", "more", "close"]);
+
+    // An open popover whose item disappears closes by itself.
+    tap(&mut a, "#more", 3_000_000);
+    assert_eq!(next().1, "popover");
+    let _: Vec<String> = app
+        .call_method(
+            Some(BUS_NAME),
+            path.as_str(),
+            Some(IFACE_CONTEXT),
+            "SetItems",
+            &(vec![button("bold", "B")],),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    world.published = Published::snapshot(&api.api);
+    assert_eq!(keys(&mut a, &world), ["bold", "close"]);
+}
