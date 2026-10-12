@@ -39,6 +39,19 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full rel
 - The agent's user unit is enabled for all users by the preset. It starts with
   `graphical-session.target`, and only if sliverd is installed.
 
+## SELinux and polkit (T76, checked on the installed Mac14,7, enforcing)
+- **SELinux: clean, no policy module needed.** sliverd runs as `unconfined_service_t` (a `bin_t`
+  binary started by systemd, the same domain tiny-dfr gets). The agent and apps run as the user's
+  `unconfined_t`, and the socket is `var_run_t`. `ausearch -m AVC -ts boot` showed no denials for any
+  sliver process across install, start, fallback, harness runs and normal use. Confinement on top
+  (a `sliverd_t` module) would add risk for little gain, since systemd's sandbox (DynamicUser, no
+  capabilities, a device allowlist, a syscall filter) already does the confining. Revisit if Fedora
+  ever confines `unconfined_service_t`.
+- **polkit: nothing to ship.** No sliver component defines or checks a polkit action. sliverd
+  authorises agents itself (seat0's active uid). Screen and keyboard-backlight sliders use logind's
+  `SetBrightness`, which logind allows for the active session without polkit. Everything the
+  agent launches runs as the user.
+
 ## COPR
 The spec is COPR-ready (SRPM upload, or the "SCM" source type running `scripts/rpm-build`).
 Creating the COPR project is an `external` ask for the human. Chroots: `fedora-*-aarch64`

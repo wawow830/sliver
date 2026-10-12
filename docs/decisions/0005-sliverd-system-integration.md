@@ -54,4 +54,4 @@ package, and hand the bar back when it can't run.
 - Installing the files is a `sudo` ask. The first boot with them is a `hardware` ask (watch the
   bar, confirm `systemctl status sliverd`, and check that the fallback works with
   `systemctl kill -s SEGV` ×6).
-- SELinux: sliverd runs as `unconfined_service_t` like tiny-dfr. A policy module is packaging work later.
+- SELinux: sliverd runs as `unconfined_service_t` like tiny-dfr. No denials on the real install (T76), and no module is planned (docs/packaging.md).
