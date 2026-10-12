@@ -613,6 +613,91 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             Spec::new(ValueMap::new().with("", esc(m)), "{}")
         }
         "cpu" | "memory" | "temperature" | "disk" | "load" => return stat_spec(m, world),
+        "network" => {
+            use sliver_session::network::{NetKind, NetState};
+            let n = &s.network;
+            if n.state == NetState::Unknown {
+                return None; // no NetworkManager
+            }
+            let (status, icon): (&'static str, String) = match (n.state, n.kind) {
+                (NetState::Disconnected, _) => {
+                    ("disconnected", "network-wireless-offline-symbolic".into())
+                }
+                (NetState::Connecting, _) => {
+                    ("connecting", "network-wireless-acquiring-symbolic".into())
+                }
+                (_, NetKind::Wifi) => {
+                    let level = match n.signal_pct.unwrap_or(0) {
+                        80..=100 => "excellent",
+                        55..=79 => "good",
+                        30..=54 => "ok",
+                        1..=29 => "weak",
+                        _ => "none",
+                    };
+                    ("wifi", format!("network-wireless-signal-{level}-symbolic"))
+                }
+                (_, NetKind::Ethernet) => ("ethernet", "network-wired-symbolic".into()),
+                (_, NetKind::Vpn) => ("vpn", "network-vpn-symbolic".into()),
+                _ => ("linked", "network-wired-symbolic".into()),
+            };
+            let essid = n.ssid.clone().unwrap_or_else(|| n.name.clone());
+            let v = ValueMap::new()
+                .with("ifname", esc(n.iface.as_deref().unwrap_or("")))
+                .with("essid", esc(&essid))
+                .with(
+                    "signalStrength",
+                    FmtValue::Num(f64::from(n.signal_pct.unwrap_or(0))),
+                )
+                .with("ipaddr", esc(n.ipv4.as_deref().unwrap_or("")))
+                .with("state", status)
+                .with("", esc(&essid));
+            let default = match status {
+                "wifi" => "{essid}",
+                "disconnected" | "connecting" => "",
+                _ => "{ifname}",
+            };
+            let mut sp = Spec::new(v, default).icon(icon);
+            sp.percentage = n.signal_pct.map(f64::from);
+            sp.status = Some(status);
+            sp
+        }
+        "bluetooth" => {
+            let b = &s.bluetooth;
+            if !b.available {
+                return None;
+            }
+            let status = if !b.powered {
+                "off"
+            } else if b.connected.is_empty() {
+                "on"
+            } else {
+                "connected"
+            };
+            let first = b.connected.first();
+            let v = ValueMap::new()
+                .with("status", status)
+                .with("num_connections", b.connected.len() as i64)
+                .with("device_alias", esc(first.map_or("", |d| d.name.as_str())))
+                .with(
+                    "device_battery_percentage",
+                    FmtValue::Num(first.and_then(|d| d.battery).map_or(0.0, f64::from)),
+                )
+                .with("", esc(first.map_or("", |d| d.name.as_str())));
+            let icon = match status {
+                "off" => "bluetooth-disabled-symbolic",
+                "on" => "bluetooth-active-symbolic",
+                _ => "bluetooth-active-symbolic",
+            };
+            let default = if status == "connected" {
+                "{device_alias}"
+            } else {
+                ""
+            };
+            let mut sp = Spec::new(v, default).icon(icon);
+            sp.status = Some(status);
+            sp.checked = status == "connected";
+            sp
+        }
         "timer" => {
             let total = m
                 .config
@@ -1330,6 +1415,52 @@ mod tests {
                 && c[0].classes.contains(&"pending".to_string())
         );
         assert!(c[1].checked);
+    }
+
+    #[test]
+    fn network_and_bluetooth_modules() {
+        use sliver_session::bluetooth::BtDevice;
+        use sliver_session::network::{NetKind, NetState};
+        let toml =
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"network\", \"bluetooth\"]\n";
+        let mut w = world();
+        assert!(
+            stat_cells(toml, &w).is_empty(),
+            "no NetworkManager / BlueZ: nothing to show"
+        );
+        let n = &mut w.session.network;
+        n.state = NetState::Connected;
+        n.kind = NetKind::Wifi;
+        n.name = "Home".into();
+        n.ssid = Some("Home <5G>".into());
+        n.signal_pct = Some(70);
+        n.iface = Some("wlan0".into());
+        w.session.bluetooth.available = true;
+        w.session.bluetooth.powered = true;
+        w.session.bluetooth.connected = vec![BtDevice {
+            name: "Buds".into(),
+            address: "x".into(),
+            battery: Some(55),
+        }];
+        let c = stat_cells(toml, &w);
+        assert_eq!(c.len(), 2);
+        let text = |c: &Cell| match &c.content {
+            Content::Markup(t) | Content::IconMarkup(_, t) | Content::Text(t) => t.clone(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(
+            text(&c[0]),
+            "Home &lt;5G&gt;",
+            "an SSID cannot inject markup"
+        );
+        assert!(c[0].classes.contains(&"wifi".to_string()));
+        assert_eq!(text(&c[1]), "Buds");
+        assert!(c[1].checked && c[1].classes.contains(&"connected".to_string()));
+        w.session.network.state = NetState::Disconnected;
+        w.session.bluetooth.powered = false;
+        let c = stat_cells(toml, &w);
+        assert!(c[0].classes.contains(&"disconnected".to_string()));
+        assert!(c[1].classes.contains(&"off".to_string()));
     }
 
     #[test]

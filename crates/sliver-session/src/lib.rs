@@ -10,11 +10,13 @@
 //! services on a private `dbus-daemon` (see `tests/`).
 
 pub mod audio;
+pub mod bluetooth;
 pub mod brightness;
 pub mod fake;
 pub mod logind;
 pub mod menu;
 pub mod mpris;
+pub mod network;
 pub mod notifications;
 pub mod power;
 pub(crate) mod props;
@@ -115,6 +117,8 @@ pub struct SessionState {
     pub tray: Vec<tray::TrayItem>,
     pub brightness: brightness::Levels,
     pub power: Power,
+    pub network: network::Network,
+    pub bluetooth: bluetooth::Bluetooth,
     pub media: Option<Media>,
 }
 
@@ -218,6 +222,8 @@ impl Session {
         let mut initial = SessionState::default();
         let sys_watch = logind::read_into(&system, &mut initial);
         power::read_into(&system, &mut initial.power);
+        network::read_into(&system, &mut initial.network);
+        bluetooth::read_into(&system, &mut initial.bluetooth);
         let mpris_watch = mpris::Tracker::new(&session, &mut initial);
         let (hub, rx) = Hub::new(initial.clone());
         let handle = Handle {
@@ -255,7 +261,9 @@ impl SessionSource for Session {
     }
 }
 
-const SYSTEM_RULES: [&str; 4] = [
+const SYSTEM_RULES: [&str; 6] = [
+    "type='signal',sender='org.freedesktop.NetworkManager'",
+    "type='signal',sender='org.bluez'",
     "type='signal',sender='org.freedesktop.login1'",
     "type='signal',sender='org.freedesktop.UPower'",
     "type='signal',sender='org.freedesktop.UPower.PowerProfiles'",
@@ -277,6 +285,14 @@ fn watch_system(
             .unwrap_or_default();
         let keep = if path.starts_with("/org/freedesktop/login1") {
             logind.on_message(&conn, &msg, &hub)
+        } else if path.starts_with("/org/freedesktop/NetworkManager") {
+            let mut n = hub.snapshot().network;
+            network::read_into(&conn, &mut n);
+            hub.update(|s| s.network = n)
+        } else if path.starts_with("/org/bluez") {
+            let mut b = hub.snapshot().bluetooth;
+            bluetooth::read_into(&conn, &mut b);
+            hub.update(|s| s.bluetooth = b)
         } else {
             let mut p = hub.snapshot().power;
             power::read_into(&conn, &mut p);
