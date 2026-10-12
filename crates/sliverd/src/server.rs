@@ -183,8 +183,8 @@ impl Server {
                 Ok(Some(p)) => {
                     let fd = match &p.msg {
                         Ok(msg) => import_attachment(msg, p.fds),
-                        Err(_) if p.fds.is_empty() => Attachment::None,
-                        Err(_) => Attachment::Rejected("fd with a bad packet".into()),
+                        // Bad packets close the connection anyway; their fds are dropped.
+                        Err(_) => Attachment::None,
                     };
                     self.dispatch(Input::Packet {
                         client,

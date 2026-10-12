@@ -13,8 +13,10 @@ pub enum Attachment {
     None,
     /// An imported, sealed, mapped buffer (only for `attach_buffer`).
     Buffer(Box<dyn PixelSource>),
-    /// fds that came with the wrong message, too many fds, or an import failure.
+    /// The buffer's fd couldn't be imported (not sealed, too small, mmap failed).
     Rejected(String),
+    /// `attach_buffer` without exactly one fd, or an fd on any other message (`malformed`).
+    WrongCount,
 }
 
 impl PixelSource for MappedBuffer {
@@ -26,6 +28,9 @@ impl PixelSource for MappedBuffer {
 /// Imports the fd of an `attach_buffer` (seal + size check, read-only mmap). fds on any other
 /// message are closed and reported.
 pub fn import_attachment(msg: &AgentMsg, mut fds: Vec<OwnedFd>) -> Attachment {
+    if msg.carries_fd() != (fds.len() == 1) {
+        return Attachment::WrongCount;
+    }
     match (msg, fds.len()) {
         (_, 0) => Attachment::None,
         (
@@ -44,8 +49,7 @@ pub fn import_attachment(msg: &AgentMsg, mut fds: Vec<OwnedFd>) -> Attachment {
                 Err(e) => Attachment::Rejected(e.to_string()),
             }
         }
-        (AgentMsg::AttachBuffer { .. }, n) => Attachment::Rejected(format!("{n} fds, want 1")),
-        (_, _) => Attachment::Rejected("unexpected fd".into()),
+        (_, _) => Attachment::WrongCount,
     }
 }
 
@@ -71,7 +75,11 @@ mod tests {
         let fd = b.as_fd().try_clone_to_owned().unwrap();
         assert!(matches!(
             import_attachment(&AgentMsg::Wake, vec![fd]),
-            Attachment::Rejected(_)
+            Attachment::WrongCount
+        ));
+        assert!(matches!(
+            import_attachment(&msg, vec![]),
+            Attachment::WrongCount
         ));
         assert!(matches!(
             import_attachment(&AgentMsg::Wake, vec![]),

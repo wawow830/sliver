@@ -12,6 +12,7 @@
 //! - [`profile`]: per-model quirks (docs/hardware.md).
 //! - [`server`]: the `poll(2)` event loop around the core. [`session`]: seat0's active uid.
 //!   [`config`]: `/etc/sliver/sliverd.toml`.
+//! - [`testing`]: `TestDaemon`, the real core in-process for agent tests (FakeDaemon-compatible).
 //!
 //! Touch semantics are `sliver_ipc::router::TouchRouter`, shared with cedar's `FakeDaemon`.
 
@@ -27,5 +28,6 @@ pub mod profile;
 pub mod real;
 pub mod server;
 pub mod session;
+pub mod testing;
 
 pub use daemon::{ClientId, Config, Daemon, Input, Out, View};

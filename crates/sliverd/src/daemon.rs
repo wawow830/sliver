@@ -95,10 +95,12 @@ pub enum View {
     Builtin(BuiltinKind),
 }
 
-struct Frame {
-    image: Pixmap,
-    pressed: Option<Pixmap>,
-    regions: Vec<Region>,
+/// An agent frame as sliverd copied it.
+pub struct Frame {
+    pub serial: u32,
+    pub image: Pixmap,
+    pub pressed: Option<Pixmap>,
+    pub regions: Vec<Region>,
 }
 
 struct Attached {
@@ -519,6 +521,15 @@ impl Daemon {
                 return self.close(client);
             }
         };
+        if matches!(fd, Attachment::WrongCount) {
+            self.error(
+                client,
+                ErrorCode::Malformed,
+                "wrong number of fds".into(),
+                None,
+            );
+            return self.close(client);
+        }
         if !c.said_hello && !matches!(msg, AgentMsg::Hello { .. }) {
             self.error(client, ErrorCode::Malformed, "hello first".into(), None);
             return self.close(client);
@@ -652,14 +663,12 @@ impl Daemon {
     ) {
         let c = self.clients.get_mut(&client).expect("checked");
         let res = match fd {
-            Attachment::None => Err("attach_buffer without an fd".to_string()),
+            Attachment::None | Attachment::WrongCount => Err("attach_buffer without an fd".into()),
             Attachment::Rejected(why) => Err(why),
-            Attachment::Buffer(_) if c.buffers.contains_key(&id) => {
-                Err("buffer id in use".to_string())
-            }
+            // Re-attaching an id replaces that buffer.
             Attachment::Buffer(buf) => validate::validate_buffer(
                 &self.panel,
-                c.buffers.len(),
+                c.buffers.len() - usize::from(c.buffers.contains_key(&id)),
                 width,
                 height,
                 stride,
@@ -706,6 +715,7 @@ impl Daemon {
             },
         };
         let frame = Frame {
+            serial: p.serial,
             image,
             pressed,
             regions: p.regions,
@@ -839,7 +849,8 @@ impl Daemon {
         }
     }
 
-    fn agent_frame(&self, layer: Layer) -> Option<&Frame> {
+    /// The active agent's accepted frame for `layer`, if any.
+    pub fn agent_frame(&self, layer: Layer) -> Option<&Frame> {
         let c = self.clients.get(&self.active?)?;
         match layer {
             Layer::Base => c.base.as_ref(),
@@ -852,6 +863,11 @@ impl Daemon {
             BuiltinKind::FKeys => &self.fkeys,
             BuiltinKind::Media => &self.media,
         }
+    }
+
+    /// The regions a touch would hit right now.
+    pub fn visible_regions(&self) -> &[Region] {
+        self.regions(self.shown_view())
     }
 
     fn regions(&self, view: View) -> &[Region] {
