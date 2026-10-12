@@ -6,6 +6,8 @@ Owner: birch (ask me before re-reading all of this). Sources: tiny-dfr **v0.3.7*
 on 2026-10-12. Nothing was opened, stopped or written.
 
 ## TL;DR for implementers
+- **Several Touch Bar variants exist** (T1, T2 2170/2008 px, M1, M2). See "Touch Bar models".
+  Everything below is for *this* Mac14,7. Discover at runtime and keep quirks in a profile table.
 - Display: DRM **`/dev/dri/card1`** (driver `adp`, `platform-228200000.display-pipe`), connector
   `DSI-1`, single mode **60x2008** (portrait: 60 wide, 2008 tall). Draw landscape, rotate 90°.
 - Touch: **`Mac14,7 Touch Bar`** (`/dev/input/event2`, driver `apple_z2` over SPI), libinput seat
@@ -218,13 +220,67 @@ wrong so systemd can restart us.
 `panic`s at startup (before `catch_unwind`, e.g. no card) exit nonzero → systemd restarts with
 default rate limits (5 starts in 10 s, then the unit gives up).
 
-## Apple Silicon vs T2
+## Touch Bar models (don't hardcode this machine)
+This laptop is just one of several Touch Bar variants. **sliverd must discover everything at
+runtime**: the card from the DRM driver (`adp`/`appletbdrm`) plus the portrait-mode check, the
+geometry from the connector mode, the touch device by name or seat, the backlight by name, and
+`max_brightness` and the brightness model from sysfs. Keep per-model quirks in one data table
+(`DeviceProfile`: match rule → backlight model, whether Esc is needed, kernel fallback, etc.), not
+scattered through the code. The fake backend should be able to simulate each row below.
+
+| family | models | chip / drivers | bar px | physical Esc | status |
+|---|---|---|---|---|---|
+| T1 (2016–17) | MacBookPro13,2 13,3 14,2 14,3 | T1 iBridge. Not covered by mainline `appletbdrm`/`hid-appletb-*` (those match T2 `05ac:8302`), old out-of-tree `apple-ib` drivers | 2170 | **no** | unsupported for now (unverified, no hardware) |
+| T2 (2018–19) | MacBookPro15,1 15,2 15,3 15,4 | `appletbdrm` (USB `05ac:8302`) + `hid-appletb-kbd` + `hid-appletb-bl` + `hid-multitouch` | 2170 | **no** | target #2 (t2linux) |
+| T2 16" (2019) | MacBookPro16,1 16,4 | same as T2 | 2008 | yes | target #2 |
+| T2 13" (2020) | MacBookPro16,2 16,3 | same as T2 | 2008 | yes | target #2 |
+| Apple Silicon M1 | MacBookPro17,1 (J293) | `adp` + `apple_z2` (SPI) + `panel-summit` | 2008 | yes | target #1 |
+| Apple Silicon M2 | Mac14,7 (J493), **this machine** | `adp` + `adpdrm_mipi` + `apple_z2` + `panel-summit` | 2008 | yes | target #1, the only one we can test |
+
+The px column comes from tiny-dfr's rule (Esc is added when the bar is ≥2170 px) plus Apple's
+hardware history. Only the Mac14,7 row has been observed directly. `apple_z2` binds
+`apple,j293-touchbar` and `apple,j493-touchbar` (from `modinfo`). Treat everything else as
+"believed" until a user with that machine confirms it. That's an `external` ask later (t2linux
+community testers).
+
+What changes per family, and what sliverd has to handle:
+- **Esc:** the 2170 px bars have no physical Esc. The built-in safe layer *must* put Esc first
+  there. On the 2008 px bars Esc is optional (still a good default for the safe layer).
+- **Backlight model:** AS `panel-summit` is a real 0–255 range. **T2 `appletb_backlight` has
+  `max_brightness` = 2** (0=off, 1=dim, 2=full; the driver maps these to HID values 4/3/1). So
+  "adaptive brightness" on T2 means choosing between dim and full. tiny-dfr's `min(max_bl)`
+  clamp hides this. Read `max_brightness` and scale.
+- **Pixel format and damage:** `appletbdrm` natively scans out BGR888 and *emulates*
+  XRGB8888. It uses the atomic damage helpers, so DIRTYFB/`FB_DAMAGE_CLIPS` translate to partial
+  USB transfers. Damage tracking matters even more on T2 (USB bandwidth and power). Geometry and
+  pixel format come from the device (`GET_INFORMATION` msg), so don't assume them.
+- **Kernel fallback on T2:** `hid-appletb-kbd` has modes `0=ESC 1=FN 2=SPCL(media, default) 3=OFF`
+  (module param `mode`, plus `fntoggle`, `autodim`, `dim_timeout`=60 s, `idle_timeout`=15 s). In
+  ESC/FN/SPCL modes the T2 firmware draws a basic bar and the driver turns its touches into key
+  events. So on T2 a dead daemon can still leave a usable Esc/F-key bar, which is a possible
+  invariant-1 fallback that Apple Silicon doesn't have. How this mode switching interacts with
+  `appletbdrm` owning the display needs a T2 tester.
+- **T2 USB config:** the bar only shows up after udev switches iBridge `05ac:8302` to USB
+  configuration 2 (tiny-dfr's rule). Our packaging must keep that rule (or depend on whatever
+  t2linux ships).
+- **Touch device names:** `Apple Inc. Touch Bar Display Touchpad` (T2), `MacBookPro17,1 Touch
+  Bar` (M1), `Mac14,7 Touch Bar` (M2). Match by seat (`ID_SEAT=seat-touchbar`) first and by name
+  second. tiny-dfr matches the substring `" Touch Bar"`, and the T2 name contains it too.
+- **Main-display backlight** for adaptive brightness: `apple-panel-bl` max 509 on AS,
+  `gmux_backlight`/`intel_backlight`/`acpi_video0` on Intel. Normalize by *its* `max_brightness`
+  (tiny-dfr wrongly hardcodes 509).
+- **Battery:** AS `macsmc-battery/capacity`. tiny-dfr computes `charge_now/charge_full` on
+  x86_64. Prefer UPower in the agent anyway.
+- **Fn key source:** AS gets it from the `Apple MTP keyboard`. T2 gets it from the internal USB
+  keyboard (`hid-apple`), which `hid-appletb-kbd` also watches for its fntoggle.
+
+## Apple Silicon vs T2 (summary)
 
 | | Apple Silicon (this) | Intel T2 |
 |---|---|---|
 | display | `adp` DRM driver, MIPI DSI (command mode), on SoC | `appletbdrm`, USB (iBridge 05ac:8302 config 2) |
 | touch | `Mac14,7 Touch Bar` / `MacBookPro17,1 Touch Bar` (`apple_z2`, SPI) | `Apple Inc. Touch Bar Display Touchpad` (`hid-multitouch` over USB) |
-| bar backlight | `228600000.dsi.0` or `228200000.display-pipe.0` (`panel-summit`), max 255 | `appletb_backlight` (`hid-appletb-bl`) |
+| bar backlight | `228600000.dsi.0` or `228200000.display-pipe.0` (`panel-summit`), max 255 | `appletb_backlight` (`hid-appletb-bl`), **max 2** (off/dim/full) |
 | main backlight | `apple-panel-bl` (max 509) | `gmux_backlight` / `intel_backlight` / `acpi_video0` |
 | battery % | `capacity` | computed from `charge_now/charge_full` (x86_64 cfg) |
 | kernel fallback | **none**: if no daemon draws, the bar is blank | the T2 firmware can draw a basic Esc/F-key/media bar by itself; `hid-appletb-kbd` picks the mode (`mode` param) when no daemon drives `appletbdrm` |
