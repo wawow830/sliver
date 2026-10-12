@@ -18,6 +18,7 @@ swarm task add "..." --body "..."    # add work
 swarm pause                          # natural stop: peers finish their current turn, nobody gets woken,
                                      #   messages queue, panes and claims stay as they are
 swarm resume                         # pick up exactly where they left off
+# disk: when free space drops below 15 GB the pulse deletes idle peers' target/ (build output) until ~25 GB is free
 swarm down                           # interrupt all peers and stop the pulse (state is kept)
 swarm up --peers ash,birch           # bring it back (`swarm spawn NAME --resume` revives a peer's session)
 ```

@@ -18,6 +18,8 @@ DEFAULT_THINKING = os.environ.get("SWARM_THINKING", "high")
 NUDGE_COOLDOWN = 120          # seconds between nudges to the same peer
 EXPLORE_COOLDOWN = 1800       # seconds between "board is empty, go find gaps" nudges per peer
 MIN_FREE_GB = 6
+LOW_DISK_GB = 15     # below this, the pulse clears build output (target/) of peers that aren't working
+CLEAN_TO_GB = 25     # ...until roughly this much is free again
 
 
 def sh(*args, check=True, cwd=None, capture=True):
@@ -701,6 +703,33 @@ def nudge_for(name, p, s):
     return None
 
 
+def free_gb():
+    return shutil.disk_usage(str(main_checkout())).free / 1e9
+
+
+def reclaim_disk():
+    """Delete target/ of peers that aren't working, biggest first. Build output only: it's rebuilt on demand."""
+    start = free_gb()
+    if start >= LOW_DISK_GB:
+        return []
+    with state(write=False) as s:
+        wts = {n: Path(p["worktree"]) / "target" for n, p in s["peers"].items() if p.get("worktree")}
+    sized = []
+    for n, t in wts.items():
+        if t.is_dir():
+            r = sh("du", "-sb", str(t), check=False)
+            sized.append((int(r.stdout.split()[0]) if r.stdout.strip() else 0, n, t))
+    freed, total = [], 0.0
+    for size, n, t in sorted(sized, reverse=True):
+        if start + total >= CLEAN_TO_GB:  # btrfs frees lazily, so count instead of re-measuring
+            break
+        if agent_status(n) == "working":
+            continue
+        shutil.rmtree(t, ignore_errors=True)
+        freed.append((n, size / 1e9)); total += size / 1e9
+    return freed
+
+
 def cmd_pulse(a):
     print(f"swarm pulse every {a.interval}s. Ctrl+C to stop. (`swarm pause` / `swarm resume`)")
     warned_blocked, warned_disk = set(), 0
@@ -750,10 +779,15 @@ def cmd_pulse(a):
                         prompt_peer(name, "[swarm] you were revived after your agent exited. Re-read SWARM.md, then `swarm inbox` and `swarm task list --mine`, and continue.")
                     else:
                         notify("sliver: peer lost", f"{name}'s pane is gone. `swarm spawn {name} --resume` to bring it back.")
-            free_gb = shutil.disk_usage(str(main_checkout())).free / 1e9
-            if free_gb < MIN_FREE_GB and now() - warned_disk > 3600:
-                warned_disk = now(); notify("sliver: disk low", f"{free_gb:.1f} GB free")
-                channel("system", f"disk low: {free_gb:.1f} GB free. Run `cargo clean` in your worktree if you can.", by="pulse")
+            freed = reclaim_disk()
+            if freed:
+                what = ", ".join(f"{n} {g:.1f} GB" for n, g in freed)
+                channel("system", f"disk was low, so I cleared target/ of idle peers ({what}). Your next build starts from scratch.", by="pulse")
+                print(time.strftime("%H:%M:%S"), "reclaimed disk:", what, flush=True)
+            free = free_gb()
+            if free < MIN_FREE_GB and now() - warned_disk > 3600:
+                warned_disk = now(); notify("sliver: disk low", f"{free:.1f} GB free, even after clearing idle peers' builds")
+                channel("system", f"disk low: {free:.1f} GB free. If you're building, `cargo clean` when you're done.", by="pulse")
             line = " ".join(f"{k}:{v}" for k, v in (("nudged", ",".join(n for k_, n, _ in actions if k_ == "nudge") or "-"),
                                                     ("needs-human", ",".join(open_h) or "-")))
             print(time.strftime("%H:%M:%S"), line, flush=True)
