@@ -1,0 +1,578 @@
+#!/usr/bin/python3
+"""sliver-safeswap: run a sliver build on the real Touch Bar for a bounded time.
+
+Privileged helper (root via pkexec). tiny-dfr is ALWAYS restored. This is the only
+sanctioned way to touch the real bar. Design and install: docs/safe-swap.md.
+
+    sliver-safeswap run BINARY [--seconds N] [--wait] [-- ARGS...]
+    sliver-safeswap stop | restore | status
+    sliver-safeswap snap > bar.png        # screenshot of whatever is on the bar now
+
+How restoration is guaranteed (all of it is systemd's job, not this script's):
+  * The payload runs in the transient system unit sliver-swap.service with
+    Conflicts=tiny-dfr.service: starting it stops tiny-dfr, and starting tiny-dfr
+    (for any reason, e.g. a udev event) stops it.
+  * RuntimeMaxSec=N kills it at the deadline. TimeoutStopSec + SIGKILL bound the stop.
+  * ExecStopPost=+<this> restore runs as root after ANY end: exit, crash, timeout, stop.
+  * A separate restore timer (sliver-swap-restore.timer) fires at N+grace no matter what.
+  * Nothing persistent is changed (no mask, no enable), so a reboot restores tiny-dfr
+    through its normal udev activation.
+  * In --wait mode, the death of the calling process (PDEATHSIG) or a signal ends the run early.
+
+The payload runs as the INVOKING USER (never root), with groups video+input, which
+that user already has. So the only privileges this helper hands out are "stop
+tiny-dfr for at most N seconds" and an fd to the bar's backlight.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import fcntl
+import mmap
+import os
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import time
+import zlib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+MAX_SECONDS = 300
+DEFAULT_SECONDS = 30
+STOP_TIMEOUT = 5  # TimeoutStopSec for the payload
+GRACE = 20  # restore timer fires at seconds + STOP_TIMEOUT + GRACE
+MAX_BINARY_BYTES = 256 * 1024 * 1024
+MAX_EXTRA_ARGS = 32
+MAX_ARG_LEN = 4096
+
+BACKLIGHT_NAMES = ("display-pipe", "228600000.dsi.0", "appletb_backlight")  # as tiny-dfr
+BAR_DRM_DRIVERS = ("adp", "appletbdrm")
+
+
+@dataclass
+class Mode:
+    """Everything that differs between the real (root/system) and test (user) setups."""
+
+    user: bool  # True: talk to the *user* systemd manager (tests). Never touches hardware.
+    target: str = "tiny-dfr.service"
+    run_unit: str = "sliver-swap.service"
+    timer_name: str = "sliver-swap-restore"
+    state_dir: Path = Path("/run/sliver-safeswap")
+    helper: str = field(default_factory=lambda: os.path.realpath(__file__))
+    allow_script: bool = False  # user mode only: payload may be a #! script
+
+    def systemctl(self) -> list[str]:
+        return ["systemctl", "--user"] if self.user else ["systemctl"]
+
+    def systemd_run(self) -> list[str]:
+        return ["systemd-run", "--user"] if self.user else ["systemd-run"]
+
+    def helper_cmd(self) -> list[str]:
+        cmd = [sys.executable, self.helper]
+        if self.user:
+            cmd += ["--user-mode", "--target", self.target, "--state-dir", str(self.state_dir)]
+        return cmd
+
+
+class SwapError(Exception):
+    pass
+
+
+def log(msg: str) -> None:
+    print(f"sliver-safeswap: {msg}", file=sys.stderr, flush=True)
+
+
+def sh(cmd: list[str], check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=check, text=True, capture_output=capture)
+
+
+# --------------------------------------------------------------------------- discovery
+
+
+def find_bar_backlight(sysfs: Path = Path("/sys/class/backlight")) -> Path:
+    for entry in sorted(sysfs.iterdir()):
+        if any(n in entry.name for n in BACKLIGHT_NAMES):
+            return entry / "brightness"
+    raise SwapError("no Touch Bar backlight in /sys/class/backlight")
+
+
+def find_bar_card(sysfs: Path = Path("/sys/class/drm")) -> Path:
+    for entry in sorted(sysfs.glob("card[0-9]*")):
+        if "-" in entry.name:
+            continue
+        drv = entry / "device" / "driver"
+        if drv.exists() and os.path.basename(os.path.realpath(drv)) in BAR_DRM_DRIVERS:
+            return Path("/dev/dri") / entry.name
+    raise SwapError("no Touch Bar DRM card (driver adp/appletbdrm)")
+
+
+def invoking_uid(mode: Mode, env: dict[str, str] | None = None) -> int:
+    env = dict(os.environ) if env is None else env
+    if mode.user:
+        return os.getuid()
+    for var in ("PKEXEC_UID", "SUDO_UID"):
+        if env.get(var, "").isdigit():
+            uid = int(env[var])
+            if uid == 0:
+                raise SwapError("refusing to run the payload as root; invoke as your user via pkexec")
+            return uid
+    raise SwapError("can't tell who invoked me (no PKEXEC_UID/SUDO_UID); use pkexec")
+
+
+# --------------------------------------------------------------------------- validation
+
+
+def validate_seconds(seconds: int) -> int:
+    if not 1 <= seconds <= MAX_SECONDS:
+        raise SwapError(f"--seconds must be in 1..{MAX_SECONDS}")
+    return seconds
+
+
+def validate_binary(path: str, allow_script: bool = False) -> Path:
+    p = Path(path)
+    if not p.is_absolute():
+        raise SwapError("binary path must be absolute (pkexec doesn't keep your cwd)")
+    p = Path(os.path.realpath(p))
+    if not p.is_file():
+        raise SwapError(f"{p} is not a regular file")
+    if p.stat().st_size > MAX_BINARY_BYTES:
+        raise SwapError(f"{p} is bigger than {MAX_BINARY_BYTES} bytes")
+    with p.open("rb") as f:
+        magic = f.read(4)
+    if magic != b"\x7fELF" and not (allow_script and magic[:2] == b"#!"):
+        raise SwapError(f"{p} is not an ELF executable")
+    return p
+
+
+def validate_args(args: list[str]) -> list[str]:
+    if len(args) > MAX_EXTRA_ARGS:
+        raise SwapError(f"at most {MAX_EXTRA_ARGS} extra args")
+    for a in args:
+        if len(a) > MAX_ARG_LEN or any(ord(c) < 0x20 for c in a):
+            raise SwapError(f"bad payload argument: {a[:40]!r}")
+    return args
+
+
+# --------------------------------------------------------------------------- unit building
+
+
+def run_unit_props(
+    mode: Mode,
+    seconds: int,
+    uid: int,
+    out_dir: Path,
+    card: Path | None,
+    backlight: Path | None,
+) -> list[str]:
+    """systemd-run -p properties for the payload unit. Pure, so it's unit-tested."""
+    log_file = out_dir / "sliverd.log"
+    p = [
+        "Type=exec",
+        f"Description=sliver safe-swap run ({seconds}s, restores {mode.target})",
+        f"Conflicts={mode.target}",
+        f"After={mode.target}",  # wait for tiny-dfr to fully stop (release DRM master) first
+        f"RuntimeMaxSec={seconds}",
+        f"TimeoutStopSec={STOP_TIMEOUT}",
+        "KillMode=control-group",
+        "SendSIGKILL=yes",
+        "Restart=no",
+        f"StandardOutput=append:{log_file}",
+        f"StandardError=append:{log_file}",
+        "Environment=SLIVER_SAFESWAP=1",
+        f"Environment=SLIVER_SAFESWAP_SECONDS={seconds}",
+        f"Environment=SLIVER_OUT_DIR={out_dir}",
+        "Environment=RUST_BACKTRACE=1",
+        "NoNewPrivileges=yes",
+        "PrivateTmp=yes",
+        # yes also hides /run/user, where the user-mode tests stage things.
+        f"ProtectHome={'read-only' if mode.user else 'yes'}",
+        "ProtectSystem=strict",
+        f"ReadWritePaths={out_dir}",
+        "ProtectKernelModules=yes",
+        "ProtectKernelLogs=yes",
+        "ProtectControlGroups=yes",
+        "RestrictNamespaces=yes",
+        "RestrictSUIDSGID=yes",
+        "LockPersonality=yes",
+        "RestrictAddressFamilies=AF_UNIX AF_NETLINK",
+        "TasksMax=64",
+        "MemoryMax=512M",
+    ]
+    # '+' = outside the sandbox and with the manager's privileges (root for the system
+    # manager), even though the payload itself runs as the user.
+    restore = " ".join(mode.helper_cmd() + ["restore", "--reason", "stop-post"])
+    p.append(f"ExecStopPost=+{restore}")
+    if not mode.user:
+        p += [
+            f"User={uid}",
+            "SupplementaryGroups=video input",
+            "DevicePolicy=closed",
+            "DeviceAllow=char-input rw",
+            "DeviceAllow=/dev/uinput rw",
+        ]
+        if card is not None:
+            p.append(f"DeviceAllow={card} rw")
+    if backlight is not None:
+        # Opened by PID 1 as root, handed over as fd named "backlight" (sd_listen_fds).
+        p.append(f"OpenFile={backlight}:backlight")
+    return p
+
+
+def restore_timer_cmd(mode: Mode, seconds: int) -> list[str]:
+    fire = seconds + STOP_TIMEOUT + GRACE
+    return mode.systemd_run() + [
+        "--quiet",
+        f"--unit={mode.timer_name}",
+        f"--on-active={fire}s",
+        "--timer-property=AccuracySec=1s",
+        f"--description=sliver safe-swap dead-man restore of {mode.target}",
+        "--collect",
+        *mode.helper_cmd(),
+        "restore",
+        "--reason",
+        "timer",
+    ]
+
+
+# --------------------------------------------------------------------------- unit state
+
+
+def unit_state(mode: Mode, unit: str) -> dict[str, str]:
+    r = sh(
+        mode.systemctl() + ["show", unit, "-p", "LoadState,ActiveState,SubState,Result,ExecMainStatus"],
+        check=False,
+        capture=True,
+    )
+    out = {}
+    for line in r.stdout.splitlines():
+        k, _, v = line.partition("=")
+        out[k] = v
+    return out
+
+
+def is_live(state: dict[str, str]) -> bool:
+    return state.get("ActiveState") in ("active", "activating", "deactivating", "reloading")
+
+
+# --------------------------------------------------------------------------- commands
+
+
+def cmd_restore(mode: Mode, reason: str) -> int:
+    """Idempotent: end any run, cancel the timer, bring the target back."""
+    log(f"restore ({reason}): bringing back {mode.target}")
+    sc = mode.systemctl()
+    if reason != "stop-post":
+        sh(sc + ["stop", "--no-block", mode.run_unit], check=False, capture=True)
+    sh(sc + ["stop", "--no-block", f"{mode.timer_name}.timer"], check=False, capture=True)
+    sh(sc + ["reset-failed", mode.target], check=False, capture=True)
+    # --no-block: we may be running inside the run unit's ExecStopPost. The start job is
+    # ordered after the run unit's stop finishes (systemd orders stop before start).
+    r = sh(sc + ["start", "--no-block", mode.target], check=False, capture=True)
+    if r.returncode != 0:
+        log(f"FAILED to start {mode.target}: {r.stderr.strip()}")
+        return 1
+    return 0
+
+
+def cmd_stop(mode: Mode) -> int:
+    sh(mode.systemctl() + ["stop", mode.run_unit], check=False, capture=True)
+    return cmd_restore(mode, "stop")
+
+
+def cmd_status(mode: Mode) -> int:
+    for unit in (mode.target, mode.run_unit, f"{mode.timer_name}.timer"):
+        s = unit_state(mode, unit)
+        print(f"{unit:32} {s.get('ActiveState', '?')}/{s.get('SubState', '?')} result={s.get('Result', '-')}")
+    out = mode.state_dir / "out"
+    if out.is_dir():
+        print(f"out: {out}: {', '.join(sorted(os.listdir(out))) or '(empty)'}")
+    return 0
+
+
+def prepare_dirs(mode: Mode, uid: int) -> tuple[Path, Path]:
+    bin_dir = mode.state_dir / "bin"
+    out_dir = mode.state_dir / "out"
+    mode.state_dir.mkdir(mode=0o755, exist_ok=True)
+    for d in (bin_dir, out_dir):
+        if d.exists():
+            shutil.rmtree(d)
+        d.mkdir(mode=0o755)
+    if not mode.user:
+        os.chown(out_dir, uid, -1)
+    return bin_dir, out_dir
+
+
+def stage_binary(mode: Mode, src: Path, bin_dir: Path) -> Path:
+    """Copy into a root-owned dir so what runs is exactly what was validated."""
+    dst = bin_dir / "sliverd"
+    shutil.copyfile(src, dst)
+    os.chmod(dst, 0o755)
+    if not mode.user and Path("/sys/fs/selinux/enforce").exists():
+        sh(["chcon", "-t", "bin_t", str(dst)], check=False, capture=True)
+    return dst
+
+
+def set_pdeathsig() -> None:
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(1, signal.SIGTERM, 0, 0, 0)  # PR_SET_PDEATHSIG
+    except OSError:
+        pass
+
+
+def wait_for_end(mode: Mode, out_dir: Path) -> int:
+    def bail(signum, _frame):
+        log(f"got signal {signum}, ending the run early")
+        sh(mode.systemctl() + ["stop", mode.run_unit], check=False, capture=True)
+        cmd_restore(mode, "signal")
+        sys.exit(128 + signum)
+
+    for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(s, bail)
+    set_pdeathsig()
+    while True:
+        s = unit_state(mode, mode.run_unit)
+        if not is_live(s):
+            break
+        time.sleep(0.25)
+    log(
+        f"run ended: {s.get('ActiveState')}/{s.get('SubState')} "
+        f"result={s.get('Result')} status={s.get('ExecMainStatus')}"
+    )
+    logf = out_dir / "sliverd.log"
+    if logf.exists():
+        tail = logf.read_text(errors="replace").splitlines()[-20:]
+        if tail:
+            print("--- last lines of sliverd.log ---", file=sys.stderr)
+            print("\n".join(tail), file=sys.stderr)
+    sh(mode.systemctl() + ["reset-failed", mode.run_unit], check=False, capture=True)
+    return 0 if s.get("Result") in ("success", "") else 1
+
+
+def cmd_run(mode: Mode, binary: str, seconds: int, wait: bool, extra: list[str]) -> int:
+    if not mode.user and os.geteuid() != 0:
+        raise SwapError("must run as root: pkexec /usr/local/libexec/sliver-safeswap run ...")
+    uid = invoking_uid(mode)
+    seconds = validate_seconds(seconds)
+    src = validate_binary(binary, mode.allow_script)
+    extra = validate_args(extra)
+
+    if is_live(unit_state(mode, mode.run_unit)):
+        raise SwapError(f"{mode.run_unit} is already running (sliver-safeswap stop)")
+    if is_live(unit_state(mode, f"{mode.timer_name}.timer")):
+        raise SwapError("a previous run's restore timer is pending; run `sliver-safeswap restore` first")
+    sh(mode.systemctl() + ["reset-failed", mode.run_unit], check=False, capture=True)
+    sh(mode.systemctl() + ["reset-failed", f"{mode.timer_name}.service"], check=False, capture=True)
+
+    bin_dir, out_dir = prepare_dirs(mode, uid)
+    if mode.user:
+        card = None
+        backlight = mode.state_dir / "fake-backlight"
+        backlight.write_text("0\n")
+    else:
+        card = find_bar_card()
+        backlight = find_bar_backlight()
+    staged = stage_binary(mode, src, bin_dir)
+
+    # 1. Dead-man timer FIRST, so there's no window where a run exists without it.
+    sh(restore_timer_cmd(mode, seconds), capture=True)
+    # 2. The payload. Conflicts= stops tiny-dfr in the same transaction.
+    props = run_unit_props(mode, seconds, uid, out_dir, card, backlight)
+    cmd = mode.systemd_run() + ["--quiet", f"--unit={mode.run_unit}"]
+    for prop in props:
+        cmd += ["-p", prop]
+    cmd += ["--", str(staged), *extra]
+    r = sh(cmd, check=False, capture=True)
+    if r.returncode != 0:
+        log(f"failed to start payload: {r.stderr.strip()}")
+        cmd_restore(mode, "start-failed")
+        return 1
+    log(f"running {src} on the bar for {seconds}s as uid {uid}; output in {out_dir}")
+    log(f"{mode.target} comes back on exit/crash/timeout; dead-man timer at +{seconds + STOP_TIMEOUT + GRACE}s")
+    if wait:
+        return wait_for_end(mode, out_dir)
+    return 0
+
+
+# --------------------------------------------------------------------------- snap (DRM screenshot)
+
+
+def _iowr(nr: int, size: int) -> int:
+    return (3 << 30) | (size << 16) | (ord("d") << 8) | nr
+
+
+def _iow(nr: int, size: int) -> int:
+    return (1 << 30) | (size << 16) | (ord("d") << 8) | nr
+
+
+DRM_IOCTL_DROP_MASTER = (ord("d") << 8) | 0x1F
+DRM_IOCTL_GEM_CLOSE = _iow(0x09, 8)
+CRTC_FMT = "=QIIIIIII" + "I10HIII32s"  # drm_mode_crtc incl. drm_mode_modeinfo (104 bytes)
+DRM_IOCTL_MODE_GETRESOURCES = _iowr(0xA0, 64)
+DRM_IOCTL_MODE_GETCRTC = _iowr(0xA1, struct.calcsize(CRTC_FMT))
+DRM_IOCTL_MODE_MAP_DUMB = _iowr(0xB3, 16)
+FB2_FMT = "=5I4I4I4I4x4Q"  # drm_mode_fb_cmd2 (104 bytes, 4 bytes padding before modifiers)
+DRM_IOCTL_MODE_GETFB2 = _iowr(0xCE, struct.calcsize(FB2_FMT))
+XRGB8888 = int.from_bytes(b"XR24", "little")
+ARGB8888 = int.from_bytes(b"AR24", "little")
+
+
+def portrait_to_landscape(buf: bytes, pitch: int, vis_w: int, h: int) -> list[bytes]:
+    """XRGB8888 portrait scanout (vis_w x h) -> RGB rows of the landscape bar (h x vis_w).
+
+    tiny-dfr draws with translate(vis_w, 0) + rotate(90deg): landscape (lx, ly) lands at
+    fb (x = vis_w - 1 - ly, y = lx). We invert that.
+    """
+    rows = []
+    for ly in range(vis_w):
+        x = vis_w - 1 - ly
+        row = bytearray(h * 3)
+        for lx in range(h):
+            o = lx * pitch + x * 4
+            row[lx * 3 : lx * 3 + 3] = bytes((buf[o + 2], buf[o + 1], buf[o]))
+        rows.append(bytes(row))
+    return rows
+
+
+def png_rgb(rows: list[bytes], width: int) -> bytes:
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    raw = b"".join(b"\x00" + r for r in rows)
+    ihdr = struct.pack(">IIBBBBB", width, len(rows), 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+def cmd_snap(mode: Mode) -> int:
+    """Read the bar's current scanout buffer (needs root: GETFB2 handles need CAP_SYS_ADMIN).
+
+    Never modesets. Opening a card with no master would make us master, so refuse when
+    neither tiny-dfr nor a run is active, and drop master immediately just in case.
+    """
+    if mode.user:
+        raise SwapError("snap needs the real card; not available in --user-mode")
+    if os.geteuid() != 0:
+        raise SwapError("snap must run as root (pkexec)")
+    if not (is_live(unit_state(mode, mode.target)) or is_live(unit_state(mode, mode.run_unit))):
+        raise SwapError("nothing owns the bar right now; refusing to open the card")
+    if sys.stdout.isatty():
+        raise SwapError("redirect stdout to a file: sliver-safeswap snap > bar.png")
+    card = find_bar_card()
+    fd = os.open(card, os.O_RDWR | os.O_CLOEXEC)
+    try:
+        try:
+            fcntl.ioctl(fd, DRM_IOCTL_DROP_MASTER)
+        except OSError:
+            pass  # not master: the normal case
+        res = bytearray(64)
+        fcntl.ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, res)
+        n_crtcs = struct.unpack_from("=I", res, 36)[0]
+        if n_crtcs < 1:
+            raise SwapError("card has no CRTCs")
+        crtc_ids = (ctypes.c_uint32 * n_crtcs)()
+        res = bytearray(64)
+        struct.pack_into("=Q", res, 8, ctypes.addressof(crtc_ids))
+        struct.pack_into("=I", res, 36, n_crtcs)
+        fcntl.ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, res)
+        crtc = bytearray(struct.calcsize(CRTC_FMT))
+        struct.pack_into("=I", crtc, 12, crtc_ids[0])
+        fcntl.ioctl(fd, DRM_IOCTL_MODE_GETCRTC, crtc)
+        f = struct.unpack(CRTC_FMT, crtc)
+        fb_id, mode_valid, hdisplay, vdisplay = f[3], f[7], f[9], f[14]
+        if not fb_id or not mode_valid:
+            raise SwapError("bar CRTC has no framebuffer")
+        fb = bytearray(struct.calcsize(FB2_FMT))
+        struct.pack_into("=I", fb, 0, fb_id)
+        fcntl.ioctl(fd, DRM_IOCTL_MODE_GETFB2, fb)
+        f2 = struct.unpack(FB2_FMT, fb)
+        width, height, fmt, handle, pitch, offset = f2[1], f2[2], f2[3], f2[5], f2[9], f2[13]
+        if fmt not in (XRGB8888, ARGB8888):
+            raise SwapError(f"unsupported pixel format {fmt:#x}")
+        if not handle:
+            raise SwapError("GETFB2 returned no handle (not root?)")
+        try:
+            md = bytearray(16)
+            struct.pack_into("=I", md, 0, handle)
+            fcntl.ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, md)
+            mmap_off = struct.unpack_from("=Q", md, 8)[0]
+            size = offset + pitch * height
+            with mmap.mmap(fd, size, mmap.MAP_SHARED, mmap.PROT_READ, offset=mmap_off) as m:
+                buf = bytes(m[:size])
+        finally:
+            fcntl.ioctl(fd, DRM_IOCTL_GEM_CLOSE, struct.pack("=II", handle, 0))
+    finally:
+        os.close(fd)
+    vis_w = min(hdisplay or width, width)
+    vis_h = min(vdisplay or height, height)
+    rows = portrait_to_landscape(buf[offset:], pitch, vis_w, vis_h)
+    sys.stdout.buffer.write(png_rgb(rows, vis_h))
+    return 0
+
+
+# --------------------------------------------------------------------------- main
+
+
+def build_mode(ns: argparse.Namespace) -> Mode:
+    if not ns.user_mode:
+        if ns.target or ns.state_dir or ns.allow_script:
+            raise SwapError("--target/--state-dir/--allow-script are only for --user-mode tests")
+        return Mode(user=False)
+    if os.geteuid() == 0:
+        raise SwapError("--user-mode must not run as root")
+    m = Mode(user=True, allow_script=ns.allow_script)
+    m.target = ns.target or "sliver-fake-tinydfr.service"
+    m.state_dir = Path(ns.state_dir or f"/run/user/{os.getuid()}/sliver-safeswap-test")
+    m.run_unit = "sliver-swap-test.service"
+    m.timer_name = "sliver-swap-test-restore"
+    return m
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="sliver-safeswap", description="run a sliver build on the Touch Bar, safely")
+    ap.add_argument("--user-mode", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--target", help=argparse.SUPPRESS)
+    ap.add_argument("--state-dir", help=argparse.SUPPRESS)
+    ap.add_argument("--allow-script", action="store_true", help=argparse.SUPPRESS)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run", help="run BINARY on the bar for at most --seconds; args after -- go to it")
+    r.add_argument("binary")
+    r.add_argument("--seconds", type=int, default=DEFAULT_SECONDS)
+    r.add_argument("--wait", action="store_true", help="block until the run ends; dying ends the run")
+    sub.add_parser("stop", help="end the run now and restore")
+    rs = sub.add_parser("restore", help="idempotently restore tiny-dfr")
+    rs.add_argument("--reason", default="manual")
+    sub.add_parser("status")
+    sub.add_parser("snap", help="PNG of the bar's current contents to stdout")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    extra: list[str] = []
+    if "--" in argv:  # everything after -- goes to the payload untouched
+        i = argv.index("--")
+        argv, extra = argv[:i], argv[i + 1 :]
+    ns = ap.parse_args(argv)
+    try:
+        mode = build_mode(ns)
+        if ns.cmd == "run":
+            return cmd_run(mode, ns.binary, ns.seconds, ns.wait, extra)
+        if ns.cmd in ("stop", "restore") and not mode.user and os.geteuid() != 0:
+            raise SwapError(f"{ns.cmd} must run as root: pkexec /usr/local/libexec/sliver-safeswap {ns.cmd}")
+        if ns.cmd == "stop":
+            return cmd_stop(mode)
+        if ns.cmd == "restore":
+            return cmd_restore(mode, ns.reason)
+        if ns.cmd == "status":
+            return cmd_status(mode)
+        if ns.cmd == "snap":
+            return cmd_snap(mode)
+    except (SwapError, OSError, subprocess.CalledProcessError) as e:
+        log(f"error: {e}")
+        return 2
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

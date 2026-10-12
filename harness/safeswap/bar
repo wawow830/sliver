@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# User-side wrapper around the installed safe-swap helper (docs/safe-swap.md).
+#   harness/safeswap/bar run target/debug/sliverd [--seconds N] [-- ARGS]   (always --wait)
+#   harness/safeswap/bar snap out.png | status | stop | restore | logs
+set -euo pipefail
+H=/usr/local/libexec/sliver-safeswap
+[[ -x $H ]] || { echo "safe-swap harness not installed (see docs/safe-swap.md)" >&2; exit 1; }
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  run)
+    bin="$(realpath "$1")"; shift
+    exec pkexec "$H" run "$bin" --wait "$@" ;;
+  snap)
+    out="${1:-bar.png}"
+    pkexec "$H" snap >"$out.tmp" && mv "$out.tmp" "$out" && echo "$out" ;;
+  logs) cat /run/sliver-safeswap/out/sliverd.log ;;
+  status) "$H" status ;;
+  stop|restore) exec pkexec "$H" "$cmd" ;;
+  *) echo "usage: bar run BIN [--seconds N] [-- ARGS] | snap [OUT.png] | status | stop | restore | logs" >&2; exit 2 ;;
+esac

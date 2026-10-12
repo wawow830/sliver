@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- sliver safe-swap: lets a user run a sliver build on the Touch Bar for a bounded time.
+     tiny-dfr is always restored. See docs/safe-swap.md. -->
+<policyconfig>
+  <vendor>sliver</vendor>
+  <action id="org.sliver.safeswap">
+    <description>Run a sliver build on the Touch Bar for a bounded time</description>
+    <message>Authentication is required to temporarily replace the Touch Bar daemon</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/libexec/sliver-safeswap</annotate>
+  </action>
+</policyconfig>
