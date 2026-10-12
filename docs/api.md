@@ -246,8 +246,11 @@ and decides what they mean. sliverd **does** know:
   active uid says `Hello`, it takes over and the old one gets `Revoked`.
 - Pixels travel in sealed memfds, never in packets.
 
-Types, codec and every check below are implemented in `crates/sliver-ipc` (`proto`, `validate`,
-`keys`). Error codes on the wire are the snake_case `ErrorCode` variants.
+Implemented in `crates/sliver-ipc`. `proto` has the types and codec, `validate` and `keys` the checks below,
+`transport` the seqpacket connection with fd passing (peer hangup *and* reset both read as `Ok(None)`),
+`shm` the sealed memfd buffers, and `router` the key-region touch semantics. Feature `fake` adds
+`fake::FakeDaemon`, an in-process sliverd that speaks the real protocol: the agent's headless tests run
+against it, and T8 can use it as a reference. Error codes on the wire are the snake_case `ErrorCode` variants.
 
 ### Handshake
 ```
