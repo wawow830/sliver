@@ -183,6 +183,40 @@ pub fn display_page(ui: &Rc<Ui>) -> gtk::Widget {
         d.pixel_shift,
     );
     page.add(&idle);
+
+    // [display.on-battery] (T68): each value overrides the one above while on battery.
+    let o = &d.on_battery;
+    let bat = group(
+        "On battery",
+        Some(
+            "Used instead of the values above while on battery. Leave one empty to keep it the same.",
+        ),
+    );
+    entry(
+        ui,
+        &bat,
+        "Maximum brightness (0-255)",
+        "display.on-battery.max-brightness",
+        &o.max_brightness.map(|b| b.to_string()).unwrap_or_default(),
+        false,
+    );
+    entry(
+        ui,
+        &bat,
+        "Dim after",
+        "display.on-battery.dim-after",
+        &o.dim_after.map(dur).unwrap_or_default(),
+        true,
+    );
+    entry(
+        ui,
+        &bat,
+        "Turn off after",
+        "display.on-battery.off-after",
+        &o.off_after.map(dur).unwrap_or_default(),
+        true,
+    );
+    page.add(&bat);
     page.upcast()
 }
 

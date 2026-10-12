@@ -7,6 +7,8 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::gio;
 
+use gtk::glib;
+use sliver_config::preset::{self, Bundle};
 use sliver_config::profile;
 
 use crate::pages::group;
@@ -127,71 +129,44 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
 
     let presets = group(
         "Presets",
-        Some("A preset is a config file: share it, keep variants, or try someone else's."),
+        Some(
+            "A preset (.sliver) is your whole setup in one readable file: config, stylesheet and icons. Share it, keep variants, or try someone else's.",
+        ),
     );
     let export = adw::ActionRow::builder()
-        .title("Export your config…")
+        .title("Export your setup…")
         .activatable(true)
         .build();
     export.add_suffix(&gtk::Image::from_icon_name("document-save-symbolic"));
     {
         let ui = ui.clone();
-        export.connect_activated(move |_| {
-            let d = gtk::FileDialog::builder()
-                .title("Export preset")
-                .initial_name("sliver-preset.toml")
-                .build();
-            let ui2 = ui.clone();
-            d.save(Some(&ui.win_widget()), gio::Cancellable::NONE, move |r| {
-                let Ok(f) = r else { return };
-                let Some(dest) = f.path() else { return };
-                let src = ui2.state().edit_target().0;
-                let text = std::fs::read_to_string(&src).unwrap_or_else(|_| "version = 1\n".into());
-                match std::fs::write(&dest, text) {
-                    Ok(()) => ui2.toast(&format!("Exported to {}", dest.display())),
-                    Err(e) => ui2.toast(&format!("Couldn't export: {e}")),
-                }
-            });
-        });
+        export.connect_activated(move |_| export_preset(&ui));
     }
     presets.add(&export);
     let open = adw::ActionRow::builder()
         .title("Use a preset…")
-        .subtitle("Scripts and commands in a preset run as you: read it first.")
+        .subtitle("You see everything it would run before anything changes.")
         .activatable(true)
         .build();
     open.add_suffix(&gtk::Image::from_icon_name("document-open-symbolic"));
     {
         let ui = ui.clone();
         open.connect_activated(move |_| {
-            let d = gtk::FileDialog::builder().title("Preset").build();
+            let filter = gtk::FileFilter::new();
+            filter.set_name(Some("Sliver presets"));
+            filter.add_pattern(&format!("*.{}", preset::EXTENSION));
+            filter.add_pattern("*.toml");
+            let filters = gio::ListStore::new::<gtk::FileFilter>();
+            filters.append(&filter);
+            let d = gtk::FileDialog::builder()
+                .title("Preset")
+                .filters(&filters)
+                .build();
             let ui2 = ui.clone();
             d.open(Some(&ui.win_widget()), gio::Cancellable::NONE, move |r| {
                 let Ok(f) = r else { return };
                 let Some(path) = f.path() else { return };
-                match std::fs::read_to_string(&path) {
-                    Ok(text) => {
-                        // List what it would run, as ux.md §9 asks, before replacing anything.
-                        let runs: Vec<String> = text
-                            .lines()
-                            .map(str::trim)
-                            .filter(|l| {
-                                l.starts_with("exec")
-                                    || l.starts_with("on-")
-                                    || l.contains("exec =")
-                            })
-                            .take(8)
-                            .map(str::to_owned)
-                            .collect();
-                        let note = if runs.is_empty() {
-                            "It runs no commands. ".to_owned()
-                        } else {
-                            format!("It runs commands:\n{}\n\n", runs.join("\n"))
-                        };
-                        replace_config(&ui2, "preset", text, note);
-                    }
-                    Err(e) => ui2.toast(&format!("{}: {e}", path.display())),
-                }
+                open_preset(&ui2, &path);
             });
         });
     }
@@ -331,4 +306,193 @@ fn delete_dialog(ui: &Rc<Ui>, name: &str) {
         }
     });
     dialog.present(Some(&ui.win_widget()));
+}
+
+/// A `.sliver` bundle, or a bare config file (what older versions exported) as a one-file bundle.
+fn read_bundle(path: &Path) -> Result<Bundle, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bare_config = || {
+        text.parse::<toml::Table>()
+            .is_ok_and(|t| !t.contains_key("preset"))
+    };
+    match Bundle::parse(&text) {
+        Ok(b) => Ok(b),
+        Err(_) if bare_config() => Ok(Bundle {
+            name: path.file_stem().map(|s| s.to_string_lossy().into_owned()),
+            files: [(preset::CONFIG.to_owned(), text.clone().into_bytes())].into(),
+        }),
+        Err(e) => Err(e),
+    }
+}
+
+/// Reviews the preset at `path` (the Use a preset… dialog, or `sliver-settings FILE.sliver`).
+pub fn open_preset(ui: &Rc<Ui>, path: &Path) {
+    match read_bundle(path) {
+        Ok(b) => review_preset(ui, b),
+        Err(e) => ui.toast(&e),
+    }
+}
+
+fn export_preset(ui: &Rc<Ui>) {
+    let Some(config) = sliver_config::find_config() else {
+        return ui.toast("Nothing to export yet: you're on the built-in defaults");
+    };
+    let profile = profile::active();
+    let name = if profile == profile::DEFAULT {
+        "sliver-preset".to_owned()
+    } else {
+        profile
+    };
+    let d = gtk::FileDialog::builder()
+        .title("Export preset")
+        .initial_name(format!("{name}.{}", preset::EXTENSION))
+        .build();
+    let ui2 = ui.clone();
+    d.save(Some(&ui.win_widget()), gio::Cancellable::NONE, move |r| {
+        let Ok(f) = r else { return };
+        let Some(dest) = f.path() else { return };
+        let stem = dest
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let result = preset::export(&config, Some(&stem)).and_then(|x| {
+            std::fs::write(&dest, x.bundle.to_text())
+                .map(|()| x.notes)
+                .map_err(|e| format!("{}: {e}", dest.display()))
+        });
+        match result {
+            Ok(notes) if notes.is_empty() => ui2.toast(&format!("Exported to {}", dest.display())),
+            Ok(notes) => {
+                let dialog = adw::AlertDialog::builder()
+                    .heading("Exported")
+                    .body(format!("{}\n\n{}", dest.display(), notes.join("\n")))
+                    .build();
+                dialog.add_responses(&[("ok", "OK")]);
+                dialog.present(Some(&ui2.win_widget()));
+            }
+            Err(e) => ui2.toast(&format!("Couldn't export: {e}")),
+        }
+    });
+}
+
+/// Shows everything the preset would run (ux.md §9) and installs it only after a choice.
+fn review_preset(ui: &Rc<Ui>, b: Bundle) {
+    let runs = b.runs();
+    let name = b.name.clone().unwrap_or_else(|| "this preset".into());
+    let files: Vec<&str> = b.files.keys().map(String::as_str).collect();
+    let body = format!(
+        "It replaces your main config with {} file{} ({}). Replaced files are backed up, and you can undo right after.{}",
+        files.len(),
+        if files.len() == 1 { "" } else { "s" },
+        files.join(", "),
+        if runs.is_empty() {
+            "\n\nIt runs no commands.".to_owned()
+        } else {
+            "\n\nIt runs these as you. Read them before choosing Use it, or import it without them:"
+                .to_owned()
+        }
+    );
+    let dialog = adw::AlertDialog::builder()
+        .heading(format!("Use {name}?"))
+        .body(body)
+        .build();
+    if !runs.is_empty() {
+        let list = gtk::Label::builder()
+            .label(
+                runs.iter()
+                    .map(|r| r.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .xalign(0.0)
+            .selectable(true)
+            .wrap(true)
+            .css_classes(["monospace", "caption"])
+            .build();
+        let scroll = gtk::ScrolledWindow::builder()
+            .child(&list)
+            .min_content_height(80)
+            .max_content_height(260)
+            .propagate_natural_height(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .build();
+        dialog.set_extra_child(Some(&scroll));
+        dialog.add_responses(&[
+            ("cancel", "Cancel"),
+            ("safe", "Without commands"),
+            ("use", "Use it"),
+        ]);
+        dialog.set_response_appearance("use", adw::ResponseAppearance::Destructive);
+    } else {
+        dialog.add_responses(&[("cancel", "Cancel"), ("use", "Use it")]);
+        dialog.set_response_appearance("use", adw::ResponseAppearance::Suggested);
+    }
+    dialog.set_default_response(Some("cancel"));
+    let ui2 = ui.clone();
+    dialog.connect_response(None, move |_, r| {
+        let b = match r {
+            "use" => b.clone(),
+            "safe" => b.without_commands().0,
+            _ => return,
+        };
+        install_preset(&ui2, &b, &name);
+    });
+    dialog.present(Some(&ui.win_widget()));
+}
+
+fn install_preset(ui: &Rc<Ui>, b: &Bundle, name: &str) {
+    let Some(dir) = profile::user_dir() else {
+        return ui.toast("No home directory to install into");
+    };
+    let installed = match b.install(&dir) {
+        Ok(i) => i,
+        Err(e) => return ui.toast(&format!("Not applied: {e}")),
+    };
+    // A preset is a main config: an active profile would hide it.
+    let left = profile::active();
+    let note = if left != profile::DEFAULT && profile::set_active(profile::DEFAULT).is_ok() {
+        format!(" (switched from {left} to Default)")
+    } else {
+        String::new()
+    };
+    let toast = adw::Toast::builder()
+        .title(glib::markup_escape_text(&format!("Using {name}{note}")))
+        .button_label("Undo")
+        .timeout(8)
+        .build();
+    let ui2 = ui.clone();
+    toast.connect_button_clicked(move |_| {
+        let r = undo_install(&dir, &installed);
+        if left != profile::DEFAULT {
+            let _ = profile::set_active(&left);
+        }
+        match r {
+            Ok(()) => ui2.toast("Restored your previous setup"),
+            Err(e) => ui2.toast(&format!("Couldn't undo: {e}")),
+        }
+        crate::rebuild(&ui2);
+    });
+    ui.add_toast(toast);
+    crate::rebuild(ui);
+}
+
+/// Puts back what [`Bundle::install`] replaced: backed-up files return, new ones go.
+fn undo_install(dir: &Path, i: &preset::Installed) -> Result<(), String> {
+    // config.toml last, so the agent reloads a complete set (as install does).
+    let mut written = i.written.clone();
+    written.sort_by_key(|p| p.ends_with(preset::CONFIG));
+    for w in &written {
+        let rel = w.strip_prefix(dir).unwrap_or(w);
+        let saved = i
+            .backup
+            .as_ref()
+            .map(|b| b.join(rel))
+            .filter(|p| p.is_file());
+        let r = match saved {
+            Some(s) => std::fs::copy(&s, w).map(|_| ()),
+            None => std::fs::remove_file(w),
+        };
+        r.map_err(|e| format!("{}: {e}", w.display()))?;
+    }
+    Ok(())
 }

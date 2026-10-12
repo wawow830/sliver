@@ -306,10 +306,13 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
 - **Display & Power, Appearance, Gestures** are editable (T52). Appearance picks the theme (`theme`)
   from a list that previews your own base layer in each one, with your stylesheet on top (T60),
   and opens the stylesheet in your editor, showing its problems. Gestures has tap timing, the Fn
-  mode and whole-bar gestures.
-- **Profiles & Presets**: import tiny-dfr (config + style.css) or a waybar config, export the
-  config as a preset, and use a preset, which lists the commands it would run first. All go
-  through a confirmation and Undo.
+  mode and whole-bar gestures. Display & Power also has the on-battery overrides
+  (`[display.on-battery]`, T68/T69).
+- **Profiles & Presets**: import tiny-dfr (config + style.css) or a waybar config. Presets are
+  cedar's `.sliver` bundles (T67, T69): export the setup in use; Use a preset… (or
+  `sliver-settings FILE.sliver`) lists everything it would run, then Use it / Without commands /
+  Cancel. It installs as the main config (backed up), switches to Default if a profile was active,
+  and Undo restores both.
 - **Profiles** (T64): list with Use, rename and delete; "New profile from the active one". The
   app always edits the active profile, and the Bar page says which one.
 - **Apps** (T53): defaults for all apps (whole-bar takeover, scripts targeting other apps),

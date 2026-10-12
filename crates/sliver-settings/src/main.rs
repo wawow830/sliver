@@ -127,10 +127,19 @@ impl Ui {
         }
     }
 
+    pub fn add_toast(&self, t: adw::Toast) {
+        self.toasts.add_toast(t);
+    }
+
     pub fn toast(&self, msg: &str) {
         self.toasts
             .add_toast(adw::Toast::new(&glib::markup_escape_text(msg)));
     }
+}
+
+thread_local! {
+    /// The one window (GTK is single-threaded): `open` reaches it after `activate` made it.
+    static WINDOW: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
 }
 
 fn main() -> glib::ExitCode {
@@ -138,8 +147,29 @@ fn main() -> glib::ExitCode {
         println!("sliver-settings {}", env!("CARGO_PKG_VERSION"));
         return glib::ExitCode::SUCCESS;
     }
-    let app = adw::Application::builder().application_id(APP_ID).build();
+    // `sliver-settings FILE.sliver` (or opening one from a file manager) reviews that preset.
+    let app = adw::Application::builder()
+        .application_id(APP_ID)
+        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN)
+        .build();
+    app.connect_open(|app, files, _| {
+        if WINDOW.with_borrow(Option::is_none) {
+            app.activate();
+        }
+        if let Some(ui) = WINDOW.with_borrow(Clone::clone) {
+            ui.win.present();
+            for f in files {
+                if let Some(p) = f.path() {
+                    presets::open_preset(&ui, &p);
+                }
+            }
+        }
+    });
     app.connect_activate(|app| {
+        if let Some(ui) = WINDOW.with_borrow(Clone::clone) {
+            ui.win.present();
+            return;
+        }
         let win = adw::ApplicationWindow::builder()
             .application(app)
             .title("Sliver")
@@ -188,6 +218,7 @@ fn main() -> glib::ExitCode {
         }
         rebuild(&ui);
         win.present();
+        WINDOW.set(Some(ui.clone()));
         onboarding(&ui);
     });
     app.run()
