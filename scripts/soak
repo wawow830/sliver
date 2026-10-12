@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Memory soak for sliver-agent (T118): does memory keep growing while things change?
+
+Runs `sliverd --fake-hardware` and `sliver-agent` on private session and system buses (like
+scripts/idle-wakeups) with a config that keeps the bar busy, then churns it for a while:
+
+  * an app publishing status items with fresh ids, random labels (now and then a glyph no font
+    has) and a fresh random PNG icon on every update, and dropping and re-creating its context;
+  * a continuous script module printing ~20 lines a second;
+  * an exec-less module updated with `sliverctl update`, and the media layer toggled;
+  * a clock with seconds.
+
+After a warm-up it samples the agent's resident memory every 10 s and fails if the end is more
+than a budget above the start (medians of the first and last samples). Caches that are bounded
+fill up during the warm-up; anything that keeps growing shows. ~4 min by default.
+
+  scripts/soak [--debug] [--minutes M] [--budget-mb B]
+"""
+
+import argparse
+import os
+import random
+import shutil
+import signal
+import statistics
+import struct
+import subprocess
+import sys
+import threading
+import time
+import zlib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+WARMUP_S = 60
+SAMPLE_S = 10
+
+CONFIG = """
+[display]
+dim-after = "1h"
+off-after = "2h"
+
+[[layouts.default.zones]]
+name = "main"
+width = "fill"
+modules = ["custom/stream", "custom/push", "status-items"]
+
+[[layouts.default.zones]]
+name = "controls"
+modules = ["clock", "backlight/slider", "audio/slider"]
+
+[modules.clock]
+format = "{:%H:%M:%S}"
+
+[modules."custom/stream"]
+exec = "sh -c 'i=0; while :; do i=$((i+1)); echo \\"line $i $(od -An -N2 -tu2 /dev/urandom)\\"; sleep 0.05; done'"
+
+[modules."custom/push"]
+format = "{}"
+"""
+
+RARE = ["\U00013000", "\U00010380", "\ua9b2", "\u16a0", "\U0010fffd", "\u2d63", "😀", "漢"]
+
+
+def png(w: int, h: int, rgb: tuple[int, int, int]) -> bytes:
+    """A tiny solid-colour PNG (no Pillow needed)."""
+    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+
+    def chunk(t: bytes, d: bytes) -> bytes:
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+
+def mem(pid: int) -> dict[str, int]:
+    out = {}
+    try:
+        for line in (Path("/proc") / str(pid) / "status").read_text().splitlines():
+            k, _, v = line.partition(":")
+            if k in ("VmRSS", "VmHWM", "RssAnon", "RssFile"):
+                out[k] = int(v.split()[0])
+    except OSError:
+        pass
+    return out
+
+
+def publisher(bus_addr: str, stop: threading.Event, stats: dict) -> None:
+    """An app churning a status context through plain D-Bus (Gio)."""
+    import gi
+
+    gi.require_version("Gio", "2.0")
+    from gi.repository import Gio, GLib
+
+    name, root = "io.github.wawow830.Sliver", "/io/github/wawow830/Sliver"
+    conn = Gio.DBusConnection.new_for_address_sync(
+        bus_addr,
+        Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
+        None, None,
+    )
+
+    def call(path, iface, method, args, reply):
+        return conn.call_sync(name, path, iface, method, args, GLib.VariantType(reply),
+                              Gio.DBusCallFlags.NONE, 5000, None).unpack()
+
+    rng, n, path = random.Random(7), 0, None
+    while not stop.is_set():
+        try:
+            if path is None:
+                opts = {"scope": GLib.Variant("s", "status"),
+                        "provider": GLib.Variant("s", f"org.example.Soak{n % 3}"),
+                        "title": GLib.Variant("s", "Soak")}
+                (path,) = call(root, name + ".TouchBar1", "CreateContext",
+                               GLib.Variant("(a{sv})", (opts,)), "(o)")
+            items = []
+            for k in range(4):
+                label = f"{n}-{k} " + "".join(rng.choice("abcxyz ") for _ in range(rng.randint(1, 12)))
+                if rng.random() < 0.1:
+                    label += rng.choice(RARE)
+                item = {"id": GLib.Variant("s", f"i{n}-{k}"),
+                        "type": GLib.Variant("s", "button"),
+                        "label": GLib.Variant("s", label)}
+                if k == 0:
+                    rgb = (rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                    item["icon-data"] = GLib.Variant("ay", png(16, 16, rgb))
+                items.append(item)
+            call(path, name + ".Context1", "SetItems", GLib.Variant("(aa{sv})", (items,)), "(as)")
+            n += 1
+            if n % 40 == 0:
+                call(path, name + ".Context1", "Destroy", None, "()")
+                path = None
+            stats["published"] = n
+        except GLib.Error as e:
+            stats["errors"] = stats.get("errors", 0) + 1
+            stats["last_error"] = e.message
+            path = None
+            time.sleep(0.5)
+        stop.wait(0.1)
+
+
+def ctl(bins: Path, env: dict, stop: threading.Event, stats: dict) -> None:
+    """sliverctl: push text to custom/push and toggle the media layer."""
+    rng, n = random.Random(11), 0
+    while not stop.is_set():
+        text = f"push {n} " + "".join(rng.choice("pqrs") for _ in range(rng.randint(1, 20)))
+        subprocess.run([str(bins / "sliverctl"), "update", "custom/push", f"text={text}"],
+                       env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if n % 15 == 0:
+            subprocess.run([str(bins / "sliverctl"), "layer", "toggle", "media"],
+                           env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        n += 1
+        stats["ctl"] = n
+        stop.wait(0.2)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--debug", action="store_true", help="use target/debug (default: release)")
+    ap.add_argument("--minutes", type=float, default=3, help="measured time after warm-up (default 3)")
+    ap.add_argument("--budget-mb", type=float, default=8, help="allowed growth (default 8 MB)")
+    a = ap.parse_args()
+
+    profile = "debug" if a.debug else "release"
+    build = ["cargo", "build", "-q", "-p", "sliverd", "-p", "sliver-agent", "-p", "sliverctl"]
+    subprocess.run(build + ([] if a.debug else ["--release"]), cwd=ROOT, check=True)
+    bins = ROOT / "target" / profile
+
+    tmp = ROOT / "target" / "test-tmp" / f"soak.{os.getpid()}"
+    shutil.rmtree(tmp, ignore_errors=True)
+    (tmp / "config" / "sliver").mkdir(parents=True)
+    (tmp / "run").mkdir(mode=0o700)
+    (tmp / "config" / "sliver" / "config.toml").write_text(CONFIG)
+    procs: list[subprocess.Popen] = []
+    stop = threading.Event()
+    stats: dict = {}
+    ok = False
+
+    def start(cmd: list[str], env: dict[str, str], log: str) -> subprocess.Popen:
+        p = subprocess.Popen(cmd, env=env, stdout=open(tmp / log, "w"), stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        procs.append(p)
+        return p
+
+    try:
+        conf = str(ROOT / "integration" / "kwin" / "session.conf")
+        base = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/"), "LANG": "C.UTF-8"}
+        for bus in ("session", "system"):
+            start(["dbus-daemon", f"--config-file={conf}", "--nofork",
+                   f"--address=unix:path={tmp / bus}"], base, f"{bus}-bus.log")
+        sock = tmp / "sliverd.sock"
+        start([str(bins / "sliverd"), "--fake-hardware", "--socket", str(sock)], base, "sliverd.log")
+        for _ in range(100):
+            if sock.exists() and (tmp / "session").exists() and (tmp / "system").exists():
+                break
+            time.sleep(0.05)
+        env = base | {
+            "XDG_CONFIG_HOME": str(tmp / "config"),
+            "XDG_RUNTIME_DIR": str(tmp / "run"),
+            "XDG_STATE_HOME": str(tmp / "state"),
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path={tmp / 'session'}",
+            "DBUS_SYSTEM_BUS_ADDRESS": f"unix:path={tmp / 'system'}",
+        }
+        agent = start([str(bins / "sliver-agent"), "--socket", str(sock)], env, "agent.log")
+        time.sleep(3)
+        if agent.poll() is not None:
+            print(f"soak: sliver-agent exited early; see {tmp}", file=sys.stderr)
+            return 1
+        threads = [
+            threading.Thread(target=publisher, args=(env["DBUS_SESSION_BUS_ADDRESS"], stop, stats)),
+            threading.Thread(target=ctl, args=(bins, env, stop, stats)),
+        ]
+        for t in threads:
+            t.start()
+
+        print(f"soak: warming up {WARMUP_S} s, then measuring {a.minutes:g} min ({profile})")
+        time.sleep(WARMUP_S)
+        samples: list[dict[str, int]] = []
+        end = time.time() + a.minutes * 60
+        while time.time() < end:
+            if agent.poll() is not None:
+                print(f"soak: sliver-agent died; see {tmp}", file=sys.stderr)
+                return 1
+            m = mem(agent.pid)
+            samples.append(m)
+            print(f"  RSS {m.get('VmRSS', 0) / 1024:6.1f} MB  anon {m.get('RssAnon', 0) / 1024:6.1f} MB"
+                  f"  peak {m.get('VmHWM', 0) / 1024:6.1f} MB   published {stats.get('published', 0)}"
+                  f"  ctl {stats.get('ctl', 0)}", flush=True)
+            time.sleep(SAMPLE_S)
+        if stats.get("published", 0) < 100:
+            print(f"soak: the publisher barely ran ({stats}); see {tmp}", file=sys.stderr)
+            return 1
+        k = max(1, len(samples) // 3)
+        first = statistics.median(s.get("VmRSS", 0) for s in samples[:k]) / 1024
+        last = statistics.median(s.get("VmRSS", 0) for s in samples[-k:]) / 1024
+        growth = last - first
+        ok = growth <= a.budget_mb
+        verdict = "ok" if ok else "GROWING"
+        print(f"soak: RSS {first:.1f} -> {last:.1f} MB ({growth:+.1f} MB, budget {a.budget_mb:g}) {verdict}")
+        if stats.get("errors"):
+            print(f"soak: publisher errors: {stats['errors']} (last: {stats.get('last_error')})")
+        if not ok:
+            print(f"soak: logs kept in {tmp}", file=sys.stderr)
+        return 0 if ok else 1
+    finally:
+        stop.set()
+        for p in reversed(procs):
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        for p in procs:
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(p.pid, signal.SIGKILL)
+        if ok:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

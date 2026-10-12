@@ -25,6 +25,22 @@ fn main() {
         ("rare", "𓀀 𐎀 ꦲ ᚠ ⵣ"),
         ("missing", "\u{10fffd}\u{e000}"),
     ];
+    // Each new text with a glyph no font has searches every font again.
+    for i in 0..3 {
+        let t0 = std::time::Instant::now();
+        let mut p = Pixmap::new(2008, 60).unwrap();
+        let text = format!("title {i} \u{10fffd}");
+        r.render(
+            &Scene::new(vec![Item::new(Content::Markup(text))]),
+            &sheet,
+            &mut p,
+        );
+        println!(
+            "{:<28} {:?}",
+            format!("missing-glyph text #{i}"),
+            t0.elapsed()
+        );
+    }
     for (name, t) in texts {
         let mut p = Pixmap::new(2008, 60).unwrap();
         r.render(

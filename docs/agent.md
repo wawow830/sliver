@@ -133,7 +133,15 @@ loaded fonts after a shaping that hit `.notdef`, and whenever the label cache tu
 (`trim_loaded_fonts`: rebuild the `FontSystem` from the same database, with cosmic-text's
 `SharedFile` mappings turned back into paths). Shaped labels survive, so the same text never
 searches again. The one-off search still shows as a peak. Measure with
-`cargo run --release -p sliver-render --example memprobe`.
+`cargo run --release -p sliver-render --example memprobe`. Re-searching for a new text with a
+missing glyph costs about 0.5 ms once the font files are in the page cache.
+
+**Soak (T118):** `scripts/soak` runs the release agent on private buses and churns it for a few
+minutes. An app publishes items with fresh ids, labels (some with missing glyphs) and PNG icons,
+and drops and re-creates its context. A continuous script prints 20 lines a second, `sliverctl`
+pushes text and toggles a layer, and the clock ticks every second. It fails if RSS grows by more
+than a budget after warm-up. First run: heap flat at 25.4–25.5 MB over 3 min (about 1,700
+publishes); RSS moves between 36 and 48 MB as fonts load and unload. No leak.
 
 ## Public D-Bus API
 `api.rs` serves cedar's `sliver_api` on the session bus. `Host::changed` sets a flag and pokes a
