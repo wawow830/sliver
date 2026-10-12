@@ -300,6 +300,29 @@ so on, with the same action forms.
 
   An unknown or unavailable key never matches.
 
+## 6b. Apps and providers on the bar (api.md §4)
+
+```toml
+[apps."*"]                     # defaults for every app
+whole-bar = true               # modal app contexts may cover the bar beyond the first zone
+
+[apps."org.mozilla.firefox"]   # app id, case-insensitive, .desktop suffix ignored (like conditions)
+controls = true                # may this app's (or a provider's) items fill App controls
+pin = "org.example.Tabs"       # only this provider fills App controls for the app
+
+[providers."org.example.Pomodoro"]   # D-Bus provider id (a Flatpak/Snap id when sandboxed)
+show = false                   # hide it everywhere: Status items and App controls
+allow = true                   # needed before a *sandboxed* provider may show status items
+order = 1                      # Status items order: lower first, unlisted after by id
+
+[api]
+target = true                  # allow target-scope contexts (scripts that target another app)
+```
+
+`sliver_config::Config::app_policy(app_id)` resolves `[apps.*]` with the `"*"` defaults, and
+`provider_prefs(id)` resolves `[providers.*]`. The agent turns them into the API registry's policy
+(cedar).
+
 ## 7. Styling (T22 implements; renderer side)
 
 These are the selectors sliver guarantees, mirroring waybar:

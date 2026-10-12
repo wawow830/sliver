@@ -140,6 +140,11 @@ pub struct Config {
     /// Module blocks, keyed by the canonical id (so `[modules.pulseaudio]` configures `audio`).
     pub modules: BTreeMap<ModuleId, Table>,
     pub gestures: BTreeMap<String, Action>,
+    /// Per-app API preferences, keyed by app id (`"*"` = defaults). api.md §4.
+    pub apps: BTreeMap<String, AppPrefs>,
+    /// Per-provider preferences, keyed by D-Bus provider id (a Flatpak/Snap id when sandboxed).
+    pub providers: BTreeMap<String, ProviderPrefs>,
+    pub api: ApiPrefs,
 }
 
 /// Always merged *underneath* every config, so built-in layers and layouts always exist and any
@@ -233,6 +238,36 @@ impl Config {
                 }
             }
         }
+        if let Some(t) = r.table("apps", &mut d) {
+            for (id, v) in t {
+                let p = join("apps", id);
+                match v.as_table() {
+                    Some(t) => {
+                        c.apps.insert(id.clone(), parse_app_prefs(t, &p, &mut d));
+                    }
+                    None => d.error(p, "expected a table"),
+                }
+            }
+        }
+        if let Some(t) = r.table("providers", &mut d) {
+            for (id, v) in t {
+                let p = join("providers", id);
+                match v.as_table() {
+                    Some(t) => {
+                        c.providers
+                            .insert(id.clone(), parse_provider_prefs(t, &p, &mut d));
+                    }
+                    None => d.error(p, "expected a table"),
+                }
+            }
+        }
+        if let Some(t) = r.table("api", &mut d) {
+            let mut ar = Reader::new(t, "api");
+            if let Some(b) = ar.bool("target", &mut d) {
+                c.api.target = b;
+            }
+            ar.finish(&mut d);
+        }
         if let Some(g) = r.table("gestures", &mut d) {
             for (k, v) in g {
                 let p = join("gestures", k);
@@ -250,6 +285,119 @@ impl Config {
         r.finish(&mut d);
         (c, d)
     }
+}
+
+/// What one app may do with the bar (`[apps."<app-id>"]`). `None` = not set here.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AppPrefs {
+    /// May the app (or a provider for it) fill App controls? Default true.
+    pub controls: Option<bool>,
+    /// May its modal contexts take the bar beyond the first zone? Default true.
+    pub whole_bar: Option<bool>,
+    /// Only this provider fills App controls for the app.
+    pub pin: Option<String>,
+}
+
+/// One provider's preferences (`[providers."<id>"]`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderPrefs {
+    /// `false` hides it everywhere (Status items and App controls).
+    pub show: bool,
+    /// Lets a *sandboxed* provider publish status items (ignored for unsandboxed ones).
+    pub allow: bool,
+    /// Status items order: lower first, unlisted after (by id).
+    pub order: Option<i64>,
+}
+
+impl Default for ProviderPrefs {
+    fn default() -> Self {
+        Self {
+            show: true,
+            allow: false,
+            order: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiPrefs {
+    /// `target`-scope contexts (scripts targeting other apps) allowed at all. Default true.
+    pub target: bool,
+}
+
+impl Default for ApiPrefs {
+    fn default() -> Self {
+        Self { target: true }
+    }
+}
+
+/// Effective per-app preferences after the `"*"` defaults.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppPolicy {
+    pub controls: bool,
+    pub whole_bar: bool,
+    pub pin: Option<String>,
+}
+
+impl Config {
+    /// The preferences for `app_id`: its own `[apps."…"]` (case-insensitive, `.desktop` suffix
+    /// ignored, like conditions), then `[apps."*"]`, then the defaults.
+    pub fn app_policy(&self, app_id: &str) -> AppPolicy {
+        let norm = |s: &str| s.trim_end_matches(".desktop").to_ascii_lowercase();
+        let want = norm(app_id);
+        let own = self
+            .apps
+            .iter()
+            .find(|(k, _)| *k != "*" && norm(k) == want)
+            .map(|(_, v)| v);
+        let any = self.apps.get("*");
+        let pick = |f: fn(&AppPrefs) -> Option<bool>, default: bool| {
+            own.and_then(f)
+                .or_else(|| any.and_then(f))
+                .unwrap_or(default)
+        };
+        AppPolicy {
+            controls: pick(|p| p.controls, true),
+            whole_bar: pick(|p| p.whole_bar, true),
+            pin: own
+                .and_then(|p| p.pin.clone())
+                .or_else(|| any.and_then(|p| p.pin.clone())),
+        }
+    }
+
+    pub fn provider_prefs(&self, provider: &str) -> ProviderPrefs {
+        self.providers.get(provider).cloned().unwrap_or_default()
+    }
+}
+
+fn parse_app_prefs(t: &Table, path: &str, d: &mut Diagnostics) -> AppPrefs {
+    let mut r = Reader::new(t, path);
+    let p = AppPrefs {
+        controls: r.bool("controls", d),
+        whole_bar: r.bool("whole-bar", d),
+        pin: r.string("pin", d),
+    };
+    r.finish(d);
+    p
+}
+
+fn parse_provider_prefs(t: &Table, path: &str, d: &mut Diagnostics) -> ProviderPrefs {
+    let mut r = Reader::new(t, path);
+    let mut p = ProviderPrefs::default();
+    if let Some(b) = r.bool("show", d) {
+        p.show = b;
+    }
+    if let Some(b) = r.bool("allow", d) {
+        p.allow = b;
+    }
+    if let Some(v) = r.get("order") {
+        match v.as_integer() {
+            Some(n) => p.order = Some(n),
+            None => d.error(join(path, "order"), "order is a whole number"),
+        }
+    }
+    r.finish(d);
+    p
 }
 
 fn parse_bar(t: &Table, d: &mut Diagnostics) -> Bar {
@@ -471,6 +619,46 @@ mod tests {
         for l in ["default", "fkeys", "media"] {
             assert!(c.layouts.contains_key(l), "{l}");
         }
+    }
+
+    #[test]
+    fn app_and_provider_prefs() {
+        let t: Table = r#"
+            [apps."*"]
+            whole-bar = false
+            [apps."org.mozilla.firefox"]
+            controls = false
+            pin = "org.example.Tabs"
+            [providers."org.example.Pomodoro"]
+            show = false
+            order = 2
+            [providers."com.spotify.Client"]
+            allow = true
+            [api]
+            target = false
+        "#
+        .parse()
+        .unwrap();
+        let (c, d) = Config::from_table(&t);
+        assert!(d.ok() && d.warnings.is_empty(), "{d:#?}");
+        let ff = c.app_policy("Org.Mozilla.Firefox.desktop");
+        assert_eq!(
+            (ff.controls, ff.whole_bar, ff.pin.as_deref()),
+            (false, false, Some("org.example.Tabs"))
+        );
+        let other = c.app_policy("foot");
+        assert_eq!(
+            (other.controls, other.whole_bar, other.pin),
+            (true, false, None),
+            "'*' defaults"
+        );
+        assert!(!c.provider_prefs("org.example.Pomodoro").show);
+        assert_eq!(c.provider_prefs("org.example.Pomodoro").order, Some(2));
+        assert!(c.provider_prefs("com.spotify.Client").allow);
+        assert_eq!(c.provider_prefs("unknown"), ProviderPrefs::default());
+        assert!(!c.api.target);
+        let (_, d) = Config::from_table(&"[apps.x]\ncontrol = true\n".parse().unwrap());
+        assert_eq!(d.warnings.len(), 1, "typo warned: {d:?}");
     }
 
     #[test]
