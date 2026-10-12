@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# The landing gate. `swarm land` runs this; keep it fast, deterministic, and hardware-free.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+echo "== swarm tool"
+python3 -m py_compile swarm/bin/swarm
+
+if [[ -f Cargo.toml ]]; then
+  echo "== cargo fmt";   cargo fmt --all -- --check
+  echo "== cargo clippy"; cargo clippy --workspace --all-targets --quiet -- -D warnings
+  echo "== cargo test";  cargo test --workspace --quiet
+fi
+
+echo "check: ok"

@@ -1,0 +1,698 @@
+#!/usr/bin/env python3
+"""swarm: shared world for sliver's decentralized agent mesh.
+
+No root agent. Peers coordinate through shared state in <git-common-dir>/swarm/:
+a task board, a broadcast channel, per-peer inboxes, a needs-human queue, and a
+peer registry (who knows what). `swarm pulse` is a dumb clock, not a planner:
+it only wakes idle peers that have something to do.
+
+Peers may (and should) improve this tool. Keep the state format backward compatible.
+"""
+import argparse, fcntl, json, os, re, shutil, subprocess, sys, time
+from contextlib import contextmanager
+from pathlib import Path
+
+NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+DEFAULT_MODEL = os.environ.get("SWARM_MODEL", "cliproxy/claude-opus-5-5")
+DEFAULT_THINKING = os.environ.get("SWARM_THINKING", "high")
+NUDGE_COOLDOWN = 120          # seconds between nudges to the same peer
+EXPLORE_COOLDOWN = 1800       # seconds between "board is empty, go find gaps" nudges per peer
+MIN_FREE_GB = 6
+
+
+def sh(*args, check=True, cwd=None, capture=True):
+    r = subprocess.run(args, cwd=cwd, text=True, capture_output=capture)
+    if check and r.returncode != 0:
+        raise SystemExit(f"swarm: command failed: {' '.join(args)}\n{r.stderr or r.stdout}")
+    return r
+
+
+def git(*args, **kw):
+    return sh("git", *args, **kw)
+
+
+def common_dir() -> Path:
+    return Path(git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
+
+
+def main_checkout() -> Path:
+    return common_dir().parent
+
+
+def home() -> Path:
+    p = Path(os.environ.get("SWARM_HOME") or common_dir() / "swarm")
+    (p / "inbox").mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def peers_root() -> Path:
+    m = main_checkout()
+    return m.parent / f"{m.name}.peers"
+
+
+def now():
+    return int(time.time())
+
+
+def ago(t):
+    if not t:
+        return "-"
+    d = now() - t
+    for unit, s in (("d", 86400), ("h", 3600), ("m", 60)):
+        if d >= s:
+            return f"{d // s}{unit}"
+    return f"{d}s"
+
+
+# ---------------------------------------------------------------- state
+
+EMPTY = {"version": 1, "next_task": 1, "next_human": 1, "seq": 0, "paused": False,
+         "tasks": {}, "humans": {}, "peers": {}, "swarm": {}}
+
+
+@contextmanager
+def state(write=True):
+    h = home()
+    with open(h / "state.lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX if write else fcntl.LOCK_SH)
+        f = h / "state.json"
+        s = json.loads(f.read_text()) if f.exists() else json.loads(json.dumps(EMPTY))
+        for k, v in EMPTY.items():
+            s.setdefault(k, json.loads(json.dumps(v)))
+        yield s
+        if write:
+            s["seq"] += 1
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(s, indent=1))
+            tmp.replace(f)
+
+
+def append(path: Path, rec: dict):
+    with open(path, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(json.dumps(rec) + "\n")
+
+
+def read_jsonl(path: Path):
+    if not path.exists():
+        return []
+    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+
+
+def channel(kind, text, by=None, **extra):
+    append(home() / "channel.log", {"at": now(), "by": by or me(required=False) or "?", "kind": kind, "text": text, **extra})
+
+
+def me(required=True):
+    n = os.environ.get("SWARM_NAME")
+    if not n:
+        try:
+            b = git("rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
+            if b.startswith("peer/"):
+                n = b[5:]
+        except Exception:
+            pass
+    if not n and required:
+        raise SystemExit("swarm: can't tell who you are (set SWARM_NAME or work on a peer/<name> branch)")
+    return n
+
+
+# ---------------------------------------------------------------- herdr
+
+def herdr(*args, check=False):
+    r = sh("herdr", *args, check=False)
+    if check and r.returncode != 0:
+        raise SystemExit(f"swarm: herdr {' '.join(args)} failed: {r.stderr.strip()}")
+    try:
+        return json.loads(r.stdout) if r.stdout.strip().startswith("{") else None
+    except json.JSONDecodeError:
+        return None
+
+
+def agent_status(name):
+    """idle|working|blocked|done|unknown, or None if no live agent with that name."""
+    j = herdr("agent", "get", name)
+    if not j:
+        return None
+    a = j.get("result", {}).get("agent", j.get("result", {}))
+    return a.get("agent_status") or a.get("status")
+
+
+def prompt_peer(name, text):
+    j = herdr("agent", "prompt", name, text)
+    return j is not None
+
+
+def notify(title, body):
+    herdr("notification", "show", title, "--body", body[:300], "--sound", "request")
+    if shutil.which("notify-send"):
+        sh("notify-send", "-a", "sliver swarm", "-u", "critical", title, body[:300], check=False)
+
+
+# ---------------------------------------------------------------- tasks
+
+def fmt_task(t):
+    deps = f" after {','.join(t['after'])}" if t.get("after") else ""
+    owner = f" @{t['owner']}" if t.get("owner") else ""
+    area = f" [{t['area']}]" if t.get("area") else ""
+    return f"{t['id']:>4} {t['status']:<8}{owner}{area} {t['title']}{deps}"
+
+
+def blocked_by(s, t):
+    return [d for d in t.get("after", []) if s["tasks"].get(d, {}).get("status") not in ("done", "dropped")]
+
+
+def claimable(s):
+    return [t for t in s["tasks"].values() if t["status"] == "open" and not blocked_by(s, t)]
+
+
+def cmd_task(a):
+    by = me(required=False) or "human"
+    if a.sub == "add":
+        with state() as s:
+            tid = f"T{s['next_task']}"; s["next_task"] += 1
+            after = [x.strip() for x in (a.after or "").split(",") if x.strip()]
+            t = {"id": tid, "title": a.title, "body": a.body or "", "area": a.area or "", "after": after,
+                 "status": "open", "owner": None, "created_by": by, "created_at": now(), "notes": []}
+            if a.claim:
+                t.update(status="claimed", owner=by, claimed_at=now())
+            s["tasks"][tid] = t
+        channel("task", f"added {tid}: {a.title}", by=by, task=tid)
+        print(tid)
+    elif a.sub == "list":
+        with state(write=False) as s:
+            ts = sorted(s["tasks"].values(), key=lambda t: int(t["id"][1:]))
+            for t in ts:
+                if a.mine and t.get("owner") != by:
+                    continue
+                if not a.all and t["status"] in ("done", "dropped"):
+                    continue
+                b = " (blocked)" if t["status"] == "open" and blocked_by(s, t) else ""
+                print(fmt_task(t) + b)
+    elif a.sub == "show":
+        with state(write=False) as s:
+            t = s["tasks"].get(a.id) or sys.exit(f"no task {a.id}")
+            print(fmt_task(t)); print(f"created by {t['created_by']} {ago(t['created_at'])} ago")
+            if t["body"]:
+                print("\n" + t["body"])
+            for n in t["notes"]:
+                print(f"\n-- {n['by']} {ago(n['at'])} ago:\n{n['text']}")
+    else:
+        with state() as s:
+            t = s["tasks"].get(a.id) or sys.exit(f"no task {a.id}")
+            if a.sub == "claim":
+                if t["status"] != "open" and not a.force:
+                    sys.exit(f"{a.id} is {t['status']} by {t.get('owner')}; ask them, or --force if they're gone")
+                if blocked_by(s, t) and not a.force:
+                    sys.exit(f"{a.id} waits on {','.join(blocked_by(s, t))}")
+                t.update(status="claimed", owner=by, claimed_at=now())
+                msg = f"claimed {a.id}: {t['title']}"
+            elif a.sub == "note":
+                t["notes"].append({"by": by, "at": now(), "text": a.text}); msg = None
+            elif a.sub == "done":
+                t.update(status="done", done_at=now())
+                if a.text: t["notes"].append({"by": by, "at": now(), "text": a.text})
+                msg = f"done {a.id}: {t['title']}" + (f" — {a.text}" if a.text else "")
+            elif a.sub == "release":
+                t.update(status="open", owner=None)
+                if a.text: t["notes"].append({"by": by, "at": now(), "text": a.text})
+                msg = f"released {a.id}" + (f" — {a.text}" if a.text else "")
+            elif a.sub == "drop":
+                t.update(status="dropped"); t["notes"].append({"by": by, "at": now(), "text": a.text})
+                msg = f"dropped {a.id} — {a.text}"
+            elif a.sub == "edit":
+                if a.title: t["title"] = a.title
+                if a.body is not None: t["body"] = a.body
+                if a.area is not None: t["area"] = a.area
+                if a.after is not None: t["after"] = [x.strip() for x in a.after.split(",") if x.strip()]
+                msg = None
+        if msg:
+            channel("task", msg, by=by, task=a.id)
+        print("ok")
+
+
+# ---------------------------------------------------------------- messaging
+
+def cmd_say(a):
+    channel("say", a.text)
+    print("ok")
+
+
+def deliver(to, frm, text, kind="msg", now_=False):
+    append(home() / "inbox" / f"{to}.jsonl", {"at": now(), "from": frm, "kind": kind, "text": text})
+    st = agent_status(to)
+    if st in ("idle", "done") or (now_ and st == "working"):
+        prompt_peer(to, f"[swarm] new message from {frm}. Run `swarm inbox`.")
+        with state() as s:
+            if to in s["peers"]:
+                s["peers"][to]["last_nudge"] = now()
+
+
+def cmd_send(a):
+    with state(write=False) as s:
+        if a.peer not in s["peers"]:
+            sys.exit(f"unknown peer {a.peer}; see `swarm peers`")
+    deliver(a.peer, me(required=False) or "human", a.text, now_=a.now)
+    print("ok")
+
+
+def cmd_inbox(a):
+    n = me()
+    msgs = read_jsonl(home() / "inbox" / f"{n}.jsonl")
+    with state(write=not a.peek) as s:
+        p = s["peers"].setdefault(n, {})
+        start = 0 if a.all else p.get("inbox_read", 0)
+        for m in msgs[start:]:
+            print(f"[{ago(m['at'])} ago] {m['from']} ({m['kind']}): {m['text']}\n")
+        if not msgs[start:]:
+            print("(no new messages)")
+        if not a.peek:
+            p["inbox_read"] = len(msgs)
+
+
+def unread(name, s):
+    return len(read_jsonl(home() / "inbox" / f"{name}.jsonl")) - s["peers"].get(name, {}).get("inbox_read", 0)
+
+
+def cmd_log(a):
+    for r in read_jsonl(home() / "channel.log")[-a.n:]:
+        print(f"[{ago(r['at']):>4}] {r['by']:<8} {r['kind']:<6} {r['text']}")
+
+
+# ---------------------------------------------------------------- humans
+
+def cmd_human(a):
+    if a.sub == "ask":
+        by = me()
+        with state() as s:
+            hid = f"H{s['next_human']}"; s["next_human"] += 1
+            s["humans"][hid] = {"id": hid, "by": by, "kind": a.kind, "task": a.task, "text": a.text,
+                                "status": "open", "at": now()}
+            if a.block:
+                s["peers"].setdefault(by, {})["status"] = "waiting"
+        channel("human", f"{hid} ({a.kind}) {a.text}", by=by)
+        notify(f"sliver needs you: {hid} ({a.kind})", f"{by}: {a.text}")
+        print(hid)
+    elif a.sub == "list":
+        with state(write=False) as s:
+            hs = [h for h in s["humans"].values() if a.all or h["status"] == "open"]
+            for h in sorted(hs, key=lambda h: int(h["id"][1:])):
+                print(f"{h['id']:>4} {h['status']:<8} {h['kind']:<9} from {h['by']} {ago(h['at'])} ago"
+                      + (f" re {h['task']}" if h.get("task") else ""))
+                print("     " + h["text"].replace("\n", "\n     "))
+                if h.get("answer"):
+                    print("  => " + h["answer"])
+            if not hs:
+                print("(nothing needs you)")
+    elif a.sub == "answer":
+        with state() as s:
+            h = s["humans"].get(a.id) or sys.exit(f"no {a.id}")
+            h.update(status="answered", answer=a.text, answered_at=now())
+            asker = h["by"]
+            if s["peers"].get(asker, {}).get("status") == "waiting":
+                s["peers"][asker]["status"] = "active"
+        channel("human", f"{a.id} answered: {a.text}", by="human")
+        deliver(asker, "human", f"answer to {a.id} ({h['text'][:80]}): {a.text}", kind="human-answer")
+        print("ok")
+
+
+# ---------------------------------------------------------------- peers
+
+def cmd_peers(a):
+    with state(write=False) as s:
+        if not s["peers"]:
+            print("(no peers)")
+        for n, p in sorted(s["peers"].items()):
+            if p.get("status") == "gone" and not a.all:
+                continue
+            owned = [t["id"] for t in s["tasks"].values() if t.get("owner") == n and t["status"] == "claimed"]
+            live = agent_status(n) or "absent"
+            print(f"{n:<10} {p.get('status', 'active'):<8} agent={live:<8} model={p.get('model', '?')} "
+                  f"tasks={','.join(owned) or '-'} unread={unread(n, s)}")
+            if p.get("knows"):
+                print(f"           knows: {p['knows']}")
+
+
+def cmd_knows(a):
+    n = me()
+    with state() as s:
+        s["peers"].setdefault(n, {})["knows"] = a.text
+    channel("peer", f"now knows: {a.text}", by=n)
+    print("ok")
+
+
+def set_status(status, reason):
+    n = me()
+    with state() as s:
+        p = s["peers"].setdefault(n, {})
+        p["status"] = status
+        p["status_seq"] = s["seq"]
+        p["open_at_rest"] = sorted(t["id"] for t in claimable(s))
+    channel("peer", f"{status}" + (f": {reason}" if reason else ""), by=n)
+    print("ok")
+
+
+def cmd_rest(a):
+    set_status("resting", a.reason)
+
+
+def cmd_wake(a):
+    set_status("active", a.reason)
+
+
+def swarm_tab():
+    with state(write=False) as s:
+        return s["swarm"].get("tab_id"), s["swarm"].get("workspace_id")
+
+
+def pick_split_target(tab_id):
+    j = herdr("pane", "list", "--workspace", tab_id.split(":")[0])
+    panes = [p for p in (j or {}).get("result", {}).get("panes", []) if p.get("tab_id") == tab_id]
+    best, area = None, -1
+    for p in panes:
+        lj = herdr("pane", "layout", "--pane", p["pane_id"])
+        for r in (lj or {}).get("result", {}).get("layout", {}).get("panes", []):
+            if r["pane_id"] == p["pane_id"]:
+                w, h = r["rect"]["width"], r["rect"]["height"]
+                if w * h > area:
+                    best, area, direction = p["pane_id"], w * h, ("right" if w > 2.6 * h else "down")
+    if not best:
+        raise SystemExit("swarm: no panes in swarm tab; run `swarm up`")
+    return best, direction
+
+
+def cmd_spawn(a):
+    name = a.name
+    if not NAME_RE.match(name):
+        sys.exit("name must match [a-z][a-z0-9_-]{0,31}")
+    with state(write=False) as s:
+        if s["peers"].get(name, {}).get("status") not in (None, "gone"):
+            sys.exit(f"{name} already exists")
+    tab, _ = swarm_tab()
+    if not tab:
+        sys.exit("no swarm tab; run `swarm up` first")
+    free_gb = shutil.disk_usage(str(main_checkout())).free / 1e9
+    if free_gb < MIN_FREE_GB:
+        sys.exit(f"only {free_gb:.1f} GB free; ask the human (`swarm human ask --kind system ...`) before spawning")
+    wt = peers_root() / name
+    git("fetch", "-q", "origin", check=False, cwd=main_checkout())
+    if not wt.exists():
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        base = "origin/main" if git("rev-parse", "-q", "--verify", "origin/main", check=False).returncode == 0 else "main"
+        exists = git("rev-parse", "-q", "--verify", f"refs/heads/peer/{name}", check=False).returncode == 0
+        if exists:
+            git("worktree", "add", str(wt), f"peer/{name}", cwd=main_checkout())
+        else:
+            git("worktree", "add", "-b", f"peer/{name}", str(wt), base, cwd=main_checkout())
+    target, direction = pick_split_target(tab)
+    path_env = f"{wt}/swarm/bin:{os.environ.get('PATH', '')}"
+    j = herdr("pane", "split", target, "--direction", direction, "--cwd", str(wt), "--no-focus",
+              "--env", f"SWARM_NAME={name}", "--env", f"PATH={path_env}", check=True)
+    pane = j["result"]["pane"]["pane_id"]
+    herdr("pane", "rename", pane, name)
+    time.sleep(1.5)
+    model = a.model or DEFAULT_MODEL
+    pi_args = ["--model", model, "--thinking", a.thinking or DEFAULT_THINKING, "--name", f"sliver:{name}", "-a"]
+    if a.resume:
+        pi_args.insert(0, "-c")
+    r = sh("herdr", "agent", "start", name, "--kind", "pi", "--pane", pane, "--timeout", "60000", "--", *pi_args, check=False)
+    if r.returncode != 0:
+        print(r.stderr, file=sys.stderr)
+    with state() as s:
+        p = s["peers"].setdefault(name, {})
+        p.update(status="active", pane=pane, model=model, worktree=str(wt), joined=p.get("joined") or now(),
+                 spawned_by=me(required=False) or "human")
+        if a.knows:
+            p["knows"] = a.knows
+    channel("peer", f"spawned {name} ({model}) in {pane}" + (f" — {a.why}" if a.why else ""))
+    onboarding = (f"You are `{name}`, a peer in sliver's decentralized agent swarm. There is no boss. "
+                  "Read GOAL.md, SWARM.md and AGENTS.md now, then follow the loop in SWARM.md. "
+                  "Start with `swarm peers`, `swarm log -n 40`, `swarm inbox`, `swarm task list`.")
+    if a.resume:
+        onboarding = "[swarm] you were revived after your agent exited. Re-read SWARM.md, then `swarm inbox` and `swarm task list --mine`, and continue."
+    if a.brief:
+        onboarding += f"\n\nBrief from whoever spawned you: {a.brief}"
+    for _ in range(30):
+        if agent_status(name) in ("idle", "done"):
+            break
+        time.sleep(2)
+    prompt_peer(name, onboarding)
+    print(f"{name} -> {pane} ({wt})")
+
+
+def cmd_retire(a):
+    name = a.name or me()
+    with state() as s:
+        p = s["peers"].get(name) or sys.exit(f"no peer {name}")
+        p["status"] = "gone"
+        for t in s["tasks"].values():
+            if t.get("owner") == name and t["status"] == "claimed":
+                t.update(status="open", owner=None)
+                t["notes"].append({"by": name, "at": now(), "text": "released on retire"})
+    channel("peer", f"{name} retired" + (f": {a.reason}" if a.reason else ""))
+    print("ok (pane left open; close it with `herdr pane close` if you want)")
+
+
+# ---------------------------------------------------------------- landing
+
+def cmd_land(a):
+    n = me()
+    if git("status", "--porcelain").stdout.strip():
+        sys.exit("working tree not clean: commit (or stash) first")
+    with open(home() / "land.lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for attempt in range(4):
+            git("fetch", "-q", "origin")
+            r = git("rebase", "origin/main", check=False)
+            if r.returncode != 0:
+                git("rebase", "--abort", check=False)
+                sys.exit("rebase onto origin/main conflicts. Resolve it yourself: `git rebase origin/main`, fix, continue, then `swarm land` again. "
+                         "If it touches a peer's area, `swarm send` them.")
+            if git("rev-list", "--count", "origin/main..HEAD").stdout.strip() == "0":
+                print("nothing to land"); return
+            if not a.no_check:
+                c = subprocess.run([str(Path(git('rev-parse', '--show-toplevel').stdout.strip()) / "scripts" / "check")])
+                if c.returncode != 0:
+                    sys.exit("scripts/check failed; not landing")
+            p = git("push", "origin", "HEAD:main", check=False)
+            if p.returncode == 0:
+                head = git("log", "-1", "--format=%h %s").stdout.strip()
+                count = git("rev-list", "--count", "ORIG_HEAD..HEAD", check=False).stdout.strip()
+                channel("land", f"landed on main: {head}", by=n)
+                m = main_checkout()
+                if git("-C", str(m), "status", "--porcelain", check=False).stdout.strip() == "" and \
+                        git("-C", str(m), "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip() == "main":
+                    git("-C", str(m), "merge", "-q", "--ff-only", "origin/main", check=False)
+                print(f"landed: {head}")
+                return
+            print(f"push rejected (attempt {attempt + 1}); retrying", file=sys.stderr)
+        sys.exit("could not land after retries")
+
+
+# ---------------------------------------------------------------- pulse
+
+def nudge_for(name, p, s):
+    st = p.get("status", "active")
+    n_unread = unread(name, s)
+    if n_unread:
+        return f"[swarm] {n_unread} new message(s). Run `swarm inbox`."
+    if st == "waiting":
+        return None
+    open_ids = sorted(t["id"] for t in claimable(s))
+    if st == "resting":
+        new = set(open_ids) - set(p.get("open_at_rest", []))
+        if not new:
+            return None
+        return f"[swarm] new claimable task(s): {', '.join(sorted(new))}. `swarm wake` if you'll take one, else `swarm rest` again."
+    mine = [t["id"] for t in s["tasks"].values() if t.get("owner") == name and t["status"] == "claimed"]
+    if mine:
+        return f"[swarm] continue your claimed task(s) {', '.join(mine)} (land via `swarm land`), or release/finish them. Then follow the SWARM.md loop."
+    if open_ids:
+        return f"[swarm] you have no claimed task. Claimable: {', '.join(open_ids[:12])}. Pick what fits your context best (`swarm task list`), or help a peer."
+    if now() - p.get("last_explore", 0) > EXPLORE_COOLDOWN:
+        p["last_explore"] = now()
+        return ("[swarm] the board is empty. Compare GOAL.md against the actual repo and find the most valuable missing piece. "
+                "Add tasks for it (`swarm task add`), tell peers on the channel, and take one. If you truly see nothing, `swarm rest`.")
+    return None
+
+
+def cmd_pulse(a):
+    print(f"swarm pulse every {a.interval}s. Ctrl+C to stop. (`swarm pause` / `swarm resume`)")
+    warned_blocked, warned_disk = set(), 0
+    revive_at = {}
+    while True:
+        try:
+            with state() as s:
+                if s["paused"]:
+                    print(time.strftime("%H:%M:%S"), "paused"); peers = {}
+                else:
+                    peers = s["peers"]
+                actions = []
+                for name, p in peers.items():
+                    if p.get("status") == "gone":
+                        continue
+                    live = agent_status(name)
+                    if live is None:
+                        if now() - revive_at.get(name, 0) > 600:
+                            revive_at[name] = now(); actions.append(("revive", name, None))
+                        continue
+                    if live == "blocked":
+                        if name not in warned_blocked:
+                            warned_blocked.add(name); actions.append(("blocked", name, None))
+                        continue
+                    warned_blocked.discard(name)
+                    if live not in ("idle", "done"):
+                        continue
+                    if now() - p.get("last_nudge", 0) < NUDGE_COOLDOWN:
+                        continue
+                    msg = nudge_for(name, p, s)
+                    if msg:
+                        p["last_nudge"] = now(); actions.append(("nudge", name, msg))
+                open_h = [h["id"] for h in s["humans"].values() if h["status"] == "open"]
+            for kind, name, msg in actions:
+                if kind == "nudge":
+                    prompt_peer(name, msg)
+                elif kind == "blocked":
+                    notify(f"sliver: {name} is blocked", f"{name} is waiting at an approval/question UI. Look at its pane.")
+                elif kind == "revive":
+                    channel("peer", f"{name}'s agent is gone; reviving", by="pulse")
+                    with state() as s:
+                        pane = s["peers"][name].get("pane")
+                    if pane and herdr("pane", "get", pane):
+                        sh("herdr", "agent", "start", name, "--kind", "pi", "--pane", pane, "--timeout", "60000", "--",
+                           "-c", "--model", s["peers"][name].get("model", DEFAULT_MODEL), "--thinking", DEFAULT_THINKING, "-a", check=False)
+                        time.sleep(5)
+                        prompt_peer(name, "[swarm] you were revived after your agent exited. Re-read SWARM.md, then `swarm inbox` and `swarm task list --mine`, and continue.")
+                    else:
+                        notify("sliver: peer lost", f"{name}'s pane is gone. `swarm spawn {name} --resume` to bring it back.")
+            free_gb = shutil.disk_usage(str(main_checkout())).free / 1e9
+            if free_gb < MIN_FREE_GB and now() - warned_disk > 3600:
+                warned_disk = now(); notify("sliver: disk low", f"{free_gb:.1f} GB free")
+                channel("system", f"disk low: {free_gb:.1f} GB free. Run `cargo clean` in your worktree if you can.", by="pulse")
+            line = " ".join(f"{k}:{v}" for k, v in (("nudged", ",".join(n for k_, n, _ in actions if k_ == "nudge") or "-"),
+                                                    ("needs-human", ",".join(open_h) or "-")))
+            print(time.strftime("%H:%M:%S"), line, flush=True)
+        except SystemExit as e:
+            print("pulse error:", e, file=sys.stderr)
+        except Exception as e:  # never die
+            print("pulse error:", repr(e), file=sys.stderr)
+        time.sleep(a.interval)
+
+
+def cmd_pause(a):
+    with state() as s:
+        s["paused"] = True
+    channel("system", "swarm paused by human", by="human"); print("paused")
+
+
+def cmd_resume(a):
+    with state() as s:
+        s["paused"] = False
+    channel("system", "swarm resumed by human", by="human"); print("resumed")
+
+
+# ---------------------------------------------------------------- up / down / status
+
+def cmd_up(a):
+    ws = os.environ.get("HERDR_WORKSPACE_ID")
+    if not ws:
+        sys.exit("run `swarm up` from inside herdr")
+    tab, _ = swarm_tab()
+    if not tab or not herdr("tab", "get", tab):
+        j = herdr("tab", "create", "--workspace", ws, "--cwd", str(main_checkout()), "--label", "swarm", "--no-focus", check=True)
+        tab = j["result"]["tab"]["tab_id"]; root = j["result"]["root_pane"]["pane_id"]
+        with state() as s:
+            s["swarm"].update(tab_id=tab, workspace_id=ws, pulse_pane=root)
+        herdr("pane", "rename", root, "pulse")
+        time.sleep(1)
+        self_path = Path(__file__).resolve()
+        herdr("pane", "run", root, f"{self_path} pulse")
+    for name in [x for x in (a.peers or "").split(",") if x]:
+        ns = argparse.Namespace(name=name, model=a.model, thinking=None, knows=None, why="initial peer", brief=None, resume=False)
+        cmd_spawn(ns)
+    print(f"swarm tab {tab}")
+
+
+def cmd_down(a):
+    with state() as s:
+        names = [n for n, p in s["peers"].items() if p.get("status") != "gone"]
+        pulse = s["swarm"].get("pulse_pane")
+    for n in names:
+        herdr("agent", "send-keys", n, "esc")
+    if pulse:
+        herdr("pane", "send-keys", pulse, "ctrl+c")
+    channel("system", "swarm down (agents interrupted, pulse stopped; state and worktrees kept)", by="human")
+    print("down. `swarm up` restarts the pulse; `swarm spawn <name> --resume` revives a peer with its session.")
+
+
+def cmd_status(a):
+    with state(write=False) as s:
+        paused = " (PAUSED)" if s["paused"] else ""
+        print(f"== sliver swarm{paused}")
+    print("\n== peers"); cmd_peers(argparse.Namespace(all=False))
+    print("\n== needs human"); cmd_human(argparse.Namespace(sub="list", all=False))
+    print("\n== board"); cmd_task(argparse.Namespace(sub="list", all=False, mine=False))
+    print("\n== channel"); cmd_log(argparse.Namespace(n=a.n))
+
+
+# ---------------------------------------------------------------- cli
+
+def main():
+    ap = argparse.ArgumentParser(prog="swarm", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = ap.add_subparsers(dest="cmd", required=True)
+
+    x = sp.add_parser("status", help="overview"); x.add_argument("-n", type=int, default=15); x.set_defaults(f=cmd_status)
+    sp.add_parser("whoami").set_defaults(f=lambda a: print(me()))
+
+    t = sp.add_parser("task", help="shared task board"); ts = t.add_subparsers(dest="sub", required=True)
+    x = ts.add_parser("add"); x.add_argument("title"); x.add_argument("--body"); x.add_argument("--area")
+    x.add_argument("--after", help="comma-separated task ids this waits on"); x.add_argument("--claim", action="store_true")
+    x = ts.add_parser("list"); x.add_argument("--all", action="store_true"); x.add_argument("--mine", action="store_true")
+    ts.add_parser("show").add_argument("id")
+    x = ts.add_parser("claim"); x.add_argument("id"); x.add_argument("--force", action="store_true")
+    x = ts.add_parser("note"); x.add_argument("id"); x.add_argument("text")
+    x = ts.add_parser("done"); x.add_argument("id"); x.add_argument("text", nargs="?")
+    x = ts.add_parser("release"); x.add_argument("id"); x.add_argument("text", nargs="?")
+    x = ts.add_parser("drop"); x.add_argument("id"); x.add_argument("text")
+    x = ts.add_parser("edit"); x.add_argument("id"); x.add_argument("--title"); x.add_argument("--body")
+    x.add_argument("--area"); x.add_argument("--after")
+    t.set_defaults(f=cmd_task)
+
+    x = sp.add_parser("say", help="broadcast on the channel"); x.add_argument("text"); x.set_defaults(f=cmd_say)
+    x = sp.add_parser("send", help="message one peer"); x.add_argument("peer"); x.add_argument("text")
+    x.add_argument("--now", action="store_true", help="interrupt even if they are working"); x.set_defaults(f=cmd_send)
+    x = sp.add_parser("inbox"); x.add_argument("--peek", action="store_true"); x.add_argument("--all", action="store_true"); x.set_defaults(f=cmd_inbox)
+    x = sp.add_parser("log", help="read the channel"); x.add_argument("-n", type=int, default=30); x.set_defaults(f=cmd_log)
+
+    h = sp.add_parser("human", help="needs-human queue"); hs = h.add_subparsers(dest="sub", required=True)
+    x = hs.add_parser("ask"); x.add_argument("text")
+    x.add_argument("--kind", default="decision", choices=["sudo", "hardware", "taste", "decision", "external", "system", "secret"])
+    x.add_argument("--task"); x.add_argument("--block", action="store_true", help="mark yourself waiting until answered")
+    hs.add_parser("list").add_argument("--all", action="store_true")
+    x = hs.add_parser("answer"); x.add_argument("id"); x.add_argument("text")
+    h.set_defaults(f=cmd_human)
+
+    x = sp.add_parser("peers"); x.add_argument("--all", action="store_true"); x.set_defaults(f=cmd_peers)
+    x = sp.add_parser("knows", help="declare what you have context on"); x.add_argument("text"); x.set_defaults(f=cmd_knows)
+    x = sp.add_parser("rest", help="nothing useful to do; sleep until new work/messages"); x.add_argument("reason", nargs="?"); x.set_defaults(f=cmd_rest)
+    x = sp.add_parser("wake"); x.add_argument("reason", nargs="?"); x.set_defaults(f=cmd_wake)
+    x = sp.add_parser("spawn", help="start a new peer (own worktree + pane)"); x.add_argument("name")
+    x.add_argument("--model"); x.add_argument("--thinking"); x.add_argument("--knows"); x.add_argument("--why")
+    x.add_argument("--brief"); x.add_argument("--resume", action="store_true"); x.set_defaults(f=cmd_spawn)
+    x = sp.add_parser("retire"); x.add_argument("name", nargs="?"); x.add_argument("--reason"); x.set_defaults(f=cmd_retire)
+    x = sp.add_parser("land", help="rebase on origin/main, check, push to main")
+    x.add_argument("--no-check", action="store_true"); x.set_defaults(f=cmd_land)
+
+    x = sp.add_parser("pulse", help="(infra) wake idle peers that have work"); x.add_argument("--interval", type=int, default=45); x.set_defaults(f=cmd_pulse)
+    sp.add_parser("pause").set_defaults(f=cmd_pause)
+    sp.add_parser("resume").set_defaults(f=cmd_resume)
+    x = sp.add_parser("up", help="(human) create swarm tab, start pulse, spawn peers")
+    x.add_argument("--peers", default=""); x.add_argument("--model"); x.set_defaults(f=cmd_up)
+    sp.add_parser("down", help="(human) interrupt peers, stop pulse").set_defaults(f=cmd_down)
+
+    a = ap.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()
