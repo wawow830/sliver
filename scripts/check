@@ -55,4 +55,9 @@ if command -v node >/dev/null; then
   done
 fi
 
+# Nothing the checks started may outlive them: orphaned test daemons and helpers pile up on the
+# human's machine (T47). Lists and kills leftovers, then fails.
+echo "== no orphaned processes"
+python3 scripts/orphans.py --since $$ --root "$PWD"
+
 echo "check: ok"
