@@ -433,3 +433,38 @@ mod erased {
         }
     }
 }
+
+#[test]
+fn layout_override_dies_with_its_caller() {
+    let Some((bus, _api, host)) = setup() else {
+        return;
+    };
+    let editor = bus.client();
+    editor
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_CONTROL),
+            "SetLayout",
+            &("fkeys",),
+        )
+        .unwrap();
+    assert_eq!(
+        host.requests.lock().unwrap().last(),
+        Some(&Control::SetLayout("fkeys".into()))
+    );
+    // Another client coming and going doesn't touch it.
+    let other = bus.client();
+    other.close().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(host.requests.lock().unwrap().len(), 1);
+    // The editor crashes: the override is dropped.
+    editor.close().unwrap();
+    assert!(
+        wait_until(
+            || host.requests.lock().unwrap().last() == Some(&Control::SetLayout(String::new()))
+        ),
+        "override not cleared: {:?}",
+        host.requests.lock().unwrap()
+    );
+}

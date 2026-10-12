@@ -117,6 +117,9 @@ pub struct Shared {
     pub policy: Policy,
     pub focus_source: FocusSource,
     focus_owner: Option<String>,
+    /// Who set the current `SetLayout` override. It's dropped when that client disconnects,
+    /// so a crashed editor (Mirror to Touch Bar) never leaves the bar on its layout.
+    layout_owner: Option<String>,
     pub workspaces: Vec<Props>,
     display_state: String,
 }
@@ -285,8 +288,20 @@ impl Api {
             if s.focus_owner.as_deref() == Some(name) {
                 s.focus_owner = None;
             }
-            s.reg.client_gone(name)
+            let layout_gone = s.layout_owner.as_deref() == Some(name);
+            if layout_gone {
+                s.layout_owner = None;
+            }
+            (s.reg.client_gone(name), layout_gone)
         };
+        let (gone, layout_gone) = gone;
+        if layout_gone {
+            // The core answers on its own thread; don't block this executor on it.
+            let host = self.inner.host.clone();
+            std::thread::spawn(move || {
+                let _ = host.control(Control::SetLayout(String::new()));
+            });
+        }
         for id in &gone {
             self.conn
                 .object_server()
@@ -636,7 +651,12 @@ impl ControlIface {
         #[zbus(connection)] c: &Connection,
         name: String,
     ) -> Result<()> {
-        self.unit(c, &h, Control::SetLayout(name)).await
+        let owner = (!name.is_empty())
+            .then(|| h.sender().map(|s| s.to_string()))
+            .flatten();
+        self.unit(c, &h, Control::SetLayout(name)).await?;
+        self.inner.lock().layout_owner = owner;
+        Ok(())
     }
     async fn set_profile(
         &self,
