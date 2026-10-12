@@ -1,0 +1,173 @@
+//! End-to-end: the agent core + link against the in-process FakeDaemon (real socket, real
+//! memfds, sliverd's validation and touch routing). PNG snapshots in `tests/snapshots/`;
+//! bless with `SLIVER_BLESS=1`.
+
+use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
+
+use chrono::{Local, TimeZone};
+use sliver_agent::link::Link;
+use sliver_agent::modules::World;
+use sliver_agent::{Agent, icons::Icons};
+use sliver_config::load_str;
+use sliver_ipc::fake::FakeDaemon;
+use sliver_ipc::proto::{Layer, RegionKind};
+use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};
+
+fn world(h: u32, m: u32) -> World {
+    World {
+        now: Local.with_ymd_and_hms(2026, 10, 12, h, m, 5).unwrap(),
+    }
+}
+
+fn agent(toml: &str) -> Agent {
+    let loaded = load_str(toml, std::path::Path::new("."));
+    assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
+    Agent::new(
+        loaded.config,
+        Stylesheet::sliver(),
+        Renderer::new(Fonts::embedded()),
+        Icons::builtin_only(),
+        2008,
+        60,
+    )
+}
+
+/// Connects a link to a fresh FakeDaemon (the handshake blocks, so it runs on a thread while we
+/// pump the fake).
+fn connect() -> (FakeDaemon, Link) {
+    let (mut fake, conn) = FakeDaemon::new(FakeDaemon::mac14_7()).unwrap();
+    let t = thread::spawn(move || Link::handshake(conn, "test-agent"));
+    while !t.is_finished() {
+        fake.pump().unwrap();
+        thread::sleep(Duration::from_millis(1));
+    }
+    let link = t.join().unwrap().unwrap();
+    fake.pump().unwrap(); // the buffer attachments
+    (fake, link)
+}
+
+/// Presents whatever the agent rebuilt and lets the fake process it.
+fn present(a: &Agent, link: &mut Link, fake: &mut FakeDaemon, layers: &[Layer]) {
+    for &l in layers {
+        let f = a.frame(l).unwrap();
+        link.present(l, &f.image, &f.pressed, &f.regions).unwrap();
+    }
+    fake.pump().unwrap();
+    link.poll().unwrap();
+}
+
+fn check(name: &str, p: &Pixmap) {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/snapshots/{name}.png"));
+    if std::env::var_os("SLIVER_BLESS").is_some() {
+        p.save_png(&path).unwrap();
+        return;
+    }
+    let want = Pixmap::load_png(&path)
+        .unwrap_or_else(|e| panic!("{name}: {e}; bless with SLIVER_BLESS=1"));
+    let bad = want
+        .data()
+        .chunks(4)
+        .zip(p.data().chunks(4))
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
+        .count();
+    if bad > 20 {
+        let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../target/snapshot-failures/{name}.png"));
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        p.save_png(&out).unwrap();
+        panic!("{name}: {bad} pixels differ; actual at {out:?}");
+    }
+}
+
+/// The fake's copy of a frame, as a Pixmap (XRGB little-endian → RGBA).
+fn fake_pixels(px: &[u8]) -> Pixmap {
+    let mut p = Pixmap::new(2008, 60).unwrap();
+    for (d, s) in p.data_mut().chunks_exact_mut(4).zip(px.chunks_exact(4)) {
+        d.copy_from_slice(&[s[2], s[1], s[0], 255]);
+    }
+    p
+}
+
+#[test]
+fn default_config_end_to_end() {
+    let mut a = agent("");
+    let (mut fake, mut link) = connect();
+    let layers = a.render(&world(9, 41));
+    assert_eq!(layers, [Layer::Base, Layer::Fn], "{:?}", a.errors);
+    present(&a, &mut link, &mut fake, &layers);
+    assert!(fake.errors.is_empty(), "{:?}", fake.errors);
+    assert!(!fake.safe_layer_active());
+
+    // What sliverd holds is exactly what we rendered.
+    let base = fake.base.as_ref().expect("base presented");
+    assert_eq!(
+        fake_pixels(&base.pixels).data(),
+        a.frame(Layer::Base).unwrap().image.data()
+    );
+    check("default-base", &a.frame(Layer::Base).unwrap().image);
+    check("default-fn", &a.frame(Layer::Fn).unwrap().image);
+    check("default-fn-pressed", &a.frame(Layer::Fn).unwrap().pressed);
+
+    // Fn layer: F1..F12 as key regions, handled by sliverd alone.
+    let fnl = fake.fn_layer.as_ref().expect("fn presented");
+    let keys: Vec<u16> = fnl
+        .regions
+        .iter()
+        .filter_map(|r| match &r.kind {
+            RegionKind::Key { keys } => Some(keys[0]),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(keys, (59..=68).chain([87, 88]).collect::<Vec<u16>>());
+
+    // Hold Fn and tap F5: the fake emits KEY_F5 down/up without asking us.
+    let f5 = fnl.regions[4].rect;
+    fake.set_fn(true).unwrap();
+    fake.tap((f5.x + f5.w / 2) as f32, 30.0).unwrap();
+    assert_eq!(fake.keys, [(63, true), (63, false)]);
+
+    // Re-rendering the same state sends nothing (invariant 3).
+    let before = link.presents;
+    let layers = a.render(&world(9, 41));
+    present(&a, &mut link, &mut fake, &layers);
+    assert_eq!(link.presents, before);
+}
+
+#[test]
+fn clock_ticks_present_only_changes() {
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        width = "fill"
+        modules = ["key/Esc", "spacer", "clock"]
+        [modules.clock]
+        format = "{:%H:%M}"
+        "#,
+    );
+    let (mut fake, mut link) = connect();
+    let layers = a.render(&world(9, 41));
+    present(&a, &mut link, &mut fake, &layers);
+    check("clock-0941", &a.frame(Layer::Base).unwrap().image);
+    assert_eq!(
+        a.next_change().unwrap().format("%H:%M:%S").to_string(),
+        "09:42:00"
+    );
+
+    let before = link.presents;
+    let layers = a.render(&world(9, 42));
+    present(&a, &mut link, &mut fake, &layers);
+    assert_eq!(link.presents, before + 1, "only base changed");
+    let base = fake.base.as_ref().unwrap();
+    assert_eq!(
+        fake_pixels(&base.pixels).data(),
+        a.frame(Layer::Base).unwrap().image.data()
+    );
+
+    // Display off: nothing ticks.
+    a.display = sliver_ipc::proto::DisplayState::Off;
+    assert_eq!(a.next_change(), None);
+}

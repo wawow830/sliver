@@ -255,7 +255,31 @@ impl Renderer {
         let mut items = Vec::new();
         let mut tracks = Vec::new();
         let mut styles = st.items.iter().zip(&st.parts).zip(scene.items());
-        let zone_spans = solve(&zone_sizes, bar.w, st.bar.gap, Align::Start);
+        // Empty zones take no space and no gap (e.g. the `esc` zone on Macs with a physical Esc),
+        // except `Fill` zones, which still take the leftover space and push later zones along.
+        let takes_space =
+            |z: &crate::Zone| !z.items.is_empty() || matches!(z.width, Width::Fill(_));
+        let nonempty: Vec<Sizing> = zone_sizes
+            .iter()
+            .zip(&scene.zones)
+            .filter(|(_, z)| takes_space(z))
+            .map(|(s, _)| *s)
+            .collect();
+        let mut solved = solve(&nonempty, bar.w, st.bar.gap, Align::Start).into_iter();
+        let mut last_end = 0.0;
+        let zone_spans: Vec<(f32, f32)> = scene
+            .zones
+            .iter()
+            .map(|z| {
+                if !takes_space(z) {
+                    (last_end, 0.0)
+                } else {
+                    let s = solved.next().unwrap_or((last_end, 0.0));
+                    last_end = s.0 + s.1;
+                    s
+                }
+            })
+            .collect();
         for (((zone, zs), (zx, zw)), sizes) in scene
             .zones
             .iter()

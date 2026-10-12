@@ -249,3 +249,16 @@ fn slider_track_is_in_layout() {
         "{t:?} in {item:?}"
     );
 }
+
+#[test]
+fn empty_zones_take_no_space() {
+    let scene = Scene::zoned(vec![], vec![Item::text("a").fill(1)], vec![]);
+    let mut r = Renderer::new(Fonts::embedded());
+    let layout = r.layout(&scene, &Stylesheet::sliver(), W, H);
+    assert_eq!((layout.items[0].x, layout.items[0].w), (0.0, W as f32));
+    assert_eq!(layout.zones[0].w, 0.0);
+    // An empty Fill zone still pushes the zones after it to the right.
+    let scene = Scene::zoned(vec![], vec![], vec![Item::text("b")]);
+    let layout = r.layout(&scene, &Stylesheet::sliver(), W, H);
+    assert_eq!(layout.items[0].right(), W as f32);
+}

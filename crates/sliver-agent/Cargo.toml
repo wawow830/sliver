@@ -11,3 +11,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+sliver-config.workspace = true
+sliver-icons.workspace = true
+sliver-ipc.workspace = true
+sliver-render.workspace = true
+rustix = { workspace = true, features = ["event"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+sliver-ipc = { workspace = true, features = ["fake"] }
