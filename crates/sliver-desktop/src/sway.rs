@@ -146,6 +146,66 @@ pub fn focused_window(tree: &Value) -> Option<Window> {
     walk(tree, false)
 }
 
+/// Every window in a `GET_TREE` reply with the workspace it sits on, in tree order.
+pub fn windows_from_tree(tree: &Value) -> Vec<crate::WindowInfo> {
+    fn walk(n: &Value, ws: i64, out: &mut Vec<crate::WindowInfo>) {
+        let ws = if str_of(n, "type") == Some("workspace") {
+            n.get("num").and_then(Value::as_i64).unwrap_or(-1)
+        } else {
+            ws
+        };
+        let leaf = is_leaf_window(n)
+            && n.get("nodes")
+                .and_then(Value::as_array)
+                .is_none_or(|a| a.is_empty())
+            && n.get("floating_nodes")
+                .and_then(Value::as_array)
+                .is_none_or(|a| a.is_empty());
+        if leaf && str_of(n, "type") != Some("workspace") {
+            let w = window_from_container(n);
+            out.push(crate::WindowInfo {
+                address: w.address,
+                class: w.class,
+                title: w.title,
+                workspace: ws,
+                focused: n.get("focused").and_then(Value::as_bool) == Some(true),
+                urgent: n.get("urgent").and_then(Value::as_bool) == Some(true),
+                pid: w.pid,
+            });
+        }
+        for key in ["nodes", "floating_nodes"] {
+            for k in n.get(key).and_then(Value::as_array).into_iter().flatten() {
+                walk(k, ws, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, -1, &mut out);
+    out
+}
+
+/// All workspaces from `GET_WORKSPACES`, counting windows from `windows`.
+pub fn workspaces_from_list(
+    list: &Value,
+    windows: &[crate::WindowInfo],
+) -> Vec<crate::WorkspaceInfo> {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| {
+            let ws = workspace_from(w)?;
+            Some(crate::WorkspaceInfo {
+                id: ws.id,
+                windows: windows.iter().filter(|x| x.workspace == ws.id).count() as u32,
+                active: w.get("focused").and_then(Value::as_bool) == Some(true),
+                urgent: w.get("urgent").and_then(Value::as_bool) == Some(true),
+                monitor: str_of(w, "output").map(str::to_string),
+                name: ws.name,
+            })
+        })
+        .collect()
+}
+
 fn workspace_from(v: &Value) -> Option<Workspace> {
     let name = str_of(v, "name")?.to_string();
     // Named workspaces have num -1; the name is then their only identity.
@@ -212,7 +272,9 @@ pub fn apply_event(state: &mut DesktopState, ty: u32, body: &Value) -> (bool, Fo
                     if let Some(w) = state.window.as_mut().filter(|w| w.address == id) {
                         w.title = str_of(&c, "name").unwrap_or_default().to_string();
                     }
+                    follow = Followup::RefreshWindow; // the taskbar shows titles too
                 }
+                "new" | "move" | "urgent" => follow = Followup::RefreshWindow,
                 "close" => {
                     if state.window.as_ref().is_some_and(|w| w.address == id) {
                         state.window = None;
@@ -238,6 +300,8 @@ pub fn apply_event(state: &mut DesktopState, ty: u32, body: &Value) -> (bool, Fo
             }
             follow = Followup::RefreshWindow;
         }
+        // init, empty, rename, urgent, move, reload: the workspace list changed.
+        EV_WORKSPACE => follow = Followup::RefreshWindow,
         EV_OUTPUT => follow = Followup::RefreshOutputs,
         EV_MODE => {
             state.submap = Some(change.to_string()).filter(|m| !m.is_empty() && m != "default");
@@ -304,12 +368,18 @@ impl Watcher {
                 self.state.keyboard_layout = Some(l);
             }
         }
+        self.state.sync_flags();
     }
 
     fn refresh_window(&mut self) {
         if let Ok(tree) = query(&self.socket, GET_TREE) {
             self.state.window = focused_window(&tree);
+            self.state.windows = windows_from_tree(&tree);
         }
+        if let Ok(list) = query(&self.socket, GET_WORKSPACES) {
+            self.state.workspaces = workspaces_from_list(&list, &self.state.windows);
+        }
+        self.state.sync_flags();
     }
 
     fn refresh_outputs(&mut self) {
@@ -335,6 +405,7 @@ impl DesktopSource for Watcher {
             }
             let body: Value = serde_json::from_slice(&payload).unwrap_or(Value::Null);
             let (mut changed, follow) = apply_event(&mut self.state, ty, &body);
+            self.state.sync_flags();
             let before = self.state.clone();
             match follow {
                 Followup::None => {}
@@ -526,6 +597,28 @@ mod tests {
     }
 
     #[test]
+    fn lists_from_tree_and_workspaces() {
+        let w = windows_from_tree(&tree());
+        let ids: Vec<(&str, i64)> = w
+            .iter()
+            .map(|x| (x.address.as_str(), x.workspace))
+            .collect();
+        assert_eq!(ids, [("10", 1), ("11", 2), ("12", 2)]);
+        assert!(w[1].focused && !w[0].focused);
+        let list = json!([
+            {"name":"1","num":1,"focused":false,"urgent":false,"output":"eDP-1"},
+            {"name":"2","num":2,"focused":true,"urgent":true,"output":"eDP-1"}
+        ]);
+        let ws = workspaces_from_list(&list, &w);
+        assert_eq!(
+            ws.iter()
+                .map(|x| (x.id, x.windows, x.active, x.urgent))
+                .collect::<Vec<_>>(),
+            [(1, 1, false, false), (2, 2, true, true)]
+        );
+    }
+
+    #[test]
     fn socket_env_order() {
         let g = |k: &str| (k == "I3SOCK").then(|| "/i3".to_string());
         assert_eq!(socket_from_env(g), Some("/i3".into()));
@@ -604,6 +697,9 @@ mod tests {
         assert_eq!(s0.window.as_ref().unwrap().class, "firefox");
         assert_eq!(s0.workspace.as_ref().unwrap().name, "2");
         assert_eq!((s0.monitors, s0.external_display), (1, false));
+        assert_eq!(s0.windows.len(), 3, "taskbar list from the tree");
+        assert_eq!(s0.workspaces.len(), 1);
+        assert!(s0.workspaces[0].active && s0.windows.iter().filter(|w| w.focused).count() == 1);
         assert_eq!(s0.keyboard_layout.as_deref(), Some("English (US)"));
 
         assert_eq!(

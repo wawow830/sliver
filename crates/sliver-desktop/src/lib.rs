@@ -8,6 +8,7 @@
 //!
 //! Survey and rationale for the other backends: `docs/integration.md`.
 
+pub mod control;
 pub mod fake;
 pub mod hyprland;
 pub mod niri;
@@ -87,6 +88,33 @@ impl Backend {
     }
 }
 
+/// One workspace in the compositor's list (what a workspaces bar shows).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceInfo {
+    pub id: i64,
+    pub name: String,
+    /// The focused workspace.
+    pub active: bool,
+    pub urgent: bool,
+    pub monitor: Option<String>,
+    /// Number of windows on it (0 = empty).
+    pub windows: u32,
+}
+
+/// One window in the compositor's list (what a taskbar shows).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    /// Same identity as [`Window::address`].
+    pub address: String,
+    pub class: String,
+    pub title: String,
+    /// Workspace id (negative = special/scratchpad).
+    pub workspace: i64,
+    pub focused: bool,
+    pub urgent: bool,
+    pub pid: Option<u32>,
+}
+
 /// Everything the compositor tells us. Only fields that changed behaviour-relevantly are here;
 /// system signals (power, media, lock...) come from other sources, see `docs/integration.md`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +139,10 @@ pub struct DesktopState {
     pub monitors: u32,
     /// Any enabled output that is not the built-in panel (see [`is_internal_output`]).
     pub external_display: bool,
+    /// All workspaces, in the compositor's order. Empty when the backend can't list them.
+    pub workspaces: Vec<WorkspaceInfo>,
+    /// All mapped windows, in the compositor's order.
+    pub windows: Vec<WindowInfo>,
 }
 
 /// Is this connector the laptop's own panel? (`eDP-*`, `LVDS-*`, `DSI-*`.)
@@ -119,6 +151,19 @@ pub fn is_internal_output(name: &str) -> bool {
 }
 
 impl DesktopState {
+    /// Re-derive the `active` / `focused` flags of the lists from the focused workspace and window.
+    /// Backends call it after changing either side.
+    pub fn sync_flags(&mut self) {
+        let ws = self.workspace.as_ref().map(|w| w.id);
+        for w in &mut self.workspaces {
+            w.active = Some(w.id) == ws;
+        }
+        let win = self.window.as_ref().map(|w| w.address.as_str());
+        for w in &mut self.windows {
+            w.focused = win == Some(w.address.as_str());
+        }
+    }
+
     /// Set the output list and the derived `monitors` / `external_display`.
     pub fn set_monitors(&mut self, names: Vec<String>) {
         self.monitors = names.len() as u32;

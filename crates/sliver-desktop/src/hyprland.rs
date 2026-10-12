@@ -88,6 +88,12 @@ pub enum Event {
     Screencast(bool),
     /// An output appeared or vanished (`monitoraddedv2` / `monitorremovedv2`): re-query them.
     MonitorsChanged,
+    /// Workspaces or windows were created, destroyed, moved or renamed: re-query the lists.
+    ListsChanged,
+    /// A window wants attention (`urgent>>ADDRESS`).
+    Urgent {
+        address: String,
+    },
     /// Config reloaded: a good moment to resync from the command socket.
     ConfigReloaded,
     /// Anything we don't track.
@@ -183,6 +189,11 @@ pub fn parse_event(line: &str) -> Event {
         "monitoraddedv2" | "monitorremovedv2" | "monitorremoved" | "monitoradded" => {
             Event::MonitorsChanged
         }
+        "createworkspacev2" | "destroyworkspacev2" | "moveworkspacev2" | "renameworkspace"
+        | "openwindow" | "movewindowv2" => Event::ListsChanged,
+        "urgent" => Event::Urgent {
+            address: data.trim_start_matches("0x").to_string(),
+        },
         "configreloaded" => Event::ConfigReloaded,
         _ => Event::Other,
     }
@@ -260,8 +271,12 @@ pub fn apply(state: &mut DesktopState, event: &Event) -> bool {
             }
         }
         Event::Screencast(on) => state.screencast = *on,
-        Event::Workspace { .. } | Event::MonitorsChanged | Event::ConfigReloaded | Event::Other => {
-        }
+        Event::Workspace { .. }
+        | Event::MonitorsChanged
+        | Event::ListsChanged
+        | Event::Urgent { .. }
+        | Event::ConfigReloaded
+        | Event::Other => {}
     }
     *state != before
 }
@@ -320,6 +335,71 @@ pub fn monitors_from_json(json: &str) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// Parse `j/workspaces`: real workspaces (special/scratchpad ones have negative ids), by id.
+pub fn workspaces_from_json(json: &str) -> Option<Vec<crate::WorkspaceInfo>> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut out: Vec<crate::WorkspaceInfo> = v
+        .as_array()?
+        .iter()
+        .filter_map(|w| {
+            let id = w.get("id")?.as_i64()?;
+            if id < 0 {
+                return None;
+            }
+            Some(crate::WorkspaceInfo {
+                id,
+                name: w.get("name")?.as_str()?.to_string(),
+                active: false,
+                urgent: false,
+                monitor: w
+                    .get("monitor")
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string),
+                windows: w.get("windows").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
+            })
+        })
+        .collect();
+    out.sort_by_key(|w| w.id);
+    Some(out)
+}
+
+/// Parse `j/clients`: mapped windows.
+pub fn windows_from_json(json: &str) -> Option<Vec<crate::WindowInfo>> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    Some(
+        v.as_array()?
+            .iter()
+            .filter(|c| c.get("mapped").and_then(|m| m.as_bool()) != Some(false))
+            .filter_map(|c| {
+                Some(crate::WindowInfo {
+                    address: c
+                        .get("address")?
+                        .as_str()?
+                        .trim_start_matches("0x")
+                        .to_string(),
+                    class: c
+                        .get("class")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    title: c
+                        .get("title")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    workspace: c.get("workspace")?.get("id")?.as_i64()?,
+                    focused: false,
+                    urgent: false,
+                    pid: c
+                        .get("pid")
+                        .and_then(|p| p.as_u64())
+                        .and_then(|p| u32::try_from(p).ok()),
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Parse `j/devices`: the active layout of the main keyboard, else of the first physical one.
 /// (On Apple laptops no keyboard is flagged `main`, and virtual ones are listed first.)
 pub fn layout_from_devices_json(json: &str) -> Option<String> {
@@ -359,6 +439,8 @@ pub struct Watcher {
     paths: Paths,
     events: BufReader<UnixStream>,
     state: DesktopState,
+    /// Windows that asked for attention and have not been focused since.
+    urgent: std::collections::HashSet<String>,
 }
 
 impl Watcher {
@@ -369,6 +451,7 @@ impl Watcher {
             paths: paths.clone(),
             events,
             state: DesktopState::default(),
+            urgent: Default::default(),
         };
         w.resync();
         Ok(w)
@@ -386,6 +469,7 @@ impl Watcher {
             }
         }
         self.refresh_monitors();
+        self.refresh_lists();
         if let Ok(j) = request(&self.paths.command, "j/devices") {
             if let Some(l) = layout_from_devices_json(&j) {
                 self.state.keyboard_layout = Some(l);
@@ -395,6 +479,49 @@ impl Watcher {
             let s = s.trim();
             self.state.submap = (s != "default" && !s.is_empty()).then(|| s.to_string());
         }
+    }
+
+    /// Re-read the workspace and window lists (taskbar, workspaces bar).
+    fn refresh_lists(&mut self) {
+        if let Ok(j) = request(&self.paths.command, "j/workspaces") {
+            if let Some(w) = workspaces_from_json(&j) {
+                self.state.workspaces = w;
+            }
+        }
+        if let Ok(j) = request(&self.paths.command, "j/clients") {
+            if let Some(w) = windows_from_json(&j) {
+                self.state.windows = w;
+            }
+        }
+        self.mark_urgent();
+    }
+
+    /// Fold the urgent set and the focus into the lists.
+    fn mark_urgent(&mut self) {
+        if let Some(w) = &self.state.window {
+            self.urgent.remove(&w.address);
+        }
+        let live: std::collections::HashSet<&str> = self
+            .state
+            .windows
+            .iter()
+            .map(|w| w.address.as_str())
+            .collect();
+        self.urgent.retain(|a| live.contains(a.as_str()));
+        for w in &mut self.state.windows {
+            w.urgent = self.urgent.contains(&w.address);
+        }
+        let urgent_ws: std::collections::HashSet<i64> = self
+            .state
+            .windows
+            .iter()
+            .filter(|w| w.urgent)
+            .map(|w| w.workspace)
+            .collect();
+        for ws in &mut self.state.workspaces {
+            ws.urgent = urgent_ws.contains(&ws.id);
+        }
+        self.state.sync_flags();
     }
 
     fn refresh_monitors(&mut self) {
@@ -454,7 +581,25 @@ impl DesktopSource for Watcher {
                     self.resync();
                     changed |= self.state != before;
                 }
-                ref other => changed = apply(&mut self.state, other),
+                Event::Urgent { ref address } => {
+                    let before = self.state.clone();
+                    self.urgent.insert(address.clone());
+                    self.mark_urgent();
+                    changed = self.state != before;
+                }
+                ref other => {
+                    let before = self.state.clone();
+                    apply(&mut self.state, other);
+                    if matches!(
+                        other,
+                        Event::ListsChanged | Event::CloseWindow { .. } | Event::WindowTitle { .. }
+                    ) {
+                        self.refresh_lists();
+                    } else {
+                        self.mark_urgent();
+                    }
+                    changed = self.state != before;
+                }
             }
             if changed {
                 return Ok(Some(self.state.clone()));
@@ -541,6 +686,14 @@ mod tests {
         assert_eq!(
             ev("monitorremovedv2>>1,HDMI-A-1,desc"),
             Event::MonitorsChanged
+        );
+        assert_eq!(ev("createworkspacev2>>3,3"), Event::ListsChanged);
+        assert_eq!(ev("openwindow>>a2,1,firefox,Doc"), Event::ListsChanged);
+        assert_eq!(
+            ev("urgent>>0xb2"),
+            Event::Urgent {
+                address: "b2".into()
+            }
         );
         assert_eq!(ev("somethingnew>>x"), Event::Other);
         assert_eq!(ev("garbage"), Event::Other);
@@ -676,6 +829,12 @@ mod tests {
                         }
                         "j/activeworkspace" => r#"{"id":1,"name":"1","monitor":"eDP-1"}"#,
                         "j/monitors" => r#"[{"name":"eDP-1"},{"name":"HDMI-A-1","disabled":true}]"#,
+                        "j/workspaces" => {
+                            r#"[{"id":1,"name":"1","monitor":"eDP-1","windows":2},{"id":2,"name":"web","windows":0},{"id":-98,"name":"special:x","windows":1}]"#
+                        }
+                        "j/clients" => {
+                            r#"[{"address":"0xa1","mapped":true,"workspace":{"id":1,"name":"1"},"class":"kitty","title":"sh","pid":7},{"address":"0xb2","mapped":true,"workspace":{"id":1,"name":"1"},"class":"firefox","title":"Docs","pid":8},{"address":"0xc3","mapped":false,"workspace":{"id":2,"name":"2"},"class":"x","title":"y"}]"#
+                        }
                         "j/devices" => {
                             r#"{"keyboards":[{"name":"kb","active_keymap":"English (US)","main":true}]}"#
                         }
@@ -723,6 +882,22 @@ mod tests {
         assert_eq!(s0.monitor.as_deref(), Some("eDP-1"));
         assert_eq!(s0.keyboard_layout.as_deref(), Some("English (US)"));
         assert_eq!(s0.submap, None);
+        assert_eq!(
+            s0.workspaces
+                .iter()
+                .map(|w| (w.id, w.windows, w.active))
+                .collect::<Vec<_>>(),
+            [(1, 2, true), (2, 0, false)],
+            "special workspaces are not listed"
+        );
+        assert_eq!(
+            s0.windows
+                .iter()
+                .map(|w| (w.address.as_str(), w.focused))
+                .collect::<Vec<_>>(),
+            [("a1", true), ("b2", false)],
+            "unmapped windows are not listed; the focused one is flagged"
+        );
         assert_eq!(
             (s0.monitors, s0.external_display),
             (1, false),

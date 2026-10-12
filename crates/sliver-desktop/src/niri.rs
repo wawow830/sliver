@@ -38,6 +38,7 @@ struct Win {
     app_id: String,
     pid: Option<u32>,
     floating: bool,
+    workspace: Option<u64>,
 }
 
 /// niri's world as the event stream describes it.
@@ -81,6 +82,7 @@ fn win_from(v: &Value) -> Option<(u64, Win, bool)> {
                 .and_then(Value::as_u64)
                 .and_then(|p| u32::try_from(p).ok()),
             floating: v.get("is_floating").and_then(Value::as_bool) == Some(true),
+            workspace: u(v, "workspace_id"),
         },
         v.get("is_focused").and_then(Value::as_bool) == Some(true),
     ))
@@ -191,6 +193,38 @@ impl Model {
             });
             st.monitor = w.output.clone();
         }
+        // Lists. Niri workspace ids are unique across outputs (indexes are per output), so
+        // `WorkspaceInfo::id` is the niri id and `name` is the user-facing name or index.
+        let mut ws: Vec<(&u64, &Ws)> = self.workspaces.iter().collect();
+        ws.sort_by(|a, b| (&a.1.output, a.1.idx).cmp(&(&b.1.output, b.1.idx)));
+        st.workspaces = ws
+            .iter()
+            .map(|(id, w)| crate::WorkspaceInfo {
+                id: **id as i64,
+                name: w.name.clone().unwrap_or_else(|| w.idx.to_string()),
+                active: w.focused,
+                urgent: false,
+                monitor: w.output.clone(),
+                windows: self
+                    .windows
+                    .values()
+                    .filter(|x| x.workspace == Some(**id))
+                    .count() as u32,
+            })
+            .collect();
+        st.windows = self
+            .windows
+            .iter()
+            .map(|(id, w)| crate::WindowInfo {
+                address: id.to_string(),
+                class: w.app_id.clone(),
+                title: w.title.clone(),
+                workspace: w.workspace.map_or(-1, |x| x as i64),
+                focused: self.focused == Some(*id),
+                urgent: false,
+                pid: w.pid,
+            })
+            .collect();
         let outputs: BTreeSet<String> = self
             .workspaces
             .values()
@@ -333,6 +367,20 @@ mod tests {
         assert_eq!((s.monitors, s.external_display), (2, true));
         assert_eq!(s.keyboard_layout.as_deref(), Some("English (US)"));
         assert_eq!(s.backend, Backend::Niri);
+        assert_eq!(
+            s.workspaces
+                .iter()
+                .map(|w| (w.id, w.name.as_str(), w.active, w.windows))
+                .collect::<Vec<_>>(),
+            [(11, "web", false, 1), (10, "1", true, 1)] // ordered by output, then index
+        );
+        assert_eq!(
+            s.windows
+                .iter()
+                .map(|w| (w.address.as_str(), w.workspace, w.focused))
+                .collect::<Vec<_>>(),
+            [("1", 10, true), ("2", 11, false)]
+        );
     }
 
     #[test]
