@@ -384,7 +384,18 @@ fn cells_in(
             continue;
         }
         if m.id.kind == "workspaces" || m.id.kind == "taskbar" {
-            for i in listed(m, world) {
+            // Pinned apps first (launchers, or the running app's window), then the other windows.
+            let mut shown = std::collections::HashSet::new();
+            if m.id.kind == "taskbar" {
+                for (pi, pin) in pinned_ids(m).iter().enumerate() {
+                    let window = pinned_window(world, pin);
+                    shown.extend(window);
+                    out.push(pinned_cell(
+                        m, &key, world, icons, icon_size, pi, pin, window,
+                    ));
+                }
+            }
+            for i in listed(m, world).into_iter().filter(|i| !shown.contains(i)) {
                 let id = match m.id.kind.as_str() {
                     "workspaces" => world.desktop.workspaces[i].id.to_string(),
                     _ => world.desktop.windows[i].address.clone(),
@@ -561,6 +572,109 @@ pub fn menu_cells(
         "menu:close".into(),
     ));
     out
+}
+
+/// `pinned = ["org.mozilla.firefox", "kitty"]`: desktop ids (with or without `.desktop`).
+fn pinned_ids(m: &ModuleInstance) -> Vec<String> {
+    m.config
+        .get("pinned")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .map(|s| s.strip_suffix(".desktop").unwrap_or(s).to_string())
+        .collect()
+}
+
+/// The first window (any workspace) that belongs to the pinned app `id`.
+fn pinned_window(world: &World, id: &str) -> Option<usize> {
+    world.desktop.windows.iter().position(|w| {
+        world
+            .apps
+            .find_by_app_id(&w.class)
+            .is_some_and(|e| e.id == id)
+    })
+}
+
+/// A launcher for a pinned app: tap focuses its window when it is running, else starts it
+/// (`gtk-launch`); hold closes the running window.
+#[allow(clippy::too_many_arguments)]
+fn pinned_cell(
+    m: &ModuleInstance,
+    key: &str,
+    world: &World,
+    icons: &mut Icons,
+    icon_size: u32,
+    index: usize,
+    id: &str,
+    window: Option<usize>,
+) -> Cell {
+    let entry = world.apps.get(id);
+    let icon = entry
+        .and_then(|e| e.icon.as_deref())
+        .or(Some(id))
+        .and_then(|n| {
+            icons.get(
+                n,
+                m.common.icon_theme.as_deref(),
+                m.common.icon_size.unwrap_or(icon_size),
+            )
+        });
+    let name = entry.map_or(id, |e| e.name.as_str());
+    let content = icon.map_or_else(
+        || {
+            Content::Markup(sliver_render::markup::escape(
+                &name.chars().take(2).collect::<String>(),
+            ))
+        },
+        Content::Icon,
+    );
+    let win = window.map(|i| &world.desktop.windows[i]);
+    let target = win.map(|w| sliver_desktop::control::Action::FocusWindow {
+        address: w.address.clone(),
+    });
+    let mut classes = vec!["pinned".to_string()];
+    classes.push(if win.is_some() { "running" } else { "idle" }.to_string());
+    if win.is_some_and(|w| w.focused) {
+        classes.push("focused".into());
+    }
+    if win.is_some_and(|w| w.urgent) {
+        classes.push("urgent".into());
+    }
+    classes.extend(m.classes.iter().cloned());
+    let tap = if win.is_some() {
+        Action::ModuleAction("focus".into())
+    } else {
+        Action::Open(id.to_string())
+    };
+    let mut on = vec![(Gesture::Tap, tap)];
+    if win.is_some() {
+        on.push((Gesture::Hold, Action::ModuleAction("close".into())));
+    }
+    Cell {
+        key: format!("{key}/pin{index}"),
+        id: m.id.to_string(),
+        kind: "taskbar".into(),
+        mic: false,
+        css_id: m.css_id.clone(),
+        classes,
+        width: Width::Auto,
+        content,
+        touch: Touch::Agent,
+        on,
+        next_change: None,
+        pressed: false,
+        checked: win.is_some_and(|w| w.focused),
+        drawer: None,
+        disabled: false,
+        foreground: None,
+        background: None,
+        published: None,
+        pass_through: false,
+        target,
+        timer_total: None,
+        menu: Vec::new(),
+    }
 }
 
 /// Which workspaces/windows a `workspaces` / `taskbar` module shows (indexes into the lists).
@@ -1782,6 +1896,64 @@ mod tests {
         let c = stat_cells(toml, &w);
         assert!(c[0].classes.contains(&"disconnected".to_string()));
         assert!(c[1].classes.contains(&"off".to_string()));
+    }
+
+    #[test]
+    fn taskbar_pinned_apps() {
+        use sliver_desktop::WindowInfo;
+        let dir = std::env::temp_dir().join(format!("sliver-pinned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("org.mozilla.firefox.desktop"), "[Desktop Entry]\nType=Application\nName=Firefox\nIcon=firefox\nStartupWMClass=firefox\n").unwrap();
+        std::fs::write(
+            dir.join("kitty.desktop"),
+            "[Desktop Entry]\nType=Application\nName=kitty\nIcon=kitty\n",
+        )
+        .unwrap();
+        let mut w = world();
+        w.apps = std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::scan(&[dir.clone()]));
+        w.desktop.connected = true;
+        w.desktop.workspace = Some(sliver_desktop::Workspace {
+            id: 1,
+            name: "1".into(),
+        });
+        let win = |addr: &str, class: &str, focused: bool| WindowInfo {
+            address: addr.into(),
+            class: class.into(),
+            title: class.into(),
+            workspace: 1,
+            focused,
+            ..Default::default()
+        };
+        w.desktop.windows = vec![win("a1", "mpv", false), win("b2", "firefox", true)];
+        let cells = stat_cells(
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"taskbar\"]\n[modules.taskbar]\npinned = [\"org.mozilla.firefox.desktop\", \"kitty\"]\n",
+            &w,
+        );
+        let keys: Vec<&str> = cells.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["taskbar/pin0", "taskbar/pin1", "taskbar/a1"],
+            "pinned first, running pinned app not repeated"
+        );
+        assert!(
+            cells[0].classes.contains(&"running".to_string())
+                && cells[0].classes.contains(&"focused".to_string())
+                && cells[0].checked
+        );
+        assert!(
+            matches!(&cells[0].target, Some(sliver_desktop::control::Action::FocusWindow { address }) if address == "b2")
+        );
+        assert!(cells[1].classes.contains(&"idle".to_string()) && cells[1].target.is_none());
+        assert!(
+            cells[1]
+                .on
+                .iter()
+                .any(|(g, a)| *g == sliver_config::Gesture::Tap
+                    && matches!(a, sliver_config::Action::Open(id) if id == "kitty")),
+            "an idle launcher starts the app"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

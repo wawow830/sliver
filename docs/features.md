@@ -56,7 +56,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Timer / pomodoro | P2 | done | MTMR pomodoro | tap start/pause, long-press reset |  |  |
 | System stats: CPU/RAM/temp/net, sparkline | P2 | partial | MTMR cpu/network | tap → system monitor | /proc, hwmon | cpu, memory, load, temperature, disk and network done. Missing: sparkline graph and rates. |
 | Emoji picker: scrolling strip, recents, category tabs | P2 | partial | mac | tap = type, swipe = scroll | uinput or text input (keymap issue: see T7) | Rendering is ready (COLRv1); the module and the insertion method are open (T51). **Now:** Done: tabs, paging, recents, typing via wtype or the clipboard (`sliver-emoji`). Missing: search and skin-tone selection. |
-| App switcher / dock: running and pinned apps | P2 | partial | Pock, MTMR dock | tap = focus, long-press = close | compositor plus icon lookup | The `taskbar` module is done (focus and close). Pinned apps are missing. |
+| App switcher / dock: running and pinned apps | P2 | done | Pock, MTMR dock | tap = focus, long-press = close | compositor plus icon lookup | The `taskbar` module: one icon per window of the active workspace, `pinned = [...]` launchers first (idle ones start the app). |
 | Scrubber / candidate strip for apps (text suggestions, tabs) | P2 | todo | mac (NSScrubber) | swipe, tap | public API |  |
 | Weather, currency, calendar "up next" | P3 | todo | MTMR |  | Only as presets built on the script widget. Not core. | Possible today as `custom/*` scripts. |
 
@@ -67,7 +67,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Key press, key combo, hold-to-repeat | P0 | done | dfr |  |
 | Switch layer: momentary (while held), toggle, one-shot (back after the next press) | P0/P1 | done | dfr Fn | P0 has only Fn. |
 | Shell command (detached, no shell by default, optional `sh -c`) | P1 | done | MTMR, BTT | Runs in the user session (agent), never as root. |
-| Open app (desktop ID) / open URL or file (xdg-open, portal) | P1 | partial | BTT | Works as a command (`xdg-open`, `gtk-launch`); no dedicated action or portal. |
+| Open app (desktop ID) / open URL or file (xdg-open, portal) | P1 | done | BTT | `{ open = "id" }` (gtk-launch) and `{ url = "…" }` (xdg-open) actions. |
 | Toggle with state (bound to a toggle widget) | P1 | partial | MTMR | Mute, mic mute, caffeine, Wi-Fi, Bluetooth, DND (dunst). |
 | D-Bus method call | P2 | done | BTT | Includes a picker for common targets (MPRIS, logind, notifications). **Now:** Picker in the settings app is not built. |
 | Switch layout or profile | P2 | partial | BTT | Layout switching done (config, API, sliverctl); profiles exist in the API but have no editor. |
