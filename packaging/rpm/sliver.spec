@@ -83,6 +83,35 @@ Requires:       sliver-agent = %{version}-%{release}
 %description -n sliver-settings
 GTK4/libadwaita settings app with a live WYSIWYG editor for Touch Bar layouts.
 
+# Desktop integrations (T122): tell the agent the focused window and workspaces on GNOME and KDE.
+# Installed alongside the desktop (Supplements:) but never enabled: each user turns them on.
+%package -n gnome-shell-extension-sliver
+Summary:        GNOME Shell extension that feeds the Sliver Touch Bar agent focus and workspaces
+License:        %{sliver_license}
+BuildArch:      noarch
+Requires:       gnome-shell >= 45
+Requires:       sliver-agent
+Supplements:    (sliver-agent and gnome-shell)
+Provides:       sliver-gnome-shell = %{version}-%{release}
+
+%description -n gnome-shell-extension-sliver
+Tells sliver-agent which window and workspace are focused on GNOME Shell (io.github.wawow830.Sliver.Desktop1),
+so per-app layouts, the workspaces module and the taskbar work there. Not enabled by default:
+gnome-extensions enable sliver-focus@sliver.wawow830.github.io, then log out and back in.
+
+%package -n sliver-kwin
+Summary:        KWin script that feeds the Sliver Touch Bar agent focus and virtual desktops
+License:        %{sliver_license}
+BuildArch:      noarch
+Requires:       kwin
+Requires:       sliver-agent
+Supplements:    (sliver-agent and kwin)
+
+%description -n sliver-kwin
+Tells sliver-agent which window and virtual desktop are active on KDE Plasma 6, so per-app layouts,
+the workspaces module and the taskbar work there. Not enabled by default: System Settings → Window
+Management → KWin Scripts → Sliver focus.
+
 # Not noarch: Firefox's system manifest directory is %%{_libdir}/mozilla/native-messaging-hosts.
 %package -n sliver-browser
 Summary:        Touch Bar tabs and navigation for Firefox and Chromium (Sliver)
@@ -130,6 +159,16 @@ for b in firefox chromium; do
         %{buildroot}%{_datadir}/sliver/browser/$b/manifest.json
 done
 install -Dpm0644 integration/browser/README.md %{buildroot}%{_datadir}/sliver/browser/README.md
+# GNOME extension and KWin script. KWin 6.7 also reads /usr/share/kwin/scripts (checked in a nested
+# kwin_wayland), and Plasma 6.0-6.3 only read it.
+gs=sliver-focus@sliver.wawow830.github.io
+for f in metadata.json extension.js; do
+    install -Dpm0644 integration/gnome-shell/$gs/$f %{buildroot}%{_datadir}/gnome-shell/extensions/$gs/$f
+done
+install -Dpm0644 integration/kwin/sliver-focus/metadata.json \
+    %{buildroot}%{_datadir}/kwin/scripts/sliver-focus/metadata.json
+install -Dpm0644 integration/kwin/sliver-focus/contents/code/main.js \
+    %{buildroot}%{_datadir}/kwin/scripts/sliver-focus/contents/code/main.js
 
 install -Dpm0644 packaging/systemd/sliverd.service %{buildroot}%{_unitdir}/sliverd.service
 install -Dpm0644 packaging/systemd/sliverd.socket %{buildroot}%{_unitdir}/sliverd.socket
@@ -256,6 +295,16 @@ fi
 %{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
 # Opens .sliver presets (shared-mime-info's file trigger updates the MIME cache).
 %{_datadir}/mime/packages/io.github.wawow830.Sliver.xml
+
+%files -n gnome-shell-extension-sliver
+%license LICENSE-MIT LICENSE-APACHE
+%{_datadir}/gnome-shell/extensions/sliver-focus@sliver.wawow830.github.io
+
+%files -n sliver-kwin
+%license LICENSE-MIT LICENSE-APACHE
+%dir %{_datadir}/kwin
+%dir %{_datadir}/kwin/scripts
+%{_datadir}/kwin/scripts/sliver-focus
 
 %files -n sliver-browser
 %license LICENSE-MIT LICENSE-APACHE

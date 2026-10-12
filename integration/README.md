@@ -4,17 +4,18 @@ Compositors that Sliver's agent cannot query itself push focus to it instead, ov
 `io.github.wawow830.Sliver.Desktop1` (`SetFocus`, `SetWorkspaces`; docs/api.md §5).
 Hyprland, sway and niri need none of this: the agent reads their IPC (`crates/sliver-desktop`).
 
-| Desktop | What | Install path (packaging) | Tested |
+| Desktop | What | Package: install path | Tested |
 |---|---|---|---|
-| KDE Plasma 6 | KWin script `kwin/sliver-focus` | `/usr/share/kwin/scripts/sliver-focus/` | yes: nested `kwin_wayland --virtual`, `kwin/test.sh` |
-| GNOME Shell 45+ | extension `gnome-shell/sliver-focus@sliver.wawow830.github.io` | `/usr/share/gnome-shell/extensions/<uuid>/` | syntax only (`node --check`); no GNOME Shell on the dev machine |
+| KDE Plasma 6 | KWin script `kwin/sliver-focus` | `sliver-kwin`: `/usr/share/kwin/scripts/sliver-focus/` (KWin 6.7 also reads it, checked nested; 6.0–6.3 only read it) | yes: nested `kwin_wayland --virtual`, `kwin/test.sh` |
+| GNOME Shell 45+ | extension `gnome-shell/sliver-focus@sliver.wawow830.github.io` | `gnome-shell-extension-sliver`: `/usr/share/gnome-shell/extensions/<uuid>/` | yes: real headless gnome-shell 50.5, `gnome-shell/test.sh` |
 
 Apps can integrate too: `browser/` is a Firefox/Chromium extension plus a native-messaging host
 that puts the focused window's tabs and back/forward/reload on the bar (see `browser/README.md`).
 
 Both desktop integrations enable per user (KDE: System Settings → Window Management → KWin Scripts; GNOME:
 `gnome-extensions enable sliver-focus@sliver.wawow830.github.io`, then log out and in on Wayland).
-Packages must not enable them by default.
+Packages must not enable them by default: the RPM subpackages are pulled in next to the desktop
+(`Supplements:`), but each user still turns them on.
 
 ## KWin script: what the test shows
 

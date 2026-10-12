@@ -10,6 +10,8 @@ Owner: **hazel**. System integration design: ADR-0005. Files: `packaging/`, `scr
 | `sliver-agent` | `/usr/bin/sliver-agent`, user unit `sliver-agent.service` (`Type=dbus`), D-Bus activation file for `io.github.wawow830.Sliver`, user preset (enabled by default) |
 | `sliverctl` | `/usr/bin/sliverctl` |
 | `sliver-settings` | `/usr/bin/sliver-settings`, `.desktop`, AppStream metainfo |
+| `gnome-shell-extension-sliver` | the GNOME Shell extension in `/usr/share/gnome-shell/extensions/sliver-focus@…` (noarch). Installed with GNOME (`Supplements:`), never enabled |
+| `sliver-kwin` | the KWin script in `/usr/share/kwin/scripts/sliver-focus` (noarch). Installed with KWin (`Supplements:`), never enabled |
 | `sliver-browser` | `/usr/libexec/sliver-browser-host`, native-messaging manifests for Firefox (`%{_libdir}/mozilla`), Chromium and Chrome (`/etc`), extension folders in `/usr/share/sliver/browser`. Optional, not pulled in by `sliver`. Needs python3-gobject-base |
 
 Built offline from a working-tree snapshot plus a `cargo vendor` tarball, using Fedora's cargo
