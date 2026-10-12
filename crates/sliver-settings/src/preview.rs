@@ -54,12 +54,12 @@ impl Preview {
     /// Renders config layer `layer` for `ctx`. Custom layers are shown the way the agent shows
     /// them: opened over base.
     pub fn render(&mut self, layer: &str, ctx: Context) -> Result<Pixmap, String> {
-        self.agent.ctx = ctx;
+        self.agent.fixed_ctx = Some(ctx);
         self.agent.layers = match layer {
             "base" | "fn" => Vec::new(),
             custom => vec![custom.to_owned()],
         };
-        self.agent.render(&World { now: Local::now() });
+        self.agent.render(&World::at(Local::now()));
         if let Some(e) = self.agent.errors.first() {
             return Err(e.clone());
         }

@@ -57,8 +57,11 @@ pub struct Agent {
     pub height: u32,
     /// The context the last render resolved with (built from the world, plus `ctx_overrides`).
     pub ctx: Context,
-    /// Applied on top of the world's context, e.g. the settings app's "Preview as".
+    /// Applied on top of the world's context (simulate one condition over live state).
     pub ctx_overrides: Vec<(String, CtxValue)>,
+    /// Use exactly this context instead of building one from the world (the settings app's
+    /// "Preview as").
+    pub fixed_ctx: Option<Context>,
     /// Whether this Mac has a physical Esc key (decides the `esc` zone).
     pub physical_esc: bool,
     /// Custom layers opened over `base` (last = on top).
@@ -110,6 +113,7 @@ impl Agent {
         let ctx = Context::new().with("physical_esc", physical_esc);
         Agent {
             ctx_overrides: Vec::new(),
+            fixed_ctx: None,
             physical_esc,
             config,
             sheet,
@@ -151,13 +155,16 @@ impl Agent {
     /// rebuilt (callers present them; the link drops unchanged pixels).
     pub fn render(&mut self, world: &World) -> Vec<Layer> {
         self.errors.clear();
-        let mut ctx = crate::context::build(
-            &world.desktop,
-            &world.session,
-            world.now,
-            self.physical_esc,
-            self.base_layer(),
-        );
+        let mut ctx = match &self.fixed_ctx {
+            Some(c) => c.clone(),
+            None => crate::context::build(
+                &world.desktop,
+                &world.session,
+                world.now,
+                self.physical_esc,
+                self.base_layer(),
+            ),
+        };
         for (k, v) in &self.ctx_overrides {
             ctx.set(k, v.clone());
         }
