@@ -425,8 +425,10 @@ fn session_world() -> World {
 /// window or taskbar module at all. Keys, sliders and the clock stay.
 #[test]
 fn locked_screen_shows_nothing_private() {
+    // `rules = []` drops the built-in lock-screen rule (T88): enforcement must hold for any layout.
     let mut a = agent(
         r#"
+        rules = []
         [[layouts.default.zones]]
         name = "main"
         width = "fill"
