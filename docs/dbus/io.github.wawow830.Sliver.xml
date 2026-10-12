@@ -109,7 +109,11 @@
       <arg name="action" type="s" direction="in"/>
     </method>
     <property name="ActiveLayer" type="s" access="read"/>
+    <property name="ActiveLayout" type="s" access="read"/>
+    <property name="ActiveLayoutSource" type="s" access="read"/>
     <property name="ActiveProfile" type="s" access="read"/>
+    <property name="ActiveRule" type="i" access="read"/>
+    <property name="ActiveRuleName" type="s" access="read"/>
     <property name="Healthy" type="b" access="read"/>
     <property name="Layers" type="as" access="read"/>
     <property name="Profiles" type="as" access="read"/>

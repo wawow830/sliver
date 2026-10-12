@@ -181,6 +181,10 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
             for (iface, name) in [
                 (IFACE_CONTROL, "Healthy"),
                 (IFACE_CONTROL, "ActiveLayer"),
+                (IFACE_CONTROL, "ActiveLayout"),
+                (IFACE_CONTROL, "ActiveLayoutSource"),
+                (IFACE_CONTROL, "ActiveRule"),
+                (IFACE_CONTROL, "ActiveRuleName"),
                 (IFACE_CONTROL, "Layers"),
                 (IFACE_CONTROL, "ActiveProfile"),
                 (IFACE_CONTROL, "Profiles"),

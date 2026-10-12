@@ -151,6 +151,8 @@ pub struct Agent {
     pub hidden_modules: std::collections::BTreeSet<String>,
     /// `sliverctl layout NAME`: a copy of the config whose current layers show that layout.
     layout_override: Option<(String, Config)>,
+    /// What the base layer resolved to last: its layout and the rule (index) that picked it.
+    active: Option<(String, Option<usize>)>,
     /// `sliverctl update MODULE …`: output pushed to exec-less custom modules.
     pub pushed: HashMap<String, sliver_modules::Output>,
 }
@@ -214,6 +216,7 @@ impl Agent {
             hidden: false,
             hidden_modules: Default::default(),
             layout_override: None,
+            active: None,
             pushed: HashMap::new(),
             errors: Vec::new(),
             emoji: Default::default(),
@@ -282,6 +285,10 @@ impl Agent {
                     } else {
                         0
                     };
+                    if layer == Layer::Base {
+                        let rule = r.rule.filter(|_| self.layout_override.is_none());
+                        self.active = Some((r.layout.clone(), rule));
+                    }
                     let mut f = self.build(&r, world, id_base);
                     if layer == Layer::Base {
                         self.animate_layer_change(&mut f);
@@ -1104,6 +1111,22 @@ impl Agent {
         c.rules.retain(|r| r.layer != layer);
         self.layout_override = Some((layout.to_owned(), c));
         Ok(())
+    }
+
+    /// What the base layer shows and why: `(layout, rule index, rule name, source)`, the source
+    /// being `rule`, `default` or `forced` (`Control1.ActiveLayout…`, ux.md §5 "Active now").
+    pub fn active_layout(&self) -> Option<(String, Option<usize>, String, &'static str)> {
+        let (layout, rule) = self.active.clone()?;
+        let name = rule
+            .and_then(|i| self.config.rules.get(i))
+            .and_then(|r| r.name.clone())
+            .unwrap_or_default();
+        let source = match (&self.layout_override, rule) {
+            (Some(_), _) => "forced",
+            (None, Some(_)) => "rule",
+            (None, None) => "default",
+        };
+        Some((layout, rule, name, source))
     }
 
     /// The layout forced by [`Agent::set_layout`], if any.

@@ -85,6 +85,15 @@ pub enum ControlReply {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ControlState {
     pub active_layer: String,
+    /// The layout the base layer shows now.
+    pub active_layout: String,
+    /// Index into the config's `rules` of the rule that picked it, or -1.
+    pub active_rule: i32,
+    /// That rule's `name` (empty if unnamed or none).
+    pub active_rule_name: String,
+    /// Why this layout: `rule`, `default` (the layer's default) or `forced` (`SetLayout` /
+    /// `HoldLayout`). Empty before the first frame.
+    pub layout_source: String,
     pub layers: Vec<String>,
     pub active_profile: String,
     pub profiles: Vec<String>,
@@ -387,6 +396,10 @@ impl Api {
         let e = iface.signal_emitter();
         let i = iface.get().await;
         i.active_layer_changed(e).await?;
+        i.active_layout_changed(e).await?;
+        i.active_rule_changed(e).await?;
+        i.active_rule_name_changed(e).await?;
+        i.active_layout_source_changed(e).await?;
         i.layers_changed(e).await?;
         i.active_profile_changed(e).await?;
         i.profiles_changed(e).await?;
@@ -862,6 +875,22 @@ impl ControlIface {
     #[zbus(property)]
     fn active_layer(&self) -> String {
         self.inner.host.control_state().active_layer
+    }
+    #[zbus(property)]
+    fn active_layout(&self) -> String {
+        self.inner.host.control_state().active_layout
+    }
+    #[zbus(property)]
+    fn active_rule(&self) -> i32 {
+        self.inner.host.control_state().active_rule
+    }
+    #[zbus(property)]
+    fn active_rule_name(&self) -> String {
+        self.inner.host.control_state().active_rule_name
+    }
+    #[zbus(property)]
+    fn active_layout_source(&self) -> String {
+        self.inner.host.control_state().layout_source
     }
     #[zbus(property)]
     fn layers(&self) -> Vec<String> {

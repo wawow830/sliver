@@ -1423,3 +1423,49 @@ fn pixel_shift_keeps_content_off_the_ends() {
         );
     }
 }
+
+/// T92: what the base layer shows and why (Control1.ActiveLayout / ActiveRule / …Source).
+#[test]
+fn active_layout_reports_the_rule() {
+    let mut a = agent(
+        r#"
+        [[rules]]
+        name = "Terminals get F-keys"
+        when = { app-id = "foot" }
+        layout = "fkeys"
+        [[rules]]
+        when = { app-id = "mpv" }
+        layout = "media"
+        "#,
+    );
+    assert_eq!(a.active_layout(), None, "nothing before the first frame");
+    let mut w = world(9, 41);
+    a.render(&w);
+    assert_eq!(
+        a.active_layout(),
+        Some(("default".into(), None, String::new(), "default"))
+    );
+    w.context = w.context.clone().with("app_id", "foot");
+    a.render(&w);
+    assert_eq!(
+        a.active_layout(),
+        Some((
+            "fkeys".into(),
+            Some(0),
+            "Terminals get F-keys".into(),
+            "rule"
+        ))
+    );
+    w.context = w.context.clone().with("app_id", "mpv");
+    a.render(&w);
+    assert_eq!(
+        a.active_layout(),
+        Some(("media".into(), Some(1), String::new(), "rule"))
+    );
+    a.set_layout("fkeys").unwrap();
+    a.render(&w);
+    assert_eq!(
+        a.active_layout(),
+        Some(("fkeys".into(), None, String::new(), "forced"))
+    );
+}

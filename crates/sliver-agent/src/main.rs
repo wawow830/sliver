@@ -1005,8 +1005,14 @@ fn run(
                     })
                     .collect();
                 api.set_on_screen(drawn);
+                let (active_layout, rule, active_rule_name, source) =
+                    agent.active_layout().unwrap_or_default();
                 api.set_control_state(ControlState {
                     active_layer: agent.base_layer().to_owned(),
+                    active_layout,
+                    active_rule: rule.map_or(-1, |i| i as i32),
+                    active_rule_name,
+                    layout_source: source.to_owned(),
                     layers: agent.config.layers.keys().cloned().collect(),
                     active_profile: reloader.profile.0.clone(),
                     profiles: reloader.profile.1.clone(),

@@ -276,7 +276,10 @@ Update(s module, a{sv} output)      push output to an exec-less custom module: s
                                     output (text, icon, class, percentage, alt, tooltip)
 ListModules() -> (aa{sv})           id, type, source (builtin/config/dbus), visible, on-screen, zone, layer
 ```
-Properties: `ActiveLayer` s, `Layers` as, `ActiveProfile` s, `Profiles` as, `Variables` a{sv}, `Healthy` b
+Properties: `ActiveLayer` s, `ActiveLayout` s (what the base layer shows now),
+`ActiveLayoutSource` s (`rule`, `default` = the layer's default, `forced` = `SetLayout`/`HoldLayout`;
+empty before the first frame), `ActiveRule` i (index into the config's `rules`, -1 if none),
+`ActiveRuleName` s (that rule's `name`, may be empty), `Layers` as, `ActiveProfile` s, `Profiles` as, `Variables` a{sv}, `Healthy` b
 (agent connected to sliverd and driving the bar).
 
 `SetProfile` writes `~/.config/sliver/active-profile` and reloads. It fails, leaving the old profile
