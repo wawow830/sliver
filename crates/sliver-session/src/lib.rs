@@ -9,6 +9,7 @@
 //! Testing: [`fake::ScriptedSession`] replays states; the real sources are tested against mock
 //! services on a private `dbus-daemon` (see `tests/`).
 
+pub mod audio;
 pub mod brightness;
 pub mod fake;
 pub mod logind;
@@ -105,6 +106,7 @@ pub struct SessionState {
     pub idle_inhibited: bool,
     /// We hold the "caffeine" inhibitor (see [`Handle::set_caffeine`]).
     pub caffeine: bool,
+    pub audio: audio::Audio,
     pub brightness: brightness::Levels,
     pub power: Power,
     pub media: Option<Media>,

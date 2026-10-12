@@ -8,6 +8,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut s = Session::start(Connection::system()?, Connection::session()?);
     s.handle()
         .refresh_brightness(&sliver_session::brightness::Sysfs::default());
+    s.handle()
+        .start_audio(sliver_session::audio::Tools::default());
     while let Some(state) = s.next_change()? {
         println!("{state:?}");
     }

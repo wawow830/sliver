@@ -3,59 +3,14 @@
 
 use sliver_session::{BatteryState, PlaybackStatus, Session, SessionSource, SessionState};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use zbus::blocking::{Connection, connection::Builder};
+use zbus::blocking::Connection;
+
+mod common;
+use common::Bus;
 use zbus::zvariant::{OwnedValue, Value};
-
-struct Bus {
-    child: Child,
-    addr: String,
-}
-
-impl Bus {
-    fn start() -> Option<Bus> {
-        let mut child = Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .ok()?;
-        let mut addr = String::new();
-        BufReader::new(child.stdout.take()?)
-            .read_line(&mut addr)
-            .ok()?;
-        Some(Bus {
-            child,
-            addr: addr.trim().to_string(),
-        })
-    }
-
-    fn connect(&self) -> Connection {
-        Builder::address(self.addr.as_str())
-            .unwrap()
-            .build()
-            .unwrap()
-    }
-
-    fn service(&self, name: &str) -> Connection {
-        Builder::address(self.addr.as_str())
-            .unwrap()
-            .name(name.to_string())
-            .unwrap()
-            .build()
-            .unwrap()
-    }
-}
-
-impl Drop for Bus {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
 
 fn props_changed(conn: &Connection, path: &str, iface: &str) {
     let changed: HashMap<&str, Value> = HashMap::new();
