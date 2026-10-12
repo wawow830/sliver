@@ -40,6 +40,7 @@ struct Opts {
     backlight: Option<u32>,
     touchviz: Option<u64>,
     udev_listen: Option<u64>,
+    power_cycle: Option<u64>,
 }
 
 fn parse_args() -> Result<Opts, String> {
@@ -58,6 +59,7 @@ fn parse_args() -> Result<Opts, String> {
             "--backlight" => o.backlight = Some(num("--backlight")? as u32),
             "--touchviz" => o.touchviz = Some(num("--touchviz")?.min(120)),
             "--udev-listen" => o.udev_listen = Some(num("--udev-listen")?.min(600)),
+            "--power-cycle" => o.power_cycle = Some(num("--power-cycle")?.clamp(2, 60)),
             "-h" | "--help" => {
                 println!(
                     "usage: sliver-hwprobe [--sysfs-only] [--draw S] [--touch S] [--backlight N] [--touchviz S]"
@@ -115,6 +117,18 @@ fn main() {
         sliver_hw::listen_fd("backlight")
     );
 
+    if let Some(secs) = opts.power_cycle {
+        let r = match &card {
+            Some(c) => power_cycle(c, secs),
+            None => Err(std::io::Error::other("no card")),
+        };
+        if let Err(e) = r {
+            println!("power-cycle: ERROR {e}");
+            std::process::exit(1);
+        }
+        println!("== done");
+        return;
+    }
     if let Some(secs) = opts.touchviz {
         // Exercises the real sliver-hw panel + input types together (what sliverd uses).
         let r = match (&card, &touch) {
@@ -601,4 +615,83 @@ fn udev_listen(secs: u64) {
             None => println!("unparsed message, {n} bytes"),
         }
     }
+}
+
+/// Reads the SMC's "Total System Power" (µW) from hwmon, if present.
+fn system_power_uw() -> Option<f64> {
+    for e in std::fs::read_dir("/sys/class/hwmon").ok()?.flatten() {
+        let p = e.path();
+        if std::fs::read_to_string(p.join("name")).ok()?.trim() != "macsmc_hwmon" {
+            continue;
+        }
+        for i in 1..=8 {
+            let label =
+                std::fs::read_to_string(p.join(format!("power{i}_label"))).unwrap_or_default();
+            if label.trim() == "Total System Power" {
+                return std::fs::read_to_string(p.join(format!("power{i}_input")))
+                    .ok()?
+                    .trim()
+                    .parse()
+                    .ok();
+            }
+        }
+    }
+    None
+}
+
+/// Phases of `secs` each: ON (pattern), OFF (CRTC ACTIVE=0), ON again (ACTIVE=1 + full redraw),
+/// sampling total system power at 5 Hz. Answers: does ACTIVE=0 really blank the panel, does it come
+/// back sharp, and is the power difference measurable over the noise?
+fn power_cycle(card: &Path, secs: u64) -> std::io::Result<()> {
+    use sliver_hw::panel::DrmPanel;
+    let mut panel = DrmPanel::open(card)?;
+    let (len, thick) = panel.logical_size();
+    let rotated = panel.rotated();
+    let paint = |panel: &mut DrmPanel| -> std::io::Result<()> {
+        panel.with_buffer(|buf, stride| {
+            for lx in 0..len {
+                for ly in 0..thick {
+                    let c = geom::test_pattern(lx, ly, len, thick);
+                    let (x, y) = if rotated {
+                        geom::landscape_to_fb(lx, ly, thick)
+                    } else {
+                        (lx, ly)
+                    };
+                    let o = y as usize * stride + x as usize * 4;
+                    buf[o..o + 4].copy_from_slice(&c.to_le_bytes());
+                }
+            }
+        })?;
+        panel.dirty(&[(0, len)]);
+        Ok(())
+    };
+    let sample = |name: &str| {
+        let mut v = Vec::new();
+        let end = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < end {
+            if let Some(p) = system_power_uw() {
+                v.push(p / 1000.0);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let n = v.len().max(1) as f64;
+        let mean = v.iter().sum::<f64>() / n;
+        let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n).sqrt();
+        println!(
+            "phase {name}: {} samples, total system power mean {mean:.0} mW, sd {sd:.0} mW",
+            v.len()
+        );
+    };
+    paint(&mut panel)?;
+    sample("on");
+    let t = Instant::now();
+    panel.set_active(false)?;
+    println!("ACTIVE=0 commit in {:?}", t.elapsed());
+    sample("off");
+    let t = Instant::now();
+    panel.set_active(true)?;
+    paint(&mut panel)?;
+    println!("ACTIVE=1 commit + full redraw in {:?}", t.elapsed());
+    sample("on-again");
+    Ok(())
 }
