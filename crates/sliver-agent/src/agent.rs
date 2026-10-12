@@ -496,6 +496,31 @@ impl Agent {
         if modal.is_some() {
             classes.push("modal".into());
         }
+        // Published items with a lower `priority` give way when their zone overflows (api.md §3),
+        // a group as a unit. Only measured when some priority differs.
+        let mut per_zone = per_zone;
+        if per_zone.iter().flatten().any(|c| {
+            c.published
+                .as_ref()
+                .is_some_and(|p| p.priority != 0 && p.priority != i32::MAX)
+        }) {
+            for _ in 0..crate::published::MAX_OVERFLOW_DROPS {
+                let probe = frame::scene(&zones, &per_zone, classes.clone());
+                let layout = self
+                    .renderer
+                    .layout(&probe, &self.sheet, self.width, self.height);
+                let Some((zi, ctx, unit)) =
+                    crate::published::overflow_victim(&per_zone, &layout.overflow)
+                else {
+                    break;
+                };
+                per_zone[zi].retain(|c| {
+                    !c.published
+                        .as_ref()
+                        .is_some_and(|p| p.context == ctx && p.unit == unit)
+                });
+            }
+        }
         let scene = frame::scene(&zones, &per_zone, classes);
         let cells = per_zone.into_iter().flatten().collect();
         frame::render(

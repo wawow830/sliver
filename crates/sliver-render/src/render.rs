@@ -80,6 +80,8 @@ pub struct Layout {
     pub items: Vec<Rect>,
     /// Per item: for sliders, the trough rect. Map a touch's x across it to the value.
     pub tracks: Vec<Option<Rect>>,
+    /// Per zone: its items wanted more room than it got, so some were squeezed.
+    pub overflow: Vec<bool>,
     /// The bar's `-sliver-layer-transition` (`None` with reduce-motion): what the caller
     /// should do when this scene replaces one of another layer.
     pub layer_transition: Option<crate::LayerTransition>,
@@ -263,14 +265,18 @@ impl Renderer {
                     let (s, parts) = styles.next().expect("one style per item");
                     let chrome = s.padding[1] + s.padding[3] + 2.0 * s.border_width;
                     let content = self.content_width(&item.content, s, parts.as_ref());
-                    let natural = (content + chrome).max(s.min_width);
+                    let mut natural = (content + chrome).max(s.min_width);
                     let margins = s.margin[1] + s.margin[3];
-                    let fixed = |w: Width| match w {
+                    let width = match item.width {
                         Width::Fixed(px) => Width::Fixed(px + margins),
+                        Width::Between(lo, hi) => {
+                            natural = natural.max(lo).min(hi.max(lo));
+                            Width::Auto
+                        }
                         w => w,
                     };
                     Sizing {
-                        width: fixed(item.width),
+                        width,
                         natural: natural + margins,
                         min: natural.min(OVERFLOW_MIN) + margins,
                     }
@@ -297,6 +303,7 @@ impl Renderer {
         let mut zones = Vec::new();
         let mut items = Vec::new();
         let mut tracks = Vec::new();
+        let mut overflow = Vec::new();
         let mut styles = st.items.iter().zip(&st.parts).zip(scene.items());
         // Empty zones take no space and no gap (e.g. the `esc` zone on Macs with a physical Esc),
         // except `Fill` zones, which still take the leftover space and push later zones along.
@@ -333,6 +340,9 @@ impl Renderer {
             let outer = Rect::new(bar.x + zx, bar.y, zw, bar.h);
             let zrect = outer.inset([zs.margin[0], zs.margin[1], zs.margin[2], zs.margin[3]]);
             let inner = zrect.inset(zs.padding.map(|p| p + zs.border_width));
+            let wanted = sizes.iter().map(|s| s.natural).sum::<f32>()
+                + zs.gap * sizes.len().saturating_sub(1) as f32;
+            overflow.push(!sizes.is_empty() && wanted > inner.w + 0.5);
             for (ix, iw) in solve(sizes, inner.w, zs.gap, zone.align) {
                 let ((s, parts), item) = styles.next().expect("one style per item");
                 let r = round(Rect::new(inner.x + ix, inner.y, iw, inner.h).inset(s.margin));
@@ -350,6 +360,7 @@ impl Renderer {
             zones,
             items,
             tracks,
+            overflow,
             layer_transition: st.bar.layer_transition.filter(|_| !self.anim.reduce_motion),
         }
     }

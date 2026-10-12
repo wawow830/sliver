@@ -759,3 +759,141 @@ fn popover_opens_and_closes() {
     world.published = Published::snapshot(&api.api);
     assert_eq!(keys(&mut a, &world), ["bold", "close"]);
 }
+
+/// T81: `priority` drops the lowest items when the app zone overflows (a group as a unit),
+/// `width = {min, max}` bounds an item, `icon-data` takes SVG, indeterminate progress is marked.
+#[test]
+fn priority_overflow_width_svg_and_indeterminate() {
+    let Some(bus) = bus() else {
+        eprintln!("dbus-daemon not installed; skipping");
+        return;
+    };
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.addr.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let api = ApiLink::serve(conn, true).unwrap();
+    let app = zbus::blocking::connection::Builder::address(bus.addr.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let path: OwnedObjectPath = app
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_TOUCHBAR),
+            "CreateContext",
+            &(opts(&[
+                ("provider", Value::from("org.example.Busy")),
+                ("modal", Value::from(true)),
+            ]),),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    let wide = "a rather long button label";
+    let button = |id: String, prio: i32| {
+        opts(&[
+            ("id", Value::from(id)),
+            ("type", Value::from("button")),
+            ("label", Value::from(wide)),
+            ("priority", Value::from(prio)),
+        ])
+    };
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="red"/></svg>"#;
+    let mut items: Vec<_> = (0..12).map(|i| button(format!("low{i}"), -1)).collect();
+    items.push(opts(&[
+        ("id", Value::from("keep")),
+        ("type", Value::from("group")),
+        ("priority", Value::from(5i32)),
+        (
+            "items",
+            Value::from(vec![button("g1".into(), 0), button("g2".into(), 0)]),
+        ),
+    ]));
+    items.push(opts(&[
+        ("id", Value::from("capped")),
+        ("type", Value::from("button")),
+        ("label", Value::from(wide)),
+        ("width", Value::from(opts(&[("max", Value::from(90i32))]))),
+        ("priority", Value::from(5i32)),
+    ]));
+    items.push(opts(&[
+        ("id", Value::from("logo")),
+        ("type", Value::from("button")),
+        ("icon-data", Value::from(svg.to_vec())),
+        ("priority", Value::from(5i32)),
+    ]));
+    items.push(opts(&[
+        ("id", Value::from("busy")),
+        ("type", Value::from("progress")),
+        ("indeterminate", Value::from(true)),
+        ("priority", Value::from(5i32)),
+    ]));
+    let warnings: Vec<String> = app
+        .call_method(
+            Some(BUS_NAME),
+            path.as_str(),
+            Some(IFACE_CONTEXT),
+            "SetItems",
+            &(items,),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    api.set_focus(Focus {
+        window: Some(Window {
+            class: "busy".into(),
+            pid: Some(std::process::id()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut world = World::at(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 0).unwrap());
+    world.published = Published::snapshot(&api.api);
+    let loaded = sliver_config::load_str("", std::path::Path::new("."));
+    let mut a = Agent::new(
+        loaded.config,
+        Stylesheet::sliver(),
+        Renderer::new(Fonts::embedded()),
+        Icons::builtin_only(),
+        2008,
+        60,
+    );
+    a.render(&world);
+    let f = a.frame(Layer::Base).unwrap();
+    let ids: Vec<String> = f
+        .cells
+        .iter()
+        .map(|c| c.key.rsplit_once('#').unwrap().1.to_owned())
+        .collect();
+    // Some low-priority buttons gave way; everything with priority 5 (the group whole) stayed.
+    let lows = ids.iter().filter(|i| i.starts_with("low")).count();
+    assert!(lows > 0 && lows < 12, "{ids:?}");
+    for keep in ["g1", "g2", "capped", "logo", "busy", "close"] {
+        assert!(ids.iter().any(|i| i == keep), "{keep} missing: {ids:?}");
+    }
+    // The ones that stayed are the first ones (the last low-priority items go first).
+    assert!(ids.contains(&"low0".to_owned()), "{ids:?}");
+    assert!(!f.layout.overflow.iter().any(|o| *o), "fits now: {ids:?}");
+    let at = |id: &str| ids.iter().position(|i| i == id).unwrap();
+    assert!(
+        f.layout.items[at("capped")].w <= 90.0,
+        "{:?}",
+        f.layout.items[at("capped")]
+    );
+    assert!(matches!(
+        f.cells[at("logo")].content,
+        sliver_render::Content::Icon(_)
+    ));
+    assert!(
+        f.cells[at("busy")]
+            .classes
+            .contains(&"indeterminate".to_owned())
+    );
+}

@@ -104,7 +104,7 @@ we want, if the hardware allows them.
 | State contexts: media playing, screen locked, on battery, low battery, fullscreen, DND, external display, time of day | P2 | partial | BTT conditional groups | Locked screen gets a privacy-safe layout (ux.md). **Now:** All keys exist (media, battery, fullscreen, DND, external display, time). `locked` comes from the desktop's `ActiveChanged` (GNOME/KDE/freedesktop screen saver), else logind on GNOME/KDE, else a running locker process (hyprlock, swaylock, ...; cached, rechecked on wake): see integration.md §3. Unknown lockers are not detected. |
 | Inheritance: a layout extends a parent and overrides zones | P2 | done | (none) | ux.md §Inheritance. |
 | Rule priority: first match in user order (settings inserts by specificity) | P1 | done | (none) | Evaluated in the agent (api.md). **Now:** Most specific match wins. |
-| App-published items and contexts (NSTouchBar-like), via App controls + Status items placeholders | P1 (API v1) / P2 (modal) | done (gaps: T81) | mac | Per-app allow/deny (ux.md §6, api.md §2). **Now:** API v1 done: all item types (incl. `scrubber`, T77, and popovers that open full-width, T80), modal contexts with ✕, per-app/provider prefs (T53). Open: icon-data SVG, indeterminate progress, priority overflow (T81). |
+| App-published items and contexts (NSTouchBar-like), via App controls + Status items placeholders | P1 (API v1) / P2 (modal) | done | mac | Per-app allow/deny (ux.md §6, api.md §2). **Now:** API v1 done: all item types (incl. `scrubber`, T77, and popovers that open full-width, T80), modal contexts with ✕, per-app/provider prefs (T53). `priority` overflow, `width` min/max, SVG `icon-data` and indeterminate progress (T81). |
 
 ## 6. Appearance
 

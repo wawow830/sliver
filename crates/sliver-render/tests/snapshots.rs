@@ -428,3 +428,28 @@ fn colr_emoji_has_colour() {
         "{saturated} saturated pixels: the flame should be orange/red"
     );
 }
+
+#[test]
+fn between_widths_and_zone_overflow() {
+    let mut r = Renderer::new(Fonts::embedded());
+    let long = "a label that is far wider than eighty pixels";
+    let scene = Scene::new(vec![
+        Item::text(long).width(Width::Between(0.0, 80.0)),
+        Item::text("x").width(Width::Between(120.0, f32::INFINITY)),
+        Item::text(long),
+    ]);
+    let layout = r.layout(&scene, &Stylesheet::sliver(), W, H);
+    assert!(layout.items[0].w <= 80.0, "capped: {:?}", layout.items[0]);
+    assert!(layout.items[1].w >= 120.0, "floored: {:?}", layout.items[1]);
+    assert!(layout.items[2].w > 200.0, "free: {:?}", layout.items[2]);
+    assert_eq!(layout.overflow, [false]);
+    let crowded = Scene::new(
+        (0..40)
+            .map(|i| Item::text(format!("item {i} {long}")))
+            .collect(),
+    );
+    assert_eq!(
+        r.layout(&crowded, &Stylesheet::sliver(), W, H).overflow,
+        [true]
+    );
+}

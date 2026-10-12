@@ -58,6 +58,11 @@ pub struct PubRef {
     pub kind: PubKind,
     /// Gestures beyond tap the item opted into.
     pub gestures: Vec<sliver_api::item::Gesture>,
+    /// The item's `priority` (a group child has its group's): lower gives way first when its
+    /// zone overflows (NSTouchBar visibilityPriority).
+    pub priority: i32,
+    /// What overflows as a unit: the top-level item's id (a group's children go together).
+    pub unit: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -87,6 +92,41 @@ pub enum PubKind {
     PopoverClose,
     /// The ✕ that closes a modal context.
     Close,
+}
+
+/// Widths of `spacer` items (`size = small / large`), in px.
+const SPACER_SMALL: f32 = 16.0;
+/// At most this many published items are dropped from one frame for overflow.
+pub const MAX_OVERFLOW_DROPS: usize = 32;
+const SPACER_LARGE: f32 = 64.0;
+
+/// Which published item (zone index, context, unit) gives way next: in an overflowing zone, the
+/// lowest-priority published item, if its priority is below another cell's there (built-in
+/// modules count as 0). All-equal priorities never drop anything; they squeeze as before.
+pub fn overflow_victim(
+    zones: &[Vec<Cell>],
+    overflow: &[bool],
+) -> Option<(usize, ContextId, String)> {
+    let prio = |c: &Cell| c.published.as_ref().map_or(0, |p| p.priority);
+    for (zi, cells) in zones.iter().enumerate() {
+        if !overflow.get(zi).copied().unwrap_or(false) {
+            continue;
+        }
+        // ✕ cells are pinned (`i32::MAX`), not a reason to drop anything.
+        let Some(top) = cells.iter().map(prio).filter(|p| *p != i32::MAX).max() else {
+            continue;
+        };
+        let victim = cells
+            .iter()
+            .rev()
+            .filter_map(|c| c.published.as_ref())
+            .filter(|p| p.priority < top)
+            .min_by_key(|p| p.priority);
+        if let Some(p) = victim {
+            return Some((zi, p.context, p.unit.clone()));
+        }
+    }
+    None
 }
 
 fn color(s: &Option<String>) -> Option<Color> {
@@ -120,6 +160,8 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
             item: String::new(),
             kind: PubKind::Close,
             gestures: Vec::new(),
+            priority: i32::MAX,
+            unit: String::new(),
         }),
         pass_through: false,
         target: None,
@@ -146,6 +188,7 @@ pub fn popover_cells(
         push(
             ctx,
             child,
+            None,
             class,
             class == "app",
             icons,
@@ -166,6 +209,8 @@ pub fn popover_cells(
         item: popover.to_owned(),
         kind: PubKind::PopoverClose,
         gestures: Vec::new(),
+        priority: i32::MAX,
+        unit: String::new(),
     });
     out.push(close);
     Some(out)
@@ -181,13 +226,15 @@ pub fn cells(
     out: &mut Vec<Cell>,
 ) {
     for item in &ctx.items {
-        push(ctx, item, class, focused, icons, icon_size, out);
+        push(ctx, item, None, class, focused, icons, icon_size, out);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push(
     ctx: &PubContext,
     item: &Item,
+    group: Option<&Item>,
     class: &str,
     focused: bool,
     icons: &mut Icons,
@@ -197,10 +244,11 @@ fn push(
     if !item.visible {
         return;
     }
+    // `icon-data` is PNG or SVG bytes (api.md §3).
     let icon = item
         .icon_data
         .as_deref()
-        .and_then(|png| Icon::from_png(png).ok())
+        .and_then(|data| Icon::from_png(data).or_else(|_| Icon::from_svg(data)).ok())
         .or_else(|| {
             item.icon
                 .as_deref()
@@ -228,15 +276,18 @@ fn push(
             ctx.provider.replace(['.', '/'], "-").to_ascii_lowercase()
         ),
         classes: classes.clone(),
-        width: match (item.min_width, &item.kind) {
-            (
-                _,
-                ItemKind::Spacer {
-                    size: SpacerSize::Flexible,
-                },
-            ) => Width::Fill(1),
-            (Some(w), _) => Width::Fixed(w as f32),
-            _ => Width::Auto,
+        width: match (&item.kind, item.min_width, item.max_width) {
+            (ItemKind::Spacer { size }, ..) => match size {
+                SpacerSize::Flexible => Width::Fill(1),
+                SpacerSize::Small => Width::Fixed(SPACER_SMALL),
+                SpacerSize::Large => Width::Fixed(SPACER_LARGE),
+            },
+            (_, None, None) => Width::Auto,
+            // `width = {min, max}`: fit the content within these bounds.
+            (_, lo, hi) => Width::Between(
+                lo.unwrap_or(0) as f32,
+                hi.map_or(f32::INFINITY, |h| h as f32),
+            ),
         },
         content,
         touch: if kind.is_some() && item.enabled {
@@ -257,6 +308,8 @@ fn push(
             item: item.id.clone(),
             kind,
             gestures: item.gestures.clone(),
+            priority: group.map_or(item.priority, |g| g.priority),
+            unit: group.map_or(&item.id, |g| &g.id).clone(),
         }),
         pass_through: false,
         target: None,
@@ -308,16 +361,29 @@ fn push(
                 &item.id,
             ));
         }
-        ItemKind::Progress { value, .. } => {
-            out.push(base(
+        ItemKind::Progress {
+            value,
+            indeterminate,
+        } => {
+            // No idle animations (power invariant): indeterminate is a full track with the
+            // `indeterminate` class, which themes draw muted.
+            let mut c = base(
                 Content::Slider {
                     icon,
-                    value: value.clamp(0.0, 1.0) as f32,
+                    value: if *indeterminate {
+                        1.0
+                    } else {
+                        value.clamp(0.0, 1.0) as f32
+                    },
                 },
                 None,
                 false,
                 &item.id,
-            ));
+            );
+            if *indeterminate {
+                c.classes.push("indeterminate".into());
+            }
+            out.push(c);
         }
         ItemKind::Spacer { .. } => out.push(base(Content::Spacer, None, false, &item.id)),
         ItemKind::Segmented { segments, selected } => {
@@ -387,7 +453,16 @@ fn push(
         }
         ItemKind::Group { items } => {
             for child in items {
-                push(ctx, child, class, focused, icons, icon_size, out);
+                push(
+                    ctx,
+                    child,
+                    Some(item),
+                    class,
+                    focused,
+                    icons,
+                    icon_size,
+                    out,
+                );
             }
         }
     }

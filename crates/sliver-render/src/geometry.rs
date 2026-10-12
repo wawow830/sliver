@@ -45,6 +45,9 @@ pub enum Width {
     /// Shares the leftover space by weight. `Fill(n)` spans `n` slots *including the gaps between
     /// them*, so a row of `Fill` items reproduces tiny-dfr's `Stretch` geometry exactly.
     Fill(u32),
+    /// Fits its content, but never narrower than the first or wider than the second value (a
+    /// published item's `width = {min, max}`).
+    Between(f32, f32),
 }
 
 /// Where children sit when they don't fill their container.
@@ -93,7 +96,7 @@ pub fn solve(children: &[Sizing], width: f32, gap: f32, align: Align) -> Vec<(f3
     let mut widths: Vec<f32> = children
         .iter()
         .map(|s| match s.width {
-            Width::Auto => s.natural.max(0.0),
+            Width::Auto | Width::Between(..) => s.natural.max(0.0),
             Width::Fixed(px) => px.max(0.0),
             Width::Fill(_) => 0.0,
         })
