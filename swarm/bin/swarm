@@ -1141,6 +1141,115 @@ def cmd_status(a):
     print("\n== channel"); cmd_log(argparse.Namespace(n=a.n))
 
 
+# ---------------------------------------------------------------- sudo
+# The human handed the swarm a sudo password file. `swarm sudo` is the only way peers use it:
+# every command needs a reason, is logged on the channel and in sudo.log, and runs with
+# `sudo -A -k` so no credential is ever cached (raw `sudo` keeps failing, so nothing bypasses
+# the log). The deny list catches accidents that could brick the laptop. It is a guard rail,
+# not a security boundary. Revoke by deleting the password file (it lives on tmpfs, so a
+# reboot also revokes it).
+
+SUDO_PASS_FILE = Path(os.environ.get("SWARM_SUDO_PASS", "/tmp/pass.txt"))
+SUDO_DENY_CMDS = {
+    "passwd", "chpasswd", "usermod", "useradd", "userdel", "visudo", "su", "sudo", "pkexec",
+    "dd", "fdisk", "sfdisk", "gdisk", "sgdisk", "parted", "wipefs", "cryptsetup", "blkdiscard",
+    "reboot", "poweroff", "shutdown", "halt", "kexec", "efibootmgr", "grub2-install",
+    "grub2-mkconfig", "asahi-fwupdate", "update-m1n1", "mkinitrd", "dracut",
+}
+SUDO_DENY_RE = [
+    (r"(^|[\s/=])mkfs", "formats a disk"),
+    (r"(^|\s)/boot(/|\s|$)|m1n1|u-boot|/efi(/|\s|$)", "touches the boot chain (Asahi boot/firmware)"),
+    (r"/etc/(sudoers|shadow|gshadow|passwd|group)\b|/etc/pam\.d", "touches users/auth"),
+    (r"\brm\s+(-\S+\s+)*/(\*|\s|$)|\brm\s+(-\S+\s+)*/(usr|etc|var|boot|home|lib|lib64|bin|sbin)/?(\s|$)", "deletes a system root directory"),
+    (r"\b(chmod|chown|chgrp)\s+(-\S+\s+)*-\S*R\S*\s+\S+\s+/(usr|etc|var|home|boot)?/?(\s|$)", "recursive permission change on a system root"),
+    (r"systemctl\s+(\S+\s+)*(reboot|poweroff|halt|suspend|hibernate|hybrid-sleep|isolate|rescue|emergency|kexec|soft-reboot|default)\b", "changes the power/boot state"),
+    (r"systemctl\s+(\S+\s+)*(stop|restart|kill|mask|disable)\s+.*\b(display-manager|sddm|gdm|greetd|lightdm|systemd-logind|dbus|dbus-broker|NetworkManager|sshd|cli-proxy\S*)\b", "would kill the human's session, network or the model proxy"),
+    (r"\b(dnf|dnf5|rpm)\b.*\s(remove|erase|autoremove|distro-sync|system-upgrade|downgrade|swap|-e)\b", "removes or swaps system packages"),
+    (r"\bselinux=0|setenforce\s+0|/etc/selinux/config", "disables SELinux (GOAL non-goal)"),
+    (r"loginctl\s+(\S+\s+)*(terminate|kill)-?", "would end the human's session"),
+]
+SHELLS = {"sh", "bash", "zsh", "fish", "dash"}
+
+
+def sudo_denied(argv):
+    base = os.path.basename(argv[0])
+    if base in SUDO_DENY_CMDS:
+        return f"`{base}` is on the deny list"
+    if base in SHELLS and "-c" not in argv:
+        return "interactive root shells aren't allowed (use `sh -c '...'`)"
+    line = " ".join(argv)
+    # also check the inner command of `sh -c '...'`
+    for pat, why in SUDO_DENY_RE:
+        if re.search(pat, line):
+            return why
+    if base in SHELLS:
+        inner = argv[argv.index("-c") + 1] if argv.index("-c") + 1 < len(argv) else ""
+        for word in re.split(r"[;&|()\s]+", inner):
+            if os.path.basename(word) in SUDO_DENY_CMDS:
+                return f"`{os.path.basename(word)}` is on the deny list"
+    return None
+
+
+def askpass():
+    """A tiny SUDO_ASKPASS helper, so the password never appears in argv, env or peers' transcripts."""
+    p = home() / "askpass"
+    body = f"#!/bin/sh\nexec cat {json.dumps(str(SUDO_PASS_FILE))}\n"
+    if not p.exists() or p.read_text() != body:
+        p.write_text(body)
+    p.chmod(0o700)
+    return p
+
+
+def sudo_log(rec):
+    append(home() / "sudo.log", rec)
+
+
+def cmd_sudo(a):
+    if a.log:
+        for r in read_jsonl(home() / "sudo.log")[-a.n:]:
+            res = "denied" if r.get("denied") else ("ok" if r.get("exit") == 0 else f"exit {r.get('exit')}")
+            print(f"[{ago(r['at']):>4}] {r['by']:<7} {res:<9} {r['cmd']}")
+            print(color("2", f"              why: {r.get('why') or '-'}" + (f"  ({r['denied']})" if r.get("denied") else "")))
+        return
+    argv = a.cmd[1:] if a.cmd and a.cmd[0] == "--" else a.cmd
+    by = me(required=False) or "human"
+    if a.check:
+        argv = ["true"]
+    if not argv:
+        sys.exit("usage: swarm sudo --why \"reason\" -- COMMAND ARGS...   (or --check, --log)")
+    if not SUDO_PASS_FILE.exists():
+        sys.exit("swarm: no sudo access right now (the human hasn't provided it, or revoked it). "
+                 "Ask: swarm human ask --kind sudo ...")
+    if SUDO_PASS_FILE.stat().st_mode & 0o077:
+        SUDO_PASS_FILE.chmod(0o600)
+    if not a.check:
+        refuse_if_paused("running sudo")
+        if not a.why or len(a.why.strip()) < 8:
+            sys.exit("swarm sudo needs --why \"a real reason\" (it's logged for the human)")
+        bad = sudo_denied(argv)
+        if bad:
+            cmdline = " ".join(argv)
+            sudo_log({"at": now(), "by": by, "cmd": cmdline, "why": a.why, "denied": bad})
+            channel("sudo", f"DENIED: {cmdline} ({bad})", by=by)
+            sys.exit(f"swarm sudo refused: {bad}. If it's truly needed, ask the human: "
+                     "swarm human ask --kind sudo \"...\" --detail \"<exact command and why>\"")
+    cmdline = " ".join(argv)
+    env = dict(os.environ, SUDO_ASKPASS=str(askpass()))
+    t0 = time.time()
+    try:
+        r = subprocess.run(["sudo", "-A", "-k", "--", *argv], env=env, timeout=a.timeout)
+        code = r.returncode
+    except subprocess.TimeoutExpired:
+        code = 124
+        print(f"swarm sudo: timed out after {a.timeout}s", file=sys.stderr)
+    if a.check:
+        print("sudo works" if code == 0 else "sudo failed: the password file is wrong or sudo is unavailable")
+        sys.exit(0 if code == 0 else 1)
+    sudo_log({"at": now(), "by": by, "cmd": cmdline, "why": a.why, "exit": code, "secs": round(time.time() - t0, 1)})
+    channel("sudo", f"{cmdline}  ({a.why})" + ("" if code == 0 else f"  -> exit {code}"), by=by)
+    sys.exit(code)
+
+
 def cmd_viz(a):
     viz = Path(__file__).resolve().parent.parent / "viz" / "serve.py"
     os.execvp(sys.executable, [sys.executable, str(viz), "--port", str(a.port), "--host", a.host])
@@ -1212,6 +1321,11 @@ def main():
     x = sp.add_parser("up", help="(human) create swarm tab, start pulse, spawn peers")
     x.add_argument("--peers", default=""); x.add_argument("--model"); x.set_defaults(f=cmd_up)
     sp.add_parser("down", help="(human) interrupt peers, stop pulse").set_defaults(f=cmd_down)
+    x = sp.add_parser("sudo", help="run ONE root command, logged (swarm sudo --why '..' -- cmd args)")
+    x.add_argument("--why", help="reason, shown to the human"); x.add_argument("--timeout", type=int, default=600)
+    x.add_argument("--check", action="store_true", help="just verify sudo access works")
+    x.add_argument("--log", action="store_true", help="show the sudo audit log"); x.add_argument("-n", type=int, default=30)
+    x.add_argument("cmd", nargs=argparse.REMAINDER); x.set_defaults(f=cmd_sudo)
     x = sp.add_parser("viz", help="live visualizer on http://localhost:7777")
     x.add_argument("--port", type=int, default=7777); x.add_argument("--host", default="127.0.0.1"); x.set_defaults(f=cmd_viz)
 

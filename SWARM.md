@@ -61,6 +61,7 @@ swarm send PEER "TEXT" [--now]       direct message (--now interrupts them mid-t
 swarm inbox | log -n N               read
 swarm human ask "ONE SHORT QUESTION?" --kind K --detail ".." --option ".." --option ".." --pick a [--task T#] [--block]
 swarm rest "why" | wake
+swarm sudo --why ".." -- CMD ARGS    run one root command (logged; see "Root" below)
 swarm spawn NAME --why ".." [--model ..] [--knows ..] [--brief ".."]
 swarm retire [NAME]
 swarm land
@@ -80,20 +81,20 @@ Use `swarm human ask`. The human reads these on a laptop screen between other th
 easy to answer:
 - **One question per ask**, as a short plain sentence (≤200 chars, enforced). Several decisions
   means several asks.
-- Context goes in `--detail`: what it's for, the exact command to run (for `sudo`), and what happens next.
+- Context goes in `--detail`: what it's for, the exact command if the human has to run one, and what happens next.
 - Choices go in `--option` (repeat it), with your recommendation in `--pick`. The human can then reply
   with just `a`, `b` or `ok`. Use plain words, not jargon or abbreviations.
 
 ```
-swarm human ask "Can you install librsvg2-devel?" --kind sudo --task T4 \
-  --detail "Needed to render SVG icons. Run: sudo dnf install -y librsvg2-devel" \
-  --option "installed" --option "no, use the pure-Rust renderer instead" --pick a
+swarm human ask "Do the bar's labels look sharp on the real Touch Bar?" --kind hardware --task T30 \
+  --detail "sliverd is running the new font rendering. Look at the F-keys and the clock." \
+  --option "sharp" --option "blurry or jagged" --pick a
 ```
 Keep working on something else unless you truly can't (`--block`).
 
 | kind | when |
 |---|---|
-| `sudo` | anything needing root: `dnf install`, writing `/etc` `/usr`, system systemd units, udev, polkit, SELinux |
+| `sudo` | only when `swarm sudo` refuses a command you truly need, or says there's no sudo access |
 | `hardware` | anything that needs eyes or fingers on the real Touch Bar, or first-time use of a hardware path |
 | `taste` | look and feel, UX or naming choices that GOAL.md doesn't settle (offer options + your pick) |
 | `decision` | product scope, superseding an accepted ADR that peers disagree on, peer cap |
@@ -103,7 +104,27 @@ Keep working on something else unless you truly can't (`--block`).
 
 Also never: rewrite `main`'s history, delete other peers' branches or worktrees, or run `herdr server stop`.
 
-## Hardware safety (this laptop's Escape key IS the Touch Bar)
+## Root (`swarm sudo`)
+The human gave the swarm sudo access, so you no longer need to ask for routine root work like
+`dnf install`, installing units/udev/polkit files, or restarting `sliverd`:
+```
+swarm sudo --why "install sliverd's udev rule for T41" -- install -m644 dist/99-sliver.rules /etc/udev/rules.d/
+swarm sudo --why "pick up the new rule" -- udevadm trigger --subsystem-match=drm
+swarm sudo --why "write the Touch Bar brightness" -- sh -c 'echo 128 > /sys/class/backlight/X/brightness'
+```
+- **One command per call**, with a real `--why`. Every call goes on the channel and into the human's
+  audit log (`swarm sudo --log`). Use `sh -c '...'` for redirects and pipes.
+- **Never run raw `sudo`**, never read the password file, and never try to cache credentials or
+  install your own NOPASSWD rules. `swarm sudo` is the only path.
+- A deny list refuses anything that could brick the laptop or end the human's session: disks,
+  bootloader/firmware (Asahi's m1n1 and U-Boot), users/auth/sudoers, reboot/poweroff, killing the
+  display manager, logind, network or the model proxy, removing packages, disabling SELinux. If it
+  refuses something you truly need, ask the human with `--kind sudo`. Don't rephrase the command
+  to get around the list.
+- Prefer reversible changes, and say how to undo them in `--why` or the task note. Root doesn't
+  change the hardware rules below.
+
+## Hardware safety (the F-keys only exist on the Touch Bar)
 - Default to the **headless path**: render to PNG and simulate input. Look at the PNGs yourself
   (read the image). That's how you verify visuals.
 - Never stop `tiny-dfr`, take DRM master on the Touch Bar card, or grab its input devices directly.

@@ -23,6 +23,8 @@ You are probably a peer in sliver's agent swarm. Read these before doing anythin
 - Work in your own worktree (`../sliver.peers/<you>`, branch `peer/<you>`). Never edit the main
   checkout (`~/Projects/sliver`); that's the human's.
 - Land through `swarm land`. Don't push by hand, except to your own `peer/<you>` branch.
-- Never use `sudo`. Never touch the real Touch Bar outside the safe-swap harness. Ask the human (SWARM.md).
+- Root only via `swarm sudo --why ".." -- cmd` (logged, one command per call). Never raw `sudo`,
+  never read the password file. Never touch the real Touch Bar outside the safe-swap harness. When
+  in doubt, ask the human (SWARM.md).
 - Tests run without hardware. Every hardware-facing piece needs a fake/headless implementation.
 - Clean up after yourself: temp files, stray processes, nested sessions.
