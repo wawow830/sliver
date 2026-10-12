@@ -66,6 +66,30 @@ impl Fonts {
         }
     }
 
+    /// Unload every font cosmic-text has loaded, keeping the database (so font ids, and the
+    /// shaped labels that refer to them, stay valid).
+    ///
+    /// cosmic-text keeps each font it ever touched, mapped and with its shaping data, for the
+    /// life of the `FontSystem`. That's normally a handful. But a glyph that's in none of the
+    /// fallback fonts makes it try every font on the system, which is hundreds on a desktop, and
+    /// they all stay loaded: tens of MB of heap and hundreds of MB of mapped pages for one odd
+    /// character in a song title. Drawing loads back only the fonts that are actually used.
+    pub(crate) fn trim_loaded_fonts(&mut self) {
+        let empty = FontSystem::new_with_locale_and_db(String::new(), fontdb::Database::new());
+        let (locale, mut db) = std::mem::replace(&mut self.system, empty).into_locale_and_db();
+        // cosmic-text maps a face into the database itself when it loads it (`SharedFile`);
+        // turn those back into plain paths so the mappings go too.
+        let shared: Vec<fontdb::ID> = db
+            .faces()
+            .filter(|f| matches!(f.source, fontdb::Source::SharedFile(..)))
+            .map(|f| f.id)
+            .collect();
+        for id in shared {
+            db.make_face_data_unshared(id);
+        }
+        self.system = FontSystem::new_with_locale_and_db(locale, db);
+    }
+
     /// Make another font available (a user's emoji font, or a test fixture). Labels shaped before
     /// this call keep their old fallback choices until the cache turns over.
     pub fn add_font_data(&mut self, data: Vec<u8>) {
@@ -180,6 +204,8 @@ fn shape_any(
     if fonts.labels.len() >= LABEL_CACHE_MAX {
         fonts.labels.clear();
         fonts.cache.image_cache.clear();
+        // Also bounds fonts that fallback loaded over a long uptime.
+        fonts.trim_loaded_fonts();
     }
     let label = Arc::new(shape_uncached(
         &mut fonts.system,
@@ -189,7 +215,16 @@ fn shape_any(
         size,
         markup,
     ));
+    // A glyph no font has (.notdef) means fallback just tried every font on the system: unload
+    // them. The label stays cached, so this text never triggers the scan again.
+    let missing = label
+        .buffer
+        .layout_runs()
+        .any(|run| run.glyphs.iter().any(|g| g.glyph_id == 0));
     fonts.labels.insert(key, label.clone());
+    if missing {
+        fonts.trim_loaded_fonts();
+    }
     label
 }
 

@@ -222,3 +222,30 @@ fn mangled_stylesheets_never_panic() {
         assert!(ok.is_ok(), "panicked on stylesheet:\n{css}");
     }
 }
+
+/// A glyph no font has makes the font system unload every font it loaded while searching
+/// (memory, see `Fonts::trim_loaded_fonts`). Labels shaped before and after keep drawing exactly
+/// as a fresh renderer draws them.
+#[test]
+fn unloading_fonts_after_a_missing_glyph_keeps_drawing_right() {
+    let sheet = Stylesheet::sliver();
+    let scene = |t: &str| {
+        Scene::new(vec![
+            Item::text("Hello").id("a"),
+            Item::new(Content::Markup(t.into())).id("b"),
+        ])
+    };
+    let draw = |r: &mut Renderer, t: &str| {
+        let mut p = Pixmap::new(400, 60).unwrap();
+        r.render(&scene(t), &sheet, &mut p);
+        p
+    };
+    let mut fresh = Renderer::new(Fonts::embedded());
+    let want = draw(&mut fresh, "F1");
+    let mut r = Renderer::new(Fonts::embedded());
+    draw(&mut r, "F1");
+    // \u{10fffd} is in no font: shaping it triggers the unload.
+    draw(&mut r, "x\u{10fffd}");
+    draw(&mut r, "x\u{10fffd}"); // cached: no new search
+    assert_eq!(draw(&mut r, "F1").data(), want.data());
+}

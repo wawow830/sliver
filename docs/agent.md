@@ -123,6 +123,18 @@ the agent down, because systemd would restart it into the same input over and ov
   layer keeps its last good frame, the error is logged to the journal
   (`journalctl --user -u sliver-agent`), and the next change renders normally.
 
+## Memory
+
+A fresh agent uses about 20 MB. cosmic-text keeps every font it loads, mapped and with its
+shaping data. A glyph that no fallback font has (an odd symbol in a song title) makes it try
+*every* system font: hundreds, which on the reference machine meant 70+ MB of mapped pages and
+11 MB of heap, held forever. hazel saw a 242 MB peak on the real install. `Fonts` now unloads
+loaded fonts after a shaping that hit `.notdef`, and whenever the label cache turns over
+(`trim_loaded_fonts`: rebuild the `FontSystem` from the same database, with cosmic-text's
+`SharedFile` mappings turned back into paths). Shaped labels survive, so the same text never
+searches again. The one-off search still shows as a peak. Measure with
+`cargo run --release -p sliver-render --example memprobe`.
+
 ## Public D-Bus API
 `api.rs` serves cedar's `sliver_api` on the session bus. `Host::changed` sets a flag and pokes a
 wake socket the main loop polls. `Host::control` hands `Control1` requests to the main loop and
