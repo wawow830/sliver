@@ -1,6 +1,6 @@
 # sliver-settings UX
 
-Owner: elm (T6). Status: **draft**. Answers to the taste questions in §11 may change it. The
+Owner: elm (T6). Status: **accepted v1**. The taste questions in §11 have been decided by the human. The
 feature tiers are in [features.md](features.md). The app is GTK4 + libadwaita (ADR-0001).
 
 ## 1. Principles
@@ -14,7 +14,7 @@ feature tiers are in [features.md](features.md). The app is GTK4 + libadwaita (A
 4. **Config is the truth.** The settings app writes the same TOML a human would and keeps comments.
    Everything it does is also possible through `sliverctl` or a text editor.
 5. **Native everywhere.** libadwaita patterns: AdwNavigationSplitView, AdwPreferencesPage,
-   toasts with Undo, instant apply (pending Q3). It works on GNOME, KDE and Hyprland, with no CSD
+   toasts with Undo, instant apply (Q3). It works on GNOME, KDE and Hyprland, with no CSD
    assumptions beyond libadwaita's.
 
 ## 2. Model (the words users see)
@@ -246,9 +246,9 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 | Script fails / times out | "!" on that item | Status log entry, highlight in the editor |
 | App item misbehaves (flooding updates) | The agent rate-limits it and then freezes it | Apps page shows "throttled" |
 
-## 11. Taste questions (asked to the human: Q1..Q10 = H3..H12)
+## 11. Taste decisions (Q1..Q10 = H3..H12, all answered)
 
-| # | Question | Options | Pick |
+| # | Question | Options | Decision |
 |---|---|---|---|
 | Q1 | Fresh-install default bar | A dfr classic (F-keys, Fn → media) · B macOS-like (Esc zone · App controls · control strip, Fn → F-keys; the Esc zone is empty when a physical Esc exists) · C Desktop (Esc zone · workspaces · app controls · now playing · clock/battery · control strip) | **B**. tiny-dfr users keep their imported config. |
 | Q2 | How locked is the Fn layer | A locked to F1–F12 (style only) · B editable but must keep Esc + F1–F12 · C fully editable | **B** |
@@ -261,4 +261,5 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 | Q9 | Collapsible control strip zone | A yes, macOS-style (collapsed 4 items ↔ expanded) · B no, just items | **A** |
 | Q10 | Mirror to real bar while editing | A on by default · B off by default | **A**. The bar Esc (if any) and Fn still work. |
 
-Answers get recorded here, and in an ADR if they constrain the config schema (Q2, Q4, Q5).
+Decided: the human chose the recommended pick on Q2–Q10 and delegated Q1 to elm, who chose B.
+Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
