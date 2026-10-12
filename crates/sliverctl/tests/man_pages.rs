@@ -115,6 +115,48 @@ fn help_commands_are_real() {
     }
 }
 
+/// Long options parsed by a binary: the `"--name"` string literals in its source file.
+fn source_flags(rel: &str, ignore: &[&str]) -> Vec<String> {
+    let src = std::fs::read_to_string(man_dir().join("..").join(rel)).unwrap();
+    let mut flags: Vec<String> = src
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|s| {
+            s.starts_with("--")
+                && s.len() > 2
+                && s[2..].chars().all(|c| c.is_ascii_lowercase() || c == '-')
+        })
+        .filter(|s| !ignore.contains(s))
+        .map(str::to_owned)
+        .collect();
+    flags.sort();
+    flags.dedup();
+    flags
+}
+
+#[test]
+fn daemon_and_agent_pages_cover_their_flags() {
+    for (page_name, src, ignore) in [
+        ("sliverd.8", "crates/sliverd/src/main.rs", &[][..]),
+        (
+            "sliver-agent.1",
+            "crates/sliver-agent/src/main.rs",
+            // systemd-run arguments the agent passes when launching apps, not its own options.
+            &["--user", "--scope", "--collect", "--quiet"][..],
+        ),
+    ] {
+        let flags = source_flags(src, ignore);
+        assert!(flags.len() >= 3, "flag scan of {src} broke: {flags:?}");
+        let words: Vec<&str> = flags.iter().map(String::as_str).collect();
+        assert_eq!(
+            missing(&page(page_name), &words),
+            Vec::<String>::new(),
+            "options parsed in {src} missing from man/{page_name}"
+        );
+    }
+}
+
 #[test]
 fn config_page_covers_the_schema() {
     let man = page("sliver-config.5");

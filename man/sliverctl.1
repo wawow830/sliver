@@ -138,7 +138,7 @@ Set a user variable, usable in rule conditions.
 .TP
 .BR render " [" \-\-layout
 .IR file ]
-.B \-o
+.BR \-o | \-\-output
 .I out.png
 Render a layout with the agent's renderer and save it as PNG.
 .SH PUBLISHING
@@ -197,7 +197,7 @@ For
 .B \-\-modal
 Cover the Main and Controls zones while shown, if the user allows it.
 .TP
-.BI \-p " id.key" = value
+\fB\-p\fR \fIid.key\fB=\fIvalue\fR, \fB\-\-prop\fR \fIid.key\fB=\fIvalue\fR
 Set any item property
 .RI ( docs/api.md
 \(sc3), for example

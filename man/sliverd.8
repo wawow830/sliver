@@ -104,6 +104,57 @@ options describe the hardware for fake and headless runs:
 (default Mac14,7),
 .BI \-\-max\-brightness " n"
 (default 255).
+.SH HARDWARE
+.B sliverd
+finds the bar's devices itself, the same way
+.B tiny\-dfr
+does:
+.TP
+Display
+The DRM card driven by
+.B adp
+(Apple Silicon) or
+.B appletbdrm
+(Intel T2).
+Frames are drawn into a dumb buffer and only the changed columns are flushed.
+.TP
+Touch
+The evdev device whose name contains
+.RB \(lq " Touch Bar" \(rq,
+read as multi\-touch protocol B.
+Fingers already on the bar when
+.B sliverd
+starts are ignored until they lift.
+.TP
+Backlight
+The bar's own backlight
+.RI ( 228600000.dsi.0 ,
+.I display\-pipe
+or
+.IR appletb_backlight ).
+Brightness 0 is how the bar is turned off: turning the display pipe off does not blank the panel.
+If the backlight can't be written (normally because udev hasn't applied
+.I 99\-z\-sliverd.rules
+yet),
+.B sliverd
+exits so that systemd can retry and then fall back to
+.BR tiny\-dfr ,
+which can still dim the OLED.
+Only when tiny\-dfr isn't installed does it run at a fixed brightness, with a warning.
+.TP
+Keys
+A uinput keyboard named
+.RB \(lq "Sliver Touch Bar Keys" \(rq,
+which the compositor treats like any other keyboard (the user's layout applies).
+.PP
+Devices that come and go (suspend, driver reloads) are picked up through udev.
+.PP
+Never test a development build by stopping
+.B tiny\-dfr
+by hand.
+Use the safe\-swap harness
+.RI ( docs/safe\-swap.md ),
+which bounds the run and always gives the bar back.
 .SH CONFIGURATION
 .I /etc/sliver/sliverd.toml
 is optional.
@@ -124,7 +175,10 @@ The agent socket.
 Daemon configuration.
 .TP
 .I sliverd.service\fR, \fPsliverd.socket
-The systemd units.
+The systemd units
+.RI ( sliver.service
+is an alias for
+.IR sliverd.service ).
 .B sliverd
 runs as a dynamic user in the
 .B video
