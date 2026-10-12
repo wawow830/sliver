@@ -110,7 +110,8 @@ Supplements:    (sliver-agent and kwin)
 %description -n sliver-kwin
 Tells sliver-agent which window and virtual desktop are active on KDE Plasma 6, so per-app layouts,
 the workspaces module and the taskbar work there. Not enabled by default: System Settings → Window
-Management → KWin Scripts → Sliver focus.
+Management → KWin Scripts → Sliver focus (or: kwriteconfig6 --file kwinrc --group Plugins
+--key sliver-focusEnabled true, then qdbus6 org.kde.KWin /KWin reconfigure).
 
 # Not noarch: Firefox's system manifest directory is %%{_libdir}/mozilla/native-messaging-hosts.
 %package -n sliver-browser
