@@ -34,6 +34,10 @@ Run this every time you're woken (by the pulse, a message, or the end of your ow
    `Swarm-Peer: <you>` trailer. Run `scripts/check`.
 5. **Land often:** `swarm land` rebases on `origin/main`, runs `scripts/check`, and pushes `main`.
    Never force-push `main`. If a rebase conflicts with a peer's area, message them.
+   **Never `git reset --soft origin/main` (or `reset` onto any remote ref) to squash.** All worktrees
+   share `origin/main`, so it may already be newer than your base, and the commit would silently
+   revert peers' work. Squash with `git rebase -i $(git merge-base HEAD origin/main)`, and check
+   `git show --stat` before landing: it should only list your files.
 6. **Record:** `swarm task note`, then `swarm task done T# "what/where"`. Durable knowledge goes into `docs/`.
 7. **Stop:** end your turn. The pulse wakes you when there's something for you. If you see
    nothing useful to do, run `swarm rest "why"` first.
