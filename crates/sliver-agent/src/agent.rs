@@ -89,6 +89,8 @@ pub enum SessionOp {
     OpenNotification,
     /// Close the latest notification.
     DismissNotification,
+    /// A `{ dbus = {...} }` action.
+    DBus(sliver_config::DBusCall),
 }
 
 pub struct Agent {
@@ -1062,15 +1064,7 @@ impl Agent {
                 }
             }
             Action::Sleep(_) => {}
-            Action::DBus(c) if c.args.is_empty() => fx.push(Effect::Spawn(vec![
-                "busctl".into(),
-                if c.system_bus { "--system" } else { "--user" }.into(),
-                "call".into(),
-                c.dest.clone(),
-                c.path.clone(),
-                c.interface.clone(),
-                c.method.clone(),
-            ])),
+            Action::DBus(c) => fx.push(Effect::Session(SessionOp::DBus(c.clone()))),
             Action::Layout(name) => match self.set_layout(name) {
                 Ok(()) => {
                     fx.extend(self.cancel_touches());
@@ -1087,7 +1081,6 @@ impl Agent {
                 };
                 self.module_action(&cell, name, value, now, fx);
             }
-            other => fx.push(Effect::Log(format!("action not supported yet: {other:?}"))),
         }
     }
 }
@@ -1449,6 +1442,18 @@ impl Agent {
             }
             ("emoji", n, _) => {
                 self.emoji_action(&cell.key, n, now, fx);
+                return;
+            }
+            ("screenshot" | "lock", n, _) if crate::modules::oneshot_action(n).is_some() => {
+                if let Some(act) = crate::modules::oneshot_action(n) {
+                    self.execute(&act, None, None, now, fx);
+                }
+                return;
+            }
+            ("power", "power:hold", _) => {
+                self.menu = Some(crate::modules::power_menu(true));
+                fx.extend(self.cancel_touches());
+                fx.push(Effect::Redraw);
                 return;
             }
             ("language", "next", _) => {

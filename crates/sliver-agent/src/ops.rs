@@ -47,6 +47,8 @@ pub enum Op {
     /// Open (invoke) or close notification `id`.
     OpenNotification(u32),
     CloseNotification(u32),
+    /// A configured D-Bus method call.
+    DBus(sliver_config::DBusCall),
 }
 
 /// Starts the ops thread. `handle` comes from the session feed.
@@ -113,6 +115,20 @@ fn run_ops(
             Op::CloseNotification(id) => sliver_session::notifications::close(&ses, id),
             Op::OpenNotification(id) => open_notification(&ses, id),
             Op::Dnd(on) => handle.set_dnd(&ses, on),
+            Op::DBus(call) => {
+                // On its own thread: a method that never answers must not stall the other ops.
+                let conn = if call.system_bus {
+                    sys.clone()
+                } else {
+                    ses.clone()
+                };
+                thread::spawn(move || {
+                    if let Err(e) = dbus_call(&conn, &call) {
+                        eprintln!("sliver-agent: dbus {}.{}: {e}", call.interface, call.method);
+                    }
+                });
+                Ok(())
+            }
             Op::Dark(on) => sliver_session::appearance::set_dark(on),
         };
         if let Err(e) = r {
@@ -168,4 +184,43 @@ pub fn bus_call(call: &sliver_desktop::control::BusCall) -> Result<(), String> {
             call.dest
         )
     })
+}
+
+/// Call `call` with its arguments coerced to the method's real types (see [`crate::dbus_call`]).
+pub fn dbus_call(conn: &Connection, call: &sliver_config::DBusCall) -> Result<(), String> {
+    let types = if call.args.is_empty() {
+        Vec::new()
+    } else {
+        // Introspection tells us `b` from `i` from `u`. Without it, guess from the TOML values.
+        conn.call_method(
+            Some(call.dest.as_str()),
+            call.path.as_str(),
+            Some("org.freedesktop.DBus.Introspectable"),
+            "Introspect",
+            &(),
+        )
+        .ok()
+        .and_then(|r| r.body().deserialize::<String>().ok())
+        .and_then(|xml| crate::dbus_call::in_signatures(&xml, &call.interface, &call.method))
+        .unwrap_or_default()
+    };
+    let reply = if call.args.is_empty() {
+        conn.call_method(
+            Some(call.dest.as_str()),
+            call.path.as_str(),
+            Some(call.interface.as_str()),
+            call.method.as_str(),
+            &(),
+        )
+    } else {
+        let body = crate::dbus_call::body(&types, &call.args)?;
+        conn.call_method(
+            Some(call.dest.as_str()),
+            call.path.as_str(),
+            Some(call.interface.as_str()),
+            call.method.as_str(),
+            &body,
+        )
+    };
+    reply.map(|_| ()).map_err(|e| e.to_string())
 }

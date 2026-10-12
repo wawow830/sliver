@@ -1280,6 +1280,77 @@ fn language_hold_lists_and_picks_a_layout() {
     assert!(!keys(&a).contains(&"menu/0".to_string()));
 }
 
+/// `screenshot` and `lock` fire a D-Bus call on tap; `power` opens a safe sub-bar on tap and the
+/// reboot/power-off one only on hold.
+#[test]
+fn screenshot_lock_and_power_widgets() {
+    use sliver_agent::agent::{Effect, SessionOp};
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"screenshot\", \"lock\", \"power\"]\n",
+    );
+    let w = world(9, 41);
+    a.render(&w);
+    let keys = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|c| c.key.clone())
+            .collect::<Vec<_>>()
+    };
+    let tap = |a: &mut Agent, key: &str, t: u64| {
+        let (id, x) = region(a, key);
+        let mut fx = a.touch(id, 0, TouchPhase::Down, x, t);
+        fx.extend(a.touch(id, 0, TouchPhase::Up, x, t + 40_000));
+        fx.extend(a.tick(t + 400_000));
+        fx
+    };
+    let dbus = |fx: &[Effect]| {
+        fx.iter().find_map(|e| match e {
+            Effect::Session(SessionOp::DBus(c)) => Some(c.clone()),
+            _ => None,
+        })
+    };
+    let c = dbus(&tap(&mut a, "screenshot", 1_000)).expect("a D-Bus call");
+    assert_eq!(
+        (c.dest.as_str(), c.method.as_str()),
+        ("org.freedesktop.portal.Desktop", "Screenshot")
+    );
+    assert_eq!(c.args.len(), 2);
+    let c = dbus(&tap(&mut a, "lock", 1_000_000)).expect("a D-Bus call");
+    assert!(
+        c.system_bus && c.method == "Lock" && c.interface.ends_with(".Session"),
+        "{c:?}"
+    );
+
+    // tap: lock and suspend only
+    tap(&mut a, "power", 2_000_000);
+    a.render(&w);
+    let k = keys(&a);
+    assert!(
+        k.contains(&"menu/0".to_string()) && k.contains(&"menu/1".to_string()),
+        "{k:?}"
+    );
+    assert!(
+        !k.contains(&"menu/2".to_string()),
+        "two safe entries + ✕: {k:?}"
+    );
+    let c = dbus(&tap(&mut a, "menu/1", 3_000_000)).expect("suspend");
+    assert_eq!(c.method, "Suspend");
+    assert_eq!(c.args, [toml::Value::Boolean(false)]);
+    a.render(&w);
+    // hold: reboot / power off
+    let (id, x) = region(&a, "power");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 4_000_000);
+    fx.extend(a.tick(5_000_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 5_100_000));
+    assert!(fx.contains(&Effect::Redraw), "{fx:?}");
+    a.render(&w);
+    let c = dbus(&tap(&mut a, "menu/1", 6_000_000)).expect("power off");
+    assert_eq!(c.method, "PowerOff");
+}
+
 /// Tapping the network, bluetooth and dnd modules asks for the matching switch.
 #[test]
 fn network_bluetooth_dnd_taps_toggle() {

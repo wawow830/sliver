@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod api;
 pub mod context;
+pub mod dbus_call;
 pub mod display;
 pub mod frame;
 pub mod gesture;

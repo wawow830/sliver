@@ -637,6 +637,86 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
     ));
 }
 
+/// A logind `Manager` call on the system bus.
+fn logind(method: &str, args: Vec<toml::Value>) -> Action {
+    Action::DBus(sliver_config::DBusCall {
+        system_bus: true,
+        dest: "org.freedesktop.login1".into(),
+        path: "/org/freedesktop/login1".into(),
+        interface: "org.freedesktop.login1.Manager".into(),
+        method: method.into(),
+        args,
+    })
+}
+
+/// The `power` module's sub-bars: `dangerous` = the long-press one (reboot, power off).
+pub fn power_menu(dangerous: bool) -> Vec<sliver_config::MenuEntry> {
+    let entry = |label: &str, icon: &str, on_tap: Action| sliver_config::MenuEntry {
+        label: label.into(),
+        icon: Some(icon.into()),
+        on_tap,
+    };
+    let interactive = vec![toml::Value::Boolean(false)];
+    if dangerous {
+        vec![
+            entry(
+                "Reboot",
+                "system-reboot-symbolic",
+                logind("Reboot", interactive.clone()),
+            ),
+            entry(
+                "Power off",
+                "system-shutdown-symbolic",
+                logind("PowerOff", interactive),
+            ),
+        ]
+    } else {
+        vec![
+            entry("Lock", "system-lock-screen-symbolic", lock_action()),
+            entry(
+                "Suspend",
+                "media-playback-pause-symbolic",
+                logind("Suspend", interactive),
+            ),
+        ]
+    }
+}
+
+/// Lock this session the way `loginctl lock-session` does: logind tells the locker.
+fn lock_action() -> Action {
+    Action::DBus(sliver_config::DBusCall {
+        system_bus: true,
+        dest: "org.freedesktop.login1".into(),
+        path: "/org/freedesktop/login1/session/auto".into(),
+        interface: "org.freedesktop.login1.Session".into(),
+        method: "Lock".into(),
+        args: Vec::new(),
+    })
+}
+
+/// The portal's interactive screenshot (the user picks area/window in the portal's own UI).
+fn screenshot_action() -> Action {
+    let mut opts = toml::Table::new();
+    opts.insert("interactive".into(), toml::Value::Boolean(true));
+    Action::DBus(sliver_config::DBusCall {
+        system_bus: false,
+        dest: "org.freedesktop.portal.Desktop".into(),
+        path: "/org/freedesktop/portal/desktop".into(),
+        interface: "org.freedesktop.portal.Screenshot".into(),
+        method: "Screenshot".into(),
+        args: vec![toml::Value::String(String::new()), toml::Value::Table(opts)],
+    })
+}
+
+/// What the `screenshot` and `lock` modules do on tap.
+pub fn oneshot_action(name: &str) -> Option<Action> {
+    match name {
+        "screenshot" => Some(screenshot_action()),
+        "lock" => Some(lock_action()),
+        _ => None,
+    }
+}
+
 /// The cells of an open `menu` sub-bar: one per entry (label and/or icon), then a ✕.
 pub fn menu_cells(
     entries: &[sliver_config::MenuEntry],
@@ -862,6 +942,8 @@ struct Spec {
     timer_total: Option<std::time::Duration>,
     /// A sub-bar built from live data (the `language` picker), used when the config has no `menu`.
     menu: Vec<sliver_config::MenuEntry>,
+    /// Shown when there is no icon (and no text), instead of an empty cell.
+    fallback_text: Option<&'static str>,
 }
 
 impl Spec {
@@ -882,6 +964,7 @@ impl Spec {
             target: None,
             timer_total: None,
             menu: Vec::new(),
+            fallback_text: None,
         }
     }
 
@@ -1361,6 +1444,30 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             sp
         }
         // Do Not Disturb, when the notification daemon reports it (dunst, KDE).
+        // One-shot actions: no state, so they are always there.
+        "screenshot" => {
+            let mut sp = Spec::new(ValueMap::new(), "")
+                .icon("applets-screenshooter-symbolic")
+                .on(Gesture::Tap, "screenshot");
+            sp.fallback_text = Some("📷");
+            sp
+        }
+        "lock" => {
+            let mut sp = Spec::new(ValueMap::new(), "")
+                .icon("system-lock-screen-symbolic")
+                .on(Gesture::Tap, "lock");
+            sp.fallback_text = Some("🔒");
+            sp
+        }
+        // Tap: lock and suspend. Hold: reboot and power off, so they can't be tapped by accident.
+        "power" => {
+            let mut sp = Spec::new(ValueMap::new(), "")
+                .icon("system-shutdown-symbolic")
+                .on(Gesture::Hold, "power:hold");
+            sp.fallback_text = Some("⏻");
+            sp.menu = power_menu(false);
+            sp
+        }
         "dnd" => {
             let on = s.notifications.dnd?;
             let mut sp = Spec::new(
@@ -1687,7 +1794,9 @@ fn cell(
                     &name.chars().take(2).collect::<String>(),
                 ))
             }
-            (None, None, true) => Content::Blank,
+            (None, None, true) => sp
+                .fallback_text
+                .map_or(Content::Blank, |t| Content::Markup(t.into())),
         }
     };
     // User bindings first, then `actions = { on-x = "name" }`, then the module's defaults.

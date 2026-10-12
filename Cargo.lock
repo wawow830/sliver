@@ -1531,6 +1531,7 @@ dependencies = [
  "sliver-stats",
  "sliver-testbus",
  "sliverd",
+ "toml",
  "zbus",
 ]
 
