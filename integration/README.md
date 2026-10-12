@@ -28,11 +28,17 @@ Wire types as KWin's `callDBus` produces them (mock log): strings `s`, booleans 
 `av`, never `aa{sv}`**. So the script reports desktops with `SetWorkspacesV(av)` (elements are `a{sv}`
 variants); GNOME's GJS can send `aa{sv}` to `SetWorkspaces` natively.
 
-## GNOME extension: untested on a real shell
+## GNOME extension: verified on a real (headless) gnome-shell 50.5
 
 Written from the GNOME Shell 45+ extension API (ESM). Uses `NO_AUTO_START` so it never starts the
 agent, ignores every error, and sends an empty `SetFocus` on disable so the agent can fall back.
-Please run it on a real GNOME session before relying on it.
+`integration/gnome-shell/test.sh` runs it on a real gnome-shell/mutter 50.5 (`--headless
+--virtual-monitor`, private session bus) with two real clients: focus, workspaces and the window list
+reach a mock agent, and `Shell1.FocusWindow`, `FocusWorkspace` and `CloseWindow` really act. The
+GNOME version it ran against is the only one tried: 45–49 are listed in `metadata.json` but
+untested. No root needed: `dnf download --resolve` the rpms, `rpm2cpio | cpio -idm` them into a
+prefix, and the script puts them over `/usr/share` and `/usr/lib64` with an overlay in a private
+user namespace (see the header of the script).
 
 ## Switching workspaces (the agent calling back)
 
@@ -40,7 +46,7 @@ Please run it on a real GNOME session before relying on it.
   number the script reports as the workspace id). `integration/kwin/test.sh` checks it in the
   nested KWin.
 * GNOME: the extension owns `io.github.wawow830.Sliver.Shell` while enabled and exports
-  `io.github.wawow830.Sliver.Shell1.FocusWorkspace(i)` (1-based). Not yet run on a real shell.
+  `io.github.wawow830.Sliver.Shell1.FocusWorkspace(i)` (1-based). Verified by `integration/gnome-shell/test.sh`.
 
 Both calls use `NoAutoStart`: with no script or extension running, tapping does nothing but log.
 
@@ -58,4 +64,4 @@ The agent's taskbar actions go back like this:
   (what KRunner uses). Verified in the nested KWin test. **KWin has no close action**, so
   long-pressing a taskbar button on KDE only logs.
 * GNOME focus and close: `Sliver.Shell1.FocusWindow(s)` / `CloseWindow(s)` on the extension, by the
-  window's `mutter:<stable sequence>` id. Not yet run on a real shell.
+  window's `mutter:<stable sequence>` id. Verified by `integration/gnome-shell/test.sh`.

@@ -69,11 +69,11 @@ is in `sliver_desktop::Backend::detect` (env: `HYPRLAND_INSTANCE_SIGNATURE`, `NI
 | backend | mechanism | events | effort | status |
 |---|---|---|---|---|
 | **Hyprland** | `socket2` event stream + `socket1` JSON queries | yes | small | **done** (`sliver_desktop::hyprland`) |
-| sway / i3 | i3-ipc over `$SWAYSOCK`, `SUBSCRIBE ["window","workspace","input","mode"]` | yes | small | **done** (`sliver_desktop::sway`; fake-server tests, not run on a real sway) |
+| sway / i3 | i3-ipc over `$SWAYSOCK`, `SUBSCRIBE ["window","workspace","input","mode"]` | yes | small | **done** (`sliver_desktop::sway`; fake-server tests, and `integration/sway/test.sh` against a real headless sway 1.11) |
 | niri | JSON IPC over `$NIRI_SOCKET`, `"EventStream"` request | yes | small | **done** (`sliver_desktop::niri`; fake-server tests, not run on a real niri) |
 | wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | yes | medium | **done** (`sliver-desktop::wlr`; verified on a real headless **labwc** with `integration/labwc/test.sh`: list, focus, workspaces, focus/close/switch; mock-tested too) |
 | KDE Plasma 6 | KWin script (JS) calling our D-Bus service | yes | medium | **done** (`integration/kwin`; tested in nested `kwin_wayland --virtual`) |
-| GNOME Shell | extension calling our D-Bus service | yes | medium-large | **written, untested** (`integration/gnome-shell`; see integration/README.md); also switches workspaces for the agent |
+| GNOME Shell | extension calling our D-Bus service | yes | medium-large | **done, verified on a real headless gnome-shell 50.5** (`integration/gnome-shell/test.sh`; see integration/README.md); also switches workspaces for the agent |
 | X11 | `_NET_ACTIVE_WINDOW` on the root window | yes | small | todo, last |
 
 ### Hyprland (done)

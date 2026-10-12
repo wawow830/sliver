@@ -7,7 +7,7 @@
 // so nothing happens while it is not running. The first caller of SetFocus becomes the agent's
 // focus source.
 //
-// NOT yet run against a real GNOME Shell (none on the development machine); written from the
+// Run against a real (headless) GNOME Shell 50.5 by integration/gnome-shell/test.sh; written from the
 // GNOME Shell 45+ extension API. See integration/README.md.
 
 import Gio from 'gi://Gio';
