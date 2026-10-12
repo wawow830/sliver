@@ -67,7 +67,10 @@ pub fn scene(zones: &[ResolvedZone], cells: &[Vec<Cell>], bar_classes: Vec<Strin
                             .width(c.width)
                             .id(c.css_id.clone())
                             .pressed(c.pressed)
-                            .checked(c.checked);
+                            .checked(c.checked)
+                            .disabled(c.disabled);
+                        item.foreground = c.foreground;
+                        item.background = c.background;
                         item.classes = c.classes.clone();
                         item
                     })

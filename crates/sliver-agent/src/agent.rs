@@ -41,6 +41,12 @@ pub enum Effect {
     Signal(u32),
     /// Re-run one user module now (`{ update = "custom/x" }`).
     Update(String),
+    /// Tell the app that owns a published item what the user did (api.md §5).
+    Api {
+        context: sliver_api::registry::ContextId,
+        item: String,
+        what: sliver_api::registry::Interaction,
+    },
 }
 
 /// Session-side changes the built-in modules make.
@@ -89,8 +95,12 @@ pub struct Agent {
     /// Macro steps and drawer closings due at a monotonic time (µs).
     scheduled: Vec<(u64, Scheduled)>,
     drag: HashMap<u32, DragState>,
+    /// Published sliders being dragged: last value sent, by region.
+    pub_drag: HashMap<u32, f64>,
     /// Problems resolving layers, for logging/status. Cleared on each render.
     pub errors: Vec<String>,
+    /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +150,8 @@ impl Agent {
             oneshot: None,
             scheduled: Vec::new(),
             drag: HashMap::new(),
+            pub_drag: HashMap::new(),
+            hidden: false,
             errors: Vec::new(),
         }
     }
@@ -178,7 +190,10 @@ impl Agent {
         let base = self.base_layer().to_owned();
         for (layer, name) in [(Layer::Base, base.as_str()), (Layer::Fn, "fn")] {
             match self.config.resolve(name, &self.ctx) {
-                Ok(r) => {
+                Ok(mut r) => {
+                    if self.hidden && layer == Layer::Base {
+                        r.zones.iter_mut().for_each(|z| z.modules.clear());
+                    }
                     let id_base = if layer == Layer::Fn {
                         FN_REGION_BASE
                     } else {
@@ -340,6 +355,12 @@ impl Agent {
         let Some(cell) = self.cell(region).cloned() else {
             return;
         };
+        if let Some(p) = &cell.published
+            && !matches!(g, Gesture::Pressed(_))
+        {
+            self.dispatch_published(region, &cell, p, g, now, fx);
+            return;
+        }
         let want = match g {
             Gesture::Pressed(on) => {
                 let changed = if on {
@@ -555,6 +576,159 @@ impl Agent {
 }
 
 impl Agent {
+    /// Runs an action that didn't come from a touch (D-Bus `Control1`, sliverctl).
+    pub fn run_action(&mut self, a: &Action, now: u64, fx: &mut Vec<Effect>) {
+        self.execute(a, None, None, now, fx);
+    }
+
+    /// `Control1.Trigger(module, gesture)`: as if the user did it on the module's cell.
+    pub fn trigger(
+        &mut self,
+        module: &str,
+        g: sliver_api::item::Gesture,
+        now: u64,
+        fx: &mut Vec<Effect>,
+    ) {
+        use sliver_api::item::Gesture as AG;
+        let found = [Layer::Base, Layer::Fn].iter().find_map(|l| {
+            let f = self.frame(*l)?;
+            let i = f
+                .cells
+                .iter()
+                .position(|c| c.id == module || c.key == module)?;
+            Some(f.id_base + i as u32 + 1)
+        });
+        let Some(region) = found else {
+            fx.push(Effect::Log(format!(
+                "trigger: no module {module:?} on the bar"
+            )));
+            return;
+        };
+        let g = match g {
+            AG::Tap => Gesture::Tap,
+            AG::Hold => Gesture::Hold,
+            AG::SwipeLeft => Gesture::SwipeLeft,
+            AG::SwipeRight => Gesture::SwipeRight,
+            AG::DoubleTap => Gesture::DoubleTap,
+            AG::Drag => return,
+        };
+        self.dispatch(region, g, now, fx);
+    }
+
+    /// What's on the bar now, for `Control1.ListModules` / `sliverctl modules`.
+    pub fn list_modules(&self) -> Vec<sliver_api::item::Props> {
+        use sliver_api::item::Prop;
+        [(Layer::Base, "base"), (Layer::Fn, "fn")]
+            .iter()
+            .filter_map(|(l, name)| Some((self.frame(*l)?, *name)))
+            .flat_map(|(f, layer)| {
+                f.cells.iter().zip(&f.layout.items).map(move |(c, r)| {
+                    [
+                        ("id", Prop::Str(c.id.clone())),
+                        ("key", Prop::Str(c.key.clone())),
+                        ("type", Prop::Str(c.kind.clone())),
+                        ("layer", Prop::Str(layer.into())),
+                        (
+                            "classes",
+                            Prop::List(c.classes.iter().cloned().map(Prop::Str).collect()),
+                        ),
+                        ("x", Prop::Int(r.x as i64)),
+                        ("width", Prop::Int(r.w as i64)),
+                    ]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_owned(), v))
+                    .collect()
+                })
+            })
+            .collect()
+    }
+
+    /// A gesture on an item an app published: the user's binding on the placeholder wins
+    /// (and passes the event through only with `pass-through`), else the app hears about it.
+    fn dispatch_published(
+        &mut self,
+        region: u32,
+        cell: &Cell,
+        p: &crate::published::PubRef,
+        g: Gesture,
+        now: u64,
+        fx: &mut Vec<Effect>,
+    ) {
+        use crate::published::PubKind;
+        use sliver_api::item::Gesture as AG;
+        use sliver_api::registry::{Interaction as I, Phase};
+        let send = |what: I, fx: &mut Vec<Effect>| {
+            fx.push(Effect::Api {
+                context: p.context,
+                item: p.item.clone(),
+                what,
+            })
+        };
+        if let Gesture::Drag(x) = g {
+            let PubKind::Slider { min, max, step } = p.kind else {
+                return;
+            };
+            let f = self.frame_for(region).expect("cell came from a frame");
+            let i = f.cell_index(region).expect("cell came from a frame");
+            let Some(t) = f.layout.tracks.get(i).copied().flatten() else {
+                return;
+            };
+            let frac = if t.w > 0.0 {
+                ((x - t.x) / t.w).clamp(0.0, 1.0) as f64
+            } else {
+                0.0
+            };
+            let mut v = min + frac * (max - min);
+            if step > 0.0 {
+                v = (min + ((v - min) / step).round() * step).clamp(min, max);
+            }
+            let phase = if self.pub_drag.contains_key(&region) {
+                Phase::Change
+            } else {
+                Phase::Begin
+            };
+            if self.pub_drag.insert(region, v) != Some(v) || phase == Phase::Begin {
+                send(I::Slider { value: v, phase }, fx);
+            }
+            return;
+        }
+        if g == Gesture::Release
+            && let Some(v) = self.pub_drag.remove(&region)
+        {
+            send(
+                I::Slider {
+                    value: v,
+                    phase: Phase::End,
+                },
+                fx,
+            );
+        }
+        let (want, ag) = match g {
+            Gesture::Tap => (CGesture::Tap, AG::Tap),
+            Gesture::DoubleTap => (CGesture::DoubleTap, AG::DoubleTap),
+            Gesture::Hold => (CGesture::Hold, AG::Hold),
+            Gesture::SwipeLeft => (CGesture::SwipeLeft, AG::SwipeLeft),
+            Gesture::SwipeRight => (CGesture::SwipeRight, AG::SwipeRight),
+            _ => return,
+        };
+        let user = cell
+            .on
+            .iter()
+            .find(|(cg, _)| *cg == want)
+            .map(|(_, a)| a.clone());
+        if let Some(a) = &user {
+            self.execute(a, None, Some(region), now, fx);
+            if !cell.pass_through {
+                return;
+            }
+        }
+        match (p.kind, ag) {
+            (PubKind::Segment(i), AG::Tap) => send(I::Select(i), fx),
+            (PubKind::Slider { .. }, AG::Tap) => {}
+            _ => send(I::Gesture(ag), fx),
+        }
+    }
+
     /// A built-in module's own action (`actions = { on-hold = "…" }`, or its default bindings).
     fn module_action(&mut self, cell: &Cell, name: &str, value: Option<f64>, fx: &mut Vec<Effect>) {
         use sliver_session::mpris::Command;
@@ -591,6 +765,25 @@ impl Agent {
 
 /// What the recognizer should look for on this cell.
 fn bindings(c: &Cell) -> Bindings {
+    if let Some(p) = &c.published {
+        use sliver_api::item::Gesture as AG;
+        let has = |g: AG| p.gestures.contains(&g);
+        let slider = matches!(p.kind, crate::published::PubKind::Slider { .. });
+        let user = |g: CGesture| c.on.iter().any(|(x, _)| *x == g);
+        return Bindings {
+            tap: !slider,
+            double_tap: has(AG::DoubleTap) || user(CGesture::DoubleTap),
+            hold: has(AG::Hold) || user(CGesture::Hold),
+            release: slider,
+            swipe: has(AG::SwipeLeft)
+                || has(AG::SwipeRight)
+                || user(CGesture::SwipeLeft)
+                || user(CGesture::SwipeRight),
+            drag: slider,
+            on_press: false,
+            swipe_threshold: None,
+        };
+    }
     let has = |g: CGesture| c.on.iter().any(|(x, _)| *x == g);
     let hold_layer = c.on.iter().any(|(g, a)| {
         *g == CGesture::Tap

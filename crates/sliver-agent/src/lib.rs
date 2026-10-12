@@ -4,6 +4,7 @@
 //! `sliverd::testing::TestDaemon`.
 
 pub mod agent;
+pub mod api;
 pub mod context;
 pub mod frame;
 pub mod gesture;
@@ -11,5 +12,6 @@ pub mod icons;
 pub mod link;
 pub mod modules;
 pub mod ops;
+pub mod published;
 
 pub use agent::Agent;

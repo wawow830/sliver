@@ -17,10 +17,14 @@ use chrono::Local;
 use rustix::event::{PollFd, PollFlags, poll};
 use sliver_agent::Agent;
 use sliver_agent::agent::{Effect, SessionOp};
+use sliver_agent::api::{ApiLink, Reply};
 use sliver_agent::icons::Icons;
 use sliver_agent::link::{Event, Link};
 use sliver_agent::modules::World;
 use sliver_agent::ops::{Op, start_ops};
+use sliver_agent::published::Published;
+use sliver_api::registry::Focus;
+use sliver_api::service::{Control, ControlReply, ControlState};
 use sliver_config::{Config, Loaded};
 use sliver_feeds::{Aggregate, Feed, Feeds};
 use sliver_ipc::proto::{DisplayState, Layer, SOCKET_PATH};
@@ -136,6 +140,9 @@ struct Live {
     /// logind's raw `LockedHint`, before the plausibility check.
     locked_hint: bool,
     ops: Option<std::sync::mpsc::Sender<Op>>,
+    /// The public D-Bus API, if the session bus is there.
+    api: Option<ApiLink>,
+    published: Published,
 }
 
 impl Live {
@@ -153,12 +160,21 @@ impl Live {
                 None
             }
         });
+        let api = match ApiLink::start() {
+            Ok(a) => Some(a),
+            Err(e) => {
+                eprintln!("sliver-agent: public D-Bus API unavailable: {e}");
+                None
+            }
+        };
         Ok(Live {
             feeds,
             agg: Aggregate::from_env(),
             outputs: HashMap::new(),
             locked_hint: false,
             ops,
+            api,
+            published: Published::default(),
         })
     }
 
@@ -177,13 +193,36 @@ impl Live {
             }
             self.agg.apply(f);
         }
+        if any {
+            self.push_focus();
+        }
         any
     }
 
-    fn world(&self) -> World {
+    /// Our compositor backend's focus decides who fills App controls (GNOME/KDE push theirs
+    /// over `Desktop1` instead).
+    fn push_focus(&mut self) {
+        let d = &self.agg.desktop;
+        if let Some(api) = &self.api
+            && d.connected
+        {
+            api.set_focus(Focus {
+                window: d.window.clone(),
+                workspace: d.workspace.as_ref().map(|w| w.name.clone()),
+                locked: self.world_locked(),
+            });
+            self.published = Published::snapshot(&api.api);
+        }
+    }
+
+    fn world_locked(&self) -> bool {
         use sliver_agent::context::{plausibly_locked, process_names};
+        plausibly_locked(self.locked_hint, self.agg.desktop.backend, process_names)
+    }
+
+    fn world(&self) -> World {
         // logind's LockedHint can be stale; see context::plausibly_locked.
-        let locked = plausibly_locked(self.locked_hint, self.agg.desktop.backend, process_names);
+        let locked = self.world_locked();
         let mut session = self.agg.session.clone();
         session.locked = locked;
         let mut context = self.agg.context();
@@ -194,6 +233,7 @@ impl Live {
             desktop: self.agg.desktop.clone(),
             context,
             outputs: self.outputs.clone(),
+            published: self.published.clone(),
         }
     }
 
@@ -351,6 +391,15 @@ fn apply(
                     eprintln!("sliver-agent: update: no user module {key:?}");
                 }
             }
+            Effect::Api {
+                context,
+                item,
+                what,
+            } => {
+                if let Some(api) = &live.api {
+                    api.interact(context, &item, what);
+                }
+            }
             Effect::Redraw => redraw = true,
             Effect::EmitKeys(keys, mode) => link.emit_keys(&keys, mode)?,
             Effect::Log(msg) => eprintln!("sliver-agent: {msg}"),
@@ -376,6 +425,91 @@ fn apply(
     Ok(redraw)
 }
 
+/// A `Control1` request from D-Bus (sliverctl and friends), answered by the core.
+fn control(agent: &mut Agent, live: &mut Live, req: Control) -> (Reply, Vec<Effect>) {
+    use sliver_config::{Action, LayerMode};
+    let layer = |name: String, mode| Action::Layer { name, mode };
+    let mut fx = Vec::new();
+    let done = Ok(ControlReply::Done);
+    let reply = match req {
+        Control::SwitchLayer(name) | Control::PushLayer(name, _) => {
+            agent.run_action(&layer(name, LayerMode::Toggle), now_us(), &mut fx);
+            if !fx.contains(&Effect::Redraw) {
+                Err("no such layer".into())
+            } else {
+                done
+            }
+        }
+        Control::ToggleLayer(name) => {
+            agent.run_action(&layer(name, LayerMode::Toggle), now_us(), &mut fx);
+            done
+        }
+        Control::PopLayer => {
+            agent.run_action(&Action::CloseLayer, now_us(), &mut fx);
+            done
+        }
+        Control::Signal(n) => {
+            fx.push(Effect::Signal(n));
+            done
+        }
+        Control::Refresh(m) => match live.modules().map(|rt| rt.trigger(&m)) {
+            Some(true) => done,
+            _ => Err(format!("no user module {m:?}")),
+        },
+        Control::Trigger(module, g) => {
+            agent.trigger(&module, g, now_us(), &mut fx);
+            done
+        }
+        Control::Bar(what) => {
+            agent.hidden = match what.as_str() {
+                "show" => false,
+                "hide" => true,
+                _ => !agent.hidden,
+            };
+            fx.push(Effect::Redraw);
+            done
+        }
+        Control::SetVariable(k, v) => {
+            agent.ctx_overrides.retain(|(x, _)| *x != k);
+            let value = match v {
+                sliver_api::item::Prop::Bool(b) => Some(sliver_config::CtxValue::Bool(b)),
+                sliver_api::item::Prop::Str(s) => Some(sliver_config::CtxValue::Str(s)),
+                sliver_api::item::Prop::Num(n) => Some(sliver_config::CtxValue::Num(n)),
+                sliver_api::item::Prop::Int(n) => Some(sliver_config::CtxValue::Num(n as f64)),
+                _ => None,
+            };
+            if let Some(v) = value {
+                agent.ctx_overrides.push((k, v));
+            }
+            fx.push(Effect::Redraw);
+            done
+        }
+        Control::Preview(name, _) | Control::RenderPreview(name, _) => {
+            let mut frames = Vec::new();
+            let saved = std::mem::replace(&mut agent.layers, vec![name.clone()]);
+            agent.render(&live.world());
+            if let Some(f) = agent.frame(Layer::Base) {
+                frames.push(f.image.encode_png());
+            }
+            agent.layers = saved;
+            fx.push(Effect::Redraw);
+            match frames.pop() {
+                Some(Ok(png)) => Ok(ControlReply::Png(png)),
+                _ => Err(format!("can't render layer {name:?}")),
+            }
+        }
+        Control::ValidateConfig(path) => {
+            let l = sliver_config::load_file(Path::new(&path));
+            Ok(ControlReply::Errors(
+                l.diagnostics.errors.iter().map(|e| e.to_string()).collect(),
+            ))
+        }
+        Control::ListModules => Ok(ControlReply::Modules(agent.list_modules())),
+        other => Err(format!("not supported yet: {other:?}")),
+    };
+    (reply, fx)
+}
+
 /// Drives one sliverd connection until it closes.
 fn run(mut agent: Agent, mut link: Link, live: &mut Live) -> std::io::Result<()> {
     let mut dirty = true;
@@ -391,6 +525,26 @@ fn run(mut agent: Agent, mut link: Link, live: &mut Live) -> std::io::Result<()>
                 .iter()
                 .for_each(|e| eprintln!("sliver-agent: {e}"));
             dirty = false;
+            if let Some(api) = &mut live.api {
+                let drawn = [Layer::Base, Layer::Fn]
+                    .iter()
+                    .filter_map(|l| agent.frame(*l))
+                    .flat_map(|f| {
+                        f.cells
+                            .iter()
+                            .filter_map(|c| c.published.as_ref().map(|p| p.context))
+                    })
+                    .collect();
+                api.set_on_screen(drawn);
+                api.set_control_state(ControlState {
+                    active_layer: agent.base_layer().to_owned(),
+                    layers: agent.config.layers.keys().cloned().collect(),
+                    active_profile: "default".into(),
+                    profiles: vec!["default".into()],
+                    variables: Default::default(),
+                    healthy: agent.errors.is_empty(),
+                });
+            }
         }
         // Sleep until sliverd says something, a gesture/macro deadline, or a module's content
         // changes on its own. Nothing else wakes us (invariant 3).
@@ -409,21 +563,39 @@ fn run(mut agent: Agent, mut link: Link, live: &mut Live) -> std::io::Result<()>
                     tv_sec: ms / 1000,
                     tv_nsec: (ms % 1000) * 1_000_000,
                 });
-        let (readable, world_changed) = {
+        let (readable, world_changed, api_woke) = {
             let (fd, wake) = (link.fd(), live.feeds.as_fd());
-            let mut fds = [
+            let api_fd = live.api.as_ref().map(|a| a.fd());
+            let mut fds = vec![
                 PollFd::new(&fd, PollFlags::IN),
                 PollFd::new(&wake, PollFlags::IN),
             ];
+            if let Some(a) = &api_fd {
+                fds.push(PollFd::new(a, PollFlags::IN));
+            }
             match poll(&mut fds, timeout.as_ref()) {
                 Ok(_) | Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(e.into()),
             }
-            (!fds[0].revents().is_empty(), !fds[1].revents().is_empty())
+            let ready = |i: usize| fds.get(i).is_some_and(|f| !f.revents().is_empty());
+            (ready(0), ready(1), ready(2))
         };
         if world_changed {
             dirty |= live.pump();
         }
+        if api_woke && let Some(api) = &live.api {
+            let (changed, requests) = api.drain();
+            if changed {
+                live.published = Published::snapshot(&api.api);
+                dirty = true;
+            }
+            for (req, reply) in requests {
+                let (answer, fx) = control(&mut agent, live, req);
+                let _ = reply.send(answer);
+                dirty |= apply(fx, &link, &mut children, live)?;
+            }
+        }
+        let world_changed = world_changed || api_woke;
         let fx = agent.tick(now_us());
         dirty |= apply(fx, &link, &mut children, live)?;
         if world_changed && !readable {
@@ -449,6 +621,13 @@ fn run(mut agent: Agent, mut link: Link, live: &mut Live) -> std::io::Result<()>
                     ..
                 } => agent.touch(region, slot, phase, x, time_us),
                 Event::Display(state) => {
+                    if let Some(api) = &mut live.api {
+                        api.set_display(match state {
+                            DisplayState::On => "on",
+                            DisplayState::Dimmed => "dimmed",
+                            DisplayState::Off => "off",
+                        });
+                    }
                     let was_off = agent.display == DisplayState::Off;
                     agent.display = state;
                     dirty |= was_off && state != DisplayState::Off;

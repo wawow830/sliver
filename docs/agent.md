@@ -84,9 +84,31 @@ MPRIS, the caffeine inhibitor), so the main loop never blocks on them.
 `sliver-agent --render out` uses the live sources too, and prints every cell with its rect,
 module key, CSS id/classes and content, which is handy for debugging configs and stylesheets.
 
-## Status
-Works: everything above, plus `--render` and the real sliverd loop.
+## Public D-Bus API
+`api.rs` serves cedar's `sliver_api` on the session bus. `Host::changed` sets a flag and pokes a
+wake socket the main loop polls. `Host::control` hands `Control1` requests to the main loop and
+waits up to 2 s for the answer, so the core stays single-threaded.
+- The agent's compositor focus goes to `Api::set_focus`. `published.rs` snapshots who fills App
+  controls / Status items.
+- The `app-controls` / `status-items` placeholder modules turn published items into cells:
+  - classes `.app`/`.status`, the item type (`.button`, `.toggle`, `.slider`…), `.focused-app`
+    and the item's own classes;
+  - `:checked` for toggles that are on and the selected segment, `:disabled`, and the item's
+    `fg`/`bg` colours.
+- Touches on published items become `Api::interact`: gestures, `Select` for segments, and slider
+  Begin/Change/End in the item's units, snapped to its step. A user `on-*` binding on the
+  placeholder wins (and also sends the app event with `pass-through`).
+- After each render the drawn contexts go to `OnScreen`, and sliverd's display state to the
+  API. `Control1`: layer switch/push/pop/toggle, signal, refresh, trigger, bar show/hide/toggle,
+  variables, preview PNGs, config validation, the module list. Not yet: layout, profile,
+  reload (T26), per-module show/hide, `update`.
 
-Not yet: the public D-Bus API (`sliver_api`: App controls/Status items placeholders, published
-items), `workspaces`/`taskbar`/`notifications`/`cpu`… modules, the `layout` action, hot reload
-(T26).
+Tests: `tests/api.rs` runs the agent with the API on a private `dbus-daemon` and a real client
+(publish → render → tap/drag → `Event` signals).
+
+## Status
+Works: everything above, plus `--render` and the real sliverd loop. Verified end to end with
+`sliverd --fake-hardware` + `sliverctl publish/status/modules/layer`.
+
+Not yet: modal app contexts covering the bar, `workspaces`/`taskbar`/`notifications`/`cpu`…
+modules, the `layout` action, hot reload (T26), preview sample values for the settings app.

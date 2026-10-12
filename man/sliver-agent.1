@@ -128,12 +128,17 @@ Hot reload of the configuration
 .RB ( SIGUSR2 ,
 inotify),
 .B SIGUSR1
-and the public D\-Bus API in the running agent are still being wired up.
-Until then,
+are still being wired up.
+Of the
 .BR sliverctl (1)
-commands other than
-.B config
-report that the agent isn't running.
+control commands,
+.BR layout ,
+.BR profile ,
+.BR reload ,
+.BR show / hide / toggle
+of single modules and
+.B update
+are not supported yet.
 .SH SEE ALSO
 .BR sliverctl (1),
 .BR sliver\-config (5),

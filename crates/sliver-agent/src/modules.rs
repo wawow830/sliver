@@ -30,6 +30,8 @@ pub struct World {
     pub context: Context,
     /// Latest output of each user module (`custom/*` with `exec`), by module key.
     pub outputs: HashMap<String, Output>,
+    /// What apps publish for the App controls / Status items placeholders.
+    pub published: crate::published::Published,
 }
 
 impl World {
@@ -41,6 +43,7 @@ impl World {
             desktop: DesktopState::default(),
             context: Context::new(),
             outputs: HashMap::new(),
+            published: Default::default(),
         }
     }
 }
@@ -91,6 +94,15 @@ pub struct Cell {
     pub checked: bool,
     /// This cell is the handle of a drawer group: tapping it opens/closes the group.
     pub drawer: Option<Drawer>,
+    /// `:disabled`.
+    pub disabled: bool,
+    /// Inline colours (published items' `fg`/`bg`).
+    pub foreground: Option<sliver_render::Color>,
+    pub background: Option<sliver_render::Color>,
+    /// A published item: touches go to the app that owns it.
+    pub published: Option<crate::published::PubRef>,
+    /// Published items: also send the app its event when a user binding handled the gesture.
+    pub pass_through: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -161,6 +173,30 @@ fn cells_in(
                 if drawer {
                     c.classes.push("drawer-child".into());
                 }
+            }
+            continue;
+        }
+        if m.id.kind == "app-controls" || m.id.kind == "status-items" {
+            let start = out.len();
+            let p = &world.published;
+            if m.id.kind == "app-controls" {
+                if let Some(ctx) = &p.app {
+                    crate::published::cells(ctx, "app", true, icons, icon_size, out);
+                }
+            } else {
+                for ctx in &p.status {
+                    crate::published::cells(ctx, "status", false, icons, icon_size, out);
+                }
+            }
+            // The placeholder's own classes and user bindings apply to every item in it
+            // (a user `on-*` replaces the app's event unless `pass-through`, api.md §5).
+            let on: Vec<(Gesture, Action)> =
+                m.common.on.iter().map(|(g, a)| (*g, a.clone())).collect();
+            for c in &mut out[start..] {
+                c.classes.extend(m.classes.iter().cloned());
+                c.on = on.clone();
+                c.pass_through = m.common.pass_through;
+                c.key = format!("{prefix}{}", c.key);
             }
             continue;
         }
@@ -523,6 +559,11 @@ fn cell(
         pressed: false,
         checked: sp.checked,
         // A collapsed slider opens like a drawer handle and closes on its own.
+        disabled: false,
+        foreground: None,
+        background: None,
+        published: None,
+        pass_through: false,
         drawer: (collapsed_slider
             || m.id.kind.ends_with("/slider") && ui.expanded && is_collapsible(m))
         .then(|| Drawer {
