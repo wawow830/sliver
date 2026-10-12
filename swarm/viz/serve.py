@@ -4,11 +4,13 @@
     swarm viz [--port 7777] [--host 127.0.0.1]
 
 GET /                 the page
-GET /api/snapshot     peers (with live agent status, cost, context, current activity), board, stats
+GET /api/snapshot     peers (live status, cost, context, current activity, busy intervals, lines
+                      written), board, feature progress, stats
 GET /api/stream       SSE: one `history` event, then every new channel/inbox event as it happens
 GET /font/<file>.otf  Red Hat Display/Text from this machine, so LAN viewers get the same type
 """
 import argparse, json, re, subprocess, threading, time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -134,7 +136,8 @@ class Live:
                 pass
         commits = git("rev-list", "--count", "origin/main", cwd=MAIN).strip()
         crates = len([l for l in git("ls-tree", "-d", "--name-only", "origin/main:crates", cwd=MAIN).splitlines() if l])
-        return {"loc": loc, "commits": int(commits or 0), "crates": crates}
+        return {"loc": loc, "commits": int(commits or 0), "crates": crates,
+                "lines": lines_by_peer(), "features": feature_progress()}
 
     def loop(self):
         while True:
@@ -164,15 +167,68 @@ class Live:
             time.sleep(3)
 
 
+def lines_by_peer():
+    """Lines added/removed on main per peer, from the `Swarm-Peer:` commit trailer."""
+    out, who = {}, None
+    log = git("log", "origin/main", "--numstat", "--format=@%(trailers:key=Swarm-Peer,valueonly,separator=)", cwd=MAIN)
+    for line in log.splitlines():
+        if line.startswith("@"):
+            who = line[1:].strip() or None
+            continue
+        parts = line.split("\t")
+        if not who or len(parts) != 3 or parts[0] == "-" or parts[2].endswith("Cargo.lock"):
+            continue
+        d = out.setdefault(who, {"added": 0, "removed": 0, "commits": 0})
+        d["added"] += int(parts[0]); d["removed"] += int(parts[1])
+    for line in git("log", "origin/main", "--format=%(trailers:key=Swarm-Peer,valueonly,separator=)", cwd=MAIN).splitlines():
+        if line.strip():
+            out.setdefault(line.strip(), {"added": 0, "removed": 0, "commits": 0})["commits"] += 1
+    return out
+
+
+def feature_progress():
+    """Per-tier feature status from docs/features.md, if its tables have a Status column
+    (done / partial / anything else = not yet). None until the swarm adds one."""
+    text = git("show", "origin/main:docs/features.md", cwd=MAIN)
+    tiers, cols = {}, None
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            cols = None
+            continue
+        cells = [c.strip().strip("*").strip() for c in line.strip().strip("|").split("|")]
+        if cols is None:
+            low = [c.lower() for c in cells]
+            cols = (low.index("tier"), low.index("status")) if "tier" in low and "status" in low else False
+            continue
+        if not cols or set(line) <= set("|-: "):
+            continue
+        t, s = cols
+        if max(t, s) >= len(cells):
+            continue
+        m = re.search(r"P(\d)", cells[t])
+        if not m:
+            continue
+        d = tiers.setdefault(f"P{m.group(1)}", {"done": 0, "partial": 0, "total": 0})
+        d["total"] += 1
+        st = cells[s].lower()
+        if st.startswith("done") or st.startswith("shipped"):
+            d["done"] += 1
+        elif st.startswith("partial") or st.startswith("in progress"):
+            d["partial"] += 1
+    return tiers or None
+
+
 LIVE = None
 SESSIONS = Path.home() / ".pi" / "agent" / "sessions"
+BUSY_GAP = 150   # seconds without any agent step that end a stretch of work
 
 
 class Usage:
     """Per-agent spend and context, read incrementally from pi's session logs."""
 
     def __init__(self):
-        self.files = {}   # path -> [offset, cost, last_ctx_tokens]
+        self.files = {}   # path -> [offset, cost, last_ctx_tokens, busy intervals]
+        self.busy = {}    # worktree -> merged [[start, end], ...] across its session files
 
     def of(self, worktree, model=""):
         if not worktree:
@@ -180,9 +236,9 @@ class Usage:
         d = SESSIONS / ("--" + str(worktree).strip("/").replace("/", "-") + "--")
         if not d.is_dir():
             return None, None
-        total, ctx, newest = 0.0, None, -1
+        total, ctx, newest, spans = 0.0, None, -1, []
         for f in d.glob("*.jsonl"):
-            off, cost, last = self.files.get(f, [0, 0.0, None])
+            off, cost, last, busy = self.files.get(f, [0, 0.0, None, []])
             try:
                 with open(f, "rb") as fh:
                     fh.seek(off)
@@ -191,21 +247,47 @@ class Usage:
                 continue
             end = chunk.rfind(b"\n") + 1
             for line in chunk[:end].splitlines():
-                if b'"usage"' not in line:
+                if not line.startswith(b'{"type":"message"'):
                     continue
                 try:
-                    u = json.loads(line).get("message", {}).get("usage") or {}
+                    rec = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                t = stamp(rec.get("timestamp"))
+                if t:   # every step the agent takes extends its current stretch of work
+                    if busy and t - busy[-1][1] <= BUSY_GAP:
+                        busy[-1][1] = max(busy[-1][1], t)
+                    else:
+                        busy.append([t, t])
+                u = (rec.get("message") or {}).get("usage")
+                if not u:
                     continue
                 cost += (u.get("cost") or {}).get("total", 0) or 0
                 last = (u.get("input", 0) or 0) + (u.get("cacheRead", 0) or 0) + (u.get("cacheWrite", 0) or 0)
-            self.files[f] = [off + end, cost, last]
+            self.files[f] = [off + end, cost, last, busy]
             total += cost
+            spans += busy
             mt = f.stat().st_mtime
             if mt > newest and last is not None:
                 newest, ctx = mt, last
+        merged = []
+        for s, e in sorted(spans):
+            if merged and s - merged[-1][1] <= BUSY_GAP:
+                merged[-1][1] = max(merged[-1][1], e)
+            else:
+                merged.append([s, e])
+        self.busy[str(worktree)] = [[round(s), round(e)] for s, e in merged]
         window = 1_000_000 if re.search(r"-5(-\d)?$", model or "") else 200_000
         return round(total, 2), (round(100 * ctx / window, 1) if ctx else None)
+
+
+def stamp(iso):
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 USAGE = Usage()
@@ -233,6 +315,8 @@ def snapshot():
             "name": name, "status": p.get("status", "active"), "model": p.get("model", ""),
             "knows": p.get("knows", ""), "joined": p.get("joined", 0), "spawned_by": p.get("spawned_by"),
             "tasks": [{"id": t["id"], "title": t["title"]} for t in owned],
+            "busy": USAGE.busy.get(str(p.get("worktree")), []),
+            "lines": (LIVE.repo.get("lines") or {}).get(name),
             **live,
         })
     peers.sort(key=lambda p: p["joined"])

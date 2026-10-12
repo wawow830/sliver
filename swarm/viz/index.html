@@ -58,6 +58,7 @@ h1 { font: 500 44px/1.12 var(--display); letter-spacing: -0.02em; margin: 0 0 16
 }
 .name { font: 600 21px/1.25 var(--display); color: var(--c); }
 .task { font-size: 15px; line-height: 1.6; color: var(--quiet); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task .st { color: var(--ink); font-weight: 500; }
 .cost { font-size: 15px; line-height: 1.6; color: var(--quiet); font-variant-numeric: tabular-nums; text-align: right; }
 .thought {
   grid-column: 2 / 4; margin: 2px 0 0; max-width: 70ch;
@@ -81,8 +82,37 @@ h1 { font: 500 44px/1.12 var(--display); letter-spacing: -0.02em; margin: 0 0 16
 }
 .empty { color: var(--quiet); font-size: 15px; }
 
+/* progress over time */
+.section { margin-top: 88px; }
+.section h2, .lower h2 { font: 600 17px/1.3 var(--display); margin: 0 0 6px; }
+.sum { margin: 0 0 26px; max-width: 72ch; font-size: 16px; color: var(--quiet); }
+#timeline { display: block; width: 100%; height: 300px; cursor: crosshair; }
+.read { margin: 12px 0 0; min-height: 1.5em; font-size: 14px; color: var(--quiet); }
+
+/* who did what, and how far along */
+.lower { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 72px; align-items: start; margin-top: 72px; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; font-variant-numeric: tabular-nums; margin-top: 14px; }
+th { font-weight: 500; font-size: 14px; color: var(--quiet); text-align: right; padding: 0 0 10px 20px; vertical-align: bottom; }
+td { text-align: right; padding: 9px 0 9px 20px; border-top: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; padding-left: 0; }
+td.n { font: 600 17px/1.2 var(--display); color: var(--c); }
+tfoot td { font-weight: 500; border-top: 1.5px solid var(--ink); }
+.bar { display: inline-block; height: 4px; margin-right: 10px; vertical-align: middle; border-radius: 2px; background: var(--c); }
+.less { color: var(--quiet); }
+.tier { margin: 14px 0 18px; }
+.tier .lab { display: flex; justify-content: space-between; gap: 12px; font-size: 15px; }
+.tier .lab span { color: var(--quiet); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.track { display: flex; height: 6px; margin-top: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.track .d { background: var(--ink); } .track .p { background: #8d968f; }
+.note { font-size: 14px; color: var(--quiet); margin: 10px 0 0; }
+.lower h3 { font: 600 15px/1.3 var(--display); margin: 30px 0 8px; }
+.tasks { list-style: none; margin: 0; padding: 0; }
+.tasks li { font-size: 15px; padding: 5px 0; overflow-wrap: anywhere; }
+.tasks b { font-weight: 500; color: var(--c); }
+
 @media (max-width: 1100px) {
-  .main { grid-template-columns: 1fr; gap: 40px; }
+  .main, .lower { grid-template-columns: minmax(0, 1fr); gap: 40px; }
   :root { --arcs: 160px; }
 }
 @media (max-width: 680px) {
@@ -123,6 +153,28 @@ h1 { font: 500 44px/1.12 var(--display); letter-spacing: -0.02em; margin: 0 0 16
     <section class="feed" aria-live="polite">
       <h2>Latest messages</h2>
       <ol id="feed"><li class="empty">Waiting for the first message.</li></ol>
+    </section>
+  </div>
+
+  <section class="section" aria-labelledby="progH">
+    <h2 id="progH">Progress</h2>
+    <p class="sum" id="progSum"></p>
+    <canvas id="timeline" role="img" aria-label="Tasks found and done over time, and when each agent was working"></canvas>
+    <p class="read" id="tlRead"></p>
+  </section>
+
+  <div class="lower">
+    <section aria-labelledby="whoH">
+      <h2 id="whoH">Who did what</h2>
+      <div class="scroll"><table id="who"></table></div>
+    </section>
+    <section aria-labelledby="goalH">
+      <h2 id="goalH">Toward the goal</h2>
+      <div id="tiers"></div>
+      <h3>Being worked on</h3>
+      <ol class="tasks" id="doing"></ol>
+      <h3>Up next</h3>
+      <ol class="tasks" id="next"></ol>
     </section>
   </div>
 </div>
@@ -189,11 +241,12 @@ function row(name) {
   const el = document.createElement("article");
   el.className = "row"; el.tabIndex = 0; el.dataset.state = "idle";
   el.style.setProperty("--c", color(name));
-  el.innerHTML = `<div class="name"></div><div class="task"></div><div class="cost"></div><p class="thought"></p>`;
+  el.innerHTML = `<div class="name"></div><div class="task"><span class="st"></span><span class="tt"></span></div><div class="cost"></div><p class="thought"></p>`;
   el.querySelector(".name").textContent = label(name);
   const box = $("rows"), you = rows.get("human");
   if (you && name !== "human") box.insertBefore(el, you.el); else box.appendChild(el);
   r = { name, el, nameEl: el.querySelector(".name"), task: el.querySelector(".task"),
+        st: el.querySelector(".st"), tt: el.querySelector(".tt"),
         cost: el.querySelector(".cost"), thought: el.querySelector(".thought") };
   for (const ev of ["mouseenter", "focus"]) el.addEventListener(ev, () => { hover = name; kick(); });
   for (const ev of ["mouseleave", "blur"]) el.addEventListener(ev, () => { if (hover === name) hover = null; kick(); });
@@ -201,23 +254,31 @@ function row(name) {
   return r;
 }
 function set(el, text) { if (el.textContent !== text) el.textContent = text; }
+// The task line: a plain status word, then what it's about.
+function setTask(r, word, rest) { set(r.st, word); set(r.tt, rest ? (word ? " " : "") + rest : ""); }
 
 function liveRow(p) {
   const r = row(p.name);
   r.el.classList.remove("unborn");
+  // What the agent is really doing (herdr) wins over the flag it set on the board.
   const state = p.status === "waiting" || p.agent === "blocked" ? "waiting"
-    : p.status === "resting" ? "resting"
     : !p.agent || p.agent === "absent" ? "absent"
-    : p.agent === "working" ? "working" : "idle";
+    : p.agent === "working" ? "working"
+    : p.status === "resting" ? "resting" : "idle";
   r.el.dataset.state = state;
-  const t = p.tasks[0];
-  set(r.task, t ? t.title : state === "resting" ? "Resting until there's new work" : state === "absent" ? "Offline" : "Between tasks");
+  const t = p.tasks[0], title = t ? t.title : "";
+  if (state === "working") setTask(r, "Working", title ? "on " + title : "between tasks");
+  else if (state === "waiting") setTask(r, "Waiting for you", title ? "on " + title : "");
+  else if (state === "resting") setTask(r, "Resting", "until there's new work");
+  else if (state === "absent") setTask(r, "Offline", "");
+  else if (snap && snap.paused) setTask(r, "Paused", title ? "and still owns " + title : "");
+  else setTask(r, "Idle", title ? "but still owns " + title : "between tasks");
   r.task.title = t ? `${t.id}: ${t.title}` : "";
   set(r.cost, p.cost != null ? `$${p.cost.toFixed(2)}` : "");
   r.cost.title = p.ctx != null ? `${Math.round(p.ctx)}% of its memory is full` : "";
   let thought;
   if (state === "waiting") thought = "Waiting for your answer.";
-  else if (state === "working") thought = p.activity || (p.cmd ? `Running ${p.cmd}` : "Working.");
+  else if (state === "working") thought = p.activity || (p.cmd ? `Running ${p.cmd}` : "");
   else thought = p.activity || "";
   set(r.thought, thought);
 }
@@ -225,8 +286,8 @@ function youRow(humans, evs) {
   const r = row("human");
   r.el.dataset.state = humans.length ? "working" : "idle";
   const answered = evs.filter((e) => e.kind === "human" && who(e.by) === "human" && /answered/.test(e.text)).length;
-  set(r.task, humans.length ? `${humans.length} question${humans.length > 1 ? "s" : ""} waiting. Answer with swarm human.`
-                            : "Nothing needs you right now");
+  if (humans.length) setTask(r, `${humans.length} question${humans.length > 1 ? "s" : ""} waiting`, "for you. Answer with swarm human.");
+  else setTask(r, "", "Nothing needs you right now");
   set(r.cost, "");
   set(r.thought, humans.length ? humans.map((h) => h.text).join("  ") : `You've answered ${answered} question${answered === 1 ? "" : "s"} so far.`);
 }
@@ -289,10 +350,11 @@ function story() {
     lead = `Replaying ${duration(replay.t1 - t0)} in under a minute. By ${clock(replay.at)} they had landed ` +
            `${int(c.landed)} change${c.landed === 1 ? "" : "s"} and sent each other ${int(c.msgs)} message${c.msgs === 1 ? "" : "s"}.`;
   } else if (snap) {
-    const c = count(events);
+    const c = count(events), b = tally(events);
     lead = `They split up the work themselves and message each other directly. In ${duration(Date.now() / 1000 - t0)} ` +
-           `they've written ${int(snap.repo.loc || 0)} lines of Rust, landed ${int(c.landed)} changes and sent each other ` +
-           `${int(c.msgs)} messages. So far it has cost $${(snap.cost || 0).toFixed(2)}.`;
+           `they've finished ${int(b.done)} of the ${int(b.found)} tasks they set themselves, written ${int(snap.repo.loc || 0)} ` +
+           `lines of Rust, landed ${int(c.landed)} changes and sent each other ${int(c.msgs)} messages. ` +
+           `So far it has cost $${(snap.cost || 0).toFixed(2)}.`;
   }
   if (lead) set($("lead"), lead);
 }
@@ -397,6 +459,238 @@ function send(e, dur = 1300) {
   kick();
 }
 
+// ------------------------------------------------------------------ progress over time
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const now = () => (replay ? replay.at : Date.now() / 1000);
+const agents = () => (snap ? snap.peers.map((p) => p.name) : joinOrder.slice());
+const peer = (n) => (snap ? snap.peers.find((p) => p.name === n) : null) || {};
+const taskId = (t) => (/T\d+/.exec(t) || [""])[0];
+
+// Tasks found and done, as step series, from the channel.
+function tally(evs) {
+  const foundS = [], doneS = [], doneIds = new Set();
+  let f = 0;
+  for (const e of evs) {
+    if (e.kind !== "task") continue;
+    if (/^added T\d+/.test(e.text)) foundS.push([e.at, ++f]);
+    else if (/^dropped T\d+/.test(e.text)) foundS.push([e.at, --f]);
+    else if (/^done T\d+/.test(e.text) && !doneIds.has(taskId(e.text))) { doneIds.add(taskId(e.text)); doneS.push([e.at, doneIds.size]); }
+  }
+  return { found: f, done: doneIds.size, foundS, doneS };
+}
+function pauses(evs, until) {
+  const out = []; let from = null;
+  for (const e of evs) {
+    if (e.kind !== "system") continue;
+    if (/^swarm paused/.test(e.text) && from === null) from = e.at;
+    else if (/^swarm resumed/.test(e.text) && from !== null) { out.push([from, e.at]); from = null; }
+  }
+  if (from !== null) out.push([from, until]);
+  return out;
+}
+const overlap = (spans, a, b) => spans.reduce((s, [x, y]) => s + Math.max(0, Math.min(y, b) - Math.max(x, a)), 0);
+function hm(sec) {
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h ? `${h} h ${m} min` : `${m} min`;
+}
+const plural = (n, w) => `${int(n)} ${w}${n === 1 ? "" : "s"}`;
+
+const tl = $("timeline"), tctx = tl.getContext("2d");
+let tlHover = null, tlPending = false, tlGeo = null;
+function kickTL() { if (!tlPending) { tlPending = true; requestAnimationFrame(drawTimeline); } }
+new ResizeObserver(kickTL).observe(tl);
+
+function drawTimeline() {
+  tlPending = false;
+  if (!events.length) return;
+  const ink = css("--ink"), quiet = css("--quiet"), line = css("--line");
+  const names = agents(), evs = visible(), all = tally(events), b = tally(evs);
+  const W = tl.clientWidth, TOP = 150, GAP = 30, LANE = 26, AXIS = 26;
+  const H = TOP + GAP + names.length * LANE + AXIS, dpr = devicePixelRatio || 1;
+  if (tl.style.height !== H + "px") tl.style.height = H + "px";
+  if (tl.width !== Math.round(W * dpr) || tl.height !== Math.round(H * dpr)) { tl.width = Math.round(W * dpr); tl.height = Math.round(H * dpr); }
+  const c = tctx;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+
+  const t0 = events[0].at, tEnd = replay ? replay.t1 : Date.now() / 1000, until = now();
+  const GUT = W < 520 ? 52 : 70, RIGHT = 84;
+  const X = (t) => GUT + ((t - t0) / Math.max(1, tEnd - t0)) * (W - GUT - RIGHT);
+  const maxY = Math.max(1, ...all.foundS.map((p) => p[1]));
+  const Y = (v) => TOP - 6 - (v / maxY) * (TOP - 26);
+  const laneY = (i) => TOP + GAP + i * LANE + LANE / 2;
+  tlGeo = { X, t0, tEnd, until, GUT, RIGHT, W, names };
+
+  // time when the swarm was paused
+  c.font = `400 12px ${css("--text")}`;
+  for (const [a, z] of pauses(evs, until)) {
+    const x1 = X(a), x2 = X(Math.min(z, until));
+    c.fillStyle = "rgba(23,32,27,0.05)"; c.fillRect(x1, 0, x2 - x1, H - AXIS);
+    if (x2 - x1 > 54) { c.fillStyle = quiet; c.textAlign = "left"; c.textBaseline = "top"; c.fillText("Paused", x1 + 8, 4); }
+  }
+
+  // hour marks
+  const span = (tEnd - t0) / 3600;
+  const step = 60 * (span <= 1.5 ? 15 : span <= 4 ? 30 : span <= 10 ? 60 : span <= 24 ? 120 : 360);
+  const tz = new Date(t0 * 1000).getTimezoneOffset() * 60;
+  c.textAlign = "center"; c.textBaseline = "alphabetic";
+  for (let t = Math.ceil((t0 - tz) / step) * step + tz; t <= tEnd; t += step) {
+    const x = X(t);
+    c.fillStyle = line; c.fillRect(Math.round(x), TOP + 4, 1, H - AXIS - TOP - 4);
+    c.fillStyle = quiet; c.fillText(clock(t), x, H - 6);
+  }
+
+  // tasks found (grey) and done (ink), as steps
+  const steps = (pts, v0) => { const out = [[t0, v0]]; for (const [t, v] of pts) if (t <= until) out.push([t, v]); return out; };
+  const path = (pts) => { c.beginPath(); let py = null; pts.forEach(([t, v], i) => { const x = X(t), y = Y(v); if (i === 0) c.moveTo(x, y); else { c.lineTo(x, py); c.lineTo(x, y); } py = y; }); c.lineTo(X(until), py); };
+  const fs = steps(all.foundS, 0), ds = steps(all.doneS, 0);
+  c.fillStyle = line; c.fillRect(GUT, Y(0), X(until) - GUT, 1);
+  path(ds); c.lineTo(X(until), Y(0)); c.lineTo(GUT, Y(0)); c.closePath();
+  c.fillStyle = "rgba(23,32,27,0.09)"; c.fill();
+  path(fs); c.strokeStyle = quiet; c.lineWidth = 1.5; c.lineJoin = "round"; c.stroke();
+  path(ds); c.strokeStyle = ink; c.lineWidth = 2; c.stroke();
+  const fy = Y(b.found), dy0 = Y(b.done), dy = Math.abs(fy - dy0) < 15 ? fy + 15 : dy0;
+  c.textAlign = "left"; c.textBaseline = "middle"; c.font = `500 13px ${css("--text")}`;
+  c.fillStyle = quiet; c.fillText(`${b.found} found`, X(until) + 8, fy);
+  c.fillStyle = ink; c.fillText(`${b.done} done`, X(until) + 8, dy);
+  c.fillStyle = quiet; c.font = `400 12px ${css("--text")}`; c.textAlign = "right";
+  c.fillText("Tasks", GUT - 12, Y(maxY));
+
+  // one lane per agent: when it was working, and a tick per change it landed
+  names.forEach((n, i) => {
+    const y = laneY(i), col = color(n);
+    c.textAlign = "right"; c.textBaseline = "middle"; c.font = `600 13px ${css("--display")}`;
+    c.fillStyle = col; c.fillText(n, GUT - 12, y);
+    c.fillStyle = line; c.fillRect(GUT, y, Math.max(0, X(until) - GUT), 1);
+    c.fillStyle = col;
+    for (const [s, e] of peer(n).busy || []) {
+      if (s > until) break;
+      const x1 = X(s), x2 = Math.max(x1 + 2, X(Math.min(e, until)));
+      c.beginPath(); c.roundRect(x1, y - 4, x2 - x1, 8, 4); c.fill();
+    }
+    c.fillStyle = ink;
+    const tw = W < 700 ? 1 : 2, th = W < 700 ? 12 : 16;
+    for (const e of evs) if (e.kind === "land" && who(e.by) === n) c.fillRect(Math.round(X(e.at)) - tw / 2, y - th / 2, tw, th);
+  });
+
+  // now, or the replay playhead, and the hover guide
+  if (replay) { c.fillStyle = ink; c.fillRect(Math.round(X(until)), 0, 1.5, H - AXIS); }
+  if (tlHover != null && tlHover <= until) {
+    c.fillStyle = "rgba(23,32,27,0.45)"; c.fillRect(Math.round(X(tlHover)), 0, 1, H - AXIS);
+  }
+  readout();
+}
+
+function readout() {
+  const el = $("tlRead");
+  if (tlHover == null || !tlGeo) {
+    set(el, "The dark line is tasks done, the grey one is tasks found. Bars show when each agent was working, and each tick is a change it landed.");
+    return;
+  }
+  const t = tlHover, upto = events.filter((e) => e.at <= t), b = tally(upto);
+  const busy = tlGeo.names.filter((n) => (peer(n).busy || []).some(([s, e]) => s <= t && t <= e));
+  const paused = pauses(upto, Infinity).some(([a, z]) => a <= t && t <= z);
+  const landed = upto.filter((e) => e.kind === "land").length;
+  const doing = paused ? "The swarm was paused." : busy.length ? `${busy.join(", ")} ${busy.length === 1 ? "was" : "were"} working.` : "Nobody was working.";
+  set(el, `At ${clock(t)}: ${b.done} of ${b.found} tasks done and ${plural(landed, "change")} landed. ${doing}`);
+}
+tl.addEventListener("mousemove", (m) => {
+  if (!tlGeo) return;
+  const g = tlGeo, x = m.offsetX;
+  const t = g.t0 + ((x - g.GUT) / (g.W - g.GUT - g.RIGHT)) * (g.tEnd - g.t0);
+  tlHover = t >= g.t0 && t <= g.until ? t : null; kickTL();
+});
+tl.addEventListener("mouseleave", () => { tlHover = null; kickTL(); });
+
+function progressSummary() {
+  if (!events.length) return;
+  const evs = visible(), b = tally(evs), until = now(), t0 = events[0].at;
+  const start = b.foundS.filter(([t]) => t <= t0 + 300).length;
+  const working = until - t0 - overlap(pauses(evs, until), t0, until);
+  const landed = evs.filter((e) => e.kind === "land").length;
+  const doing = replay ? null : (snap ? snap.tasks.filter((t) => t.status === "claimed").length : 0);
+  let s = `${int(b.done)} of ${int(b.found)} tasks done` + (doing != null ? `, ${int(doing)} in progress.` : ".");
+  if (b.found > start) s += ` The board started with ${start} tasks. The agents added the other ${int(b.found - start)} as they found more to do.`;
+  if (working > 600 && landed) s += ` While the swarm was running, they landed about ${Math.round(landed / (working / 3600))} changes an hour.`;
+  set($("progSum"), s);
+  tl.setAttribute("aria-label", s);
+}
+
+let whoKey = "";
+function renderWho() {
+  const evs = visible(), until = now(), names = agents();
+  const rowsData = names.map((n) => {
+    const p = peer(n);
+    const busy = overlap(p.busy || [], 0, until);
+    const landed = evs.filter((e) => e.kind === "land" && who(e.by) === n).length;
+    const tasks = new Set(evs.filter((e) => e.kind === "task" && who(e.by) === n && /^done T\d+/.test(e.text)).map((e) => taskId(e.text))).size;
+    return { n, busy, landed, tasks, lines: replay ? null : p.lines, cost: replay ? null : p.cost };
+  });
+  const key = JSON.stringify(rowsData.map((r) => [r.n, Math.round(r.busy / 60), r.landed, r.tasks, r.lines, r.cost]));
+  if (key === whoKey) return;
+  whoKey = key;
+  const most = Math.max(1, ...rowsData.map((r) => r.landed));
+  const sum = (k) => rowsData.reduce((a, r) => a + (r[k] || 0), 0);
+  const lines = (l) => (l ? `${int(l.added)} <span class="less">−${int(l.removed)}</span>` : "");
+  const money = (v) => (v != null ? `$${v.toFixed(2)}` : "");
+  const per = (cost, n) => (cost != null && n ? `$${(cost / n).toFixed(2)}` : "");
+  const tot = { added: rowsData.reduce((a, r) => a + (r.lines ? r.lines.added : 0), 0), removed: rowsData.reduce((a, r) => a + (r.lines ? r.lines.removed : 0), 0) };
+  const costSum = replay ? null : sum("cost");
+  $("who").innerHTML =
+    `<thead><tr><th scope="col">Agent</th><th scope="col">Time working</th><th scope="col">Tasks done</th>` +
+    `<th scope="col">Changes landed</th><th scope="col" title="Lines added and removed in every file they changed, docs included">Lines written</th><th scope="col">Cost</th><th scope="col">Per change</th></tr></thead><tbody>` +
+    rowsData.map((r) =>
+      `<tr style="--c:${color(r.n)}"><td class="n">${escape(r.n)}</td><td>${hm(r.busy)}</td><td>${r.tasks}</td>` +
+      `<td><span class="bar" style="width:${Math.round((48 * r.landed) / most)}px"></span>${r.landed}</td>` +
+      `<td>${lines(r.lines)}</td><td>${money(r.cost)}</td><td>${per(r.cost, r.landed)}</td></tr>`).join("") +
+    `</tbody><tfoot><tr><td>All agents</td><td>${hm(sum("busy"))}</td><td>${sum("tasks")}</td><td>${sum("landed")}</td>` +
+    `<td>${replay ? "" : lines(tot)}</td><td>${money(costSum)}</td><td>${per(costSum, sum("landed"))}</td></tr></tfoot>`;
+}
+
+const TIERS = { P0: "Parity with tiny-dfr", P1: "First real release", P2: "Everything in the goal", P3: "Polish" };
+let goalKey = "";
+function renderGoal() {
+  if (!snap) return;
+  const f = snap.repo && snap.repo.features;
+  const evs = visible();
+  // which tasks are open or being worked on: live from the board, in replay from the channel
+  let doing, next;
+  if (replay) {
+    const st = new Map();
+    for (const e of evs) {
+      if (e.kind !== "task") continue;
+      const id = taskId(e.text), title = e.text.replace(/^\w+ T\d+:?\s*/, "").replace(/ — .*$/s, "");
+      if (/^added/.test(e.text)) st.set(id, { id, title, status: "open" });
+      const t = st.get(id); if (!t) continue;
+      if (/^claimed/.test(e.text)) Object.assign(t, { status: "claimed", owner: who(e.by) });
+      else if (/^released/.test(e.text)) Object.assign(t, { status: "open", owner: null });
+      else if (/^(done|dropped)/.test(e.text)) t.status = "closed";
+    }
+    doing = [...st.values()].filter((t) => t.status === "claimed");
+    next = [...st.values()].filter((t) => t.status === "open");
+  } else {
+    doing = snap.tasks.filter((t) => t.status === "claimed");
+    next = snap.tasks.filter((t) => t.status === "open");
+  }
+  const byId = (a, b) => parseInt(a.id.slice(1)) - parseInt(b.id.slice(1));
+  doing.sort(byId); next.sort(byId);
+  const key = JSON.stringify([f, doing.map((t) => t.id + t.owner), next.map((t) => t.id)]);
+  if (key === goalKey) return;
+  goalKey = key;
+  $("tiers").innerHTML = f
+    ? Object.keys(TIERS).filter((k) => f[k]).map((k) => {
+        const d = f[k], pct = (v) => (100 * v) / Math.max(1, d.total);
+        return `<div class="tier"><div class="lab">${TIERS[k]}<span>${d.done} of ${d.total} features${d.partial ? `, ${d.partial} partly` : ""}</span></div>` +
+               `<div class="track"><i class="d" style="width:${pct(d.done)}%"></i><i class="p" style="width:${pct(d.partial)}%"></i></div></div>`;
+      }).join("")
+    : `<p class="note">Feature-by-feature progress shows up here once docs/features.md tracks the status of each feature.</p>`;
+  const li = (t) => `<li${t.owner ? ` style="--c:${color(t.owner)}"` : ""}>${t.owner ? `<b>${escape(t.owner)}</b> ` : ""}${escape(t.title)}</li>`;
+  $("doing").innerHTML = doing.length ? doing.map(li).join("") : `<li class="empty">Nothing right now.</li>`;
+  $("next").innerHTML = next.length ? next.slice(0, 5).map(li).join("") + (next.length > 5 ? `<li class="empty">and ${next.length - 5} more</li>` : "")
+                                    : `<li class="empty">The board is empty. The agents add tasks as they find gaps.</li>`;
+}
+function renderProgress() { progressSummary(); renderWho(); renderGoal(); kickTL(); }
+document.fonts && document.fonts.ready.then(kickTL);
+
 // ------------------------------------------------------------------ data
 async function refresh() {
   let s;
@@ -405,11 +699,13 @@ async function refresh() {
   if (replay) return;
   const st = $("status");
   st.className = "status" + (s.paused ? " paused" : "");
-  set($("statusText"), s.paused ? "Paused" : "Live");
+  const working = s.peers.filter((p) => p.agent === "working").length;
+  set($("statusText"), s.paused ? (working ? `Paused, ${working} still finishing up` : "Paused")
+                                : `Live, ${working} of ${s.peers.length} working`);
   for (const p of s.peers) liveRow(p);
   for (const [name, r] of rows) if (name !== "human" && !s.peers.some((p) => p.name === name)) { r.el.remove(); rows.delete(name); }
   youRow(s.humans, events);
-  story(); renderFeed(events, Date.now() / 1000); kick();
+  story(); renderFeed(events, Date.now() / 1000); renderProgress(); kick();
 }
 function ingest(e) {
   events.push(e);
@@ -425,7 +721,7 @@ function connect() {
   });
   es.onmessage = (m) => {
     const e = JSON.parse(m.data); ingest(e);
-    if (live && !replay) { send(e); renderFeed(events, Date.now() / 1000); story(); }
+    if (live && !replay) { send(e); renderFeed(events, Date.now() / 1000); story(); renderProgress(); }
   };
   es.onerror = () => { es.close(); live = false; setTimeout(connect, 2000); };
 }
@@ -433,6 +729,7 @@ function connect() {
 // ------------------------------------------------------------------ replay
 function startReplay() {
   if (!events.length) return;
+  tlHover = null;
   const t0 = events[0].at, t1 = events[events.length - 1].at, seconds = 50;
   replay = { at: t0, t0, t1, rate: Math.max(1, (t1 - t0) / seconds), started: performance.now(), next: 0 };
   $("status").className = "status replay"; set($("statusText"), "Replay");
@@ -453,11 +750,13 @@ function startReplay() {
       r.el.dataset.state = born.has(name) && busy ? "working" : "idle";
       set(r.thought, born.has(name) && lastEv ? plain(lastEv) : born.has(name) ? "" : "Not here yet.");
       const claimed = seen.filter((e) => e.by === name && e.kind === "task" && /^claimed T\d+: /.test(e.text)).pop();
-      set(r.task, claimed ? claimed.text.replace(/^claimed T\d+: /, "") : "");
+      const title = claimed ? claimed.text.replace(/^claimed T\d+: /, "") : "";
+      if (!born.has(name)) setTask(r, "", "");
+      else setTask(r, busy ? "Working" : "Idle", title ? (busy ? "on " : "but still owns ") + title : "");
     }
     const you = rows.get("human");
-    if (you) { set(you.task, ""); set(you.thought, ""); you.el.dataset.state = "idle"; }
-    story(); renderFeed(seen, replay.at); kick();
+    if (you) { setTask(you, "", ""); set(you.thought, ""); you.el.dataset.state = "idle"; }
+    story(); renderFeed(seen, replay.at); renderProgress(); kick();
     if (replay.at >= replay.t1) { setTimeout(stopReplay, 2500); return; }
     requestAnimationFrame(tick);
   };
