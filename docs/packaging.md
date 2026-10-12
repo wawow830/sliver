@@ -41,7 +41,10 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full rel
 
 ## Upgrades (seen in T94)
 - Upgrading restarts sliverd (`%systemd_postun_with_restart`). If sliverd was start-limited at the
-  time, the transaction still started it once the 60 s window had passed. Since the agent spec fix,
+  time, the upgrade still brings it up: restarting the failed `sliverd.socket` lets a waiting agent
+  connect, which socket-activates sliverd once the 60 s start-limit window has passed (journal,
+  T94). A fresh install starts nothing (no socket, no agent yet), and udev `change` triggers don't
+  start it either: systemd acts on `SYSTEMD_WANTS` only when a device first becomes active. Since the agent spec fix,
   running agents are restarted too (`%systemd_user_postun_with_restart`, in every user manager).
   `%postun` runs from the *old* package, so this works for upgrades away from .263 (737ff05) on.
   The .261 → .263 upgrade still kept the old agent, which reconnected fine.
