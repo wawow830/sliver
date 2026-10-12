@@ -14,6 +14,7 @@
 //! 4. [`panel::damage`] finds what changed since the last frame, and [`panel::blit`] rotates it into
 //!    the panel's native framebuffer layout.
 
+mod anim;
 mod color;
 mod colr;
 mod geometry;
@@ -30,6 +31,6 @@ pub use geometry::{Align, Rect, Sizing, Width, hit_test, solve};
 pub use icon::{BUILTIN_ICONS, Icon, IconError};
 pub use render::{Layout, Renderer};
 pub use scene::{Content, Item, Scene, Zone};
-pub use style::{Diagnostic, Style, Stylesheet};
+pub use style::{Diagnostic, Style, Stylesheet, Timing, Transition, TransitionProp};
 pub use text::{EMBEDDED_FONT_FAMILY, Fonts};
 pub use tiny_skia::Pixmap;

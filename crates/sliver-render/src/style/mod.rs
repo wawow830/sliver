@@ -53,6 +53,9 @@ pub const BUILTIN_THEMES: &[(&str, &str)] = &[
     ("sliver", include_str!("../../assets/themes/sliver.css")),
 ];
 
+mod transition;
+pub use transition::{Timing, Transition, TransitionProp};
+
 /// The computed style of one element.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
@@ -78,6 +81,8 @@ pub struct Style {
     pub min_height: f32,
     /// Space between children: zones in the bar, modules in a zone, icon and label in a module.
     pub gap: f32,
+    /// `transition`: which paint properties animate when this element's style changes.
+    pub transitions: Vec<Transition>,
 }
 
 impl Style {
@@ -99,6 +104,7 @@ impl Style {
             min_width: 0.0,
             min_height: 0.0,
             gap: 0.0,
+            transitions: Vec::new(),
         }
     }
 
@@ -124,6 +130,7 @@ enum Prop {
     MinWidth,
     MinHeight,
     Gap,
+    Transition,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -134,6 +141,7 @@ enum Value {
     Family(Vec<String>),
     Weight(u16),
     Number(f32),
+    Transitions(Vec<Transition>),
     Inherit,
     Initial,
 }
@@ -436,8 +444,7 @@ impl Stylesheet {
             "min-width" => vec![Prop::MinWidth],
             "min-height" => vec![Prop::MinHeight],
             "gap" | "column-gap" => vec![Prop::Gap],
-            // Parsed for forward compatibility (customization.md §7); animations aren't drawn yet.
-            "transition" => return Ok(Vec::new()),
+            "transition" => vec![Prop::Transition],
             _ => {
                 let side = ["top", "right", "bottom", "left"];
                 let sided = |prefix: &str| {
@@ -477,6 +484,9 @@ impl Stylesheet {
             },
             "font-family" => one(Prop::FontFamily, value::font_family(raw).map(Value::Family)),
             "font-weight" => one(Prop::FontWeight, value::font_weight(raw).map(Value::Weight)),
+            "transition" => transition::parse(raw)
+                .map(|t| vec![(Prop::Transition, Value::Transitions(t))])
+                .map_err(ctx),
             "opacity" => one(
                 Prop::Opacity,
                 value::number_or_percent(raw).map(|v| Value::Number(v.clamp(0.0, 1.0))),
@@ -642,6 +652,9 @@ impl Stylesheet {
             parent.min_height,
         );
         s.gap = inherit_if(Prop::Gap, len(get(Prop::Gap), 0.0, 0.0), parent.gap);
+        if let Some(Value::Transitions(t)) = get(Prop::Transition) {
+            s.transitions = t.clone();
+        }
         s
     }
 }

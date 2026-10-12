@@ -60,6 +60,7 @@ struct Styles {
 
 /// Draws scenes. Holds font, glyph, label and style caches, so keep one around.
 pub struct Renderer {
+    anim: crate::anim::Animator,
     fonts: Fonts,
     styles: HashMap<String, Arc<Style>>,
     styles_generation: u64,
@@ -68,6 +69,7 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(fonts: Fonts) -> Renderer {
         Renderer {
+            anim: Default::default(),
             fonts,
             styles: HashMap::new(),
             styles_generation: 0,
@@ -354,7 +356,40 @@ impl Renderer {
     /// Draws the whole scene into `pixmap`, a landscape bar (e.g. 2008x60), and returns the
     /// layout it used.
     pub fn render(&mut self, scene: &Scene, sheet: &Stylesheet, pixmap: &mut Pixmap) -> Layout {
+        self.render_at(scene, sheet, pixmap, std::time::Instant::now())
+    }
+
+    /// When the next frame is due for transitions that are still running, or `None` when
+    /// everything is at rest (then there is nothing to redraw until something changes).
+    pub fn animation_deadline(&self) -> Option<std::time::Instant> {
+        self.anim.deadline()
+    }
+
+    /// Draws without transitions and without touching their state: for variants of a scene that
+    /// must not animate (the "everything pressed" overlay sliverd swaps in).
+    pub fn render_still(
+        &mut self,
+        scene: &Scene,
+        sheet: &Stylesheet,
+        pixmap: &mut Pixmap,
+    ) -> Layout {
+        let saved = std::mem::take(&mut self.anim);
+        let layout = self.render_at(scene, sheet, pixmap, std::time::Instant::now());
+        self.anim = saved;
+        layout
+    }
+
+    /// [`Self::render`] at an explicit time, which is what `transition` interpolates by.
+    /// Re-render at [`Self::animation_deadline`] until it is `None`.
+    pub fn render_at(
+        &mut self,
+        scene: &Scene,
+        sheet: &Stylesheet,
+        pixmap: &mut Pixmap,
+        now: std::time::Instant,
+    ) -> Layout {
         let st = self.compute_styles(scene, sheet);
+        self.anim.begin_frame();
         let layout = self.layout_styled(scene, &st, pixmap.width(), pixmap.height());
         // The panel has no alpha: whatever's transparent shows black.
         pixmap.fill(tiny_skia::Color::BLACK);
@@ -370,8 +405,15 @@ impl Renderer {
         for ((zone, zs), zrect) in scene.zones.iter().zip(&st.zones).zip(&layout.zones) {
             let zone_opacity = bar_opacity * zs.opacity;
             draw_box(pixmap, *zrect, zs, None, zone_opacity);
-            for _ in 0..zone.items.len() {
+            for (ii, _) in zone.items.iter().enumerate() {
                 let ((((item, rect), s), parts), track) = items.next().expect("one rect per item");
+                let key = format!(
+                    "{}/{}",
+                    zone.name.as_deref().unwrap_or(""),
+                    item.id.clone().unwrap_or_else(|| ii.to_string())
+                );
+                let animated = self.anim.apply(&key, s, now);
+                let s = &animated;
                 let opacity = zone_opacity * s.opacity;
                 self.draw_item(item, *rect, s, opacity, pixmap);
                 if let (Content::Slider { value, .. }, Some(parts), Some(track)) =
@@ -381,6 +423,7 @@ impl Renderer {
                 }
             }
         }
+        self.anim.end_frame();
         layout
     }
 

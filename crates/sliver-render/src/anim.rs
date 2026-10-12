@@ -1,0 +1,359 @@
+//! Transitions: when a module's computed style changes, ease its paint properties (`color`,
+//! `background-color`, `border-color`, `opacity`) from where they were to where they are going,
+//! as its `transition` asks.
+//!
+//! The renderer stays a function of (scene, sheet, time): [`Animator`] only remembers, per item,
+//! what each property currently shows. Frames are needed only while something is moving:
+//! [`Animator::deadline`] says when, and is `None` once everything has settled, so an idle bar
+//! costs nothing (invariant 3). Frames come at most every [`FRAME`].
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use crate::Color;
+use crate::style::{Style, Timing, TransitionProp};
+
+/// Minimum time between animation frames (~30 fps): plenty for fades on a 60 px bar, and cheap.
+pub const FRAME: Duration = Duration::from_millis(33);
+
+trait Lerp: Copy + PartialEq {
+    fn lerp(a: Self, b: Self, t: f32) -> Self;
+}
+
+impl Lerp for f32 {
+    fn lerp(a: f32, b: f32, t: f32) -> f32 {
+        a + (b - a) * t
+    }
+}
+
+impl Lerp for Color {
+    /// Straight-alpha sRGB interpolation. A fade from transparent keeps the target's hue
+    /// instead of passing through black.
+    fn lerp(a: Color, b: Color, t: f32) -> Color {
+        let (a, b) = match (a.a, b.a) {
+            (0, _) => (Color { a: 0, ..b }, b),
+            (_, 0) => (a, Color { a: 0, ..a }),
+            _ => (a, b),
+        };
+        let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+        Color {
+            r: mix(a.r, b.r),
+            g: mix(a.g, b.g),
+            b: mix(a.b, b.b),
+            a: mix(a.a, b.a),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Track<T: Lerp> {
+    from: T,
+    to: T,
+    start: Instant,
+    duration: Duration,
+    delay: Duration,
+    timing: Timing,
+}
+
+impl<T: Lerp> Track<T> {
+    fn settled(v: T, now: Instant) -> Track<T> {
+        Track {
+            from: v,
+            to: v,
+            start: now,
+            duration: Duration::ZERO,
+            delay: Duration::ZERO,
+            timing: Timing::Linear,
+        }
+    }
+
+    fn progress(&self, now: Instant) -> f32 {
+        if self.duration.is_zero() {
+            return 1.0;
+        }
+        let begin = self.start + self.delay;
+        if now <= begin {
+            return 0.0;
+        }
+        ((now - begin).as_secs_f32() / self.duration.as_secs_f32()).min(1.0)
+    }
+
+    fn value(&self, now: Instant) -> T {
+        let p = self.progress(now);
+        if p >= 1.0 {
+            self.to
+        } else {
+            T::lerp(self.from, self.to, self.timing.at(p))
+        }
+    }
+
+    fn done(&self, now: Instant) -> bool {
+        self.progress(now) >= 1.0 && now >= self.start + self.delay || self.duration.is_zero()
+    }
+
+    /// The element's style now asks for `to`. Start easing from whatever is showing, using
+    /// the transition spec for this property (`None`: no transition, jump).
+    fn retarget(&mut self, to: T, spec: Option<(Duration, Duration, Timing)>, now: Instant) {
+        if to == self.to {
+            return;
+        }
+        let shown = self.value(now);
+        match spec {
+            Some((duration, delay, timing)) if !(duration + delay).is_zero() => {
+                *self = Track {
+                    from: shown,
+                    to,
+                    start: now,
+                    duration,
+                    delay,
+                    timing,
+                };
+            }
+            _ => *self = Track::settled(to, now),
+        }
+    }
+}
+
+struct ItemAnim {
+    color: Track<Color>,
+    background: Track<Color>,
+    border: Track<Color>,
+    opacity: Track<f32>,
+    seen: bool,
+}
+
+/// Per-item transition state for one [`crate::Renderer`].
+#[derive(Default)]
+pub(crate) struct Animator {
+    items: HashMap<String, ItemAnim>,
+    next: Option<Instant>,
+}
+
+/// The last matching entry wins, as in CSS; `all` matches every property.
+fn spec(style: &Style, prop: TransitionProp) -> Option<(Duration, Duration, Timing)> {
+    style
+        .transitions
+        .iter()
+        .rev()
+        .find(|t| t.prop == prop || t.prop == TransitionProp::All)
+        .map(|t| (t.duration, t.delay, t.timing))
+}
+
+impl Animator {
+    pub fn begin_frame(&mut self) {
+        for a in self.items.values_mut() {
+            a.seen = false;
+        }
+        self.next = None;
+    }
+
+    /// The style to draw for `key` right now, given its computed (target) `style`.
+    pub fn apply(&mut self, key: &str, style: &Arc<Style>, now: Instant) -> Arc<Style> {
+        let target = (
+            style.color,
+            style.background,
+            style.border_color(),
+            style.opacity,
+        );
+        let a = self
+            .items
+            .entry(key.to_string())
+            .or_insert_with(|| ItemAnim {
+                color: Track::settled(target.0, now),
+                background: Track::settled(target.1, now),
+                border: Track::settled(target.2, now),
+                opacity: Track::settled(target.3, now),
+                seen: true,
+            });
+        a.seen = true;
+        a.color
+            .retarget(target.0, spec(style, TransitionProp::Color), now);
+        a.background
+            .retarget(target.1, spec(style, TransitionProp::Background), now);
+        a.border
+            .retarget(target.2, spec(style, TransitionProp::BorderColor), now);
+        a.opacity
+            .retarget(target.3, spec(style, TransitionProp::Opacity), now);
+        let moving = !(a.color.done(now)
+            && a.background.done(now)
+            && a.border.done(now)
+            && a.opacity.done(now));
+        if !moving {
+            return style.clone();
+        }
+        self.next = Some(match self.next {
+            Some(n) => n.min(now + FRAME),
+            None => now + FRAME,
+        });
+        let mut s = (**style).clone();
+        s.color = a.color.value(now);
+        s.background = a.background.value(now);
+        s.border_color = Some(a.border.value(now));
+        s.opacity = a.opacity.value(now);
+        Arc::new(s)
+    }
+
+    /// Forget items that are no longer on the bar.
+    pub fn end_frame(&mut self) {
+        self.items.retain(|_, a| a.seen);
+    }
+
+    /// When the next animation frame is due; `None` when everything is at rest.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.next
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::Transition;
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    fn style(bg: Color, trans: &[Transition]) -> Arc<Style> {
+        let mut s = Style::initial();
+        s.background = bg;
+        s.transitions = trans.to_vec();
+        Arc::new(s)
+    }
+
+    fn fade(prop: TransitionProp, d: u64) -> Transition {
+        Transition {
+            prop,
+            duration: ms(d),
+            delay: Duration::ZERO,
+            timing: Timing::Linear,
+        }
+    }
+
+    const RED: Color = Color::rgb(255, 0, 0);
+    const BLUE: Color = Color::rgb(0, 0, 255);
+
+    #[test]
+    fn first_frame_does_not_animate_and_change_eases() {
+        let t0 = Instant::now();
+        let mut an = Animator::default();
+        let tr = [fade(TransitionProp::Background, 200)];
+        an.begin_frame();
+        assert_eq!(an.apply("a", &style(RED, &tr), t0).background, RED);
+        assert!(an.deadline().is_none(), "nothing moving");
+        an.end_frame();
+
+        an.begin_frame();
+        let mid = an.apply("a", &style(BLUE, &tr), t0 + ms(1000));
+        assert_eq!(mid.background, RED, "starts where it was");
+        assert!(an.deadline().is_some());
+        an.end_frame();
+        an.begin_frame();
+        let mid = an.apply("a", &style(BLUE, &tr), t0 + ms(1100));
+        assert_eq!(
+            mid.background,
+            Color::rgb(128, 0, 128),
+            "halfway after 100 of 200 ms"
+        );
+        an.end_frame();
+        an.begin_frame();
+        let end = an.apply("a", &style(BLUE, &tr), t0 + ms(1300));
+        assert_eq!(end.background, BLUE);
+        assert!(an.deadline().is_none(), "settled: no more frames needed");
+    }
+
+    #[test]
+    fn no_transition_jumps_and_retarget_midflight_starts_from_current() {
+        let t0 = Instant::now();
+        let mut an = Animator::default();
+        an.begin_frame();
+        an.apply("a", &style(RED, &[]), t0);
+        an.end_frame();
+        an.begin_frame();
+        assert_eq!(
+            an.apply("a", &style(BLUE, &[]), t0 + ms(10)).background,
+            BLUE,
+            "no transition: instant"
+        );
+        an.end_frame();
+
+        let tr = [fade(TransitionProp::All, 100)];
+        an.begin_frame();
+        an.apply("b", &style(RED, &tr), t0);
+        an.end_frame();
+        an.begin_frame();
+        an.apply("b", &style(BLUE, &tr), t0 + ms(100));
+        an.end_frame();
+        an.begin_frame();
+        let half = an.apply("b", &style(BLUE, &tr), t0 + ms(150)).background;
+        assert_eq!(half, Color::rgb(128, 0, 128));
+        an.end_frame();
+        // reverse at the halfway point: it eases back from purple, not from blue
+        an.begin_frame();
+        let turn = an.apply("b", &style(RED, &tr), t0 + ms(150)).background;
+        assert_eq!(turn, Color::rgb(128, 0, 128));
+        an.end_frame();
+    }
+
+    #[test]
+    fn unseen_items_are_forgotten_and_opacity_animates() {
+        let t0 = Instant::now();
+        let mut an = Animator::default();
+        let tr = [fade(TransitionProp::Opacity, 100)];
+        let mut s = Style::initial();
+        s.transitions = tr.to_vec();
+        let on = Arc::new(s.clone());
+        s.opacity = 0.0;
+        let off = Arc::new(s);
+        an.begin_frame();
+        an.apply("x", &on, t0);
+        an.end_frame();
+        an.begin_frame();
+        an.apply("x", &off, t0 + ms(10));
+        an.end_frame();
+        an.begin_frame();
+        let o = an.apply("x", &off, t0 + ms(60)).opacity;
+        assert!((o - 0.5).abs() < 0.02, "{o}");
+        an.end_frame();
+        an.begin_frame(); // x not drawn this frame
+        an.end_frame();
+        an.begin_frame();
+        assert_eq!(
+            an.apply("x", &off, t0 + ms(70)).opacity,
+            0.0,
+            "came back as a new item: no animation"
+        );
+    }
+
+    #[test]
+    fn delay_holds_the_start() {
+        let t0 = Instant::now();
+        let mut an = Animator::default();
+        let tr = [Transition {
+            prop: TransitionProp::Background,
+            duration: ms(100),
+            delay: ms(100),
+            timing: Timing::Linear,
+        }];
+        an.begin_frame();
+        an.apply("a", &style(RED, &tr), t0);
+        an.end_frame();
+        an.begin_frame();
+        an.apply("a", &style(BLUE, &tr), t0 + ms(10));
+        an.end_frame();
+        an.begin_frame();
+        assert_eq!(
+            an.apply("a", &style(BLUE, &tr), t0 + ms(80)).background,
+            RED,
+            "still waiting"
+        );
+        assert!(an.deadline().is_some());
+    }
+
+    #[test]
+    fn fading_in_from_transparent_keeps_the_hue() {
+        let mid = Color::lerp(Color::TRANSPARENT, BLUE, 0.5);
+        assert_eq!((mid.r, mid.g, mid.b), (0, 0, 255));
+        assert_eq!(mid.a, 128);
+    }
+}
