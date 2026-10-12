@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.wawow830.Sliver.Settings</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>@LICENSE@</project_license>
+  <name>Sliver</name>
+  <summary>Customize the Touch Bar on Linux Macs</summary>
+  <description>
+    <p>
+      Sliver turns the Touch Bar on Apple Silicon and Intel T2 Macs into a first-class part of the
+      Linux desktop: layouts, per-app contexts, widgets, gestures and appearance, with Escape and
+      the F-keys always reachable.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.wawow830.Sliver.Settings.desktop</launchable>
+  <developer id="io.github.wawow830">
+    <name>The Sliver contributors</name>
+  </developer>
+  <url type="homepage">https://github.com/wawow830/sliver</url>
+  <provides>
+    <binary>sliver-settings</binary>
+  </provides>
+  <keywords>
+    <keyword>Touch Bar</keyword>
+    <keyword>tiny-dfr</keyword>
+  </keywords>
+  <content_rating type="oars-1.1"/>
+</component>

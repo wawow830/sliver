@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Build Sliver's source RPM (default) or binary RPMs from the current tree.
+#
+#   scripts/rpm-build            # SRPM only (fast): target/rpmbuild/SRPMS/
+#   scripts/rpm-build --binary   # SRPM + RPMs (full release build, ~10+ min): target/rpmbuild/RPMS/
+#   scripts/rpm-build --binary --nocheck
+#
+# Sources: a snapshot of the working tree (tracked + untracked, minus .gitignore'd) and a
+# `cargo vendor` tarball, so the build runs offline (mock/COPR). Nothing is installed.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+binary=0; rpmargs=()
+for a in "$@"; do
+  case "$a" in
+    --binary) binary=1 ;;
+    --nocheck) rpmargs+=(--without check) ;;
+    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    *) echo "rpm-build: unknown argument $a" >&2; exit 2 ;;
+  esac
+done
+
+name=sliver
+version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+snapshot="$(date -u +%Y%m%d)git$(git rev-parse --short HEAD)"
+top="$PWD/target/rpmbuild"
+mkdir -p "$top"/{SOURCES,SPECS,SRPMS,RPMS,BUILD}
+
+echo "== source tarball ($name-$version, $snapshot)"
+# Tracked + untracked-but-not-ignored files, as they are on disk (uncommitted work included).
+git ls-files -co --exclude-standard | while IFS= read -r f; do [[ -e "$f" ]] && printf '%s\0' "$f"; done \
+  | tar --null -T - --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+        --transform "s,^,$name-$version/," -czf "$top/SOURCES/$name-$version.tar.gz"
+
+echo "== vendor tarball"
+vdir=$(mktemp -d "$PWD/target/rpm-vendor.XXXXXX")
+trap 'rm -rf "$vdir"' EXIT
+cargo vendor --locked --quiet "$vdir/vendor" >/dev/null
+tar -C "$vdir" -cJf "$top/SOURCES/$name-$version-vendor.tar.xz" vendor
+
+cp packaging/rpm/sliver.spec "$top/SPECS/"
+common=(--define "_topdir $top" --define "snapshot $snapshot")
+
+echo "== srpm"
+rpmbuild "${common[@]}" -bs "$top/SPECS/sliver.spec"
+
+if (( binary )); then
+  echo "== rpms"
+  rpmbuild "${common[@]}" "${rpmargs[@]}" -bb "$top/SPECS/sliver.spec"
+  ls -1 "$top"/RPMS/*/*.rpm
+  if command -v rpmlint >/dev/null; then rpmlint "$top"/RPMS/*/*.rpm "$top"/SRPMS/*.src.rpm || true; fi
+fi

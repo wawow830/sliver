@@ -1,0 +1,2 @@
+# Start the Sliver session agent in graphical sessions (sliver-agent package).
+enable sliver-agent.service

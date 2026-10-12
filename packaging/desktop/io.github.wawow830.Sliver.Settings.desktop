@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sliver
+GenericName=Touch Bar Settings
+Comment=Customize the Touch Bar: layouts, widgets, gestures and appearance
+Exec=sliver-settings
+Icon=input-keyboard
+Terminal=false
+Categories=Settings;HardwareSettings;GTK;
+Keywords=Touch Bar;touchbar;function keys;Fn;tiny-dfr;
+StartupNotify=true
+DBusActivatable=false

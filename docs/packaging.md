@@ -1,0 +1,53 @@
+# Packaging
+
+Owner: **hazel**. System integration design: ADR-0005. Files: `packaging/`, `scripts/rpm-build`.
+
+## RPM (`packaging/rpm/sliver.spec`)
+| package | contents |
+|---|---|
+| `sliver` | metapackage: sliverd + sliver-agent + sliverctl, Recommends sliver-settings. Docs, examples, bundled-crate licenses |
+| `sliverd` | `/usr/libexec/sliverd`, `sliverd.{service,socket}`, `99-z-sliverd.rules`. Recommends `tiny-dfr` (fallback) |
+| `sliver-agent` | `/usr/bin/sliver-agent`, user unit `sliver-agent.service`, user preset (enabled by default) |
+| `sliverctl` | `/usr/bin/sliverctl` |
+| `sliver-settings` | `/usr/bin/sliver-settings`, `.desktop`, AppStream metainfo |
+
+Built offline from a working-tree snapshot plus a `cargo vendor` tarball, using Fedora's cargo
+macros (`%cargo_prep -v vendor`, `%cargo_build`, `%cargo_license`, `%cargo_vendor_manifest`).
+`%check` validates the desktop/metainfo files and runs the hardware-free test suites (`--without
+check` skips them). `sliver-hwprobe` (hardware debugging) is not packaged.
+
+```
+scripts/rpm-build                    # SRPM → target/rpmbuild/SRPMS (~30 s)
+scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full release build)
+```
+`scripts/check` runs `rpmspec -P` on the spec when rpm is installed.
+
+### Install behaviour
+- **No takeover at install.** sliverd's udev rule applies from the next boot (or the next digitizer
+  `add` event). Switch right away with `sudo systemctl start sliverd`, and `Conflicts=` stops tiny-dfr.
+- **Uninstall gives the bar back:** `%preun` stops sliverd, and `%postun` starts tiny-dfr (if it's
+  installed) so Esc/F-keys don't wait for a reboot.
+- **Upgrade** restarts sliverd (`%systemd_postun_with_restart`), which costs ~0.5 s of bar. The agent
+  reconnects on its own.
+- The agent's user unit is enabled for all users by the preset. It starts with
+  `graphical-session.target`, and only if sliverd is installed.
+
+## COPR
+The spec is COPR-ready (SRPM upload, or the "SCM" source type running `scripts/rpm-build`).
+Creating the COPR project is an `external` ask for the human. Chroots: `fedora-*-aarch64`
+(Asahi) and `fedora-*-x86_64` (t2linux).
+
+## Still open
+- **License** (H27): the spec's `sliver_license` macro, the `LICENSE` file and the metainfo
+  `project_license`. The bundled-crate license list should then be refreshed from `%cargo_license_summary`.
+- **D-Bus activation** of the agent (T36): `Type=dbus` + `packaging/dbus/io.github.wawow830.Sliver.service`
+  once the agent owns the bus name. There's a marked line in the spec.
+- **SELinux:** sliverd runs `unconfined_service_t` (like tiny-dfr). It needs nothing beyond standard
+  device access, and DynamicUser is fine under targeted policy. A real policy module (DRM, input,
+  uinput, sysfs backlight, `/run/sliver` socket) is future work. Check the first install with
+  `ausearch -m avc -ts recent`.
+- **polkit:** nothing needed. sliverd authorises agents by seat0 session ownership, the agent is
+  per user, and nothing asks for privileges at runtime. (The safe-swap harness policy is a dev tool
+  and isn't packaged.)
+- **Man pages** (T42, cedar): add to `%files` when they land.
+- **Icon** for the settings app: it uses the theme's `input-keyboard` until we have one.

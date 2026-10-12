@@ -26,6 +26,12 @@ if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then
   [[ -z "$out" ]] || { echo "$out"; exit 1; }
   udevadm verify --no-summary packaging/udev/*.rules
 fi
+if command -v rpmspec >/dev/null; then
+  rpmspec -P packaging/rpm/sliver.spec >/dev/null
+fi
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate packaging/desktop/*.desktop
+fi
 
 if command -v node >/dev/null; then
   echo "== desktop integration scripts"

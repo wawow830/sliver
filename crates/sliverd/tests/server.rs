@@ -27,10 +27,21 @@ struct Rig {
     socket: PathBuf,
 }
 
+/// Under target/ when the path fits in `sun_path` (108 bytes), else the system temp dir (deep
+/// build roots like rpmbuild's exceed it).
+fn socket_path(name: &str) -> PathBuf {
+    let file = format!("sliverd-{name}-{}.sock", std::process::id());
+    let p = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(&file);
+    if p.as_os_str().len() < 100 {
+        p
+    } else {
+        std::env::temp_dir().join(file)
+    }
+}
+
 impl Rig {
     fn new(name: &str) -> Rig {
-        let socket =
-            PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("sliverd-{name}.sock"));
+        let socket = socket_path(name);
         let listener = Listener::bind(&socket).unwrap();
         let hw = FakeHardware::new(2008, 60);
         let panel = PanelInfo {
