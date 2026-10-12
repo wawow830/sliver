@@ -1,0 +1,16 @@
+[package]
+name = "sliver-reload"
+description = "Config and stylesheet hot reload: inotify watching with debounce and last-good fallback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sliver-config.workspace = true
+sliver-render.workspace = true
+rustix = { workspace = true, features = ["event"] }

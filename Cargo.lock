@@ -1614,6 +1614,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sliver-reload"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "sliver-config",
+ "sliver-render",
+]
+
+[[package]]
 name = "sliver-render"
 version = "0.1.0"
 dependencies = [
