@@ -15,6 +15,12 @@ if [[ -f Cargo.toml ]]; then
   echo "== cargo test";  cargo test --workspace --quiet
 fi
 
+# The installed sliverd must be allowed past sliver-hw's harness gate (first real install failed
+# without it), and must not pretend to be a harness run.
+grep -qx 'Environment=SLIVER_SYSTEM_UNIT=1' packaging/systemd/sliverd.service \
+  || { echo "sliverd.service must set Environment=SLIVER_SYSTEM_UNIT=1"; exit 1; }
+! grep -q 'SLIVER_SAFESWAP' packaging/systemd/sliverd.service \
+  || { echo "sliverd.service must not set SLIVER_SAFESWAP"; exit 1; }
 # sliverd units + udev rules (ADR-0005). Skipped where the tools are missing. Full behaviour test:
 # packaging/itest-units.sh (needs a user systemd manager, ~10 s).
 if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then

@@ -1,7 +1,7 @@
 //! Real Touch Bar hardware access: discovery (sysfs), DRM, evdev and backlight helpers.
 //!
-//! **Never open the real devices outside the safe-swap harness** (docs/safe-swap.md). Code that
-//! opens devices must call [`require_harness`] first. Discovery only reads sysfs and is always safe.
+//! **Never open the real devices outside the safe-swap harness** (docs/safe-swap.md) or the
+//! installed `sliverd.service`. Code that opens devices must call [`require_harness`] first. Discovery only reads sysfs and is always safe.
 //! Hardware facts and per-model quirks: docs/hardware.md.
 
 pub mod backlight;
@@ -22,22 +22,31 @@ pub struct NotUnderHarness;
 impl fmt::Display for NotUnderHarness {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
-            "refusing to open Touch Bar devices outside the safe-swap harness \
-             (SLIVER_SAFESWAP=1 not set); see docs/safe-swap.md",
+            "refusing to open Touch Bar devices outside the safe-swap harness or the installed \
+             sliverd.service (neither SLIVER_SAFESWAP=1 nor SLIVER_SYSTEM_UNIT=1 is set); \
+             see docs/safe-swap.md",
         )
     }
 }
 
 impl std::error::Error for NotUnderHarness {}
 
-/// Ok only when running inside a safe-swap harness run (or a future sliverd unit that sets it).
+/// Ok only inside a safe-swap harness run (`SLIVER_SAFESWAP=1`) or the packaged
+/// `sliverd.service`, which sets `SLIVER_SYSTEM_UNIT=1` (there systemd's OnFailure=tiny-dfr is
+/// the safety net). Never set either by hand.
 pub fn require_harness() -> Result<(), NotUnderHarness> {
-    harness_env_ok(std::env::var("SLIVER_SAFESWAP").ok().as_deref())
+    harness_env_ok(
+        std::env::var("SLIVER_SAFESWAP").ok().as_deref(),
+        std::env::var("SLIVER_SYSTEM_UNIT").ok().as_deref(),
+    )
 }
 
-fn harness_env_ok(v: Option<&str>) -> Result<(), NotUnderHarness> {
-    match v {
-        Some("1") => Ok(()),
+fn harness_env_ok(
+    safeswap: Option<&str>,
+    system_unit: Option<&str>,
+) -> Result<(), NotUnderHarness> {
+    match (safeswap, system_unit) {
+        (Some("1"), _) | (_, Some("1")) => Ok(()),
         _ => Err(NotUnderHarness),
     }
 }
@@ -71,10 +80,11 @@ mod tests {
 
     #[test]
     fn harness_gate() {
-        assert!(harness_env_ok(Some("1")).is_ok());
-        assert!(harness_env_ok(None).is_err());
-        assert!(harness_env_ok(Some("0")).is_err());
-        assert!(harness_env_ok(Some("yes")).is_err());
+        assert!(harness_env_ok(Some("1"), None).is_ok());
+        assert!(harness_env_ok(None, Some("1")).is_ok());
+        assert!(harness_env_ok(None, None).is_err());
+        assert!(harness_env_ok(Some("0"), None).is_err());
+        assert!(harness_env_ok(Some("yes"), Some("true")).is_err());
     }
 
     #[test]

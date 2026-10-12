@@ -22,6 +22,9 @@ OnFailure=tiny-dfr.service
 
 [Service]
 Type=exec
+# sliver-hw refuses to open the bar outside the safe-swap harness unless this is set. Only this
+# unit sets it: OnFailure=tiny-dfr above is the safety net here.
+Environment=SLIVER_SYSTEM_UNIT=1
 ExecStart=/usr/libexec/sliverd
 Sockets=sliverd.socket
 Restart=always

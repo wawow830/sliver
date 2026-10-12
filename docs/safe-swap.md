@@ -105,7 +105,9 @@ Remove: `sudo harness/safeswap/uninstall.sh` (restores tiny-dfr, deletes the thr
 `crates/sliver-hw` is real-hardware access (discovery, DRM, evdev, backlight). It will hold the
 real sliverd backends. Its `sliver-hwprobe` binary refuses to open any device unless
 `SLIVER_SAFESWAP=1` (only `--sysfs-only` works anywhere). Any code that opens bar devices should
-call `sliver_hw::require_harness()` the same way. Planned order, each step a `hardware` ask:
+call `sliver_hw::require_harness()` the same way. The only other way past the gate is the packaged
+`sliverd.service`, which sets `SLIVER_SYSTEM_UNIT=1` (its OnFailure=tiny-dfr is the safety net; never
+set it by hand). Planned order, each step a `hardware` ask:
 ```
 cargo build -p sliver-hw
 harness/safeswap/bar snap tinydfr.png                                      # 1. snap tiny-dfr, check orientation

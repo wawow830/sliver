@@ -105,6 +105,5 @@ Tests: `crates/sliverd/tests/daemon.rs` (core), `tests/server.rs` (real socket +
 (`SLIVER_BLESS=1` to update, then look at them).
 
 ## Not yet
-- First full `sliverd` run on the real bar through the safe-swap harness (real mode exists, needs `SLIVER_SAFESWAP=1`).
-- RPM spec/COPR, SELinux policy (units + udev rules are in `packaging/`, ADR-0005).
+- COPR, SELinux policy (RPM, units and udev rules are in `packaging/`, ADR-0005).
 - Pixel shift, `follow_screen` reading the main backlight on change (it's read on activity now).
