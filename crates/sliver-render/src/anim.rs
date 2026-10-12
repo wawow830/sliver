@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::Color;
+use crate::geometry::Rect;
 use crate::style::{Style, Timing, TransitionProp};
 
 /// Minimum time between animation frames (~30 fps): plenty for fades on a 60 px bar, and cheap.
@@ -123,10 +124,20 @@ struct ItemAnim {
     seen: bool,
 }
 
+struct GeoAnim {
+    x: Track<f32>,
+    w: Track<f32>,
+    seen: bool,
+}
+
 /// Per-item transition state for one [`crate::Renderer`].
 #[derive(Default)]
 pub(crate) struct Animator {
     items: HashMap<String, ItemAnim>,
+    /// Boxes (zones and items) with a `width` transition.
+    geo: HashMap<String, GeoAnim>,
+    /// The desktop asked for reduced motion: every change jumps.
+    pub reduce_motion: bool,
     /// Next frame due, per scene (the agent renders several layers with one renderer).
     next: HashMap<String, Instant>,
 }
@@ -136,13 +147,15 @@ fn in_scene(key: &str, scene: &str) -> bool {
     key.strip_prefix(scene).is_some_and(|r| r.starts_with('|'))
 }
 
-/// The last matching entry wins, as in CSS; `all` matches every property.
+/// The last matching entry wins, as in CSS; `all` matches every paint property.
 fn spec(style: &Style, prop: TransitionProp) -> Option<(Duration, Duration, Timing)> {
     style
         .transitions
         .iter()
         .rev()
-        .find(|t| t.prop == prop || t.prop == TransitionProp::All)
+        .find(|t| {
+            t.prop == prop || t.prop == TransitionProp::All && prop != TransitionProp::Geometry
+        })
         .map(|t| (t.duration, t.delay, t.timing))
 }
 
@@ -150,6 +163,11 @@ impl Animator {
     /// Start drawing `scene` (an id such as its classes): its items are "unseen" until applied.
     pub fn begin_frame(&mut self, scene: &str) {
         for (k, a) in self.items.iter_mut() {
+            if in_scene(k, scene) {
+                a.seen = false;
+            }
+        }
+        for (k, a) in self.geo.iter_mut() {
             if in_scene(k, scene) {
                 a.seen = false;
             }
@@ -182,14 +200,15 @@ impl Animator {
                 seen: true,
             });
         a.seen = true;
-        a.color
-            .retarget(target.0, spec(style, TransitionProp::Color), now);
+        let reduce = self.reduce_motion;
+        let spec = |p| spec(style, p).filter(|_| !reduce);
+        a.color.retarget(target.0, spec(TransitionProp::Color), now);
         a.background
-            .retarget(target.1, spec(style, TransitionProp::Background), now);
+            .retarget(target.1, spec(TransitionProp::Background), now);
         a.border
-            .retarget(target.2, spec(style, TransitionProp::BorderColor), now);
+            .retarget(target.2, spec(TransitionProp::BorderColor), now);
         a.opacity
-            .retarget(target.3, spec(style, TransitionProp::Opacity), now);
+            .retarget(target.3, spec(TransitionProp::Opacity), now);
         let moving = !(a.color.done(now)
             && a.background.done(now)
             && a.border.done(now)
@@ -207,9 +226,44 @@ impl Animator {
         Arc::new(s)
     }
 
+    /// Where to draw the box `key` (laid out at `target`) right now, given its `style`'s
+    /// `width` transition. Only x and width move: the bar is one row.
+    pub fn geometry(
+        &mut self,
+        scene: &str,
+        key: &str,
+        target: Rect,
+        style: &Style,
+        now: Instant,
+    ) -> Rect {
+        let spec = spec(style, TransitionProp::Geometry).filter(|_| !self.reduce_motion);
+        if spec.is_none() && !self.geo.contains_key(key) {
+            return target; // the common case: nothing to remember
+        }
+        let a = self.geo.entry(key.to_string()).or_insert_with(|| GeoAnim {
+            x: Track::settled(target.x, now),
+            w: Track::settled(target.w, now),
+            seen: true,
+        });
+        a.seen = true;
+        a.x.retarget(target.x, spec, now);
+        a.w.retarget(target.w, spec, now);
+        if a.x.done(now) && a.w.done(now) {
+            return target;
+        }
+        let due = self.next.entry(scene.to_string()).or_insert(now + FRAME);
+        *due = (*due).min(now + FRAME);
+        Rect {
+            x: a.x.value(now),
+            w: a.w.value(now),
+            ..target
+        }
+    }
+
     /// Forget the items of `scene` that were not drawn this frame.
     pub fn end_frame(&mut self, scene: &str) {
         self.items.retain(|k, a| a.seen || !in_scene(k, scene));
+        self.geo.retain(|k, a| a.seen || !in_scene(k, scene));
     }
 
     /// When the next animation frame is due; `None` when everything is at rest.

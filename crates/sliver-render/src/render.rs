@@ -359,6 +359,11 @@ impl Renderer {
         self.render_at(scene, sheet, pixmap, std::time::Instant::now())
     }
 
+    /// Honour the desktop's "reduce motion": every transition jumps to its end.
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        self.anim.reduce_motion = on;
+    }
+
     /// When the next frame is due for transitions that are still running, or `None` when
     /// everything is at rest (then there is nothing to redraw until something changes).
     pub fn animation_deadline(&self) -> Option<std::time::Instant> {
@@ -376,6 +381,7 @@ impl Renderer {
         let saved = std::mem::take(&mut self.anim);
         let layout = self.render_at(scene, sheet, pixmap, std::time::Instant::now());
         self.anim = saved;
+        // (A fresh animator has no history, so everything draws at its target.)
         layout
     }
 
@@ -404,8 +410,16 @@ impl Renderer {
             .zip(&st.parts)
             .zip(&layout.tracks);
         for ((zone, zs), zrect) in scene.zones.iter().zip(&st.zones).zip(&layout.zones) {
+            let zone_name = zone.name.as_deref().unwrap_or("");
             let zone_opacity = bar_opacity * zs.opacity;
-            draw_box(pixmap, *zrect, zs, None, zone_opacity);
+            let zrect = self.anim.geometry(
+                &scene_id,
+                &format!("{scene_id}|zone:{zone_name}"),
+                *zrect,
+                zs,
+                now,
+            );
+            draw_box(pixmap, zrect, zs, None, zone_opacity);
             // Several items can share an id (an app's items, two clocks): number repeats so each
             // element keeps its own transition state.
             let mut seen_ids: HashMap<String, usize> = HashMap::new();
@@ -414,15 +428,24 @@ impl Renderer {
                 let id = zone_item.id.clone().unwrap_or_else(|| ii.to_string());
                 let n = seen_ids.entry(id.clone()).or_insert(0);
                 *n += 1;
-                let key = format!("{}/{id}#{n}", zone.name.as_deref().unwrap_or(""));
+                // Keyed per scene: the base and fn layers keep separate state.
+                let key = format!("{scene_id}|{zone_name}/{id}#{n}");
                 let animated = self.anim.apply(&scene_id, &key, s, now);
                 let s = &animated;
                 let opacity = zone_opacity * s.opacity;
-                self.draw_item(item, *rect, s, opacity, pixmap);
+                // A box gliding to its new place (`transition: width`): the trough keeps its
+                // inset from the item's left edge and stretches with it.
+                let drawn = self.anim.geometry(&scene_id, &key, *rect, s, now);
+                self.draw_item(item, drawn, s, opacity, pixmap);
                 if let (Content::Slider { value, .. }, Some(parts), Some(track)) =
                     (&item.content, parts, track)
                 {
-                    draw_slider(pixmap, *track, *value, parts, opacity);
+                    let track = Rect {
+                        x: track.x + drawn.x - rect.x,
+                        w: (track.w + drawn.w - rect.w).max(0.0),
+                        ..*track
+                    };
+                    draw_slider(pixmap, track, *value, parts, opacity);
                 }
             }
         }
@@ -692,9 +715,11 @@ fn draw_slider(
         opacity * trough.opacity * hl.opacity,
     );
     let (kw, kh) = (knob.min_width, knob.min_height.max(knob.min_width));
-    if kw > 0.0 {
-        // The knob stays inside the trough's ends.
-        let cx = (track.x + track.w * value).clamp(track.x + kw / 2.0, track.right() - kw / 2.0);
+    // The knob stays inside the trough's ends; a trough too short for it (mid-glide while a
+    // slider opens) shows no knob yet.
+    let (lo, hi) = (track.x + kw / 2.0, track.right() - kw / 2.0);
+    if kw > 0.0 && lo <= hi {
+        let cx = (track.x + track.w * value).clamp(lo, hi);
         let r = Rect::new(cx - kw / 2.0, track.center().1 - kh / 2.0, kw, kh);
         draw_box(
             pixmap,

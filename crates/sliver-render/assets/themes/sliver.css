@@ -26,9 +26,10 @@ module {
 }
 
 module:active { background-color: #636366; }
-/* Like macOS: the press shows at once, the release fades (frames only while it fades). */
-module { transition: background-color 150ms ease-out; }
-module:active { transition: none; }
+/* Like macOS: the press shows at once, the release fades (frames only while it fades), and
+   boxes glide when the layout changes (a collapsed slider opening). */
+module { transition: background-color 150ms ease-out, width 180ms ease-out; }
+module:active { transition: width 180ms ease-out; }
 module:disabled { opacity: 0.4; }
 
 /* Toggles that are on: caffeine, DND, mic, idle inhibitor… */

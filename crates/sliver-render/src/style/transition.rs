@@ -1,8 +1,11 @@
 //! CSS `transition`: which paint properties animate, how long, and how they ease.
 //!
-//! Only properties that can change without a re-layout animate: `color`, `background-color`,
-//! `border-color` and `opacity`. Other property names parse (so pasted GTK/waybar themes load
-//! without noise) and are ignored.
+//! Paint properties animate: `color`, `background-color`, `border-color` and `opacity`. So does
+//! the box itself, named `width` (or `min-width`): when the layout resizes or moves an element
+//! (a collapsed slider opening, neighbours making room), it glides there. `all` covers the paint
+//! properties only, so a pasted `transition: all 0.3s` theme doesn't start animating layout
+//! (each clock tick would move things). Other property names parse (so pasted GTK/waybar themes
+//! load without noise) and are ignored.
 
 use std::time::Duration;
 
@@ -15,6 +18,8 @@ pub enum TransitionProp {
     Background,
     BorderColor,
     Opacity,
+    /// The element's box (`width`, `min-width`): position and size after a re-layout.
+    Geometry,
 }
 
 /// A CSS timing function.
@@ -101,9 +106,8 @@ fn timing(s: &str) -> Option<Timing> {
     })
 }
 
-/// Properties we know about but do not animate (they would need a re-layout).
+/// Properties we know about but do not animate.
 const UNANIMATED: &[&str] = &[
-    "min-width",
     "min-height",
     "padding",
     "margin",
@@ -112,7 +116,6 @@ const UNANIMATED: &[&str] = &[
     "font-size",
     "gap",
     "transform",
-    "width",
     "height",
     "background-position",
     "box-shadow",
@@ -143,6 +146,7 @@ pub(crate) fn parse(raw: &str) -> Result<Vec<Transition>, String> {
                     "background" | "background-color" => Some(TransitionProp::Background),
                     "border-color" | "border" => Some(TransitionProp::BorderColor),
                     "opacity" => Some(TransitionProp::Opacity),
+                    "width" | "min-width" => Some(TransitionProp::Geometry),
                     p if UNANIMATED.contains(&p) => None,
                     p => return Err(format!("unknown transition token '{p}'")),
                 });
@@ -221,8 +225,13 @@ mod tests {
     #[test]
     fn unanimated_and_bad() {
         assert!(
-            parse("min-width 200ms, transform 1s").unwrap().is_empty(),
+            parse("min-height 200ms, transform 1s").unwrap().is_empty(),
             "parsed, not animated"
+        );
+        let geo = parse("min-width 200ms, width 1s").unwrap();
+        assert!(
+            geo.iter().all(|t| t.prop == TransitionProp::Geometry),
+            "{geo:?}"
         );
         assert!(parse("color").unwrap_err().contains("duration"));
         assert!(parse("sparkle 1s").is_err());

@@ -106,3 +106,63 @@ fn transition_property_lists_and_unknowns() {
     assert!(d.is_empty(), "{d:?}");
     let _ = TransitionProp::All;
 }
+
+/// `transition: width`: when an item grows (a collapsed slider opening), its neighbour glides
+/// over instead of jumping, the regions (the returned layout) are final at once, and frames
+/// stop when it lands. Reduce-motion makes it jump.
+#[test]
+fn width_transition_glides_boxes() {
+    const GLIDE: &str = "module { background-color: #000000; transition: width 200ms linear }
+#b { background-color: #ff0000 }";
+    let scene = |w: f32| {
+        Scene::new(vec![
+            Item::text("").id("a").width(sliver_render::Width::Fixed(w)),
+            Item::text("")
+                .id("b")
+                .width(sliver_render::Width::Fixed(40.0)),
+        ])
+    };
+    // Where `b`'s red starts on row 30.
+    let red_x =
+        |p: &Pixmap| (0..p.width()).find(|&x| p.data()[((30 * p.width() + x) * 4) as usize] > 200);
+    let draw = |r: &mut Renderer, w: f32, t: Instant| {
+        let mut p = Pixmap::new(400, 60).unwrap();
+        let l = r.render_at(&scene(w), &sheet(GLIDE), &mut p, t);
+        (p, l)
+    };
+    let mut r = Renderer::new(Fonts::embedded());
+    let t0 = Instant::now();
+    let (p, l0) = draw(&mut r, 50.0, t0);
+    let start = red_x(&p).unwrap();
+    assert!(r.animation_deadline().is_none());
+    let (_, l1) = draw(&mut r, 150.0, t0 + Duration::from_secs(1));
+    let end_layout = l1.items[1].x;
+    assert!(
+        end_layout > l0.items[1].x + 90.0,
+        "layout is final immediately"
+    );
+    assert!(r.animation_deadline().is_some(), "gliding");
+    let (p, _) = draw(&mut r, 150.0, t0 + Duration::from_millis(1100));
+    let mid = red_x(&p).unwrap();
+    assert!(
+        mid > start + 30 && mid + 30 < end_layout as u32,
+        "halfway: {start} < {mid} < {end_layout}"
+    );
+    let (p, _) = draw(&mut r, 150.0, t0 + Duration::from_millis(1250));
+    assert_eq!(red_x(&p).unwrap(), end_layout.round() as u32);
+    assert!(r.animation_deadline().is_none(), "landed: idle again");
+
+    // Reduce motion: the same change jumps.
+    r.set_reduce_motion(true);
+    let (p, _) = draw(&mut r, 50.0, t0 + Duration::from_secs(3));
+    assert_eq!(red_x(&p).unwrap(), start);
+    assert!(r.animation_deadline().is_none());
+
+    // `all` stays paint-only: a pasted `transition: all 0.3s` theme doesn't animate layout.
+    let all = sheet("module { transition: all 300ms } #b { background-color: #ff0000 }");
+    let mut r = Renderer::new(Fonts::embedded());
+    let mut p = Pixmap::new(400, 60).unwrap();
+    r.render_at(&scene(50.0), &all, &mut p, t0);
+    r.render_at(&scene(150.0), &all, &mut p, t0 + Duration::from_secs(1));
+    assert!(r.animation_deadline().is_none());
+}

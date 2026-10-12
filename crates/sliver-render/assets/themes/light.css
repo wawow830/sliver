@@ -26,8 +26,8 @@ module {
 }
 
 module:active { background-color: #b8b8bf; }
-module { transition: background-color 150ms ease-out; }
-module:active { transition: none; }
+module { transition: background-color 150ms ease-out, width 180ms ease-out; }
+module:active { transition: width 180ms ease-out; }
 module:disabled { opacity: 0.4; }
 
 module:checked, module.on, module.activated { background-color: @accent; color: #fff; }

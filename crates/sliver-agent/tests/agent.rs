@@ -448,6 +448,15 @@ fn session_modules() {
     assert!(deliver(&mut a, &mut link, &mut fake).contains(&Redraw));
     let layers = a.render(&w);
     present(&a, &mut link, &mut fake, &layers);
+    // It glides open (the theme's `transition: width`): frames until it lands, then none.
+    let mut frames = 0;
+    while let Some(due) = a.animation_deadline() {
+        std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
+        a.render(&w);
+        frames += 1;
+        assert!(frames < 20, "the glide ends");
+    }
+    assert!(frames >= 3, "it animated: {frames} frames");
     check("session-slider-open", &a.frame(Layer::Base).unwrap().image);
 
     // Dragging the open volume slider sets the volume along its trough.
