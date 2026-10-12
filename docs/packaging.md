@@ -7,7 +7,7 @@ Owner: **hazel**. System integration design: ADR-0005. Files: `packaging/`, `scr
 |---|---|
 | `sliver` | metapackage: sliverd + sliver-agent + sliverctl, Recommends sliver-settings. Docs, examples, bundled-crate licenses |
 | `sliverd` | `/usr/libexec/sliverd`, `sliverd.{service,socket}`, `99-z-sliverd.rules`. Recommends `tiny-dfr` (fallback) |
-| `sliver-agent` | `/usr/bin/sliver-agent`, user unit `sliver-agent.service`, user preset (enabled by default) |
+| `sliver-agent` | `/usr/bin/sliver-agent`, user unit `sliver-agent.service` (`Type=dbus`), D-Bus activation file for `io.github.wawow830.Sliver`, user preset (enabled by default) |
 | `sliverctl` | `/usr/bin/sliverctl` |
 | `sliver-settings` | `/usr/bin/sliver-settings`, `.desktop`, AppStream metainfo |
 
@@ -41,8 +41,6 @@ Creating the COPR project is an `external` ask for the human. Chroots: `fedora-*
 - **Bundled-crate licenses:** the spec's `bundled_licenses` is hand-written. Refresh it when
   dependencies change: `RUSTC_BOOTSTRAP=1 cargo tree -Zavoid-dev-deps --workspace --edges=no-build,no-dev,no-proc-macro --target=all --prefix=none --format '# {l}' | sort -u`
   (`cargo2rpm license-summary` needs the vendored tree). Sliver itself: MIT OR Apache-2.0 (H27).
-- **D-Bus activation** of the agent (T36): `Type=dbus` + `packaging/dbus/io.github.wawow830.Sliver.service`
-  once the agent owns the bus name. There's a marked line in the spec.
 - **SELinux:** sliverd runs `unconfined_service_t` (like tiny-dfr). It needs nothing beyond standard
   device access, and DynamicUser is fine under targeted policy. A real policy module (DRM, input,
   uinput, sysfs backlight, `/run/sliver` socket) is future work. Check the first install with
