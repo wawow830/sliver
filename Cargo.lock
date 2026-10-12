@@ -1059,6 +1059,7 @@ version = "0.1.0"
 dependencies = [
  "cosmic-text",
  "resvg",
+ "svgtypes",
  "thiserror",
  "tiny-skia",
 ]

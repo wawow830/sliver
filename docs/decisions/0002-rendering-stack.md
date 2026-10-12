@@ -23,19 +23,19 @@ The emoji gap is a contained follow-up (paint COLRv1 via `skrifa`'s `ColorPainte
 or bundle a CBDT/SVG emoji set). Everything else favors pure Rust, especially invariants 1 and 4.
 
 ## Shape of `sliver-render`
-- `Renderer::layout(scene, theme, w, h) -> Vec<Rect>` measures `Auto` content and calls the pure
-  `solve()`: zones (Esc | Main grows | Controls) of items with `Width::Auto | Fixed(px) | Fill(n)`
+- `Renderer::layout(scene, sheet, w, h) -> Layout` (zone + item rects; `render` returns it too) measures `Auto` content and calls the pure
+  `solve()`: zones (each Auto/Fixed/Fill with an `align`) of items with `Width::Auto | Fixed(px) | Fill(n)`
   (H6). `Fill(n)` spans n slots plus the gaps between them, so all-`Fill` rows reproduce tiny-dfr's
-  `Stretch` geometry. Leftover space goes to `Fill`, otherwise to the end of growing zones. On
+  `Stretch` geometry. Leftover space goes to `Fill`, otherwise it is placed per `align`. On
   overflow (ux.md §4), `Fill` compresses to `min_width`, then the widest items are capped at a
   common width like a tab strip, and labels shrink and then ellipsize. Use the **same rects** for IPC
   key/agent regions so touch can't drift from what's drawn (`hit_test` splits gaps down the middle).
-- `Scene { zones: Vec<Zone{items, grow}> }`, `Item { content: Spacer|Blank|Text|Icon|IconText,
-  width, pressed, background, foreground }`. This is a *resolved frame*, not config. The agent
+- `Scene { classes, zones: Vec<Zone{name, classes, width, align, items}> }`, `Item { content: Spacer|Blank|Text|Icon|IconText,
+  id, classes, width, pressed, disabled, background, foreground }`. This is a *resolved frame*, not config. The agent
   builds it from sliver-config's resolved layout plus live widget state. The IPC's `pressed`
   image is the same scene with every item `pressed`.
-- `Theme`: colors, radius, spacing, margins, icon size, font. `Theme::tiny_dfr()` is the default and
-  matches tiny-dfr 0.3.7's look. A sliver default theme is a taste question for later.
+- Styling: a `Stylesheet` (waybar-style CSS, **ADR-0004**, docs/styling.md) replaced the original
+  `Theme` struct. The built-in `classic` sheet matches tiny-dfr 0.3.7's look.
 - `Renderer` keeps font, glyph and shaped-label caches. Full 2008x60 frame: ~1.3 ms cold, ~0.4 ms
   cached (release, M2). Render on change only, then `panel::damage` diffs frames into column
   spans for DRM dirty clips. `panel::blit_xrgb8888` rotates into the panel's framebuffer

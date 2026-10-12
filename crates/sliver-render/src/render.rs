@@ -1,138 +1,312 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cosmic_text::SwashContent;
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Transform};
+use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, PixmapPaint, Stroke, Transform};
 
 use crate::icon::Image;
+use crate::style::{Element, Style, Stylesheet};
 use crate::text::{self, Label};
-use crate::{Color, Content, Fonts, Icon, Item, Rect, Scene, Sizing, Spacing, Theme, Width, solve};
+use crate::{Align, Color, Content, Fonts, Icon, Item, Rect, Scene, Sizing, Width, solve};
 
-/// Draws scenes. Holds font and glyph caches, so keep one around rather than making one per frame.
+/// Items are never squeezed narrower than this on overflow unless they're naturally narrower
+/// (ux.md §4: 60 px is the smallest usable touch target).
+const OVERFLOW_MIN: f32 = 60.0;
+
+/// Where everything in a scene goes. All rects are in bar pixels, rounded to whole pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layout {
+    pub zones: Vec<Rect>,
+    /// One per item, in [`Scene::items`] order. Use these for touch regions.
+    pub items: Vec<Rect>,
+}
+
+/// Computed styles for one scene.
+struct Styles {
+    bar: Arc<Style>,
+    zones: Vec<Arc<Style>>,
+    items: Vec<Arc<Style>>,
+}
+
+/// Draws scenes. Holds font, glyph, label and style caches, so keep one around.
 pub struct Renderer {
     fonts: Fonts,
+    styles: HashMap<String, Arc<Style>>,
+    styles_generation: u64,
 }
 
 impl Renderer {
     pub fn new(fonts: Fonts) -> Renderer {
-        Renderer { fonts }
+        Renderer {
+            fonts,
+            styles: HashMap::new(),
+            styles_generation: 0,
+        }
     }
 
-    /// Item rectangles for `scene` on a `width` x `height` bar, in [`Scene::items`] order. Same
-    /// geometry as [`Self::render`]. Takes `&mut self` because `Auto` widths measure text.
-    pub fn layout(&mut self, scene: &Scene, theme: &Theme, width: u32, height: u32) -> Vec<Rect> {
-        let zones: Vec<(bool, Vec<Sizing>)> = scene
+    fn compute_styles(&mut self, scene: &Scene, sheet: &Stylesheet) -> Styles {
+        if self.styles_generation != sheet.generation() || self.styles.len() > 4096 {
+            self.styles.clear();
+            self.styles_generation = sheet.generation();
+        }
+        let bar_el = Element {
+            tag: "bar",
+            id: None,
+            classes: &scene.classes,
+            active: false,
+            disabled: false,
+            first: true,
+            last: true,
+        };
+        let mut key = format!("bar.{}", scene.classes.join("."));
+        let bar = self.cached(&key, sheet, &[bar_el], None);
+        let mut zones = Vec::new();
+        let mut items = Vec::new();
+        let nz = scene.zones.len();
+        for (zi, zone) in scene.zones.iter().enumerate() {
+            // A zone's name is a class (`.zone-main`, like waybar's `.modules-left`), so `#id`
+            // always means a module.
+            let mut zclasses = Vec::with_capacity(zone.classes.len() + 1);
+            zclasses.extend(zone.name.iter().map(|n| format!("zone-{n}")));
+            zclasses.extend(zone.classes.iter().cloned());
+            let zone_el = Element {
+                tag: "zone",
+                id: None,
+                classes: &zclasses,
+                active: false,
+                disabled: false,
+                first: zi == 0,
+                last: zi + 1 == nz,
+            };
+            let zone_key = format!(
+                "{key}>zone.{}:{}{}",
+                zclasses.join("."),
+                zone_el.first as u8,
+                zone_el.last as u8
+            );
+            let zs = self.cached(&zone_key, sheet, &[bar_el, zone_el], Some(&bar));
+            let ni = zone.items.len();
+            for (ii, item) in zone.items.iter().enumerate() {
+                // Waybar themes select every module with `.module`.
+                let mut classes = Vec::with_capacity(item.classes.len() + 1);
+                classes.push("module".to_string());
+                classes.extend(item.classes.iter().cloned());
+                let el = Element {
+                    tag: "module",
+                    id: item.id.as_deref(),
+                    classes: &classes,
+                    active: item.pressed,
+                    disabled: item.disabled,
+                    first: ii == 0,
+                    last: ii + 1 == ni,
+                };
+                key.clear();
+                key.push_str(&zone_key);
+                key.push_str(&format!(
+                    ">module#{}.{}:{}{}{}{}",
+                    item.id.as_deref().unwrap_or(""),
+                    classes.join("."),
+                    el.active as u8,
+                    el.disabled as u8,
+                    el.first as u8,
+                    el.last as u8
+                ));
+                items.push(self.cached(&key, sheet, &[bar_el, zone_el, el], Some(&zs)));
+            }
+            zones.push(zs);
+            key = format!("bar.{}", scene.classes.join("."));
+        }
+        Styles { bar, zones, items }
+    }
+
+    fn cached(
+        &mut self,
+        key: &str,
+        sheet: &Stylesheet,
+        path: &[Element<'_>],
+        parent: Option<&Style>,
+    ) -> Arc<Style> {
+        if let Some(s) = self.styles.get(key) {
+            return s.clone();
+        }
+        let s = Arc::new(sheet.compute(path, parent));
+        self.styles.insert(key.to_string(), s.clone());
+        s
+    }
+
+    /// Where every zone and item goes on a `width` x `height` bar. Same geometry as
+    /// [`Self::render`]. Takes `&mut self` because `Auto` widths measure text.
+    pub fn layout(&mut self, scene: &Scene, sheet: &Stylesheet, width: u32, height: u32) -> Layout {
+        let styles = self.compute_styles(scene, sheet);
+        self.layout_styled(scene, &styles, width, height)
+    }
+
+    fn layout_styled(&mut self, scene: &Scene, st: &Styles, width: u32, height: u32) -> Layout {
+        let bar = Rect::new(0.0, 0.0, width as f32, height as f32).inset(st.bar.padding);
+        let mut item_sizes: Vec<Vec<Sizing>> = Vec::new();
+        let mut zone_sizes = Vec::new();
+        let mut styles = st.items.iter();
+        for (zone, zs) in scene.zones.iter().zip(&st.zones) {
+            let sizes: Vec<Sizing> = zone
+                .items
+                .iter()
+                .map(|item| {
+                    let s = styles.next().expect("one style per item");
+                    let chrome = s.padding[1] + s.padding[3] + 2.0 * s.border_width;
+                    let content = self.content_width(&item.content, s);
+                    let natural = (content + chrome).max(s.min_width);
+                    let margins = s.margin[1] + s.margin[3];
+                    let fixed = |w: Width| match w {
+                        Width::Fixed(px) => Width::Fixed(px + margins),
+                        w => w,
+                    };
+                    Sizing {
+                        width: fixed(item.width),
+                        natural: natural + margins,
+                        min: natural.min(OVERFLOW_MIN) + margins,
+                    }
+                })
+                .collect();
+            let gaps = zs.gap * sizes.len().saturating_sub(1) as f32;
+            let chrome =
+                zs.padding[1] + zs.padding[3] + 2.0 * zs.border_width + zs.margin[1] + zs.margin[3];
+            zone_sizes.push(Sizing {
+                width: match zone.width {
+                    Width::Fixed(px) => Width::Fixed(px + zs.margin[1] + zs.margin[3]),
+                    w => w,
+                },
+                natural: sizes.iter().map(|s| s.natural).sum::<f32>() + gaps + chrome,
+                min: sizes.iter().map(|s| s.min).sum::<f32>() + gaps + chrome,
+            });
+            item_sizes.push(sizes);
+        }
+        let round = |r: Rect| {
+            let (x0, x1) = (r.x.round(), r.right().round());
+            let (y0, y1) = (r.y.round(), r.bottom().round());
+            Rect::new(x0, y0, x1 - x0, y1 - y0)
+        };
+        let mut zones = Vec::new();
+        let mut items = Vec::new();
+        let mut styles = st.items.iter();
+        let zone_spans = solve(&zone_sizes, bar.w, st.bar.gap, Align::Start);
+        for (((zone, zs), (zx, zw)), sizes) in scene
             .zones
             .iter()
-            .map(|z| {
-                let sizes = z
-                    .items
-                    .iter()
-                    .map(|item| Sizing {
-                        width: item.width,
-                        natural: match item.width {
-                            Width::Auto => self.natural_width(&item.content, theme),
-                            _ => 0.0,
-                        },
-                    })
-                    .collect();
-                (z.grow, sizes)
-            })
-            .collect();
-        let spacing = Spacing {
-            item: theme.spacing,
-            zone: theme.zone_gap,
-            margin_y: theme.margin_y,
-            comfortable: theme.comfortable_width,
-            min: theme.min_width,
-        };
-        solve(&zones, width, height, spacing)
-    }
-
-    /// Content width plus `Auto` padding, at the theme's preferred sizes.
-    fn natural_width(&mut self, content: &Content, theme: &Theme) -> f32 {
-        let f = &theme.font;
-        let mut label =
-            |t: &str| text::shape(&mut self.fonts, t, &f.family, f.weight, f.size).width;
-        let inner = match content {
-            Content::Spacer | Content::Blank => 0.0,
-            Content::Text(t) => label(t),
-            Content::Icon(_) => theme.icon_size,
-            Content::IconText(_, t) => theme.icon_size + theme.icon_gap + label(t),
-        };
-        inner.ceil() + 2.0 * theme.auto_padding_x
-    }
-
-    /// Draws the whole scene into `pixmap`, a landscape bar (e.g. 2008x60).
-    pub fn render(&mut self, scene: &Scene, theme: &Theme, pixmap: &mut Pixmap) {
-        pixmap.fill(theme.background.to_skia());
-        let rects = self.layout(scene, theme, pixmap.width(), pixmap.height());
-        for (item, rect) in scene.items().zip(rects) {
-            self.draw_item(item, rect, theme, pixmap);
+            .zip(&st.zones)
+            .zip(zone_spans)
+            .zip(&item_sizes)
+        {
+            let outer = Rect::new(bar.x + zx, bar.y, zw, bar.h);
+            let zrect = outer.inset([zs.margin[0], zs.margin[1], zs.margin[2], zs.margin[3]]);
+            let inner = zrect.inset(zs.padding.map(|p| p + zs.border_width));
+            for (ix, iw) in solve(sizes, inner.w, zs.gap, zone.align) {
+                let s = styles.next().expect("one style per item");
+                let r = Rect::new(inner.x + ix, inner.y, iw, inner.h).inset(s.margin);
+                items.push(round(r));
+            }
+            zones.push(round(zrect));
         }
+        Layout { zones, items }
+    }
+
+    /// Width of an item's content (no padding) at its preferred size.
+    fn content_width(&mut self, content: &Content, s: &Style) -> f32 {
+        let family = self.fonts.pick_family(&s.font_family);
+        let mut label =
+            |t: &str| text::shape(&mut self.fonts, t, &family, s.font_weight, s.font_size).width;
+        match content {
+            Content::Spacer | Content::Blank => 0.0,
+            Content::Text(t) => label(t).ceil(),
+            Content::Icon(_) => s.icon_size,
+            Content::IconText(_, t) => s.icon_size + s.gap + label(t).ceil(),
+        }
+    }
+
+    /// Draws the whole scene into `pixmap`, a landscape bar (e.g. 2008x60), and returns the
+    /// layout it used.
+    pub fn render(&mut self, scene: &Scene, sheet: &Stylesheet, pixmap: &mut Pixmap) -> Layout {
+        let st = self.compute_styles(scene, sheet);
+        let layout = self.layout_styled(scene, &st, pixmap.width(), pixmap.height());
+        // The panel has no alpha: whatever's transparent shows black.
+        pixmap.fill(tiny_skia::Color::BLACK);
+        let full = Rect::new(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
+        let bar_opacity = st.bar.opacity;
+        draw_box(pixmap, full, &st.bar, None, bar_opacity);
+        let mut items = scene.items().zip(&layout.items).zip(&st.items);
+        for ((zone, zs), zrect) in scene.zones.iter().zip(&st.zones).zip(&layout.zones) {
+            let zone_opacity = bar_opacity * zs.opacity;
+            draw_box(pixmap, *zrect, zs, None, zone_opacity);
+            for _ in 0..zone.items.len() {
+                let ((item, rect), s) = items.next().expect("one rect per item");
+                self.draw_item(item, *rect, s, zone_opacity * s.opacity, pixmap);
+            }
+        }
+        layout
     }
 
     /// Convenience: renders into a new `width` x `height` pixmap.
-    pub fn render_new(&mut self, scene: &Scene, theme: &Theme, width: u32, height: u32) -> Pixmap {
+    pub fn render_new(
+        &mut self,
+        scene: &Scene,
+        sheet: &Stylesheet,
+        width: u32,
+        height: u32,
+    ) -> Pixmap {
         let mut pixmap = Pixmap::new(width, height).expect("non-zero bar size");
-        self.render(scene, theme, &mut pixmap);
+        self.render(scene, sheet, &mut pixmap);
         pixmap
     }
 
-    fn draw_item(&mut self, item: &Item, rect: Rect, theme: &Theme, pixmap: &mut Pixmap) {
-        if matches!(item.content, Content::Spacer) {
+    fn draw_item(&mut self, item: &Item, rect: Rect, s: &Style, opacity: f32, pixmap: &mut Pixmap) {
+        if matches!(item.content, Content::Spacer) || opacity <= 0.0 {
             return;
         }
-        let fill = match (item.pressed, item.background) {
-            (true, Some(bg)) => Some(mix(bg, Color::WHITE, 0.25)),
-            (true, None) => Some(theme.button_pressed),
-            (false, Some(bg)) => Some(bg),
-            (false, None) => theme.outlines.then_some(theme.button),
-        };
-        if let Some(fill) = fill {
-            fill_rounded_rect(pixmap, rect, theme.radius, fill);
-        }
-
-        let fg = item.foreground.unwrap_or(theme.foreground);
-        let avail = (rect.w - 2.0 * theme.padding_x).max(1.0);
-        let icon_size = theme.icon_size.min(rect.h).min(avail).floor();
-        let (cx, cy) = rect.center();
+        draw_box(pixmap, rect, s, item.background, opacity);
+        let fg = fade(item.foreground.unwrap_or(s.color), opacity);
+        let content = rect.inset(s.padding.map(|p| p + s.border_width));
+        let avail = content.w.max(1.0);
+        let icon_size = s
+            .icon_size
+            .min(content.h.max(rect.h * 0.5))
+            .min(avail)
+            .floor();
+        let (cx, cy) = content.center();
+        let clip = rect.inset([0.0, s.border_width, 0.0, s.border_width]);
         match &item.content {
             Content::Spacer | Content::Blank => {}
             Content::Text(t) => {
-                let label = self.fit_label(t, theme, avail);
+                let label = self.fit_label(t, s, avail);
                 let x = (cx - label.width / 2.0).round();
-                self.draw_label(label, x, cy, fg, rect, pixmap);
+                self.draw_label(&label, x, cy, fg, clip, pixmap);
             }
             Content::Icon(icon) => {
                 let x = (cx - icon_size / 2.0).round();
                 let y = (cy - icon_size / 2.0).round();
-                draw_icon(icon, x, y, icon_size, fg, pixmap);
+                draw_icon(icon, x, y, icon_size, fg, opacity, pixmap);
             }
             Content::IconText(icon, t) => {
-                let label = self.fit_label(t, theme, avail - icon_size - theme.icon_gap);
-                let total = icon_size + theme.icon_gap + label.width;
-                let x = (cx - total / 2.0).round();
+                let label = self.fit_label(t, s, avail - icon_size - s.gap);
+                let total = icon_size + s.gap + label.width;
+                let x = (cx - total / 2.0).round().max(content.x.floor());
                 let y = (cy - icon_size / 2.0).round();
-                draw_icon(icon, x, y, icon_size, fg, pixmap);
-                let tx = x + icon_size + theme.icon_gap;
-                self.draw_label(label, tx, cy, fg, rect, pixmap);
+                draw_icon(icon, x, y, icon_size, fg, opacity, pixmap);
+                self.draw_label(&label, x + icon_size + s.gap, cy, fg, clip, pixmap);
             }
         }
     }
 
-    /// Shapes `text` at the theme's size, shrinking it (down to `min_size`) to fit `avail` pixels,
-    /// then ellipsizing if it still doesn't fit.
-    fn fit_label(&mut self, text: &str, theme: &Theme, avail: f32) -> Arc<Label> {
-        let f = &theme.font;
-        let mut shape =
-            |t: &str, size: f32| text::shape(&mut self.fonts, t, &f.family, f.weight, size);
-        let label = shape(text, f.size);
+    /// Shapes `text` at the style's size, shrinking it (down to half, at least 10 px) to fit
+    /// `avail` pixels, then ellipsizing if it still doesn't fit.
+    fn fit_label(&mut self, text: &str, s: &Style, avail: f32) -> Arc<Label> {
+        let family = self.fonts.pick_family(&s.font_family);
+        let (size, weight) = (s.font_size, s.font_weight);
+        let min_size = (size * 0.5).max(10.0).min(size);
+        let mut shape = |t: &str, size: f32| text::shape(&mut self.fonts, t, &family, weight, size);
+        let label = shape(text, size);
         if label.width <= avail {
             return label;
         }
-        let size = (f.size * avail / label.width)
-            .floor()
-            .clamp(f.min_size, f.size);
+        let size = (size * avail / label.width).floor().clamp(min_size, size);
         let label = shape(text, size);
         if label.width <= avail {
             return label;
@@ -156,7 +330,7 @@ impl Renderer {
     /// Draws a shaped label starting at `x`, optically centered on `cy`, clipped to `clip`.
     fn draw_label(
         &mut self,
-        label: Arc<Label>,
+        label: &Label,
         x: f32,
         cy: f32,
         color: Color,
@@ -176,7 +350,14 @@ impl Renderer {
                 let origin = (phys.x + p.left, phys.y - p.top);
                 let color = glyph
                     .color_opt
-                    .map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a()))
+                    .map(|c| {
+                        Color::rgba(
+                            c.r(),
+                            c.g(),
+                            c.b(),
+                            (c.a() as f32 * color.a as f32 / 255.0) as u8,
+                        )
+                    })
                     .unwrap_or(color);
                 blend_glyph(
                     pixmap,
@@ -192,12 +373,16 @@ impl Renderer {
     }
 }
 
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color::rgba(l(a.r, b.r), l(a.g, b.g), l(a.b, b.b), l(a.a, b.a))
+fn fade(c: Color, opacity: f32) -> Color {
+    Color::rgba(
+        c.r,
+        c.g,
+        c.b,
+        (c.a as f32 * opacity.clamp(0.0, 1.0)).round() as u8,
+    )
 }
 
-fn fill_rounded_rect(pixmap: &mut Pixmap, r: Rect, radius: f32, color: Color) {
+fn rounded_rect(r: Rect, radius: f32) -> Option<Path> {
     let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
     // Cubic Bézier approximation of a quarter circle.
     let k = rad * (1.0 - 0.552_284_8);
@@ -213,20 +398,47 @@ fn fill_rounded_rect(pixmap: &mut Pixmap, r: Rect, radius: f32, color: Color) {
     pb.line_to(x0, y0 + rad);
     pb.cubic_to(x0, y0 + k, x0 + k, y0, x0 + rad, y0);
     pb.close();
-    let Some(path) = pb.finish() else { return };
-    let mut paint = Paint::default();
-    paint.set_color(color.to_skia());
-    paint.anti_alias = true;
-    pixmap.fill_path(
-        &path,
-        &paint,
-        FillRule::Winding,
-        Transform::identity(),
-        None,
-    );
+    pb.finish()
 }
 
-fn draw_icon(icon: &Icon, x: f32, y: f32, size: f32, fg: Color, pixmap: &mut Pixmap) {
+/// Background and border of a bar, zone or module.
+fn draw_box(pixmap: &mut Pixmap, r: Rect, s: &Style, bg_override: Option<Color>, opacity: f32) {
+    if r.w <= 0.0 || r.h <= 0.0 {
+        return;
+    }
+    let bg = fade(bg_override.unwrap_or(s.background), opacity);
+    if bg.a > 0
+        && let Some(path) = rounded_rect(r, s.radius)
+    {
+        let mut paint = Paint::default();
+        paint.set_color(bg.to_skia());
+        paint.anti_alias = true;
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    let bw = s.border_width.min(r.w / 2.0).min(r.h / 2.0);
+    let border = fade(s.border_color(), opacity);
+    if bw > 0.0
+        && border.a > 0
+        && let Some(path) = rounded_rect(r.inset([bw / 2.0; 4]), (s.radius - bw / 2.0).max(0.0))
+    {
+        let mut paint = Paint::default();
+        paint.set_color(border.to_skia());
+        paint.anti_alias = true;
+        let stroke = Stroke {
+            width: bw,
+            ..Stroke::default()
+        };
+        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+}
+
+fn draw_icon(icon: &Icon, x: f32, y: f32, size: f32, fg: Color, opacity: f32, pixmap: &mut Pixmap) {
     let (w, h) = icon.size();
     if w <= 0.0 || h <= 0.0 || size <= 0.0 {
         return;
@@ -248,26 +460,31 @@ fn draw_icon(icon: &Icon, x: f32, y: f32, size: f32, fg: Color, pixmap: &mut Pix
             }
         }
     };
-    if !icon.symbolic {
+    if !icon.symbolic && opacity >= 1.0 {
         draw(pixmap, x, y);
         return;
     }
-    // Symbolic: draw the shape offscreen, keep only its coverage, and paint it in `fg`.
+    // Draw offscreen, then either recolor (symbolic: keep only coverage, paint in `fg`) or fade.
     let side = size.ceil() as u32;
     let Some(mut scratch) = Pixmap::new(side, side) else {
         return;
     };
     draw(&mut scratch, 0.0, 0.0);
-    for px in scratch.data_mut().chunks_exact_mut(4) {
-        let a = px[3] as u32 * fg.a as u32 / 255;
-        let premul = |c: u8| ((c as u32 * a + 127) / 255) as u8;
-        px.copy_from_slice(&[premul(fg.r), premul(fg.g), premul(fg.b), a as u8]);
+    let mut paint = PixmapPaint::default();
+    if icon.symbolic {
+        for px in scratch.data_mut().chunks_exact_mut(4) {
+            let a = px[3] as u32 * fg.a as u32 / 255;
+            let premul = |c: u8| ((c as u32 * a + 127) / 255) as u8;
+            px.copy_from_slice(&[premul(fg.r), premul(fg.g), premul(fg.b), a as u8]);
+        }
+    } else {
+        paint.opacity = opacity.clamp(0.0, 1.0);
     }
     pixmap.draw_pixmap(
         x as i32,
         y as i32,
         scratch.as_ref(),
-        &PixmapPaint::default(),
+        &paint,
         Transform::identity(),
         None,
     );
@@ -305,7 +522,7 @@ fn blend_glyph(
                 }
                 SwashContent::Color => {
                     let s = &data[i * 4..i * 4 + 4];
-                    (s[0], s[1], s[2], s[3] as u32)
+                    (s[0], s[1], s[2], s[3] as u32 * color.a as u32 / 255)
                 }
                 // We never ask swash for subpixel masks.
                 SwashContent::SubpixelMask => continue,

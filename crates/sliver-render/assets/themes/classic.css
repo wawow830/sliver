@@ -1,0 +1,34 @@
+/* classic: tiny-dfr 0.3.7's look. Import it with  @import "sliver:classic";  and override. */
+
+bar {
+  background-color: #000;
+  color: #fff;
+  font-family: "Noto Sans";
+  font-weight: bold;
+  font-size: 32px;
+  -sliver-icon-size: 48px;
+  padding: 1px 0;
+  gap: 16px; /* between zones */
+}
+
+zone {
+  gap: 16px; /* between modules */
+}
+
+module {
+  background-color: #333;
+  border-radius: 8px;
+  padding: 0 16px;
+  min-width: 80px;
+  gap: 8px; /* between icon and label */
+}
+
+module:active {
+  background-color: #666;
+}
+
+/* tiny-dfr's battery colors. */
+#battery.charging { background-color: #003300; }
+#battery.charging:active { background-color: #006600; }
+#battery.critical { background-color: #330000; }
+#battery.critical:active { background-color: #660000; }

@@ -6,10 +6,18 @@
 
 use std::path::PathBuf;
 
-use sliver_render::{Color, Content, Fonts, Icon, Item, Pixmap, Renderer, Scene, Theme, Width};
+use sliver_render::{
+    Color, Content, Fonts, Icon, Item, Pixmap, Renderer, Scene, Stylesheet, Width,
+};
 
 const W: u32 = 2008;
 const H: u32 = 60;
+
+fn css(text: &str) -> Stylesheet {
+    let (sheet, diags) = Stylesheet::parse("test.css", text, None);
+    assert!(diags.is_empty(), "{diags:?}");
+    sheet
+}
 
 fn icon(name: &str) -> Icon {
     Icon::builtin(name).unwrap()
@@ -22,9 +30,9 @@ fn fkeys() -> Vec<Item> {
 }
 
 /// Compares with a little tolerance so harmless rasterizer differences across CPUs don't fail CI.
-fn check(name: &str, scene: &Scene, theme: &Theme) {
+fn check(name: &str, scene: &Scene, sheet: &Stylesheet) {
     let mut renderer = Renderer::new(Fonts::embedded());
-    let actual = renderer.render_new(scene, theme, W, H);
+    let actual = renderer.render_new(scene, sheet, W, H);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let expected_path = root.join("tests/snapshots").join(format!("{name}.png"));
     if std::env::var_os("SLIVER_BLESS").is_some() {
@@ -55,18 +63,16 @@ fn check(name: &str, scene: &Scene, theme: &Theme) {
 
 #[test]
 fn primary_layer() {
-    check("primary", &Scene::new(fkeys()), &Theme::tiny_dfr());
+    check("primary", &Scene::new(fkeys()), &Stylesheet::classic());
 }
 
 #[test]
 fn primary_layer_pressed_no_outlines() {
     let mut items = fkeys();
     items[5].pressed = true;
-    let theme = Theme {
-        outlines: false,
-        ..Theme::tiny_dfr()
-    };
-    check("primary-pressed-no-outlines", &Scene::new(items), &theme);
+    // tiny-dfr's ShowButtonOutlines = false.
+    let sheet = css("@import \"sliver:classic\"; module { background: transparent }");
+    check("primary-pressed-no-outlines", &Scene::new(items), &sheet);
 }
 
 #[test]
@@ -90,7 +96,7 @@ fn media_layer() {
         .map(|n| Item::icon(icon(n)).fill(1)),
     );
     items[8].pressed = true;
-    check("media", &Scene::new(items), &Theme::tiny_dfr());
+    check("media", &Scene::new(items), &Stylesheet::classic());
 }
 
 #[test]
@@ -100,7 +106,8 @@ fn mixed_stretch_widgets_and_fitting() {
         Item::spacer().fill(1),
         Item::new(Content::IconText(icon("battery_charging_80"), "83%".into()))
             .fill(2)
-            .background(Color::rgb(0, 102, 0)),
+            .id("battery")
+            .class("charging"),
         Item::text("12:34 Mon 12 Oct").fill(3),
         Item::text("A label far too long for one slot").fill(1),
         Item::new(Content::Blank).fill(1),
@@ -109,7 +116,7 @@ fn mixed_stretch_widgets_and_fitting() {
             .fill(1)
             .foreground(Color::rgb(255, 200, 0)),
     ];
-    check("mixed", &Scene::new(items), &Theme::tiny_dfr());
+    check("mixed", &Scene::new(items), &Stylesheet::classic());
 }
 
 #[test]
@@ -129,7 +136,7 @@ fn zones_with_auto_and_fixed_widths() {
             Item::text("12:34"),
         ],
     );
-    check("zones", &scene, &Theme::tiny_dfr());
+    check("zones", &scene, &Stylesheet::classic());
 }
 
 #[test]
@@ -152,5 +159,40 @@ fn overflow_shrinks_and_ellipsizes() {
     ];
     let mut items: Vec<Item> = words.iter().map(|w| Item::text(*w)).collect();
     items.push(Item::text("Fill").fill(1));
-    check("overflow", &Scene::new(items), &Theme::tiny_dfr());
+    check("overflow", &Scene::new(items), &Stylesheet::classic());
+}
+
+#[test]
+fn waybar_style_stylesheet() {
+    let sheet = css(r#"
+        @define-color accent #3584e4;
+        bar { background: #101014; color: #e8e8ea; font-size: 26px; font-weight: 600;
+              -sliver-icon-size: 34px; padding: 4px 6px; gap: 24px; }
+        zone { gap: 6px; }
+        .zone-main { background: alpha(white, 0.06); border-radius: 12px; padding: 0 6px; }
+        module { background: #2a2a30; border-radius: 10px; padding: 0 18px; min-width: 64px; }
+        module:active { background: @accent; }
+        #esc { background: transparent; border: 2px solid alpha(@accent, 0.8); }
+        #battery.warning { color: #f5c211; }
+        #battery.critical { background: #c01c28; }
+        .muted { opacity: 0.4; }
+        .zone-controls module:last-child { font-family: "Noto Sans"; font-weight: normal; }
+        "#);
+    let scene = Scene::zoned(
+        vec![Item::text("esc").id("esc")],
+        vec![
+            Item::icon(icon("fast_rewind")),
+            Item::icon(icon("play_pause")).pressed(true),
+            Item::icon(icon("fast_forward")),
+            Item::text("Song - Artist").width(Width::Fill(1)),
+        ],
+        vec![
+            Item::new(Content::IconText(icon("battery_2_bar"), "18%".into()))
+                .id("battery")
+                .class("warning"),
+            Item::icon(icon("volume_off")).class("muted"),
+            Item::text("12:34").id("clock"),
+        ],
+    );
+    check("stylesheet", &scene, &sheet);
 }
