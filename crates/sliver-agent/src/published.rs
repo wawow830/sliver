@@ -167,6 +167,7 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
         target: None,
         timer_total: None,
         menu: Vec::new(),
+        slot: None,
     }
 }
 
@@ -315,6 +316,7 @@ fn push(
         target: None,
         timer_total: None,
         menu: Vec::new(),
+        slot: None,
     };
     match &item.kind {
         ItemKind::Button => out.push(base(

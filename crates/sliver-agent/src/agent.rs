@@ -499,9 +499,10 @@ impl Agent {
         if modal.is_some() {
             classes.push("modal".into());
         }
+        let mut per_zone = per_zone;
+        self.fit_slots(&zones, &mut per_zone, &classes);
         // Published items with a lower `priority` give way when their zone overflows (api.md §3),
         // a group as a unit. Only measured when some priority differs.
-        let mut per_zone = per_zone;
         if per_zone.iter().flatten().any(|c| {
             c.published
                 .as_ref()
@@ -535,6 +536,82 @@ impl Agent {
             self.height,
             id_base,
         )
+    }
+
+    /// Fixed-width App controls / Status items slots (`width = 332`): measure the items, give
+    /// the trailing spacer what's left, and if they don't fit, drop the lowest-priority item (a
+    /// group as a unit) until they do. Fill slots need nothing: their spacer is `Fill`.
+    fn fit_slots(
+        &mut self,
+        zones: &[sliver_config::ResolvedZone],
+        per_zone: &mut [Vec<Cell>],
+        classes: &[String],
+    ) {
+        use sliver_render::Width;
+        let is_px_spacer = |c: &Cell| c.kind == "slot" && matches!(c.width, Width::Fixed(_));
+        // The slots' sizes, then measure with their spacers at zero.
+        let mut want: HashMap<String, f32> = HashMap::new();
+        for c in per_zone.iter_mut().flatten().filter(|c| is_px_spacer(c)) {
+            if let (Width::Fixed(w), Some(s)) = (c.width, &c.slot) {
+                want.insert(s.clone(), w);
+                c.width = Width::Fixed(0.0);
+            }
+        }
+        if want.is_empty() {
+            return;
+        }
+        for _ in 0..crate::published::MAX_OVERFLOW_DROPS {
+            let probe = frame::scene(zones, per_zone, classes.to_vec());
+            let layout = self
+                .renderer
+                .layout(&probe, &self.sheet, self.width, self.height);
+            // Per slot: from its first item's left edge to the spacer's (gap included).
+            let mut too_big: Option<String> = None;
+            let mut sizes: Vec<(usize, usize, f32)> = Vec::new();
+            let mut i = 0;
+            for (zi, cells) in per_zone.iter().enumerate() {
+                let mut first: HashMap<&str, f32> = HashMap::new();
+                for (ci, c) in cells.iter().enumerate() {
+                    let r = layout.items[i + ci];
+                    let Some(s) = c.slot.as_deref() else { continue };
+                    if c.kind != "slot" {
+                        first.entry(s).or_insert(r.x);
+                    } else if let Some(&w) = want.get(s) {
+                        let used = first.get(s).map_or(0.0, |x0| r.x - x0);
+                        if used > w + 0.5 {
+                            too_big.get_or_insert_with(|| s.to_string());
+                        }
+                        sizes.push((zi, ci, (w - used).max(0.0)));
+                    }
+                }
+                i += cells.len();
+            }
+            let Some(slot) = too_big else {
+                for (zi, ci, rest) in sizes {
+                    per_zone[zi][ci].width = Width::Fixed(rest.floor());
+                }
+                return;
+            };
+            // Drop the lowest-priority item of the overfull slot (the last one on a tie).
+            let victim = per_zone
+                .iter()
+                .flatten()
+                .filter(|c| c.slot.as_deref() == Some(slot.as_str()) && c.kind != "slot")
+                .filter_map(|c| c.published.as_ref())
+                .rev()
+                .min_by_key(|p| p.priority)
+                .map(|p| (p.context, p.unit.clone()));
+            let Some((ctx, unit)) = victim else { return };
+            for cells in per_zone.iter_mut() {
+                cells.retain(|c| {
+                    c.slot.as_deref() != Some(slot.as_str())
+                        || !c
+                            .published
+                            .as_ref()
+                            .is_some_and(|p| p.context == ctx && p.unit == unit)
+                });
+            }
+        }
     }
 
     /// Re-renders just the images of frames whose pressed cells changed (after

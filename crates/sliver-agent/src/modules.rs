@@ -284,6 +284,9 @@ pub struct Cell {
     pub timer_total: Option<std::time::Duration>,
     /// `menu = [...]`: the entries of the sub-bar this module opens.
     pub menu: Vec<sliver_config::MenuEntry>,
+    /// Part of a sized App controls / Status items slot (`width` = px or fill), by the slot's
+    /// key: its published items, and the trailing `kind = "slot"` spacer that reserves the rest.
+    pub slot: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -426,11 +429,17 @@ fn cells_in(
                     crate::published::cells(ctx, "status", false, icons, icon_size, out);
                 }
             }
-            if out.len() == start && world.preview {
-                let (label, class) = if m.id.kind == "app-controls" {
-                    ("App controls", "app")
+            let class = if m.id.kind == "app-controls" {
+                "app"
+            } else {
+                "status"
+            };
+            let placeholder_shown = out.len() == start && world.preview;
+            if placeholder_shown {
+                let label = if class == "app" {
+                    "App controls"
                 } else {
-                    ("Status items", "status")
+                    "Status items"
                 };
                 out.push(placeholder(m, &key, label, class));
             }
@@ -443,6 +452,21 @@ fn cells_in(
                 c.on = on.clone();
                 c.pass_through = m.common.pass_through;
                 c.key = format!("{prefix}{}", c.key);
+            }
+            // A sized slot (`width` = px or fill): the items lay out inside it and a trailing
+            // spacer reserves the rest. The agent measures a px slot and trims the spacer, or
+            // drops the lowest-priority items if they don't fit (`Agent::fit_slots`).
+            if !placeholder_shown && m.common.width != sliver_config::Width::Auto {
+                let slot = key.clone();
+                for c in &mut out[start..] {
+                    c.slot = Some(slot.clone());
+                }
+                let mut spacer = placeholder(m, &format!("{slot}#slot"), "", class);
+                spacer.kind = "slot".into();
+                spacer.classes = vec!["slot".into(), class.into()];
+                spacer.content = Content::Spacer;
+                spacer.slot = Some(slot);
+                out.push(spacer);
             }
             continue;
         }
@@ -550,6 +574,7 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         target: None,
         timer_total: None,
         menu: Vec::new(),
+        slot: None,
     };
     let act = |name: String| Action::ModuleAction(name);
     for t in 0..=Group::ALL.len() {
@@ -641,6 +666,7 @@ pub fn menu_cells(
         target: None,
         timer_total: None,
         menu: Vec::new(),
+        slot: None,
     };
     let mut out = Vec::new();
     for (i, e) in entries.iter().enumerate() {
@@ -775,6 +801,7 @@ fn pinned_cell(
         target,
         timer_total: None,
         menu: Vec::new(),
+        slot: None,
     }
 }
 
@@ -1719,6 +1746,7 @@ fn cell(
         target: sp.target,
         timer_total: sp.timer_total,
         menu,
+        slot: None,
         drawer: (collapsed_slider
             || m.id.kind.ends_with("/slider") && ui.expanded && is_collapsible(m))
         .then(|| Drawer {
@@ -2337,6 +2365,7 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
         target: None,
         timer_total: None,
         menu: Vec::new(),
+        slot: None,
     }
 }
 

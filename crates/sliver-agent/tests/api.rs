@@ -897,3 +897,138 @@ fn priority_overflow_width_svg_and_indeterminate() {
             .contains(&"indeterminate".to_owned())
     );
 }
+
+/// `width` on App controls is a slot: the app's items lay out inside it, the rest is empty, and
+/// what doesn't fit gives way by priority. An empty slot keeps its width.
+#[test]
+fn app_controls_width_is_a_slot() {
+    let Some(bus) = bus() else {
+        eprintln!("dbus-daemon not installed; skipping");
+        return;
+    };
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.addr.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let api = ApiLink::serve(conn, true).unwrap();
+    let config = |width: &str| {
+        sliver_config::load_str(
+            &format!(
+                "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"app-controls\", \"custom/after\"]\n\
+                 [modules.app-controls]\nwidth = {width}\n[modules.\"custom/after\"]\nformat = \"after\"\n"
+            ),
+            std::path::Path::new("."),
+        )
+        .config
+    };
+    let render = |width: &str, api: &ApiLink| {
+        let mut world = World::at(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 0).unwrap());
+        world.published = Published::snapshot(&api.api);
+        let mut a = Agent::new(
+            config(width),
+            Stylesheet::sliver(),
+            Renderer::new(Fonts::embedded()),
+            Icons::builtin_only(),
+            2008,
+            60,
+        );
+        a.render(&world);
+        let f = a.frame(Layer::Base).unwrap();
+        let after = f.cells.iter().position(|c| c.id == "custom/after").unwrap();
+        let ids: Vec<String> = f
+            .cells
+            .iter()
+            .filter(|c| c.published.is_some())
+            .map(|c| c.key.rsplit_once('#').unwrap().1.to_owned())
+            .collect();
+        // Where the slot ends: the item after it, minus one gap.
+        let zone_x = f.layout.zones[0].x;
+        let start_of_after = f.layout.items[after].x - zone_x;
+        (
+            ids,
+            start_of_after,
+            f.layout.items.clone(),
+            after,
+            f.image.clone(),
+        )
+    };
+    // Empty: the slot is still reserved. ("auto" collapses to nothing.)
+    let (_, empty_end, _, _, _) = render("400", &api);
+    let (_, auto_end, _, _, _) = render("\"auto\"", &api);
+    // (400 px plus the one gap before the next module.)
+    let reserved = empty_end - auto_end;
+    assert!(
+        (400.0..=420.0).contains(&reserved),
+        "{empty_end} vs {auto_end}"
+    );
+
+    // Six buttons, b0 lowest priority: only what fits in 400 px stays, and the slot stays 400.
+    let app = zbus::blocking::connection::Builder::address(bus.addr.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let path: OwnedObjectPath = app
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_TOUCHBAR),
+            "CreateContext",
+            &(opts(&[("provider", Value::from("org.example.Slot"))]),),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    let items: Vec<_> = (0..6)
+        .map(|i| {
+            opts(&[
+                ("id", Value::from(format!("b{i}"))),
+                ("type", Value::from("button")),
+                ("label", Value::from("Button")),
+                ("priority", Value::from(i)),
+            ])
+        })
+        .collect();
+    let _: Vec<String> = app
+        .call_method(
+            Some(BUS_NAME),
+            path.as_str(),
+            Some(IFACE_CONTEXT),
+            "SetItems",
+            &(items,),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    api.set_focus(Focus {
+        window: Some(Window {
+            class: "slot".into(),
+            pid: Some(std::process::id()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let (ids, end, items, after, image) = render("400", &api);
+    check("api-slot", &image);
+    assert!(
+        !ids.is_empty() && ids.len() < 6,
+        "some fit, some gave way: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"b0".to_owned()),
+        "lowest priority goes first: {ids:?}"
+    );
+    assert!(ids.contains(&"b5".to_owned()), "{ids:?}");
+    assert!(
+        (end - empty_end).abs() <= 1.0,
+        "slot keeps its 400 px: {end} vs {empty_end}"
+    );
+    assert!(items[after - 1].w >= 0.0);
+    // fill: the slot takes the zone's leftover, so the next module is pushed to the far end.
+    let (ids, end, _, _, _) = render("\"fill\"", &api);
+    assert_eq!(ids.len(), 6, "{ids:?}");
+    assert!(end > 1500.0, "{end}");
+}
