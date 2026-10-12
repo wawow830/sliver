@@ -1,14 +1,16 @@
 //! sliverd's built-in layers, drawn with sliver-render's embedded font and icons. They depend on
 //! no config, no system fonts and no agent, so Esc/F-keys always render (invariant 1).
 //!
-//! - **F-keys**: Esc + F1–F12. The safe layer's base, and the built-in `fn` layer that stands in
-//!   whenever an active agent has no valid `fn` layer of its own (it satisfies any escape floor).
+//! - **F-keys**: F1–F12 (`keys::safe_keys_for_panel`). The safe layer's base, what the safe hatch
+//!   (Fn double-press + hold) shows, and the `fn` layer while the agent has none of its own.
 //! - **Media**: tiny-dfr's default media row (brightness, mic, search, keyboard light, playback,
-//!   volume). The safe layer's `fn`. Esc leads it on bars without a physical Esc.
+//!   volume). The safe layer's `fn`.
+//!
+//! Esc leads both on bars without a physical Esc.
 
 use sliver_ipc::keys::{self, KEY_ESC};
 use sliver_ipc::proto::{Rect, Region, RegionKind};
-use sliver_render::{Icon, Item, Pixmap, Renderer, Scene, Theme};
+use sliver_render::{Icon, Item, Pixmap, Renderer, Scene, Stylesheet};
 
 /// evdev codes for tiny-dfr's default media layer.
 pub mod media_keys {
@@ -46,7 +48,7 @@ impl BuiltinLayer {
         kind: BuiltinKind,
         lead_with_esc: bool,
         renderer: &mut Renderer,
-        theme: &Theme,
+        sheet: &Stylesheet,
         width: u32,
         height: u32,
     ) -> BuiltinLayer {
@@ -84,7 +86,7 @@ impl BuiltinLayer {
             }
         }
         let scene = Scene::new(keys.iter().map(|(item, _)| item.clone()).collect());
-        let rects = renderer.layout(&scene, theme, width, height);
+        let rects = renderer.layout(&scene, sheet, width, height).items;
         let regions = touch_regions(&rects, width, height)
             .into_iter()
             .zip(&keys)
@@ -95,7 +97,7 @@ impl BuiltinLayer {
                 kind: RegionKind::Key { keys: vec![*key] },
             })
             .collect();
-        let image = renderer.render_new(&scene, theme, width, height);
+        let image = renderer.render_new(&scene, sheet, width, height);
         BuiltinLayer {
             kind,
             scene,
@@ -109,14 +111,14 @@ impl BuiltinLayer {
         &self,
         pressed: &[u32],
         renderer: &mut Renderer,
-        theme: &Theme,
+        sheet: &Stylesheet,
         out: &mut Pixmap,
     ) {
         let mut scene = self.scene.clone();
         for (i, item) in scene.items_mut().enumerate() {
             item.pressed = pressed.contains(&(i as u32));
         }
-        renderer.render(&scene, theme, out);
+        renderer.render(&scene, sheet, out);
     }
 }
 
@@ -150,7 +152,7 @@ mod tests {
 
     fn layer(kind: BuiltinKind, esc: bool, width: u32) -> BuiltinLayer {
         let mut r = Renderer::new(Fonts::embedded());
-        BuiltinLayer::new(kind, esc, &mut r, &Theme::tiny_dfr(), width, 60)
+        BuiltinLayer::new(kind, esc, &mut r, &Stylesheet::classic(), width, 60)
     }
 
     #[test]
@@ -165,6 +167,7 @@ mod tests {
             };
             for (kind, esc) in [
                 (BuiltinKind::FKeys, true),
+                (BuiltinKind::FKeys, false),
                 (BuiltinKind::Media, false),
                 (BuiltinKind::Media, true),
             ] {
@@ -177,7 +180,7 @@ mod tests {
                 }
             }
             let f = layer(BuiltinKind::FKeys, true, width);
-            assert!(validate::escape_floor(&f.regions, Some(&[]), &keys::ESCAPE_FLOOR).is_empty());
+            assert!(validate::missing_safe_keys(&[&f.regions], &keys::SAFE_KEYS).is_empty());
         }
     }
 }

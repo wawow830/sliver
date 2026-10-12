@@ -13,7 +13,7 @@ use sliver_ipc::proto::{
     CodecError, DaemonMsg, DisplayPolicy, DisplayState, ErrorCode, KeyMode, Layer, PROTO,
     PanelInfo, PixelFormat, Present, ProtoVersion, Rect, Region, RegionKind, Role, TouchPhase,
 };
-use sliver_render::{Fonts, Item, Pixmap, Renderer, Scene, Theme};
+use sliver_render::{Fonts, Item, Pixmap, Renderer, Scene, Stylesheet};
 use sliverd::backend::TouchEvent;
 use sliverd::builtin::{BuiltinKind, media_keys};
 use sliverd::fake::{FakeHardware, FakeShm, KeyEvent};
@@ -204,17 +204,17 @@ fn check_png(name: &str, actual: &Pixmap) {
 /// handles itself, and a volume key. Returns (normal, pressed, regions).
 fn agent_frame() -> (Pixmap, Pixmap, Vec<Region>) {
     let mut r = Renderer::new(Fonts::embedded());
-    let theme = Theme::tiny_dfr();
+    let sheet = Stylesheet::classic();
     let items = vec![
         Item::text("Copy").fill(1),
         Item::text("now playing").fill(4),
         Item::text("vol+").fill(1),
     ];
     let scene = Scene::new(items.clone());
-    let normal = r.render_new(&scene, &theme, 2008, 60);
+    let normal = r.render_new(&scene, &sheet, 2008, 60);
     let pressed_scene = Scene::new(items.into_iter().map(|i| i.pressed(true)).collect());
-    let pressed = r.render_new(&pressed_scene, &theme, 2008, 60);
-    let rects = r.layout(&scene, &theme, 2008, 60);
+    let pressed = r.render_new(&pressed_scene, &sheet, 2008, 60);
+    let rects = r.layout(&scene, &sheet, 2008, 60).items;
     let rect = |i: usize| Rect::new(rects[i].x as u32, 0, rects[i].w as u32, 60);
     let regions = vec![
         Region {
@@ -275,14 +275,14 @@ fn starts_on_the_safe_layer() {
 #[test]
 fn tap_presses_and_releases_with_feedback() {
     let mut rig = Rig::new();
-    rig.down(0, slot_x(1, 13)); // F1
+    rig.down(0, slot_x(0, 12)); // F1
     assert_eq!(rig.keys(), vec![Down(KEY_F1)]);
     check_png("safe-f1-pressed", &rig.hw.display.frame());
     let flushes = rig.hw.display.flush_count();
-    rig.mv(0, slot_x(1, 13) + 5.0);
+    rig.mv(0, slot_x(0, 12) + 5.0);
     assert!(rig.keys().is_empty());
     assert_eq!(rig.hw.display.flush_count(), flushes, "no change, no flush");
-    rig.up(0, slot_x(1, 13));
+    rig.up(0, slot_x(0, 12));
     assert_eq!(rig.keys(), vec![Up(KEY_F1)]);
     check_png("safe-fkeys", &rig.hw.display.frame());
     // Damage covered only the F1 button, not the whole bar.
@@ -295,7 +295,7 @@ fn tap_presses_and_releases_with_feedback() {
 #[test]
 fn slide_off_releases_slide_back_presses_never_a_second_region() {
     let mut rig = Rig::new();
-    let (f1, f2) = (slot_x(1, 13), slot_x(2, 13));
+    let (f1, f2) = (slot_x(0, 12), slot_x(1, 12));
     rig.down(0, f1);
     rig.mv(0, f2); // onto F2: releases F1, does NOT press F2
     assert_eq!(rig.keys(), vec![Down(KEY_F1), Up(KEY_F1)]);
@@ -310,11 +310,11 @@ fn slide_off_releases_slide_back_presses_never_a_second_region() {
 #[test]
 fn multitouch_chord_and_shared_keys() {
     let mut rig = Rig::new();
-    rig.down(0, slot_x(1, 13));
-    rig.down(1, slot_x(12, 13));
+    rig.down(0, slot_x(0, 12));
+    rig.down(1, slot_x(11, 12));
     assert_eq!(rig.keys(), vec![Down(KEY_F1), Down(KEY_F12)]);
     // A third finger on F1 doesn't re-press, and F1 stays down until the last finger lifts.
-    rig.down(2, slot_x(1, 13) + 10.0);
+    rig.down(2, slot_x(0, 12) + 10.0);
     rig.up(0, 0.0);
     assert!(rig.keys().is_empty());
     rig.up(2, 0.0);
@@ -323,23 +323,23 @@ fn multitouch_chord_and_shared_keys() {
 }
 
 #[test]
-fn touch_outside_any_region_does_nothing() {
-    let mut rig = Rig::with(2008, "Mac14,7", 255, Config::default());
-    // Gaps between built-in buttons belong to the nearest button: no dead zones.
-    let gap = slot_x(0, 13) + (2008.0 - 16.0 * 12.0) / 13.0 / 2.0 + 4.0;
+fn gaps_between_builtin_keys_have_no_dead_zone() {
+    let mut rig = Rig::new();
+    // Just right of F1's button, inside the 16 px gap: still F1.
+    let gap = slot_x(0, 12) + (2008.0 - 16.0 * 11.0) / 12.0 / 2.0 + 4.0;
     rig.down(0, gap);
     rig.up(0, gap);
-    assert_eq!(rig.keys(), vec![Down(KEY_ESC), Up(KEY_ESC)]);
+    assert_eq!(rig.keys(), vec![Down(KEY_F1), Up(KEY_F1)]);
 }
 
 #[test]
 fn fn_swaps_to_media_and_held_touch_keeps_its_key() {
     let mut rig = Rig::new();
-    rig.down(0, slot_x(3, 13)); // F3
+    rig.down(0, slot_x(2, 12)); // F3
     rig.input(Input::FnKey { held: true });
     assert_eq!(rig.d.shown_view(), View::Builtin(BuiltinKind::Media));
     check_png("safe-media", &rig.hw.display.frame());
-    rig.up(0, slot_x(3, 13));
+    rig.up(0, slot_x(2, 12));
     assert_eq!(rig.keys(), vec![Down(KEY_F3), Up(KEY_F3)]);
     // Media layer on a bar with physical Esc: 12 icons, the first is brightness down.
     rig.down(0, slot_x(0, 12));
@@ -390,8 +390,8 @@ fn dims_turns_off_and_wake_touch_is_swallowed() {
     assert_eq!(rig.d.display_state(), DisplayState::Dimmed);
     assert_eq!(rig.hw.backlight.current(), Some(1));
     // Touch while dimmed works and brightens.
-    rig.down(0, slot_x(1, 13));
-    rig.up(0, slot_x(1, 13));
+    rig.down(0, slot_x(0, 12));
+    rig.up(0, slot_x(0, 12));
     assert_eq!(rig.keys(), vec![Down(KEY_F1), Up(KEY_F1)]);
     assert_eq!(rig.hw.backlight.current(), Some(128));
     rig.advance(60_000);
@@ -406,9 +406,9 @@ fn dims_turns_off_and_wake_touch_is_swallowed() {
     assert_eq!(rig.d.display_state(), DisplayState::On);
     rig.advance(60_000);
     // Wake touch: no key, display on.
-    rig.down(0, slot_x(1, 13));
-    rig.mv(0, slot_x(1, 13) + 1.0);
-    rig.up(0, slot_x(1, 13));
+    rig.down(0, slot_x(0, 12));
+    rig.mv(0, slot_x(0, 12) + 1.0);
+    rig.up(0, slot_x(0, 12));
     assert!(rig.keys().is_empty());
     assert_eq!(rig.d.display_state(), DisplayState::On);
 }
@@ -559,8 +559,8 @@ fn agent_death_releases_held_keys_and_shows_safe_layer() {
     );
     check_png("safe-fkeys", &rig.hw.display.frame());
     // The finger that was on the dead agent's region does nothing more, even on a safe key.
-    rig.mv(0, slot_x(1, 13));
-    rig.up(0, slot_x(1, 13));
+    rig.mv(0, slot_x(0, 12));
+    rig.up(0, slot_x(0, 12));
     assert!(rig.keys().is_empty());
 }
 
@@ -590,40 +590,100 @@ fn bye_and_garbage_fall_back() {
 }
 
 #[test]
-fn escape_floor_swaps_in_builtin_fn_layer() {
+fn fn_layer_is_fully_editable() {
     let (mut rig, regions) = rig_with_agent();
-    // Agent base has no F-keys and no fn layer: the built-in fn layer covers the floor.
+    // No agent fn layer: Fn shows the built-in F-keys.
     rig.input(Input::FnKey { held: true });
     assert_eq!(rig.d.shown_view(), View::Builtin(BuiltinKind::FKeys));
-    // An fn layer that still lacks F-keys is refused.
-    let out = rig.present(A, 2, Layer::Fn, 1, None, regions.clone());
-    assert_eq!(error_codes(&out, A), vec![ErrorCode::EscapeFloor]);
-    assert!(sent(&out, A).contains(&DaemonMsg::Presented { serial: 2 }));
-    assert_eq!(rig.d.shown_view(), View::Builtin(BuiltinKind::FKeys));
-    rig.down(0, slot_x(5, 13));
-    rig.up(0, slot_x(5, 13));
+    rig.down(0, slot_x(4, 12));
+    rig.up(0, slot_x(4, 12));
     assert_eq!(rig.keys(), vec![Down(KEY_F5), Up(KEY_F5)]);
-
-    // A proper F-key fn layer is accepted...
-    let fkeys: Vec<Region> = F_KEYS
-        .iter()
-        .enumerate()
-        .map(|(i, k)| Region {
-            id: 100 + i as u32,
-            rect: Rect::new(i as u32 * 160, 0, 160, 60),
-            kind: RegionKind::Key { keys: vec![*k] },
-        })
-        .collect();
-    let out = rig.present(A, 3, Layer::Fn, 2, None, fkeys);
-    assert!(error_codes(&out, A).is_empty());
+    // An fn layer without any F-keys is accepted as is (H4 revised).
+    let out = rig.present(A, 2, Layer::Fn, 1, None, regions.clone());
+    assert_eq!(sent(&out, A), vec![DaemonMsg::Presented { serial: 2 }]);
     assert_eq!(rig.d.shown_view(), View::Agent(Layer::Fn));
-    // ...until a new base layer can't stand without it... which it can, so the fn stays.
-    let out = rig.present(A, 4, Layer::Base, 1, Some(2), regions.clone());
-    assert!(error_codes(&out, A).is_empty());
-    assert_eq!(rig.d.shown_view(), View::Agent(Layer::Fn));
-    // clear_layer falls back to the built-in fn layer.
+    // clear_layer falls back to the built-in one.
     rig.send(A, AgentMsg::ClearLayer { layer: Layer::Fn });
     assert_eq!(rig.d.shown_view(), View::Builtin(BuiltinKind::FKeys));
+}
+
+/// Agent `A` with an fn layer that has no F-keys, so only the hatch can reach them.
+fn rig_without_fkeys() -> (Rig, Vec<Region>) {
+    let (mut rig, regions) = rig_with_agent();
+    rig.present(A, 2, Layer::Fn, 1, None, regions.clone());
+    (rig, regions)
+}
+
+#[test]
+fn safe_hatch_double_press_fn_and_hold() {
+    let (mut rig, regions) = rig_without_fkeys();
+    // A finger on the agent's widget area.
+    let widget = regions[1].rect.x as f32 + 10.0;
+    rig.down(5, widget);
+    // Single Fn press: the agent's fn layer.
+    rig.input(Input::FnKey { held: true });
+    assert_eq!(rig.d.shown_view(), View::Agent(Layer::Fn));
+    rig.now += 100;
+    rig.input(Input::FnKey { held: false });
+    rig.now += 150;
+    // Second press within 400 ms: the hatch opens. Captured touches are cancelled first, then
+    // the agent hears hatch{active}, then fn{held}.
+    let out = rig.input(Input::FnKey { held: true });
+    assert!(rig.d.hatch_active());
+    let msgs = sent(&out, A);
+    assert!(matches!(
+        msgs[0],
+        DaemonMsg::Touch {
+            region: 11,
+            phase: TouchPhase::Cancel,
+            ..
+        }
+    ));
+    assert_eq!(
+        msgs[1..],
+        [
+            DaemonMsg::Hatch { active: true },
+            DaemonMsg::FnKey { held: true }
+        ]
+    );
+    assert_eq!(rig.d.shown_view(), View::Builtin(BuiltinKind::FKeys));
+    check_png("safe-fkeys", &rig.hw.display.frame());
+    rig.up(5, widget); // the cancelled finger lifts: nothing
+    // F-keys work and never reach the agent.
+    let out = rig.down(0, slot_x(0, 12));
+    assert!(sent(&out, A).is_empty());
+    rig.up(0, slot_x(0, 12));
+    assert_eq!(rig.keys(), vec![Down(KEY_F1), Up(KEY_F1)]);
+    // Agent frames keep arriving but don't show while the hatch is open.
+    let out = rig.present(A, 3, Layer::Base, 1, None, regions.clone());
+    assert_eq!(sent(&out, A), vec![DaemonMsg::Presented { serial: 3 }]);
+    assert_eq!(rig.d.shown_view(), View::Builtin(BuiltinKind::FKeys));
+    // Releasing Fn closes it: a key held under the hatch is released.
+    rig.down(0, slot_x(0, 12));
+    rig.now += 1_000; // (the widget touch's ping is still within its 2 s)
+    let out = rig.input(Input::FnKey { held: false });
+    assert_eq!(rig.keys(), vec![Down(KEY_F1), Up(KEY_F1)]);
+    assert_eq!(
+        sent(&out, A),
+        vec![
+            DaemonMsg::Hatch { active: false },
+            DaemonMsg::FnKey { held: false }
+        ]
+    );
+    assert!(rig.d.agent_drives());
+    assert_eq!(rig.d.shown_view(), View::Agent(Layer::Base));
+}
+
+#[test]
+fn safe_hatch_needs_a_quick_double_press() {
+    let (mut rig, _) = rig_without_fkeys();
+    rig.input(Input::FnKey { held: true });
+    rig.now += 100;
+    rig.input(Input::FnKey { held: false });
+    rig.now += 400; // 500 ms between the downs
+    rig.input(Input::FnKey { held: true });
+    assert!(!rig.d.hatch_active());
+    assert_eq!(rig.d.shown_view(), View::Agent(Layer::Fn));
 }
 
 #[test]

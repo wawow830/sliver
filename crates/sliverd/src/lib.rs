@@ -2,7 +2,7 @@
 //! and always keeps a built-in safe layer (Esc + F-keys) available (GOAL invariant 1).
 //!
 //! The contract with `sliver-agent` is `docs/api.md` §6 and `sliver_ipc`. Layout:
-//! - [`daemon`]: the sans-IO core. Agent frames + key regions, the escape floor, Fn layers,
+//! - [`daemon`]: the sans-IO core. Agent frames + key regions, Fn layers, the safe hatch,
 //!   liveness, sessions, display power. Driven by [`daemon::Input`] with simulated time in tests.
 //! - [`builtin`]: the safe layer and built-in fn layer, rendered with sliver-render's embedded
 //!   font and icons.

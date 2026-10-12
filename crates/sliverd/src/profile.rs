@@ -16,7 +16,7 @@ pub enum Family {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceProfile {
     pub family: Family,
-    /// Whether the machine has a physical Esc key. Without one, Esc joins the escape floor.
+    /// Whether the machine has a physical Esc key. Without one, Esc leads the built-in layers.
     pub physical_esc: bool,
     /// Backlight while active, in device units.
     pub active_brightness: u32,
@@ -65,12 +65,12 @@ impl DeviceProfile {
         }
     }
 
-    /// Keys that must always be reachable (invariant 1).
-    pub fn escape_floor(&self) -> &'static [u16] {
+    /// Keys of the built-in safe layer (invariant 1): F1–F12, Esc first without a physical Esc.
+    pub fn safe_keys(&self) -> &'static [u16] {
         if self.physical_esc {
             &keys::F_KEYS
         } else {
-            &keys::ESCAPE_FLOOR
+            &keys::SAFE_KEYS
         }
     }
 }
@@ -85,16 +85,16 @@ mod tests {
         assert_eq!(m2.family, Family::AppleSilicon);
         assert!(m2.physical_esc);
         assert_eq!((m2.active_brightness, m2.dim_brightness), (128, 1));
-        assert_eq!(m2.escape_floor(), &keys::F_KEYS);
+        assert_eq!(m2.safe_keys(), &keys::F_KEYS);
 
         let t2 = DeviceProfile::detect("MacBookPro15,1", 2170, 2, None);
         assert_eq!(t2.family, Family::T2);
         assert!(!t2.physical_esc);
         assert_eq!((t2.active_brightness, t2.dim_brightness), (2, 1));
-        assert_eq!(t2.escape_floor(), &keys::ESCAPE_FLOOR);
+        assert_eq!(t2.safe_keys(), &keys::SAFE_KEYS);
 
         let over = DeviceProfile::detect("Mac14,7", 2008, 255, Some(false));
-        assert_eq!(over.escape_floor(), &keys::ESCAPE_FLOOR);
+        assert_eq!(over.safe_keys(), &keys::SAFE_KEYS);
         assert_eq!(
             DeviceProfile::detect("Weird1,1", 1000, 100, None).family,
             Family::Unknown

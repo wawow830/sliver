@@ -1103,6 +1103,10 @@ version = "0.1.0"
 [[package]]
 name = "sliverd"
 version = "0.1.0"
+dependencies = [
+ "sliver-ipc",
+ "sliver-render",
+]
 
 [[package]]
 name = "slotmap"

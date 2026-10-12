@@ -25,25 +25,28 @@ Owner: **hazel**. Contract with the agent: `docs/api.md` §6 (cedar). Hardware: 
 sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
 
 ## Layers
-- **Safe layer** (no agent driving): base = Esc + F1–F12, fn = tiny-dfr's media row
-  (swapped by `Config::media_layer_default`). Esc leads the media row only on bars without
-  a physical Esc (≥ 2170 px, or `physical_esc = false`).
-- **Built-in fn layer** (agent driving but its fn layer is missing, cleared or failed the floor):
-  Esc + F1–F12.
-- The agent drives once it has presented a `base` frame. Both built-ins are rendered with
-  `Fonts::embedded()` and built-in icons. Region ids are item indices, and gaps are split at the
-  midpoint, so there are no dead zones.
+- **Built-in F-key layer**: F1–F12, with Esc first on bars without a physical Esc (≥ 2170 px, or
+  `physical_esc = false`), i.e. `DeviceProfile::safe_keys()`. It's the safe layer's base, what the
+  **safe hatch** shows, and the fn layer while the agent has none (never presented, or `clear_layer`).
+- **Media layer**: tiny-dfr's media row (Esc first on the same bars). It's the safe layer's fn.
+  `Config::media_layer_default` swaps base and fn.
+- The agent drives once it has presented a `base` frame. Frames are never rejected for missing
+  Esc/F-keys (H4 revised). Both built-ins render with `Fonts::embedded()`, the built-in icons and
+  `Stylesheet::classic()`. Region ids are item indices, and gaps are split at the midpoint, so there
+  are no dead zones.
+- **Safe hatch** (invariant 1, `sliver_ipc::hatch::FnHatch`): two Fn key-downs ≤ 400 ms apart, then hold.
+  While it's open, the built-in F-key layer is shown and touched whatever the agent does. On open or
+  close: `cancel_all`, then `hatch{active}`, then `fn{held}`. Agent presents are kept for later.
 
 ## Rules implemented (api.md §6)
 - Touch semantics: `sliver_ipc::router::TouchRouter` (shared with cedar's `FakeDaemon`). Any change
-  of frame source (agent ⇄ built-in, agent A → B) and display-off call `cancel_all`, which
-  releases every held key.
+  of frame source (agent ⇄ built-in, agent A → B, hatch open/close) and display-off call
+  `cancel_all`, which releases every held key.
 - Pressed feedback: built-ins re-render with the item pressed. Agent frames blit the region from
   `pressed`, or lighten it 25% if there's no pressed image. A region is highlighted only if its id
   **and** rect match the capture.
 - Unknown message → error, continue. Malformed packet, hello missing, proto major mismatch, `bye`,
-  pong timeout or hangup → close + safe layer. Invalid frame → error, previous frame stays. Floor
-  failure → frame accepted, fn := built-in, `escape_floor` error.
+  pong timeout or hangup → close + safe layer. Invalid frame → error, previous frame stays.
 - Liveness: ping on display wake (to On) and on an agent-region touch-down if none in 5 s. The
   pong deadline (2 s) is the only liveness timer, and it's armed only while a ping is outstanding.
 - Display power: `idle.rs`. Dims at 30 s, off at 60 s (or per the agent's `display_policy`), and off
@@ -64,5 +67,5 @@ Tests: `crates/sliverd/tests/daemon.rs`. Snapshots are in `tests/snapshots/`
 ## Not yet
 - Real event loop (epoll over listener/conns/input fd + timerfd) and real backends (birch, T-next).
 - `/etc/sliver/sliverd.toml` parsing (`Config` is ready).
-- Fn double-press-hold safe hatch (H14, docs/customization.md §9). Waiting for the answer and the §6 update.
+- Merge cedar's `FakeDaemon` into `sliverd::Daemon` + fake hardware (agreed, once this is stable).
 - Pixel shift, `follow_screen` reading the main backlight on change (it's read on activity now).

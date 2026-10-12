@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use sliver_ipc::hatch::FnHatch;
 use sliver_ipc::proto::{
     CodecError, DaemonMsg, DisplayState, ErrorCode, KeyMode, Layer, PING_MIN_INTERVAL_MS,
     PONG_TIMEOUT_MS, PROTO, PanelInfo, Present, Rect, Region, Role, TouchPhase,
@@ -14,7 +15,7 @@ use sliver_ipc::proto::{
 use sliver_ipc::router::{Routed, TouchRouter};
 use sliver_ipc::{AgentMsg, validate};
 use sliver_render::panel::{self, Span};
-use sliver_render::{Fonts, Pixmap, Renderer, Theme};
+use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};
 
 use crate::backend::{Backends, PixelSource, TouchEvent};
 use crate::builtin::{BuiltinKind, BuiltinLayer};
@@ -145,7 +146,7 @@ pub struct Daemon {
     panel: PanelInfo,
     profile: DeviceProfile,
     renderer: Renderer,
-    theme: Theme,
+    sheet: Stylesheet,
     fkeys: BuiltinLayer,
     media: BuiltinLayer,
     safe_base: BuiltinKind,
@@ -162,6 +163,8 @@ pub struct Daemon {
     keys: KeyState,
     scratch: Vec<u8>,
     fn_held: bool,
+    /// Fn double-press + hold: built-in layer, whatever the agent does (invariant 1).
+    hatch: FnHatch,
     idle: Idle,
     backlight: Option<u32>,
     /// The composed frame.
@@ -188,17 +191,11 @@ impl Daemon {
             config.physical_esc,
         );
         let mut renderer = Renderer::new(Fonts::embedded());
-        let theme = Theme::tiny_dfr();
+        let sheet = Stylesheet::classic();
         let (w, h) = (panel.width, panel.height);
-        let fkeys = BuiltinLayer::new(BuiltinKind::FKeys, true, &mut renderer, &theme, w, h);
-        let media = BuiltinLayer::new(
-            BuiltinKind::Media,
-            !profile.physical_esc,
-            &mut renderer,
-            &theme,
-            w,
-            h,
-        );
+        let esc = !profile.physical_esc;
+        let fkeys = BuiltinLayer::new(BuiltinKind::FKeys, esc, &mut renderer, &sheet, w, h);
+        let media = BuiltinLayer::new(BuiltinKind::Media, esc, &mut renderer, &sheet, w, h);
         let (safe_base, safe_fn) = if config.media_layer_default {
             (BuiltinKind::Media, BuiltinKind::FKeys)
         } else {
@@ -216,7 +213,7 @@ impl Daemon {
             panel,
             profile,
             renderer,
-            theme,
+            sheet,
             fkeys,
             media,
             safe_base,
@@ -231,6 +228,7 @@ impl Daemon {
             keys: KeyState::default(),
             scratch: Vec::new(),
             fn_held: false,
+            hatch: FnHatch::new(),
             idle,
             backlight: None,
             frame,
@@ -266,8 +264,16 @@ impl Daemon {
 
     /// The layer on screen right now.
     pub fn shown_view(&self) -> View {
+        if self.hatch.active() {
+            return View::Builtin(BuiltinKind::FKeys);
+        }
         let (base, fn_layer) = self.layers();
         if self.fn_held { fn_layer } else { base }
+    }
+
+    /// Whether the safe hatch is open.
+    pub fn hatch_active(&self) -> bool {
+        self.hatch.active()
     }
 
     /// The composed frame (what the panel shows, unless the display is off).
@@ -293,16 +299,7 @@ impl Daemon {
                 self.clients.remove(&client);
             }
             Input::Touch(ev) => self.touch(now, ev),
-            Input::FnKey { held } => {
-                self.activity(now);
-                if self.fn_held != held {
-                    self.fn_held = held;
-                    if let Some(c) = self.active {
-                        self.send(c, DaemonMsg::FnKey { held });
-                    }
-                    self.recompose();
-                }
-            }
+            Input::FnKey { held } => self.fn_key(now, held),
             Input::Activity => self.activity(now),
             Input::Lid { closed } => {
                 let s = self.idle.set_lid(closed, now);
@@ -327,6 +324,27 @@ impl Daemon {
         let after = self.idle.tick(now);
         if after != before {
             self.display_changed(now, after);
+        }
+    }
+
+    fn fn_key(&mut self, now: u64, held: bool) {
+        self.activity(now);
+        let was = self.hatch.active();
+        let open = self.hatch.fn_key(held, now);
+        if open != was {
+            // The visible layer changes owner: nothing captured on the old one stays pressed.
+            let routed = self.router.cancel_all();
+            self.route(now, routed, 0);
+            if let Some(c) = self.active {
+                self.send(c, DaemonMsg::Hatch { active: open });
+            }
+        }
+        if self.fn_held != held || open != was {
+            self.fn_held = held;
+            if let Some(c) = self.active {
+                self.send(c, DaemonMsg::FnKey { held });
+            }
+            self.recompose();
         }
     }
 
@@ -441,6 +459,9 @@ impl Daemon {
         let state = self.idle.state();
         if state != DisplayState::On {
             self.send(client, DaemonMsg::Display { state });
+        }
+        if self.hatch.active() {
+            self.send(client, DaemonMsg::Hatch { active: true });
         }
         if self.fn_held {
             self.send(client, DaemonMsg::FnKey { held: true });
@@ -684,36 +705,15 @@ impl Daemon {
                 }
             },
         };
-        let floor = self.profile.escape_floor();
         let frame = Frame {
             image,
             pressed,
             regions: p.regions,
         };
-        let missing = match p.layer {
-            Layer::Base => {
-                let fn_regions = c.fn_layer.as_ref().map(|f| f.regions.as_slice());
-                let missing = validate::escape_floor(&frame.regions, fn_regions, floor);
-                if !missing.is_empty() {
-                    c.fn_layer = None;
-                }
-                c.base = Some(frame);
-                missing
-            }
-            Layer::Fn => {
-                let base = c.base.as_ref().map_or(&[][..], |f| f.regions.as_slice());
-                let missing = validate::escape_floor(base, Some(&frame.regions), floor);
-                c.fn_layer = missing.is_empty().then_some(frame);
-                missing
-            }
-        };
-        if !missing.is_empty() {
-            self.error(
-                client,
-                ErrorCode::EscapeFloor,
-                format!("keys {missing:?} unreachable; built-in fn layer in use"),
-                serial,
-            );
+        // Layouts are fully editable (H4 revised): no safe-key check. The hatch covers invariant 1.
+        match p.layer {
+            Layer::Base => c.base = Some(frame),
+            Layer::Fn => c.fn_layer = Some(frame),
         }
         self.send(client, DaemonMsg::Presented { serial: p.serial });
         self.recompose();
@@ -874,7 +874,9 @@ impl Daemon {
 
     /// Rebuilds the frame from the shown layer plus pressed feedback, then flushes the damage.
     fn recompose(&mut self) {
-        let source = self.agent_drives().then_some(self.active).flatten();
+        let source = (self.agent_drives() && !self.hatch.active())
+            .then_some(self.active)
+            .flatten();
         if source != self.touch_source {
             // Captures refer to the old source's regions: release everything.
             self.touch_source = source;
@@ -902,7 +904,7 @@ impl Daemon {
                     self.frame.data_mut().copy_from_slice(layer.image.data());
                 } else {
                     let ids: Vec<u32> = pressed.iter().map(|r| r.id).collect();
-                    layer.render_pressed(&ids, &mut self.renderer, &self.theme, &mut self.frame);
+                    layer.render_pressed(&ids, &mut self.renderer, &self.sheet, &mut self.frame);
                 }
             }
             View::Agent(layer) => {
