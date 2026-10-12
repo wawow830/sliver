@@ -99,3 +99,24 @@ pub fn agent_status(done: impl Fn(Agent) + 'static) {
         }
     });
 }
+
+/// Mirror to Touch Bar (ux.md §4, Q10): ask the agent to show `layout` on the real bar
+/// (`Control1.SetLayout`); `""` returns it to the rules. Fire and forget, off the main thread;
+/// an absent agent is fine.
+pub fn set_layout(layout: &str) {
+    let layout = layout.to_owned();
+    std::thread::spawn(move || set_layout_now(&layout));
+}
+
+/// Blocking version, for the window closing (a background thread would die with the process).
+pub fn set_layout_now(layout: &str) {
+    if let Ok(conn) = Connection::session() {
+        let _ = conn.call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_CONTROL),
+            "SetLayout",
+            &(layout,),
+        );
+    }
+}

@@ -297,8 +297,11 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
     state).
   - The window **refreshes when the config changes on disk** from outside (an editor, `sliverctl
     config set`). GIO directory monitors catch rename-saves, and the app's own saves are skipped.
-- Next: drag and drop on the preview, Mirror to Touch Bar, and the Gestures/Appearance/Apps/
-  Profiles pages.
+- **Mirror** (Q10, on by default): while the window is focused, the base-layer layout being
+  edited shows on the real bar (`Control1.SetLayout`). It's reset when focus leaves, the window
+  closes, or the switch is turned off. If the app is killed, the agent should drop the override
+  when its caller leaves the bus (asked ash).
+- Next: drag and drop on the preview, and the Gestures/Appearance/Apps/Profiles pages.
 - **Testing headless** (never on the live session): `gtk4-broadwayd :7 &` then
   `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`
   (a sandboxed config dir, so edits never touch yours), and open

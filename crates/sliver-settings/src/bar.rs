@@ -85,6 +85,20 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             .build(),
     );
     controls.append(&locked);
+    let mirror = gtk::Switch::builder()
+        .valign(gtk::Align::Center)
+        .active(ui.mirror.get())
+        .build();
+    mirror.set_tooltip_text(Some(
+        "Show the layout you're editing on the real Touch Bar while this window is focused",
+    ));
+    controls.append(
+        &gtk::Label::builder()
+            .label("Mirror")
+            .margin_start(16)
+            .build(),
+    );
+    controls.append(&mirror);
     page.append(&controls);
 
     // Drawn at half scale (1004x30) so it stays legible; narrower windows scroll sideways.
@@ -174,6 +188,12 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 }
             };
             *shown_layout.borrow_mut() = layout.clone();
+            // Only base-layer layouts are mirrored: the agent's SetLayout replaces the base layer.
+            if layer == "base" {
+                ui.mirror_layout(&layout);
+            } else {
+                ui.stop_mirror();
+            }
             match preview.borrow_mut().render(&layer, ctx.clone()) {
                 Ok(p) => *frame.borrow_mut() = pages_surface(&p),
                 Err(e) => {
@@ -247,6 +267,17 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     }
     picture.add_controller(click);
     picture.set_cursor_from_name(Some("pointer"));
+    {
+        let (ui, shown_layout) = (ui.clone(), shown_layout.clone());
+        mirror.connect_active_notify(move |m| {
+            ui.mirror.set(m.is_active());
+            if m.is_active() {
+                ui.mirror_layout(&shown_layout.borrow());
+            } else {
+                ui.stop_mirror();
+            }
+        });
+    }
     refresh();
     page.upcast()
 }

@@ -88,6 +88,11 @@ pub(crate) struct Ui {
     refresh_pending: Cell<bool>,
     /// The user file's text as we last loaded or wrote it, to tell our own saves from others'.
     last_text: RefCell<Option<String>>,
+    /// Mirror to Touch Bar (Q10: on by default) and what we last asked the agent to show.
+    pub mirror: Cell<bool>,
+    mirrored: RefCell<Option<String>>,
+    /// The layout the Bar page shows, mirrored again when the window regains focus.
+    mirror_wanted: RefCell<Option<String>>,
 }
 
 impl Ui {
@@ -97,6 +102,25 @@ impl Ui {
 
     pub fn win_widget(&self) -> adw::ApplicationWindow {
         self.win.clone()
+    }
+
+    /// Shows `layout` on the real bar if mirroring is on and the window is focused.
+    pub fn mirror_layout(&self, layout: &str) {
+        *self.mirror_wanted.borrow_mut() = Some(layout.to_owned());
+        if !self.mirror.get() || !self.win.is_active() {
+            return;
+        }
+        if self.mirrored.borrow().as_deref() != Some(layout) {
+            live::set_layout(layout);
+            *self.mirrored.borrow_mut() = Some(layout.to_owned());
+        }
+    }
+
+    /// Back to what the rules pick.
+    pub fn stop_mirror(&self) {
+        if self.mirrored.borrow_mut().take().is_some() {
+            live::set_layout("");
+        }
     }
 
     pub fn toast(&self, msg: &str) {
@@ -132,7 +156,32 @@ fn main() -> glib::ExitCode {
             monitors: RefCell::default(),
             refresh_pending: Cell::new(false),
             last_text: RefCell::default(),
+            mirror: Cell::new(true),
+            mirrored: RefCell::default(),
+            mirror_wanted: RefCell::default(),
         });
+        // Mirroring only while the window is focused, and never after it closes (ux.md §4).
+        {
+            let ui = ui.clone();
+            win.connect_is_active_notify(move |w| {
+                // Clone out first: mirror_layout borrows mirror_wanted mutably.
+                let wanted = ui.mirror_wanted.borrow().clone();
+                if !w.is_active() {
+                    ui.stop_mirror();
+                } else if let Some(l) = wanted {
+                    ui.mirror_layout(&l);
+                }
+            });
+        }
+        {
+            let ui = ui.clone();
+            win.connect_close_request(move |_| {
+                if ui.mirrored.borrow_mut().take().is_some() {
+                    live::set_layout_now("");
+                }
+                glib::Propagation::Proceed
+            });
+        }
         rebuild(&ui);
         win.present();
     });
