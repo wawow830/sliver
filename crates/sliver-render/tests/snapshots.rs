@@ -477,3 +477,29 @@ fn extra_inset_keeps_content_clear_of_the_edges() {
         }
     }
 }
+
+#[test]
+fn indeterminate_progress_is_muted_in_every_theme() {
+    // A full track with `.indeterminate` must not look like a full (100%) one.
+    let track = |class: Option<&str>| {
+        let mut it = Item::new(Content::Slider {
+            icon: None,
+            value: 1.0,
+        });
+        if let Some(c) = class {
+            it = it.class(c);
+        }
+        Scene::new(vec![it])
+    };
+    for (name, _) in sliver_render::style::BUILTIN_THEMES {
+        let sheet = Stylesheet::builtin(name).unwrap();
+        let mut r = Renderer::new(Fonts::embedded());
+        let full = r.render_new(&track(None), &sheet, W, H);
+        let muted = r.render_new(&track(Some("indeterminate")), &sheet, W, H);
+        assert_ne!(
+            full.data(),
+            muted.data(),
+            "theme {name}: indeterminate looks full"
+        );
+    }
+}

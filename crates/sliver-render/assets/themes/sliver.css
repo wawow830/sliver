@@ -79,3 +79,6 @@ module.emoji { font-size: 32px; padding: 0; }
 module.emoji-tab { font-size: 26px; padding: 0; background-color: transparent; }
 module.emoji-tab:checked { background-color: @accent; }
 module.emoji-close { font-size: 24px; padding: 0; }
+
+/* Indeterminate progress (published items) is a full track: muted, so it doesn't read as 100%. */
+module.indeterminate highlight { background-color: alpha(@accent, 0.35); }

@@ -40,3 +40,6 @@ module.placeholder {
   color: alpha(white, 0.5);
   font-weight: normal;
 }
+
+/* Indeterminate progress (published items) is a full track: muted, so it doesn't read as 100%. */
+module.indeterminate highlight { background-color: alpha(white, 0.3); }

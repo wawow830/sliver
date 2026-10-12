@@ -72,3 +72,6 @@ module.emoji { font-size: 32px; padding: 0; border-width: 0; }
 module.emoji-tab { font-size: 26px; padding: 0; border-width: 0; }
 module.emoji-tab:checked { background-color: #ffd60a; }
 module.emoji-close { font-size: 24px; padding: 0; }
+
+/* Indeterminate progress is a full track: grey, not white, so it doesn't read as 100%. */
+module.indeterminate highlight { background-color: #8e8e93; }
