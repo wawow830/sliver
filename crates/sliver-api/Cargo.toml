@@ -14,3 +14,8 @@ workspace = true
 sliver-ipc.workspace = true
 sliver-desktop.workspace = true
 regex-lite = "0.1"
+zbus = "5"
+futures-lite = "2"
+
+[dev-dependencies]
+serde.workspace = true

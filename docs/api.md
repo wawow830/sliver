@@ -66,6 +66,11 @@ Rules, layers and layout resolution all happen in the agent. sliverd only knows 
   config (via `Control1` or the settings app), not in long-lived D-Bus objects.
 - If the agent is gone, sliverd shows its built-in safe layer (Esc, F1–F12, brightness/media).
 
+Implementation: `crates/sliver-api`. `item` handles parsing, `registry` is the sans-IO policy model
+(precedence, tiers, limits, optimistic state), `identity` reads /proc, and `service` is the zbus layer
+plus `Api`, the agent core's handle. It's tested end to end on a private `dbus-daemon`.
+In event `data`, integers are `i` (or `x` if they don't fit), reals are `d`, and lists are `av`.
+
 ## 2. `NS.TouchBar1` at `root`
 
 The entry point for apps.
@@ -178,7 +183,7 @@ with the config schema (T11/T20/T21/T22, owned by elm and the config peers). Thi
 | `format`, `format-icons`, `states` | applied to the item's `values`. The defaults are `text` (= `label`), `icon`, `percentage` (0–100), `alt`, `tooltip`, and any app-defined key. With no user `format`, `label`/`icon` render as published. |
 | stylesheet | selectors match the module id, the type class (`.button`, `.slider`, …), `.dbus`, `.app`/`.status`, the item's `classes`, and states `:active` (pressed), `:checked` (toggle on), `:disabled`, `:focused-app`. |
 | gesture bindings (`on-tap`, `on-hold`, `on-swipe-left/right`, `on-drag`, …) | a user binding **replaces** the app's `Event` for that gesture. With `pass-through = true` the event is also sent. Unbound gestures behave as published. |
-| show/hide, signal | `Control1.Show/Hide/Toggle` work on these ids. `Signal(n)` sends `Event("", "signal", {n: u})` to every context whose user config sets `signal = n`. |
+| show/hide, signal | `Control1.Show/Hide/Toggle` work on these ids. `Signal(n)` sends `Event("", "signal", {n: i})` to every context whose user config sets `signal = n`. |
 
 So `values` is how apps let the user restyle *content*: a VPN client publishing
 `values = {state: "connected", percentage: 80}` gets `format = "{state} {percentage}%"` for free.
@@ -232,7 +237,8 @@ For `sliverctl`, the settings app and DE integrations. Unsandboxed clients only.
 `NS.Control1`
 ```
 SwitchLayer(s name)                 PushLayer(s name, u timeout_ms)   PopLayer()
-SetProfile(s name)                  ReloadConfig() -> (as errors)
+SetLayout(s name)                   SetProfile(s name)                ReloadConfig() -> (as errors)
+Bar(s action)                       show | hide | toggle the whole bar (the hatch keeps working)
 ValidateConfig(s toml) -> (as errors)
 Preview(s layout_toml, u timeout_ms)       show on the real bar, auto-revert (settings live preview)
 RenderPreview(s layout_toml, a{sv} options) -> (ay png)   same renderer, for on-screen WYSIWYG
