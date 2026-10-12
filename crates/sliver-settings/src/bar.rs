@@ -221,12 +221,6 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
         click.connect_pressed(move |_, _, x, _| {
             // The preview is drawn at half scale.
-            eprintln!(
-                preview
-                    .borrow()
-                    .hit(x as f32 * 2.0)
-                    .map(|h| (h.zone, h.key.clone()))
-            );
             let Some(hit) = preview.borrow().hit(x as f32 * 2.0) else {
                 return;
             };
