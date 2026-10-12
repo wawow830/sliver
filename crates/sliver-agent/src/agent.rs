@@ -268,6 +268,14 @@ impl Agent {
             edge_right: bound(BG::EdgeSwipeFromRight),
             width: self.width as f32,
         });
+        // Locked: modules only ever see the sanitized world (lock-screen privacy, ux.md §5).
+        let sanitized;
+        let world = if self.ctx.flag("locked") {
+            sanitized = crate::privacy::sanitize(world);
+            &sanitized
+        } else {
+            world
+        };
         let mut out = Vec::new();
         let base = self.base_layer().to_owned();
         for (layer, name) in [(Layer::Base, base.as_str()), (Layer::Fn, "fn")] {
@@ -507,6 +515,11 @@ impl Agent {
             classes.push("modal".into());
         }
         let mut per_zone = per_zone;
+        if self.ctx.flag("locked") {
+            for cells in &mut per_zone {
+                cells.retain(crate::privacy::allowed);
+            }
+        }
         self.fit_slots(&zones, &mut per_zone, &classes);
         // Published items with a lower `priority` give way when their zone overflows (api.md §3),
         // a group as a unit. Only measured when some priority differs.

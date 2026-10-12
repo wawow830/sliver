@@ -420,6 +420,107 @@ fn session_world() -> World {
     w
 }
 
+/// Lock-screen privacy (ux.md §5): whatever the layout says, a locked bar shows no media
+/// title, notification text, window title, script output or app items, and no custom/*,
+/// window or taskbar module at all. Keys, sliders and the clock stay.
+#[test]
+fn locked_screen_shows_nothing_private() {
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        width = "fill"
+        modules = ["mpris", "notifications", "window", "taskbar", "custom/secret", "app-controls"]
+        [[layouts.default.zones]]
+        name = "controls"
+        modules = ["clock", "backlight/slider", "audio/slider"]
+        [modules."custom/secret"]
+        format = "{}"
+        [modules."audio/slider"]
+        collapsed = false
+        "#,
+    );
+    let mut w = session_world();
+    w.session.notifications.count = 2;
+    w.session.notifications.latest = Some(sliver_session::notifications::Latest {
+        id: 1,
+        app: "Chat".into(),
+        summary: "Secret message".into(),
+    });
+    w.desktop.window = Some(sliver_desktop::Window {
+        class: "firefox".into(),
+        title: "Bank account".into(),
+        ..Default::default()
+    });
+    w.desktop.windows = vec![sliver_desktop::WindowInfo {
+        class: "firefox".into(),
+        title: "Bank account".into(),
+        focused: true,
+        ..Default::default()
+    }];
+    w.outputs.insert(
+        "custom/secret".into(),
+        sliver_modules::Output {
+            text: "TOKEN 1234".into(),
+            ..Default::default()
+        },
+    );
+    let text = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|c| format!("{} {:?}", c.kind, c.content))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let secrets = [
+        "Song",
+        "Band",
+        "Secret message",
+        "Chat",
+        "Bank account",
+        "TOKEN",
+    ];
+    a.render(&w);
+    let open = text(&a);
+    for s in ["Song", "Secret message", "TOKEN"] {
+        assert!(open.contains(s), "unlocked shows {s}: {open}");
+    }
+
+    w.context.set("locked", true);
+    a.render(&w);
+    let locked = text(&a);
+    for s in secrets {
+        assert!(!locked.contains(s), "{s} leaked while locked: {locked}");
+    }
+    let kinds: Vec<String> = a
+        .frame(Layer::Base)
+        .unwrap()
+        .cells
+        .iter()
+        .map(|c| c.kind.clone())
+        .collect();
+    for gone in ["custom", "window", "taskbar"] {
+        assert!(!kinds.iter().any(|k| k == gone), "{gone}: {kinds:?}");
+    }
+    for kept in ["clock", "backlight/slider", "audio/slider"] {
+        assert!(kinds.iter().any(|k| k == kept), "{kept}: {kinds:?}");
+    }
+    check("locked-privacy", &a.frame(Layer::Base).unwrap().image);
+    // The Fn layer is covered too, and unlocking brings everything back.
+    assert!(
+        a.frame(Layer::Fn)
+            .unwrap()
+            .cells
+            .iter()
+            .all(sliver_agent::privacy::allowed)
+    );
+    w.context.set("locked", false);
+    a.render(&w);
+    assert!(text(&a).contains("Song"));
+}
+
 #[test]
 fn session_modules() {
     use sliver_agent::agent::{Effect::*, SessionOp};

@@ -89,6 +89,23 @@ MPRIS, the caffeine inhibitor), so the main loop never blocks on them.
 `sliver-agent --render out` uses the live sources too, and prints every cell with its rect,
 module key, CSS id/classes and content, which is handy for debugging configs and stylesheets.
 
+## Lock-screen privacy (T87)
+
+While the context says `locked` (see `context::plausibly_locked`), nothing private reaches the
+bar, whatever the layout says (ux.md §5). `privacy.rs` does this in two layers:
+
+1. Modules are built from `privacy::sanitize(world)`. That copy has no media title, artist,
+   album or art, no latest-notification text, no window titles or window list, no script
+   output, and nothing published by apps (so no App controls, Status items or modal context
+   either).
+2. `privacy::allowed` drops whole kinds: `custom/*` (arbitrary output, and commands run from a
+   locked bar), published items and their slots, `window`, `taskbar`, and `emoji` (recents are
+   a history).
+
+Keys, sliders, toggles, the clock, battery, workspaces, the keyboard layout, the notification
+count and media play/pause (status glyph only) stay. Both layers apply to the base and Fn
+frames. Tested in `tests/agent.rs` (`locked_screen_shows_nothing_private`).
+
 ## Public D-Bus API
 `api.rs` serves cedar's `sliver_api` on the session bus. `Host::changed` sets a flag and pokes a
 wake socket the main loop polls. `Host::control` hands `Control1` requests to the main loop and

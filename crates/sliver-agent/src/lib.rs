@@ -13,6 +13,7 @@ pub mod icons;
 pub mod link;
 pub mod modules;
 pub mod ops;
+pub mod privacy;
 pub mod published;
 
 pub mod wait;
