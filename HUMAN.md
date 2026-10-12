@@ -23,8 +23,9 @@ swarm down                           # interrupt all peers and stop the pulse (s
 swarm up --peers ash,birch           # bring it back (`swarm spawn NAME --resume` revives a peer's session)
 ```
 
-Live visualizer: **http://localhost:7777** (`swarm viz`, started by `swarm up`). Add `?replay` or press REPLAY for a
-time-lapse of the whole swarm history. Click an agent to pin its live thoughts. `swarm viz --host 0.0.0.0` shares it on your LAN.
+Live visualizer: **http://localhost:7777** (`swarm viz`, started by `swarm up`). It shows who talks to whom, what each
+agent is thinking and the latest messages. Hover an agent to see its conversations. Press "Replay the whole build" (or
+add `?replay`) for a time-lapse. `swarm viz --host 0.0.0.0` shares it on your LAN.
 
 You can also just walk into any peer's pane and type to it.
 

@@ -6,7 +6,7 @@
 GET /                 the page
 GET /api/snapshot     peers (with live agent status, cost, context, current activity), board, stats
 GET /api/stream       SSE: one `history` event, then every new channel/inbox event as it happens
-GET /snap/<name>.png  Touch Bar renders committed on origin/main
+GET /font/<file>.otf  Red Hat Display/Text from this machine, so LAN viewers get the same type
 """
 import argparse, json, re, subprocess, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -123,9 +123,7 @@ class Live:
                 pass
         commits = git("rev-list", "--count", "origin/main", cwd=MAIN).strip()
         crates = len([l for l in git("ls-tree", "-d", "--name-only", "origin/main:crates", cwd=MAIN).splitlines() if l])
-        snaps = sorted(p for p in git("ls-tree", "-r", "--name-only", "origin/main", cwd=MAIN).splitlines()
-                       if re.search(r"snapshots/[^/]+\.png$", p))
-        return {"loc": loc, "commits": int(commits or 0), "crates": crates, "snapshots": snaps}
+        return {"loc": loc, "commits": int(commits or 0), "crates": crates}
 
     def loop(self):
         n = 0
@@ -200,13 +198,14 @@ class Usage:
 USAGE = Usage()
 
 
-def font_file():
-    """Google Sans Flex (OFL, Fedora package) from this machine, so LAN viewers get it too."""
-    try:
-        p = subprocess.run(["fc-match", "-f", "%{file}", "Google Sans Flex"], capture_output=True, text=True).stdout
-        return Path(p) if "GoogleSansFlex" in p and Path(p).exists() else None
-    except Exception:
+FONTS = Path("/usr/share/fonts/redhat")   # Fedora's redhat-display-fonts / redhat-text-fonts (OFL)
+
+
+def font_file(name):
+    if not re.fullmatch(r"RedHat(Display|Text)-[A-Za-z]+\.otf", name):
         return None
+    p = FONTS / name
+    return p if p.is_file() else None
 
 
 def snapshot():
@@ -276,20 +275,13 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
             return self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
-        if path == "/font/flex.ttf":
-            f = font_file()
+        if path.startswith("/font/"):
+            f = font_file(path[len("/font/"):])
             if f:
-                return self.send(200, f.read_bytes(), "font/ttf")
+                return self.send(200, f.read_bytes(), "font/otf")
             return self.send(404, b"font not installed", "text/plain")
         if path == "/api/snapshot":
             return self.send(200, json.dumps(snapshot()).encode(), "application/json")
-        if path.startswith("/snap/"):
-            name = path[len("/snap/"):]
-            match = [p for p in LIVE.repo.get("snapshots", []) if p.endswith("/" + name) or p == name]
-            if match:
-                data = subprocess.run(["git", "show", f"origin/main:{match[0]}"], cwd=MAIN, capture_output=True).stdout
-                return self.send(200, data, "image/png")
-            return self.send(404, b"no such snapshot", "text/plain")
         if path == "/api/stream":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
