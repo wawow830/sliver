@@ -31,6 +31,7 @@ pub struct Server {
     session: Box<dyn SessionSource>,
     active_uid: Option<u32>,
     clock: Instant,
+    sleep: SleepDetector,
 }
 
 enum Ready {
@@ -38,6 +39,34 @@ enum Ready {
     Conn(ClientId),
     Input(usize),
     Session,
+}
+
+/// Notices that the machine was suspended, without D-Bus and without a timer: `CLOCK_BOOTTIME`
+/// keeps counting while suspended, `CLOCK_MONOTONIC` (the daemon's clock) doesn't. Checked
+/// whenever the loop wakes anyway. After a resume something always wakes it: the lid, a key,
+/// the touchpad, the bar.
+#[derive(Debug, Default)]
+pub struct SleepDetector {
+    gap_ms: Option<i64>,
+}
+
+/// More than this between the two clocks since the last look = the machine slept.
+const SLEPT_MS: i64 = 1000;
+
+impl SleepDetector {
+    /// Feeds the current `BOOTTIME - MONOTONIC` gap. True if it grew: a suspend happened since.
+    pub fn observe(&mut self, gap_ms: i64) -> bool {
+        let slept = self.gap_ms.is_some_and(|g| gap_ms - g > SLEPT_MS);
+        self.gap_ms = Some(gap_ms);
+        slept
+    }
+
+    pub fn check(&mut self) -> bool {
+        use rustix::time::{ClockId, clock_gettime};
+        let ms = |t: rustix::time::Timespec| t.tv_sec * 1000 + t.tv_nsec / 1_000_000;
+        let gap = ms(clock_gettime(ClockId::Boottime)) - ms(clock_gettime(ClockId::Monotonic));
+        self.observe(gap)
+    }
 }
 
 impl Server {
@@ -60,7 +89,9 @@ impl Server {
             session,
             active_uid,
             clock,
+            sleep: SleepDetector::default(),
         };
+        s.sleep.check();
         s.dispatch(Input::SessionChanged { active_uid });
         Ok(s)
     }
@@ -93,6 +124,10 @@ impl Server {
             (a, b) => a.or(b),
         };
         let ready = self.poll(wait)?;
+        // Before the event that woke us (e.g. the lid opening): repaint what s2idle may have lost.
+        if self.sleep.check() {
+            self.dispatch(Input::Resumed);
+        }
         for r in ready {
             match r {
                 Ready::Listener => self.accept(),
@@ -286,6 +321,7 @@ fn log_input(input: &Input) {
         Input::ScreenBacklight => crate::debug!("screen backlight changed"),
         Input::SessionChanged { active_uid } => crate::debug!("seat0 active uid {active_uid:?}"),
         Input::Tick => crate::debug!("tick"),
+        Input::Resumed => crate::debug!("resumed from suspend"),
     }
 }
 
@@ -319,5 +355,23 @@ fn hw_input(e: HwEvent) -> Input {
         HwEvent::Activity => Input::Activity,
         HwEvent::Lid { closed } => Input::Lid { closed },
         HwEvent::ScreenBacklight => Input::ScreenBacklight,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SleepDetector;
+
+    #[test]
+    fn notices_a_suspend_once() {
+        let mut s = SleepDetector::default();
+        assert!(!s.observe(5_000), "first look is the baseline");
+        assert!(!s.observe(5_003), "clock jitter is not a sleep");
+        assert!(s.observe(65_003), "a minute suspended");
+        assert!(!s.observe(65_004), "reported once");
+        // The real clocks answer and never report a sleep within one instant.
+        let mut real = SleepDetector::default();
+        real.check();
+        assert!(!real.check());
     }
 }

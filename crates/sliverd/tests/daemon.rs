@@ -420,6 +420,43 @@ fn t2_three_step_backlight_with_adaptive_and_curve() {
     assert_eq!(rig.hw.backlight.current(), Some(0), "off");
 }
 
+/// T120: after a suspend, s2idle may have reset the panel or its backlight behind our back. Resumed
+/// repaints the whole bar and writes the backlight again even though our value didn't change;
+/// a dark bar stays dark (and is repainted in full when it wakes).
+#[test]
+fn resume_repaints_and_rewrites_the_backlight() {
+    let mut rig = Rig::new();
+    let (flushes, writes) = (
+        rig.hw.display.flush_count(),
+        rig.hw.backlight.writes().len(),
+    );
+    rig.input(Input::Activity); // nothing changed: nothing written
+    assert_eq!(rig.hw.display.flush_count(), flushes);
+    rig.input(Input::Resumed);
+    assert_eq!(rig.hw.display.flush_count(), flushes + 1, "repainted");
+    let last = rig.hw.display.state().flushes.last().cloned().unwrap();
+    assert_eq!(
+        last.iter().map(|s| s.w).sum::<u32>(),
+        2008,
+        "the whole bar: {last:?}"
+    );
+    assert_eq!(rig.hw.backlight.writes().len(), writes + 1, "written again");
+    assert_eq!(rig.hw.backlight.current(), Some(128));
+
+    rig.advance(60_000); // off
+    let (flushes, writes) = (
+        rig.hw.display.flush_count(),
+        rig.hw.backlight.writes().len(),
+    );
+    rig.input(Input::Resumed);
+    assert_eq!(rig.hw.display.flush_count(), flushes, "dark: nothing drawn");
+    assert_eq!(rig.hw.backlight.writes().last(), Some(&0), "and kept dark");
+    assert_eq!(rig.hw.backlight.writes().len(), writes + 1);
+    rig.input(Input::Lid { closed: false }); // wakes: full repaint
+    let last = rig.hw.display.state().flushes.last().cloned().unwrap();
+    assert_eq!(last.iter().map(|s| s.w).sum::<u32>(), 2008);
+}
+
 // ---- display power ------------------------------------------------------------------------------
 
 #[test]

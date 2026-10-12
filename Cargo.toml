@@ -34,7 +34,7 @@ sliver-render = { path = "crates/sliver-render" }
 # External crates shared by several members.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-rustix = { version = "1.1.5", features = ["event", "net", "fs", "mm", "process"] }
+rustix = { version = "1.1.5", features = ["event", "net", "fs", "mm", "process", "time"] }
 
 # Rendering (ADR-0002): pure Rust, no system libraries.
 cosmic-text = "0.19"

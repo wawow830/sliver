@@ -86,6 +86,10 @@ pub enum Input {
     },
     /// [`Daemon::next_deadline`] has passed.
     Tick,
+    /// The machine was suspended (the server notices on its next wakeup). s2idle may have reset
+    /// the panel or its backlight behind our back: repaint everything and write the backlight
+    /// again, even if nothing changed on our side.
+    Resumed,
 }
 
 #[derive(Debug, PartialEq)]
@@ -344,6 +348,12 @@ impl Daemon {
             }
             Input::SessionChanged { active_uid } => self.session_changed(now, active_uid),
             Input::Tick => {}
+            Input::Resumed => {
+                self.shown = None;
+                self.backlight = None;
+                self.recompose();
+                self.apply_backlight();
+            }
         }
         std::mem::take(&mut self.out)
     }
