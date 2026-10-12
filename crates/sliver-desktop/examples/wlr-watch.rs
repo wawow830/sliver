@@ -6,7 +6,9 @@
 //! ```
 //!
 //! With `--focus-first-window` it also sends a `FocusWindow` for the first window it sees that
-//! is not focused, and `--close-focused` closes the focused one, to exercise the control path.
+//! is not focused, `--close-focused` closes the focused one, and `--other-workspace` switches to
+//! the first workspace that is not active, to exercise the control path (each once, in that
+//! order of appearance: the flags are independent, use one per run).
 
 use sliver_desktop::control::{Action, run};
 use std::ops::ControlFlow;
@@ -14,6 +16,7 @@ use std::ops::ControlFlow;
 fn main() {
     let focus = std::env::args().any(|a| a == "--focus-first-window");
     let close = std::env::args().any(|a| a == "--close-focused");
+    let other_ws = std::env::args().any(|a| a == "--other-workspace");
     let mut done = false;
     let r = sliver_desktop::wlr::watch(|s| {
         println!("{}", serde_json::to_string(s).unwrap());
@@ -27,6 +30,14 @@ fn main() {
                         &Action::FocusWindow { address: addr },
                     );
                     eprintln!("focus: {r:?}");
+                });
+            }
+            if other_ws && let Some(w) = s.workspaces.iter().find(|w| !w.active) {
+                done = true;
+                let w = w.clone();
+                std::thread::spawn(move || {
+                    let r = run(|k| std::env::var(k).ok(), &Action::FocusWorkspace(w));
+                    eprintln!("workspace: {r:?}");
                 });
             }
             if close && let Some(w) = s.windows.iter().find(|w| w.focused) {

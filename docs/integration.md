@@ -71,7 +71,7 @@ is in `sliver_desktop::Backend::detect` (env: `HYPRLAND_INSTANCE_SIGNATURE`, `NI
 | **Hyprland** | `socket2` event stream + `socket1` JSON queries | yes | small | **done** (`sliver_desktop::hyprland`) |
 | sway / i3 | i3-ipc over `$SWAYSOCK`, `SUBSCRIBE ["window","workspace","input","mode"]` | yes | small | **done** (`sliver_desktop::sway`; fake-server tests, not run on a real sway) |
 | niri | JSON IPC over `$NIRI_SOCKET`, `"EventStream"` request | yes | small | **done** (`sliver_desktop::niri`; fake-server tests, not run on a real niri) |
-| wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | yes | medium | **done** (`sliver-desktop::wlr`; tested against a mock compositor, **not yet on a real river/labwc/wayfire**) |
+| wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | yes | medium | **done** (`sliver-desktop::wlr`; verified on a real headless **labwc** with `integration/labwc/test.sh`: list, focus, workspaces, focus/close/switch; mock-tested too) |
 | KDE Plasma 6 | KWin script (JS) calling our D-Bus service | yes | medium | **done** (`integration/kwin`; tested in nested `kwin_wayland --virtual`) |
 | GNOME Shell | extension calling our D-Bus service | yes | medium-large | **written, untested** (`integration/gnome-shell`; see integration/README.md); also switches workspaces for the agent |
 | X11 | `_NET_ACTIVE_WINDOW` on the root window | yes | small | todo, last |
@@ -142,8 +142,13 @@ There is no pid, floating or keyboard-layout info. A compositor without
 `wlr-foreign-toplevel-management` makes the watcher stop at once (no retry loop). The test
 (`crates/sliver-desktop/tests/wlr.rs`) runs a mock compositor (wayland-server) speaking both
 protocols and checks the initial burst, live changes and the three actions over a real socket. A
-headless Hyprland could not be started here (`CBackend::create() failed`), so no real compositor
-has been tried.
+headless Hyprland could not be started here (`CBackend::create() failed`), but a real **labwc**
+runs headless (`WLR_BACKENDS=headless WLR_RENDERER=pixman`) and `integration/labwc/test.sh` checks
+the whole chain against it. Neither labwc nor sway needs root: `dnf download --resolve` the rpms,
+`rpm2cpio | cpio -idm` them into a prefix and point `SLIVER_TEST_ROOT` at it (the scripts say
+how, and skip when the compositor is missing). `integration/sway/test.sh` does the same for the
+sway backend and found a real bug: closing a window that wasn't focused never refreshed the
+taskbar's list (fixed in `sway.rs`).
 
 ### KDE Plasma 6 (KWin script)
 

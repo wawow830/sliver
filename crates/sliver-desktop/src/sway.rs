@@ -289,7 +289,11 @@ pub fn apply_event(state: &mut DesktopState, ty: u32, body: &Value) -> (bool, Fo
             let c = body.get("container").cloned().unwrap_or(Value::Null);
             let id = window_from_container(&c).address;
             match change {
-                "focus" => state.window = Some(window_from_container(&c)),
+                "focus" => {
+                    state.window = Some(window_from_container(&c));
+                    // The window list's `focused` flags move too.
+                    follow = Followup::RefreshWindow;
+                }
                 "title" => {
                     if let Some(w) = state.window.as_mut().filter(|w| w.address == id) {
                         w.title = str_of(&c, "name").unwrap_or_default().to_string();
@@ -299,9 +303,11 @@ pub fn apply_event(state: &mut DesktopState, ty: u32, body: &Value) -> (bool, Fo
                 "new" | "move" | "urgent" => follow = Followup::RefreshWindow,
                 "close" => {
                     if state.window.as_ref().is_some_and(|w| w.address == id) {
-                        state.window = None;
-                        follow = Followup::RefreshWindow; // focus moved to a sibling
+                        state.window = None; // focus moves to a sibling
                     }
+                    // Whichever window it was, it leaves the taskbar's list (found by the live
+                    // headless sway test: only the focused window's close used to refresh).
+                    follow = Followup::RefreshWindow;
                 }
                 "fullscreen_mode" | "floating" => {
                     if let Some(w) = state.window.as_mut().filter(|w| w.address == id) {
@@ -603,6 +609,19 @@ mod tests {
             json!({"change":"close","container":{"id":11}}),
         );
         assert!(changed && follow == Followup::RefreshWindow && s.window.is_none());
+        // a window that isn't the focused one closing still refreshes the taskbar's list
+        s.window = Some(window_from_container(&json!({"id":12,"app_id":"foot"})));
+        let (_, follow) = ev(
+            &mut s,
+            EV_WINDOW,
+            json!({"change":"close","container":{"id":99}}),
+        );
+        assert_eq!(follow, Followup::RefreshWindow);
+        assert_eq!(
+            s.window.as_ref().unwrap().address,
+            "12",
+            "focus is untouched"
+        );
         // workspace focus
         let (c, f) = ev(
             &mut s,
