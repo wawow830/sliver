@@ -10,6 +10,7 @@ Owner: **hazel**. System integration design: ADR-0005. Files: `packaging/`, `scr
 | `sliver-agent` | `/usr/bin/sliver-agent`, user unit `sliver-agent.service` (`Type=dbus`), D-Bus activation file for `io.github.wawow830.Sliver`, user preset (enabled by default) |
 | `sliverctl` | `/usr/bin/sliverctl` |
 | `sliver-settings` | `/usr/bin/sliver-settings`, `.desktop`, AppStream metainfo |
+| `sliver-browser` | `/usr/libexec/sliver-browser-host`, native-messaging manifests for Firefox (`%{_libdir}/mozilla`), Chromium and Chrome (`/etc`), extension folders in `/usr/share/sliver/browser`. Optional, not pulled in by `sliver`. Needs python3-gobject-base |
 
 Built offline from a working-tree snapshot plus a `cargo vendor` tarball, using Fedora's cargo
 macros (`%cargo_prep -v vendor`, `%cargo_build`, `%cargo_license`, `%cargo_vendor_manifest`).
