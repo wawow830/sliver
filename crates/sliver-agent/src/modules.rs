@@ -128,6 +128,50 @@ pub struct UiState {
     pub show_alt: bool,
     /// A drawer group is open.
     pub expanded: bool,
+    /// `timer` modules: the countdown.
+    pub timer: Option<TimerState>,
+}
+
+/// A countdown that survives re-resolution (it lives in [`UiState`], keyed by the cell).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimerState {
+    /// Time left when it was last started, paused or created.
+    pub remaining: std::time::Duration,
+    /// Wall-clock start of the current run; `None` while paused or finished.
+    pub running_since: Option<DateTime<Local>>,
+    pub finished: bool,
+    /// Bumped on every start/pause so a stale "done" deadline is ignored.
+    pub generation: u64,
+}
+
+impl TimerState {
+    pub fn new(total: std::time::Duration) -> TimerState {
+        TimerState {
+            remaining: total,
+            running_since: None,
+            finished: false,
+            generation: 0,
+        }
+    }
+
+    /// What is left at `now`.
+    pub fn left(&self, now: DateTime<Local>) -> std::time::Duration {
+        match self.running_since {
+            Some(t) => self
+                .remaining
+                .saturating_sub((now - t).to_std().unwrap_or_default()),
+            None => self.remaining,
+        }
+    }
+}
+
+/// `MM:SS`, or `H:MM:SS` from an hour up.
+pub fn clock_text(d: std::time::Duration) -> String {
+    let s = d.as_secs() + u64::from(d.subsec_nanos() > 0); // round up: 0:00 means done
+    match s {
+        0..=3599 => format!("{:02}:{:02}", s / 60, s % 60),
+        _ => format!("{}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60),
+    }
 }
 
 /// What a touch on a cell does.
@@ -178,6 +222,8 @@ pub struct Cell {
     pub pass_through: bool,
     /// What a workspaces/taskbar cell does to the compositor (focus; hold closes a window).
     pub target: Option<sliver_desktop::control::Action>,
+    /// `timer` modules: the configured total.
+    pub timer_total: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -358,6 +404,7 @@ struct Spec {
     refresh: Option<std::time::Duration>,
     /// Workspaces/taskbar items: what tapping does.
     target: Option<sliver_desktop::control::Action>,
+    timer_total: Option<std::time::Duration>,
 }
 
 impl Spec {
@@ -376,6 +423,7 @@ impl Spec {
             raw: false,
             refresh: None,
             target: None,
+            timer_total: None,
         }
     }
 
@@ -565,6 +613,78 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             Spec::new(ValueMap::new().with("", esc(m)), "{}")
         }
         "cpu" | "memory" | "temperature" | "disk" | "load" => return stat_spec(m, world),
+        "timer" => {
+            let total = m
+                .config
+                .get("duration")
+                .and_then(|v| sliver_config::parse_duration(v).ok())
+                .filter(|d| !d.is_zero())
+                .unwrap_or(std::time::Duration::from_secs(25 * 60));
+            let (left, status) = match &ui.timer {
+                None => (total, "idle"),
+                Some(t) if t.finished => (std::time::Duration::ZERO, "finished"),
+                Some(t) if t.running_since.is_some() => (t.left(world.now), "running"),
+                Some(t) => (t.remaining, "paused"),
+            };
+            let pct = 100.0 * (1.0 - left.as_secs_f64() / total.as_secs_f64());
+            let v = ValueMap::new()
+                .with("remaining", clock_text(left))
+                .with("minutes", (left.as_secs() / 60) as i64)
+                .with("seconds", (left.as_secs() % 60) as i64)
+                .with("", clock_text(left));
+            let mut sp = Spec::new(v, "{remaining}")
+                .on(Gesture::Tap, "toggle")
+                .on(Gesture::Hold, "reset");
+            sp.percentage = Some(pct.clamp(0.0, 100.0));
+            sp.status = Some(status);
+            sp.checked = status == "running";
+            sp.timer_total = Some(total);
+            if status == "running" {
+                sp.refresh = Some(std::time::Duration::from_secs(1));
+            }
+            sp
+        }
+        "notifications" => {
+            let n = s.notifications;
+            let count = if n.count == 0 {
+                FmtValue::Text(String::new())
+            } else {
+                FmtValue::Num(f64::from(n.count))
+            };
+            let mut sp = Spec::new(
+                ValueMap::new().with("count", count.clone()).with("", count),
+                "{count}",
+            )
+            .icon(if n.dnd == Some(true) {
+                "notifications-disabled-symbolic"
+            } else {
+                "notifications-symbolic"
+            });
+            sp.status = Some(if n.count > 0 { "pending" } else { "none" });
+            sp.extra_classes = n
+                .dnd
+                .filter(|d| *d)
+                .map(|_| "dnd".to_string())
+                .into_iter()
+                .collect();
+            sp
+        }
+        // Do Not Disturb, when the notification daemon reports it (dunst, KDE).
+        "dnd" => {
+            let on = s.notifications.dnd?;
+            let mut sp = Spec::new(
+                ValueMap::new().with("state", if on { "on" } else { "off" }),
+                "",
+            )
+            .icon(if on {
+                "notifications-disabled-symbolic"
+            } else {
+                "notifications-symbolic"
+            });
+            sp.status = Some(if on { "on" } else { "off" });
+            sp.checked = on;
+            sp
+        }
         "workspaces" => {
             let ws = world.desktop.workspaces.get(item?)?;
             let status = if ws.urgent {
@@ -897,6 +1017,7 @@ fn cell(
         published: None,
         pass_through: false,
         target: sp.target,
+        timer_total: sp.timer_total,
         drawer: (collapsed_slider
             || m.id.kind.ends_with("/slider") && ui.expanded && is_collapsible(m))
         .then(|| Drawer {
@@ -1180,6 +1301,38 @@ mod tests {
     }
 
     #[test]
+    fn notifications_and_dnd() {
+        let toml =
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"notifications\", \"dnd\"]\n";
+        let mut w = world();
+        let c = stat_cells(toml, &w);
+        assert_eq!(
+            c.len(),
+            1,
+            "dnd is hidden while the daemon doesn't report it"
+        );
+        assert!(
+            matches!(&c[0].content, Content::Icon(_) | Content::Blank),
+            "no text at zero: {:?}",
+            c[0].content
+        );
+        w.session.notifications.count = 3;
+        w.session.notifications.dnd = Some(true);
+        let c = stat_cells(toml, &w);
+        assert_eq!(c.len(), 2);
+        assert!(
+            matches!(&c[0].content, Content::IconMarkup(_, t) | Content::Markup(t) if t == "3"),
+            "{:?}",
+            c[0].content
+        );
+        assert!(
+            c[0].classes.contains(&"dnd".to_string())
+                && c[0].classes.contains(&"pending".to_string())
+        );
+        assert!(c[1].checked);
+    }
+
+    #[test]
     fn clock_formats_and_ticks() {
         let cells = build(
             r#"
@@ -1284,6 +1437,7 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
         published: None,
         pass_through: false,
         target: None,
+        timer_total: None,
     }
 }
 

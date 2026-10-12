@@ -115,6 +115,11 @@ pub struct Agent {
 enum Scheduled {
     Action(Action),
     CloseDrawer(String),
+    /// A running timer reaches zero (ignored if it was paused or reset since).
+    TimerDone {
+        key: String,
+        generation: u64,
+    },
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -366,6 +371,29 @@ impl Agent {
         for (_, s) in due {
             match s {
                 Scheduled::Action(a) => self.execute(&a, None, None, now, &mut fx),
+                Scheduled::TimerDone { key, generation } => {
+                    if let Some(t) = self.ui(&key).timer.as_mut()
+                        && t.generation == generation
+                        && t.running_since.is_some()
+                    {
+                        t.running_since = None;
+                        t.remaining = std::time::Duration::ZERO;
+                        t.finished = true;
+                        fx.push(Effect::Redraw);
+                        fx.push(Effect::Spawn(
+                            [
+                                "notify-send",
+                                "-a",
+                                "Sliver",
+                                "-i",
+                                "alarm-symbolic",
+                                "Timer finished",
+                            ]
+                            .map(String::from)
+                            .into(),
+                        ));
+                    }
+                }
                 Scheduled::CloseDrawer(g) => {
                     if std::mem::take(&mut self.ui(&g).expanded) {
                         fx.push(Effect::Redraw);
@@ -654,7 +682,7 @@ impl Agent {
                 let Some(cell) = region.and_then(|r| self.cell(r)).cloned() else {
                     return;
                 };
-                self.module_action(&cell, name, value, fx);
+                self.module_action(&cell, name, value, now, fx);
             }
             other => fx.push(Effect::Log(format!("action not supported yet: {other:?}"))),
         }
@@ -841,7 +869,14 @@ impl Agent {
     }
 
     /// A built-in module's own action (`actions = { on-hold = "…" }`, or its default bindings).
-    fn module_action(&mut self, cell: &Cell, name: &str, value: Option<f64>, fx: &mut Vec<Effect>) {
+    fn module_action(
+        &mut self,
+        cell: &Cell,
+        name: &str,
+        value: Option<f64>,
+        now: u64,
+        fx: &mut Vec<Effect>,
+    ) {
         use sliver_session::mpris::Command;
         let pct = value.map(|v| v.clamp(0.0, 100.0).round() as u8);
         let kind = cell.kind.as_str();
@@ -859,6 +894,39 @@ impl Agent {
             ("mpris", "next", _) => SessionOp::Media(Command::Next),
             ("mpris", "previous", _) => SessionOp::Media(Command::Previous),
             ("idle-inhibitor", "toggle", _) => SessionOp::ToggleCaffeine,
+            ("timer", "toggle", _) => {
+                let total = cell
+                    .timer_total
+                    .unwrap_or(std::time::Duration::from_secs(25 * 60));
+                let wall = Local::now();
+                let key = cell.key.clone();
+                let t = self
+                    .ui(&key)
+                    .timer
+                    .get_or_insert_with(|| modules::TimerState::new(total));
+                if t.finished {
+                    *t = modules::TimerState::new(total);
+                } else if t.running_since.is_some() {
+                    t.remaining = t.left(wall);
+                    t.running_since = None;
+                    t.generation += 1;
+                } else {
+                    t.running_since = Some(wall);
+                    t.generation += 1;
+                    let due = now + t.remaining.as_micros() as u64;
+                    let generation = t.generation;
+                    self.scheduled
+                        .push((due, Scheduled::TimerDone { key, generation }));
+                }
+                fx.push(Effect::Redraw);
+                return;
+            }
+            ("timer", "reset", _) => {
+                let key = cell.key.clone();
+                self.ui(&key).timer = None;
+                fx.push(Effect::Redraw);
+                return;
+            }
             ("workspaces" | "taskbar", "focus", _) => {
                 if let Some(t) = &cell.target {
                     fx.push(Effect::Desktop(t.clone()));

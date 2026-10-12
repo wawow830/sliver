@@ -110,6 +110,7 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
         }),
         pass_through: false,
         target: None,
+        timer_total: None,
     }
 }
 
@@ -202,6 +203,7 @@ fn push(
         }),
         pass_through: false,
         target: None,
+        timer_total: None,
     };
     match &item.kind {
         ItemKind::Button | ItemKind::Popover { .. } => out.push(base(

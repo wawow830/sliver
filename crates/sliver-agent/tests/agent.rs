@@ -621,3 +621,54 @@ fn workspaces_and_taskbar_buttons_drive_the_compositor() {
         "{fx:?}"
     );
 }
+
+/// The timer module: tap starts, tap pauses, hold resets, and reaching zero notifies once.
+#[test]
+fn timer_counts_down_and_notifies() {
+    use sliver_agent::agent::Effect;
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"timer\"]\n[modules.timer]\nduration = \"1s\"\n",
+    );
+    let w = world(9, 41);
+    let text = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
+        sliver_render::Content::Markup(t) | sliver_render::Content::Text(t) => t.clone(),
+        other => format!("{other:?}"),
+    };
+    a.render(&w);
+    assert_eq!(text(&a), "00:01");
+    let (id, x) = region(&a, "timer");
+    let tap = |a: &mut Agent, t: u64| {
+        let mut fx = a.touch(id, 0, TouchPhase::Down, x, t);
+        fx.extend(a.touch(id, 0, TouchPhase::Up, x, t + 40_000));
+        fx.extend(a.tick(t + 400_000));
+        fx
+    };
+    tap(&mut a, 1_000);
+    a.render(&w);
+    assert!(a.frame(Layer::Base).unwrap().cells[0].checked, "running");
+    assert!(
+        a.frame(Layer::Base).unwrap().cells[0].next_change.is_some(),
+        "ticks every second while running"
+    );
+    // the deadline fires a notification once
+    let fx = a.tick(2_000_000);
+    let spawns = fx
+        .iter()
+        .filter(|e| matches!(e, Effect::Spawn(argv) if argv[0] == "notify-send"))
+        .count();
+    assert_eq!(spawns, 1, "{fx:?}");
+    assert!(
+        a.tick(3_000_000)
+            .iter()
+            .all(|e| !matches!(e, Effect::Spawn(_))),
+        "only once"
+    );
+    a.render(&w);
+    assert_eq!(text(&a), "00:00");
+    // tap again resets a finished timer
+    tap(&mut a, 5_000_000);
+    a.render(&w);
+    assert_eq!(text(&a), "00:01");
+    assert!(!a.frame(Layer::Base).unwrap().cells[0].checked);
+}

@@ -183,7 +183,7 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 | `mode` | `hyprland/submap`, `sway/mode` | P2 | |
 | `language` | `hyprland/language`, `sway/language` | P2 | Tap = next layout. |
 | `idle-inhibitor` | `idle_inhibitor` | P1 | Caffeine. |
-| `dnd` | (none; swaync etc. via custom) | P1 | |
+| `dnd` | (none; swaync etc. via custom) | P1 | Shows Do Not Disturb when the notification daemon reports it (dunst, KDE); hidden otherwise. Display only for now. |
 | `power-profiles` | `power-profiles-daemon` | P2 | |
 | `cpu`, `memory`, `temperature`, `disk`, `load` | same | P2 | Done (`sliver-stats`). Read from /proc and /sys when drawn, refreshed on `interval` (defaults: cpu/temperature/load 10 s, memory/disk 30 s) only while on the bar and the display is on. Placeholders: cpu `{usage}` `{load}` `{avg_frequency}`; memory `{percentage}` `{used}` `{total}` `{avail}` (GiB) `{swapPercentage}` `{swapUsed}` `{swapTotal}` `{swapAvail}`; load `{load1}` `{load5}` `{load15}`; temperature `{temperatureC}` `{temperatureF}` `{temperatureK}`, keys `thermal-zone`, `hwmon-path`, `critical-threshold` (adds `.critical`; default source is the hottest sensor); disk `{percentage_used}` `{percentage_free}` `{used}` `{free}` `{total}` (GiB) `{path}`, key `path` (default `/`). `states` use `percentage` (cpu, memory, disk). |
 | `network`, `bluetooth` | same | P2 | Not yet. |
@@ -191,9 +191,9 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 | `privacy` | `privacy` | P2 | Screenshare/mic/camera in-use indicator. |
 | `systemd-failed-units` | same | P3 | |
 | `taskbar` | `wlr/taskbar` | P2 | Done. One icon per window of the active workspace (`all-workspaces = true` for all), icon from the app's `.desktop` entry (first letters if none); `.focused` / `.urgent`; `{title}` `{app_id}` for a custom `format`; tap focuses, hold closes the window. |
-| `notifications` | (none) | P2 | |
+| `notifications` | (none) | P2 | Done. A bell with the number of notifications the server has open (`{count}`, empty at zero), classes `.pending`/`.none` and `.dnd`. |
 | `emoji` | (none) | P2 | A scrolling strip that opens a layer. |
-| `timer` | (none) | P2 | Pomodoro. |
+| `timer` | (none) | P2 | Done. Countdown (`duration`, default 25m; `{remaining}` `{minutes}` `{seconds}`, `percentage` for `states`); tap starts/pauses, hold resets; `notify-send` at zero. Status classes `.idle` `.running` `.paused` `.finished`. |
 | `image` | `image` | P1 | `path` or `exec` → path, `interval`/`signal`. |
 | `group/<name>` | `group/<name>` | P1 | §3.1. |
 | `app-controls`, `status-items` | (none) / `tray` | P1 | Placeholders for D-Bus-published items (api.md). `tray` is accepted as an alias, so StatusNotifierItems show here (gap G6). |
