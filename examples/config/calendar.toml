@@ -1,0 +1,20 @@
+# Calendar "up next": "in 12 min: Standup", "now: Design review", "14:30 1:1 with Sam". Hidden
+# when nothing is on in the next 12 hours; the detail lists the next few events.
+#
+# Install the script:  install -m755 examples/python/sliver-next-event ~/.local/bin/
+#   (packaged: /usr/share/doc/sliver/examples/python/sliver-next-event; needs python3)
+# Point it at your calendars: .ics files, vdirsyncer/khal directories, or an iCal feed URL
+# (Google: Settings > your calendar > "Secret address in iCal format"). URLs are fetched at
+# most every 15 minutes. Then copy this block into ~/.config/sliver/config.toml, or
+# `include = ["calendar.toml"]`, and put "custom/next-event" in a zone.
+#
+# It re-runs every minute for the countdown, only while it's on the bar with the display on.
+# Classes: now (with `percentage` = how far through), soon (15 min or less), upcoming (an hour or
+# less), later; e.g. `#custom-next-event.soon { background: #e5a50a; color: black; }`.
+
+[modules."custom/next-event"]
+exec = "sliver-next-event ~/.local/share/calendars"   # files, dirs and URLs, space-separated
+return-type = "json"
+interval = "1m"
+timeout = "10s"
+on-tap = { open = "org.gnome.Calendar.desktop" }   # or your calendar app's desktop id

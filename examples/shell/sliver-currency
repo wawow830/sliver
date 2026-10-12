@@ -1,0 +1,57 @@
+#!/bin/sh
+# sliver-currency: an exchange rate from the European Central Bank (via frankfurter.dev), as one
+# JSON line for a sliver custom/* module (return-type = "json"). Preset:
+# examples/config/currency.toml.
+#
+#   sliver-currency FROM TO [AMOUNT]      e.g. sliver-currency EUR USD, sliver-currency USD JPY 100
+#
+# The ECB publishes once per working day, so an interval of an hour or more is plenty. The class
+# says which way the rate last moved: up, down or same (plus stale/error). Needs curl.
+set -u
+
+from=$(printf '%s' "${1:-EUR}" | tr 'a-z' 'A-Z')
+to=$(printf '%s' "${2:-USD}" | tr 'a-z' 'A-Z')
+amount=${3:-1}
+for code in "$from" "$to"; do
+	case $code in
+	[A-Z][A-Z][A-Z]) ;;
+	*)
+		printf '{"text":"?","class":"error","tooltip":"currency codes are 3 letters, like EUR"}\n'
+		exit 0
+		;;
+	esac
+done
+case $amount in '' | *[!0-9.]*) amount=1 ;; esac
+cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/sliver
+cache=$cache_dir/currency-$from-$to
+
+# {"amount":1.0,"base":"EUR","date":"2026-10-09","rates":{"USD":1.1206}}
+body=$(curl -fsS --max-time 8 "https://api.frankfurter.dev/v1/latest?base=$from&symbols=$to" 2>/dev/null)
+rate=$(printf '%s' "$body" | sed -n "s/.*\"rates\":{\"$to\":\([0-9.eE+-]*\)}.*/\1/p")
+date=$(printf '%s' "$body" | sed -n 's/.*"date":"\([0-9-]*\)".*/\1/p')
+
+# The cache: "RATE DATE TREND" of the last reading.
+prev= prev_date= trend=same
+[ -r "$cache" ] && read -r prev prev_date trend <"$cache"
+stale=
+if [ -z "$rate" ]; then
+	if [ -z "$prev" ]; then
+		printf '{"text":"?","class":"error","tooltip":"frankfurter.dev is unreachable"}\n'
+		exit 0
+	fi
+	rate=$prev date=$prev_date stale=" stale"
+elif [ "$rate" != "$prev" ]; then
+	# A new rate: the arrow shows which way it moved, until it moves again.
+	[ -n "$prev" ] && trend=$(awk -v a="$rate" -v b="$prev" \
+		'BEGIN { print (a > b) ? "up" : (a < b) ? "down" : "same" }')
+	mkdir -p "$cache_dir" && printf '%s %s %s\n' "$rate" "$date" "$trend" >"$cache"
+fi
+case $trend in up) arrow=' ▲' ;; down) arrow=' ▼' ;; *) trend=same arrow= ;; esac
+
+value=$(awk -v r="$rate" -v n="$amount" 'BEGIN { v = r * n; printf (v >= 100) ? "%.2f" : "%.4f", v }')
+label=$from
+[ "$amount" != 1 ] && label="$amount $from"
+tip="1 $from = $rate $to (ECB, $date)"
+[ -n "$stale" ] && tip="$tip; offline: last reading"
+printf '{"text":"%s → %s %s%s","tooltip":"%s","class":"%s%s"}\n' \
+	"$label" "$value" "$to" "$arrow" "$tip" "$trend" "$stale"

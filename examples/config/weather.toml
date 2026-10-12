@@ -1,0 +1,22 @@
+# Weather from wttr.in: "☁️ 24°C", with the condition, humidity and wind as the detail.
+#
+# Install the script:  install -m755 examples/shell/sliver-weather ~/.local/bin/
+#   (packaged: /usr/share/doc/sliver/examples/shell/sliver-weather)
+# Then copy this block into ~/.config/sliver/config.toml, or `include = ["weather.toml"]`, and
+# put "custom/weather" in a zone, e.g.
+#
+#   [[layouts.default.zones]]
+#   name = "controls"
+#   modules = ["status-items", "custom/weather", "clock"]
+#
+# It runs every 15 minutes, and only while it's on the bar with the display on. Offline it
+# keeps the last reading (class `stale`). Style the classes clear, cloudy, rain, snow, storm and
+# fog, e.g. `#custom-weather.rain { color: #62a0ea; }`.
+
+[modules."custom/weather"]
+exec = "sliver-weather"            # or "sliver-weather Sydney", "sliver-weather 'New York'"
+return-type = "json"
+interval = "15m"
+timeout = "10s"                    # a network call: more than the 2 s default
+on-tap = { url = "https://wttr.in" }
+# env = { SLIVER_WEATHER_UNITS = "u" }   # °F and mph

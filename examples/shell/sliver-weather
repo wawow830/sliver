@@ -1,0 +1,64 @@
+#!/bin/sh
+# sliver-weather: the current weather from wttr.in, as one JSON line for a sliver custom/* module
+# (return-type = "json"). Preset: examples/config/weather.toml.
+#
+#   sliver-weather [LOCATION]
+#
+# LOCATION (or $SLIVER_WEATHER_LOCATION) is a city, airport code or "lat,lon". Without it, wttr.in
+# guesses from your IP address. $SLIVER_WEATHER_UNITS: m = metric (default), u = US units.
+# Needs curl. Offline, it shows the last good reading with the `stale` class.
+# Classes: clear, cloudy, rain, snow, storm, fog (plus stale/error).
+set -u
+
+loc=${1:-${SLIVER_WEATHER_LOCATION:-}}
+units=${SLIVER_WEATHER_UNITS:-m}
+case $units in m | u) ;; *) units=m ;; esac
+cache_dir=${XDG_CACHE_HOME:-$HOME/.cache}/sliver
+cache=$cache_dir/weather-$(printf '%s' "$loc" | tr -c 'A-Za-z0-9,.-' '_')
+
+json_str() { # a JSON string literal for $1
+	printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037')"
+}
+
+class_of() { # a style class from wttr.in's condition text
+	c=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+	case $c in
+	*thunder*) echo storm ;;
+	*snow* | *sleet* | *ice* | *blizzard*) echo snow ;;
+	*rain* | *drizzle* | *shower*) echo rain ;;
+	*fog* | *mist* | *haze*) echo fog ;;
+	*sunny* | *clear*) echo clear ;;
+	*) echo cloudy ;;
+	esac
+}
+
+# icon|temperature|condition|humidity|wind
+query=$(printf '%s' "$loc" | sed 's/ /+/g')
+line=$(curl -fsS --max-time 8 "https://wttr.in/$query?$units&format=%c|%t|%C|%h|%w" 2>/dev/null)
+extra=
+case $line in
+*'|'*'°'*'|'*)
+	mkdir -p "$cache_dir" && printf '%s\n' "$line" >"$cache"
+	;;
+*)
+	if [ -r "$cache" ]; then
+		line=$(cat "$cache")
+		extra=" stale"
+	else
+		printf '{"text":"?","class":"error","tooltip":"wttr.in is unreachable"}\n'
+		exit 0
+	fi
+	;;
+esac
+
+IFS='|' read -r icon temp cond hum wind <<EOF
+$line
+EOF
+icon=$(printf '%s' "$icon" | tr -d ' ')
+cond=$(printf '%s' "$cond" | sed 's/ *$//')
+temp=$(printf '%s' "$temp" | sed 's/^+//')
+detail="$cond, humidity $hum, wind $wind"
+[ -n "$extra" ] && detail="$detail (offline: last reading)"
+printf '{"text":%s,"alt":%s,"tooltip":%s,"class":"%s%s"}\n' \
+	"$(json_str "$icon $temp")" "$(json_str "$(class_of "$cond")")" \
+	"$(json_str "$detail")" "$(class_of "$cond")" "$extra"

@@ -37,6 +37,16 @@ sliverctl publish --scope target --target-app firefox --provider org.example.FxT
   done
 ```
 
+## Module scripts (presets in `examples/config/`)
+Scripts for `custom/*` modules print one JSON line per run (`return-type = "json"`):
+- `sliver-weather [LOCATION]`: wttr.in, e.g. `☁️ 24°C` (`weather.toml`).
+- `sliver-currency FROM TO [AMOUNT]`: ECB rates, e.g. `EUR → 1.1206 USD ▲` (`currency.toml`).
+- `../python/sliver-next-event SOURCE...`: calendar "up next" from .ics files, vdirsyncer/khal
+  directories or iCal URLs, e.g. `in 12 min: Standup` (`calendar.toml`).
+
+Install with `install -m755 sliver-weather sliver-currency ../python/sliver-next-event ~/.local/bin/`,
+then copy or `include` the preset. Each runs only while its module is on the bar.
+
 ## waybar-style control
 ```sh
 sliverctl signal 8                  # like pkill -RTMIN+8 waybar: re-run modules with signal = 8

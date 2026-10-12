@@ -58,7 +58,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Emoji picker: scrolling strip, recents, category tabs | P2 | partial | mac | tap = type, swipe = scroll | uinput or text input (keymap issue: see T7) | Rendering is ready (COLRv1); the module and the insertion method are open (T51). **Now:** Done: tabs, paging, recents, typing via wtype or the clipboard (`sliver-emoji`). Missing: search and skin-tone selection. |
 | App switcher / dock: running and pinned apps | P2 | done | Pock, MTMR dock | tap = focus, long-press = close | compositor plus icon lookup | The `taskbar` module: one icon per window of the active workspace, `pinned = [...]` launchers first (idle ones start the app). |
 | Scrubber / candidate strip for apps (text suggestions, tabs) | P2 | todo | mac (NSScrubber) | swipe, tap | public API |  |
-| Weather, currency, calendar "up next" | P3 | todo | MTMR |  | Only as presets built on the script widget. Not core. | Possible today as `custom/*` scripts. |
+| Weather, currency, calendar "up next" | P3 | done (presets) | MTMR |  | Only as presets built on the script widget. Not core. | `examples/config/{weather,currency,calendar}.toml` on `custom/*` scripts: `examples/shell/sliver-weather` (wttr.in), `examples/shell/sliver-currency` (ECB via frankfurter.dev, ▲/▼), `examples/python/sliver-next-event` (.ics files, vdirsyncer/khal dirs or iCal URLs; recurrence, countdown, `now`/`soon` classes). Offline they keep the last reading (`stale`). Tested with a fake curl (`crates/sliver-modules/tests/examples.rs`). |
 
 ## 3. Actions
 

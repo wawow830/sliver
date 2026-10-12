@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""sliver-next-event: calendar "up next" for a sliver custom/* module (return-type = "json").
+
+    sliver-next-event SOURCE...
+
+A SOURCE is an .ics file, a directory of them (a vdirsyncer/khal calendar, read recursively), or
+an http(s) URL to an iCalendar feed (Google's "secret address in iCal format", Nextcloud,
+Outlook's published calendar). URLs are fetched at most every 15 minutes (cached in
+$XDG_CACHE_HOME/sliver/calendar); local files are read on every run.
+
+Shows the event that's on now, else the next one in the coming 12 hours (else hides itself):
+  "now: Standup"        class now
+  "in 12 min: Standup"  class soon (15 minutes or less) or upcoming (an hour or less)
+  "14:30 Standup"       class later
+The detail lists the next few events. All-day events are skipped.
+
+Recurrence: DAILY, WEEKLY (with BYDAY), MONTHLY (same day of month) and YEARLY rules with
+INTERVAL, COUNT and UNTIL, plus EXDATE and moved instances (RECURRENCE-ID). Rules beyond that
+(BYSETPOS, "2nd Tuesday", ...) use their first occurrence only. Standard library only.
+
+Preset: examples/config/calendar.toml. SLIVER_NOW=2026-10-12T09:00 fixes "now" (for testing).
+"""
+
+import datetime as dt
+import hashlib
+import json
+import os
+import sys
+import time
+import urllib.request
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python < 3.9
+    ZoneInfo = None
+
+WINDOW = dt.timedelta(hours=12)
+FETCH_EVERY = 15 * 60
+MAX_TITLE = 28
+WEEKDAYS = {"MO": 0, "TU": 1, "WE": 2, "TH": 3, "FR": 4, "SA": 5, "SU": 6}
+
+
+def local_tz():
+    return dt.datetime.now().astimezone().tzinfo
+
+
+def now():
+    fixed = os.environ.get("SLIVER_NOW")
+    if fixed:
+        t = dt.datetime.fromisoformat(fixed)
+        return t if t.tzinfo else t.replace(tzinfo=local_tz())
+    return dt.datetime.now().astimezone()
+
+
+# ---- reading sources ----
+
+
+def fetch(url):
+    cache_dir = os.path.join(
+        os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "sliver", "calendar"
+    )
+    path = os.path.join(cache_dir, hashlib.sha256(url.encode()).hexdigest()[:16] + ".ics")
+    try:
+        fresh = time.time() - os.path.getmtime(path) < FETCH_EVERY
+    except OSError:
+        fresh = False
+    if not fresh:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "sliver-next-event"})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = r.read(8 << 20)
+            os.makedirs(cache_dir, exist_ok=True)
+            tmp = path + ".new"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except OSError:
+            if not os.path.exists(path):
+                raise
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def texts(source):
+    if source.startswith(("http://", "https://", "webcal://")):
+        yield fetch("https://" + source[len("webcal://"):] if source.startswith("webcal://") else source)
+    elif os.path.isdir(source):
+        for root, _, files in os.walk(source):
+            for name in sorted(files):
+                if name.endswith(".ics"):
+                    with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+                        yield f.read()
+    else:
+        with open(os.path.expanduser(source), encoding="utf-8", errors="replace") as f:
+            yield f.read()
+
+
+# ---- iCalendar ----
+
+
+def unfold(text):
+    lines = []
+    for raw in text.splitlines():
+        if raw[:1] in (" ", "\t") and lines:
+            lines[-1] += raw[1:]
+        else:
+            lines.append(raw)
+    return lines
+
+
+def prop(line):
+    """'DTSTART;TZID=Europe/Berlin:20261012T090000' -> ('DTSTART', {'TZID': ...}, '2026...')"""
+    head, _, value = line.partition(":")
+    name, *params = head.split(";")
+    p = {}
+    for x in params:
+        k, _, v = x.partition("=")
+        p[k.upper()] = v.strip('"')
+    return name.upper(), p, value
+
+
+def unescape(s):
+    return s.replace("\\n", " ").replace("\\N", " ").replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\")
+
+
+def zone(tzid):
+    if tzid and ZoneInfo:
+        try:
+            return ZoneInfo(tzid)
+        except Exception:
+            pass
+    return local_tz()
+
+
+def when(value, params):
+    """A datetime, or None for all-day dates."""
+    if params.get("VALUE") == "DATE" or len(value) == 8:
+        return None
+    if value.endswith("Z"):
+        return dt.datetime.strptime(value[:15], "%Y%m%dT%H%M%S").replace(tzinfo=dt.timezone.utc)
+    return dt.datetime.strptime(value[:15], "%Y%m%dT%H%M%S").replace(tzinfo=zone(params.get("TZID")))
+
+
+def duration(s):
+    """RFC 5545 DURATION (P1DT2H30M, PT45M, P1W)."""
+    sign = -1 if s.startswith("-") else 1
+    s = s.lstrip("+-").lstrip("P")
+    total, num, in_time = dt.timedelta(), "", False
+    for c in s:
+        if c.isdigit():
+            num += c
+        elif c == "T":
+            in_time = True
+        else:
+            n = int(num or 0)
+            num = ""
+            total += {
+                "W": dt.timedelta(weeks=n),
+                "D": dt.timedelta(days=n),
+                "H": dt.timedelta(hours=n),
+                "M": dt.timedelta(minutes=n) if in_time else dt.timedelta(),
+                "S": dt.timedelta(seconds=n),
+            }.get(c, dt.timedelta())
+    return sign * total
+
+
+def events(text):
+    ev = None
+    for line in unfold(text):
+        name, params, value = prop(line)
+        if name == "BEGIN" and value.upper() == "VEVENT":
+            ev = {"exdates": set()}
+        elif name == "END" and value.upper() == "VEVENT" and ev is not None:
+            yield ev
+            ev = None
+        elif ev is None:
+            continue
+        elif name == "SUMMARY":
+            ev["title"] = unescape(value)
+        elif name == "LOCATION":
+            ev["where"] = unescape(value)
+        elif name in ("DTSTART", "DTEND", "RECURRENCE-ID"):
+            ev[name] = when(value, params)
+            ev[name + "-allday"] = ev[name] is None
+        elif name == "DURATION":
+            ev["DURATION"] = duration(value)
+        elif name == "RRULE":
+            ev["rrule"] = dict(x.partition("=")[::2] for x in value.split(";") if x)
+        elif name == "EXDATE":
+            for v in value.split(","):
+                t = when(v, params)
+                if t:
+                    ev["exdates"].add(t)
+        elif name == "STATUS" and value.upper() == "CANCELLED":
+            ev["cancelled"] = True
+
+
+def until_of(rule):
+    u = rule.get("UNTIL")
+    if not u:
+        return None
+    if len(u) == 8:
+        return dt.datetime.strptime(u, "%Y%m%d").replace(tzinfo=local_tz()) + dt.timedelta(days=1)
+    return when(u, {})
+
+
+def starts(ev, end_of_window):
+    """Occurrence starts of `ev` up to `end_of_window` (in order)."""
+    start, rule = ev["DTSTART"], ev.get("rrule")
+    if not rule:
+        yield start
+        return
+    freq = rule.get("FREQ", "")
+    interval = max(1, int(rule.get("INTERVAL", "1") or 1))
+    count = int(rule["COUNT"]) if rule.get("COUNT", "").isdigit() else None
+    until = until_of(rule)
+    n = 0
+
+    def ok(t):
+        return (until is None or t <= until) and t not in ev["exdates"]
+
+    if freq in ("DAILY", "WEEKLY"):
+        step = dt.timedelta(days=interval * (7 if freq == "WEEKLY" else 1))
+        days = sorted({WEEKDAYS[d[-2:]] for d in rule.get("BYDAY", "").split(",") if d[-2:] in WEEKDAYS})
+        period = start
+        # Without COUNT, jump close to the window instead of walking years of meetings.
+        if count is None and end_of_window - start > 2 * step:
+            skip = (end_of_window - WINDOW - dt.timedelta(days=8) - start) // step
+            period = start + max(0, skip) * step
+        week0 = period - dt.timedelta(days=period.weekday())
+        for _ in range(100000):
+            if freq == "WEEKLY" and days:
+                cands = [
+                    dt.datetime.combine((week0 + dt.timedelta(days=d)).date(), start.timetz())
+                    for d in days
+                ]
+            else:
+                cands = [period]
+            for t in cands:
+                if t < start:
+                    continue
+                if t > end_of_window or (until and t > until) or (count is not None and n >= count):
+                    return
+                n += 1
+                if ok(t):
+                    yield t
+            period += step
+            week0 += step
+    elif freq in ("MONTHLY", "YEARLY"):
+        months = interval * (12 if freq == "YEARLY" else 1)
+        for i in range(100000):
+            m = start.month - 1 + i * months
+            y, m = start.year + m // 12, m % 12 + 1
+            try:
+                t = start.replace(year=y, month=m)
+            except ValueError:  # the 31st in a short month: RFC 5545 skips it
+                continue
+            if t > end_of_window or (until and t > until) or (count is not None and n >= count):
+                return
+            n += 1
+            if ok(t):
+                yield t
+    else:
+        yield start
+
+
+def occurrences(sources, t0):
+    end_of_window = t0 + WINDOW
+    moved = set()  # (title, original start) of instances replaced by a RECURRENCE-ID override
+    all_events = []
+    for s in sources:
+        for text in texts(s):
+            all_events.extend(events(text))
+    for ev in all_events:
+        if ev.get("RECURRENCE-ID"):
+            moved.add((ev.get("title"), ev["RECURRENCE-ID"]))
+    for ev in all_events:
+        if ev.get("cancelled") or not ev.get("DTSTART"):
+            continue  # cancelled, or all-day
+        length = (
+            ev["DTEND"] - ev["DTSTART"]
+            if ev.get("DTEND")
+            else ev.get("DURATION", dt.timedelta(hours=1))
+        )
+        for s in starts(ev, end_of_window):
+            if not ev.get("RECURRENCE-ID") and (ev.get("title"), s) in moved:
+                continue
+            if s + length > t0 and s <= end_of_window:
+                yield s, s + length, ev.get("title") or "(no title)", ev.get("where")
+
+
+# ---- output ----
+
+
+def short(s):
+    s = " ".join(s.split())
+    return s if len(s) <= MAX_TITLE else s[: MAX_TITLE - 1] + "…"
+
+
+def render(occ, t0):
+    if not occ:
+        return {"text": "", "hidden": True}
+    occ.sort()
+    start, end, title, where = occ[0]
+    mins = int((start - t0).total_seconds() // 60)
+    if start <= t0:
+        text, cls = f"now: {short(title)}", "now"
+    elif mins <= 60:
+        text, cls = f"in {max(mins, 1)} min: {short(title)}", "soon" if mins <= 15 else "upcoming"
+    else:
+        text, cls = f"{start.astimezone(t0.tzinfo):%H:%M} {short(title)}", "later"
+    lines = []
+    for s, e, ti, w in occ[:4]:
+        span = f"{s.astimezone(t0.tzinfo):%H:%M}–{e.astimezone(t0.tzinfo):%H:%M}"
+        lines.append(f"{span} {ti}" + (f" ({w})" if w else ""))
+    pct = None
+    if start <= t0 < end:
+        pct = round(100 * (t0 - start) / (end - start))
+    out = {"text": text, "tooltip": "\n".join(lines), "class": cls, "alt": cls}
+    if pct is not None:
+        out["percentage"] = pct
+    return out
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if argv else 2
+    t0 = now()
+    try:
+        occ = list(occurrences(argv, t0))
+    except (OSError, ValueError) as e:
+        print(json.dumps({"text": "?", "class": "error", "tooltip": f"calendar: {e}"}))
+        return 0
+    print(json.dumps(render(occ, t0), ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

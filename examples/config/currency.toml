@@ -1,0 +1,17 @@
+# An exchange rate from the European Central Bank: "EUR → 1.1206 USD ▲".
+#
+# Install the script:  install -m755 examples/shell/sliver-currency ~/.local/bin/
+#   (packaged: /usr/share/doc/sliver/examples/shell/sliver-currency)
+# Then copy this block into ~/.config/sliver/config.toml, or `include = ["currency.toml"]`, and
+# put "custom/currency" in a zone.
+#
+# The ECB publishes once per working day, so hourly is plenty; it runs only while on the bar.
+# The arrow and the class (up, down, same; stale when offline) show the last move. Add more
+# pairs as more modules: [modules."custom/btc"] with exec = "sliver-currency USD JPY 100", etc.
+
+[modules."custom/currency"]
+exec = "sliver-currency EUR USD"
+return-type = "json"
+interval = "1h"
+timeout = "10s"
+on-tap = { url = "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html" }
