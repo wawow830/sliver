@@ -151,6 +151,7 @@ pub fn display_page(ui: &Rc<Ui>) -> gtk::Widget {
         &d.max_brightness.to_string(),
         false,
     );
+    g.add(&crate::curve::editor(ui, &state.loaded.merged, d.adaptive));
     page.add(&g);
     let idle = group(
         "Idle",

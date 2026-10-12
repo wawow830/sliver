@@ -6,6 +6,7 @@
 
 mod apps;
 mod bar;
+mod curve;
 mod edit;
 mod live;
 mod pages;
