@@ -41,20 +41,85 @@ const LOCKERS: &[&str] = &[
     "swaylock-effects",
 ];
 
-/// Whether to believe logind's `LockedHint` (integration.md §3: it's verified to read `true` on
-/// an unlocked Hyprland session). On compositors whose lockers are separate programs, trust it
-/// only while one of them runs. GNOME and KDE maintain the hint, so trust it there.
-/// `running` lists process names (`/proc/*/comm`; injectable for tests).
+/// Whether the screen is locked, from every source we have, most trustworthy first:
+///
+/// 1. The desktop's own `ActiveChanged` (GNOME, KDE, anything with `org.freedesktop.ScreenSaver`).
+/// 2. On GNOME and KDE without it: logind's `LockedHint`, which those shells keep honest.
+/// 3. Elsewhere, whether a known locker process is running: lockers started by a keybind or
+///    `swayidle` never touch logind (the hint stays `false`: a leak), and others never clear it
+///    (integration.md §3: the hint stays `yes` after unlocking: a stuck privacy layout). The
+///    hint alone is not believed.
+///
+/// `running` lists process names (`/proc/*/comm`; injectable for tests); it is only called when
+/// the answer needs it.
 pub fn plausibly_locked(
     hint: bool,
+    screensaver: Option<bool>,
     backend: sliver_desktop::Backend,
     running: impl FnOnce() -> Vec<String>,
 ) -> bool {
     use sliver_desktop::Backend::*;
-    match (hint, backend) {
-        (false, _) => false,
-        (true, Gnome | Kde) => true,
-        (true, _) => running().iter().any(|p| LOCKERS.contains(&p.as_str())),
+    if let Some(active) = screensaver {
+        return active;
+    }
+    match backend {
+        Gnome | Kde => hint,
+        _ => running().iter().any(|p| LOCKERS.contains(&p.as_str())),
+    }
+}
+
+/// [`plausibly_locked`] with the process scan cached for a moment: world snapshots are built on
+/// every render, and `/proc` has hundreds of entries. The cache is dropped on [`LockWatch::wake`]
+/// so a bar waking up never shows a stale "unlocked".
+#[derive(Debug, Default)]
+pub struct LockWatch {
+    cache: std::sync::Mutex<Option<(std::time::Instant, bool)>>,
+}
+
+/// How long a process scan result is reused.
+const SCAN_TTL: std::time::Duration = std::time::Duration::from_millis(1500);
+
+impl LockWatch {
+    pub fn locked(
+        &self,
+        hint: bool,
+        screensaver: Option<bool>,
+        backend: sliver_desktop::Backend,
+    ) -> bool {
+        self.locked_with(hint, screensaver, backend, process_names)
+    }
+
+    pub fn locked_with(
+        &self,
+        hint: bool,
+        screensaver: Option<bool>,
+        backend: sliver_desktop::Backend,
+        running: impl FnOnce() -> Vec<String>,
+    ) -> bool {
+        use sliver_desktop::Backend::*;
+        match (screensaver, backend) {
+            (Some(active), _) => active,
+            (None, Gnome | Kde) => hint,
+            (None, _) => self.locker_running(running),
+        }
+    }
+
+    fn locker_running(&self, running: impl FnOnce() -> Vec<String>) -> bool {
+        let now = std::time::Instant::now();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((t, v)) = *cache
+            && now.saturating_duration_since(t) < SCAN_TTL
+        {
+            return v;
+        }
+        let v = running().iter().any(|p| LOCKERS.contains(&p.as_str()));
+        *cache = Some((now, v));
+        v
+    }
+
+    /// The display woke up: look again.
+    pub fn wake(&self) {
+        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -130,14 +195,48 @@ mod tests {
     }
 
     #[test]
-    fn stale_hint_on_hyprland_is_ignored() {
+    fn lock_sources_in_order_of_trust() {
         let none = || Vec::new();
-        assert!(!plausibly_locked(true, Backend::Hyprland, none));
-        assert!(plausibly_locked(true, Backend::Hyprland, || vec![
-            "bash".into(),
-            "hyprlock".into()
-        ]));
-        assert!(plausibly_locked(true, Backend::Gnome, none));
-        assert!(!plausibly_locked(false, Backend::Gnome, none));
+        let hyprlock = || vec!["bash".to_string(), "hyprlock".to_string()];
+        // a stale hint on Hyprland is not believed; a running locker is, hint or not
+        assert!(!plausibly_locked(true, None, Backend::Hyprland, none));
+        assert!(plausibly_locked(true, None, Backend::Hyprland, hyprlock));
+        assert!(
+            plausibly_locked(false, None, Backend::Sway, || vec!["swaylock".into()]),
+            "a locker started by a keybind never touches logind"
+        );
+        // GNOME and KDE keep the hint honest
+        assert!(plausibly_locked(true, None, Backend::Gnome, none));
+        assert!(!plausibly_locked(false, None, Backend::Kde, hyprlock));
+        // the desktop's own ActiveChanged beats everything
+        assert!(plausibly_locked(false, Some(true), Backend::Hyprland, none));
+        assert!(!plausibly_locked(true, Some(false), Backend::Gnome, none));
+        assert!(!plausibly_locked(
+            true,
+            Some(false),
+            Backend::Hyprland,
+            hyprlock
+        ));
+    }
+
+    #[test]
+    fn lock_watch_caches_the_scan_until_woken() {
+        use std::cell::Cell;
+        let w = LockWatch::default();
+        let scans = Cell::new(0);
+        let locked = |names: &'static [&'static str]| {
+            w.locked_with(false, None, Backend::Sway, || {
+                scans.set(scans.get() + 1);
+                names.iter().map(|s| s.to_string()).collect()
+            })
+        };
+        assert!(!locked(&["bash"]));
+        assert!(!locked(&["swaylock"]), "cached: still the first answer");
+        assert_eq!(scans.get(), 1);
+        w.wake();
+        assert!(locked(&["swaylock"]), "a wake looks again");
+        assert_eq!(scans.get(), 2);
+        // no scan at all when the shell says
+        assert!(w.locked_with(false, Some(true), Backend::Sway, || panic!("scanned")));
     }
 }

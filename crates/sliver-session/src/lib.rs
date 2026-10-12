@@ -22,6 +22,7 @@ pub mod network;
 pub mod notifications;
 pub mod power;
 pub(crate) mod props;
+pub mod screensaver;
 pub mod tray;
 
 use serde::{Deserialize, Serialize};
@@ -109,6 +110,9 @@ pub struct Media {
 pub struct SessionState {
     /// logind `LockedHint` plus `Lock`/`Unlock` edges. A hint, not a fact: see integration.md §3.
     pub locked: bool,
+    /// The desktop's own lock/screen-saver state (`ActiveChanged`), when it has one. Unlike
+    /// `locked` this is not a hint: it wins over it.
+    pub screensaver: Option<bool>,
     /// logind `IdleHint`.
     pub idle: bool,
     /// Between `PrepareForSleep(true)` and `PrepareForSleep(false)`.

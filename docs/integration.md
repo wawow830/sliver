@@ -184,6 +184,17 @@ on this machine.
   advisory until the agent can see the locker itself (ext-session-lock has no client-side
   observer; per-locker adapters such as hyprlock/quickshell process checks are the likely fix). GNOME also has
   `org.gnome.ScreenSaver.ActiveChanged`; KDE has `org.freedesktop.ScreenSaver`.
+- **How the agent decides `locked` (T83)**, most trustworthy first: (1) the desktop's own
+  `ActiveChanged` signal on `org.gnome.ScreenSaver` / `org.freedesktop.ScreenSaver` (read once with
+  `GetActive`, then followed; `sliver-session::screensaver`); (2) on GNOME and KDE without it, the
+  logind hint, which those shells keep honest; (3) everywhere else, whether a known locker process
+  (`hyprlock`, `swaylock`, `gtklock`, `waylock`, `i3lock`, `physlock`) is running, **regardless of the hint**, so
+  a locker started by a keybind or `swayidle` (which never touches logind) still brings up the
+  privacy layout, and a stuck `LockedHint` no longer does. The scan reads `/proc/*/comm`, is cached
+  for 1.5 s and redone whenever the bar wakes from off. **Limit:** a locker that starts while the bar
+  is on and nothing else changes is only noticed at the next render or wake; there is no
+  event for it (nothing polls, invariant 3). Unknown lockers (e.g. a shell's built-in lock such as
+  quickshell's) are not detected on those compositors unless they emit `ActiveChanged`.
 - Idle for dimming the bar: sliverd should use its own touch/key idle timer (it sees the
   input). For "user is idle on the desktop" use `ext-idle-notify-v1` (Wayland) rather than
   polling `IdleHint`.

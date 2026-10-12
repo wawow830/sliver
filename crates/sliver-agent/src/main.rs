@@ -307,6 +307,7 @@ struct Live {
     outputs: HashMap<String, sliver_modules::Output>,
     /// logind's raw `LockedHint`, before the plausibility check.
     locked_hint: bool,
+    lock_watch: sliver_agent::context::LockWatch,
     ops: Option<std::sync::mpsc::Sender<Op>>,
     /// The public D-Bus API, if the session bus is there.
     api: Option<ApiLink>,
@@ -351,6 +352,7 @@ impl Live {
             agg: Aggregate::from_env(),
             outputs: HashMap::new(),
             locked_hint: false,
+            lock_watch: Default::default(),
             ops,
             api,
             published: Published::default(),
@@ -400,8 +402,11 @@ impl Live {
     }
 
     fn world_locked(&self) -> bool {
-        use sliver_agent::context::{plausibly_locked, process_names};
-        plausibly_locked(self.locked_hint, self.agg.desktop.backend, process_names)
+        self.lock_watch.locked(
+            self.locked_hint,
+            self.agg.session.screensaver,
+            self.agg.desktop.backend,
+        )
     }
 
     fn world(&self) -> World {
@@ -1126,6 +1131,11 @@ fn run(
                     let was_off = agent.display == DisplayState::Off;
                     agent.display = state;
                     dirty |= was_off && state != DisplayState::Off;
+                    if was_off && state != DisplayState::Off {
+                        // A locker may have started while we were dark and nothing told us.
+                        live.lock_watch.wake();
+                        live.push_focus();
+                    }
                     // User module timers stop while the bar is off (invariant 3).
                     if let Some(rt) = live.modules() {
                         rt.set_active(state != DisplayState::Off);

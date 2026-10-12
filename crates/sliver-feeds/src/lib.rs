@@ -44,6 +44,8 @@ pub struct SessionOptions {
     pub tray: bool,
     /// Accent colour and colour scheme from the settings portal (and `kdeglobals`).
     pub appearance: bool,
+    /// The desktop's lock-screen state (`ActiveChanged`).
+    pub screensaver: bool,
 }
 
 impl Default for SessionOptions {
@@ -54,6 +56,7 @@ impl Default for SessionOptions {
             notifications: true,
             tray: true,
             appearance: true,
+            screensaver: true,
         }
     }
 }
@@ -67,6 +70,7 @@ impl SessionOptions {
             notifications: false,
             tray: false,
             appearance: false,
+            screensaver: false,
         }
     }
 }
@@ -291,6 +295,11 @@ impl Feeds {
         if opts.tray {
             if let Ok(c) = session() {
                 handle.start_tray(c);
+            }
+        }
+        if opts.screensaver {
+            if let Ok(c) = session() {
+                handle.start_screensaver(c);
             }
         }
         if opts.appearance {
