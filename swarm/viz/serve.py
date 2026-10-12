@@ -324,7 +324,9 @@ def snapshot():
     humans = [{"id": h["id"], "by": h["by"], "text": h["text"]} for h in st.get("humans", {}).values()
               if h["status"] == "open"]
     cost = sum(p.get("cost") or 0 for p in peers)
-    return {"now": time.time(), "paused": st.get("paused", False), "peers": peers, "tasks": tasks,
+    sw = st.get("swarm", {})
+    return {"now": time.time(), "paused": st.get("paused", False), "paused_by": sw.get("paused_by"),
+            "resume_eta": sw.get("resume_eta"), "peers": peers, "tasks": tasks,
             "humans": humans, "repo": LIVE.repo, "cost": round(cost, 2)}
 
 

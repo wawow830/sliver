@@ -482,8 +482,8 @@ function pauses(evs, until) {
   const out = []; let from = null;
   for (const e of evs) {
     if (e.kind !== "system") continue;
-    if (/^swarm paused/.test(e.text) && from === null) from = e.at;
-    else if (/^swarm resumed/.test(e.text) && from !== null) { out.push([from, e.at]); from = null; }
+    if (/^(swarm |auto-)paused/.test(e.text) && from === null) from = e.at;
+    else if (/^(swarm |auto-)resumed/.test(e.text) && from !== null) { out.push([from, e.at]); from = null; }
   }
   if (from !== null) out.push([from, until]);
   return out;
@@ -700,7 +700,11 @@ async function refresh() {
   const st = $("status");
   st.className = "status" + (s.paused ? " paused" : "");
   const working = s.peers.filter((p) => p.agent === "working").length;
-  set($("statusText"), s.paused ? (working ? `Paused, ${working} still finishing up` : "Paused")
+  const why = s.paused_by === "quota"
+    ? " to save Claude usage" + (s.resume_eta ? ", back around " + new Date(s.resume_eta * 1000)
+        .toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "")
+    : "";
+  set($("statusText"), s.paused ? (working ? `Paused${why}, ${working} still finishing up` : `Paused${why}`)
                                 : `Live, ${working} of ${s.peers.length} working`);
   for (const p of s.peers) liveRow(p);
   for (const [name, r] of rows) if (name !== "human" && !s.peers.some((p) => p.name === name)) { r.el.remove(); rows.delete(name); }

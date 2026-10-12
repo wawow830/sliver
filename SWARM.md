@@ -42,7 +42,8 @@ Run this every time you're woken (by the pulse, a message, or the end of your ow
 7. **Stop:** end your turn. The pulse wakes you when there's something for you. If you see
    nothing useful to do, run `swarm rest "why"` first.
 
-**Paused?** If `swarm` prints ⏸, the human has paused the swarm. Finish the step you're on (commit,
+**Paused?** If `swarm` prints ⏸, the swarm is paused, either by the human or automatically to save
+Claude usage (it resumes by itself when usage resets). Either way, do the same thing. Finish the step you're on (commit,
 and land it if it's green), then end your turn. Don't claim, spawn or start anything new. Your claims stay
 yours, messages queue, and the pulse wakes you on resume.
 

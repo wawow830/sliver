@@ -8,7 +8,8 @@ it only wakes idle peers that have something to do.
 
 Peers may (and should) improve this tool. Keep the state format backward compatible.
 """
-import argparse, fcntl, json, os, re, shutil, subprocess, sys, textwrap, time
+import argparse, fcntl, json, os, re, shutil, subprocess, sys, textwrap, time, urllib.request
+from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -245,6 +246,19 @@ PAUSE_NOTE = ("The swarm is paused by the human. Finish the step you're on (comm
               "then end your turn. Don't claim or start new work. Your claims stay yours, and you'll be woken on resume.")
 
 
+QUOTA_PAUSE_NOTE = ("The swarm is paused to save Claude usage (it resumes by itself when usage resets). Finish the step "
+                    "you're on (commit, and land it if it's green), then end your turn. Don't claim or start new work. "
+                    "Your claims stay yours, and you'll be woken on resume.")
+
+
+def pause_note():
+    try:
+        by = json.loads((home() / "state.json").read_text()).get("swarm", {}).get("paused_by")
+    except (OSError, ValueError):
+        by = None
+    return QUOTA_PAUSE_NOTE if by == "quota" else PAUSE_NOTE
+
+
 def is_paused():
     try:
         return json.loads((home() / "state.json").read_text()).get("paused", False)
@@ -259,7 +273,7 @@ def is_peer():
 
 def refuse_if_paused(what):
     if is_peer() and is_paused():
-        sys.exit(f"swarm: not {what}. {PAUSE_NOTE}")
+        sys.exit(f"swarm: not {what}. {pause_note()}")
 
 
 def deliver(to, frm, text, kind="msg", now_=False):
@@ -730,12 +744,209 @@ def reclaim_disk():
     return freed
 
 
+# ---------------------------------------------------------------- claude usage: auto-pause / auto-resume
+#
+# Reads each Claude login's usage from Anthropic's usage endpoint (what Claude Code's /usage shows), using the
+# OAuth logins CLIProxyAPI already holds. Read-only: it never refreshes tokens, since that would break
+# CLIProxyAPI's own refresh chain. Accounts are pooled with equal weight, because CLIProxyAPI round-robins them.
+
+QUOTA_DEFAULTS = {"enabled": True, "pause_below": 40, "resume_at": 45, "windows": ["five_hour", "seven_day"], "every": 300}
+WINDOW_NAMES = {"five_hour": "5-hour", "seven_day": "weekly"}
+AUTH_DIR = Path(os.environ.get("SWARM_QUOTA_AUTH_DIR", "~/.cli-proxy-api")).expanduser()
+USAGE_URL = os.environ.get("SWARM_QUOTA_URL", "https://api.anthropic.com/api/oauth/usage")
+
+
+def quota_cfg(s):
+    return {**QUOTA_DEFAULTS, **s.get("quota_cfg", {})}
+
+
+def epoch(iso):
+    try:
+        return int(datetime.fromisoformat(iso).timestamp()) if iso else None
+    except ValueError:
+        return None
+
+
+def when(t):
+    """Local, human-friendly time: '18:00' today, else 'Tue 06:00'."""
+    lt = time.localtime(t)
+    return time.strftime("%H:%M" if lt[:3] == time.localtime()[:3] else "%a %H:%M", lt)
+
+
+def fetch_accounts(prev):
+    out, errors = {}, []
+    for f in sorted(AUTH_DIR.glob("claude-*.json")):
+        try:
+            d = json.loads(f.read_text())
+        except (OSError, ValueError) as e:
+            errors.append(f"{f.name}: {e}"); continue
+        if d.get("disabled"):
+            continue
+        email = d.get("email") or f.stem
+        exp = epoch(d.get("expired"))
+        if exp and exp < now():
+            errors.append(f"{email}: token expired (CLIProxyAPI refreshes it on next use)")
+        else:
+            req = urllib.request.Request(USAGE_URL, headers={
+                "Authorization": f"Bearer {d.get('access_token', '')}", "anthropic-beta": "oauth-2025-04-20",
+                "Accept": "application/json", "User-Agent": "claude-cli/2.0 (external, cli)"})
+            try:
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    u = json.load(r)
+                out[email] = {"at": now()}
+                for w in WINDOW_NAMES:
+                    x = u.get(w) or {}
+                    out[email][w] = {"left": round(100 - float(x.get("utilization") or 0), 1), "resets": epoch(x.get("resets_at"))}
+                continue
+            except Exception as e:
+                errors.append(f"{email}: {e}")
+        if email in prev and now() - prev[email].get("at", 0) < 6 * 3600:  # fall back to the last reading
+            out[email] = prev[email]
+    return out, errors
+
+
+def acct_left(a, w):
+    x = a.get(w) or {}
+    if x.get("resets") and x["resets"] <= now():
+        return 100.0  # that window has reset since we last looked
+    return float(x.get("left", 100.0))
+
+
+def pooled(accounts, w):
+    return sum(acct_left(a, w) for a in accounts.values()) / len(accounts)
+
+
+def recovery_eta(accounts, windows, target):
+    """When every watched window is back to `target`% left, if nothing else gets used. None if unknown."""
+    eta = now()
+    for w in windows:
+        lefts = {e: acct_left(a, w) for e, a in accounts.items()}
+        if sum(lefts.values()) / len(lefts) >= target:
+            continue
+        resets = sorted((a[w]["resets"], e) for e, a in accounts.items() if (a.get(w) or {}).get("resets"))
+        for t, e in resets:
+            lefts[e] = 100.0
+            if sum(lefts.values()) / len(lefts) >= target:
+                eta = max(eta, t); break
+        else:
+            return None
+    return eta
+
+
+def quota_summary(s):
+    """(lowest % left, its window, {window: % left}) from the cached reading, or None."""
+    cfg, accounts = quota_cfg(s), s.get("quota", {}).get("accounts", {})
+    windows = [w for w in cfg["windows"] if w in WINDOW_NAMES]
+    if not accounts or not windows:
+        return None
+    per = {w: pooled(accounts, w) for w in windows}
+    w = min(per, key=per.get)
+    return per[w], w, per
+
+
+def quota_tick(force=False):
+    """Refresh the usage reading when due, then auto-pause or auto-resume. Returns a word for the pulse line."""
+    with state(write=False) as s:
+        cfg, q = quota_cfg(s), s.get("quota", {})
+    if not cfg["enabled"]:
+        return "off"
+    if force or now() - q.get("at", 0) >= cfg["every"]:
+        accounts, errors = fetch_accounts(q.get("accounts", {}))
+        with state() as s:
+            s["quota"] = {"at": now(), "accounts": accounts, "errors": errors}
+    action = None
+    with state() as s:
+        summ = quota_summary(s)
+        if not summ:
+            return "unknown"
+        left, w, _ = summ
+        sw = s["swarm"]
+        if sw.get("quota_override") and left >= cfg["resume_at"]:
+            sw.pop("quota_override")  # recovered, so the human's override has done its job
+        if not s["paused"] and not sw.get("quota_override") and left <= cfg["pause_below"]:
+            s["paused"] = True
+            sw.update(paused_at=now(), paused_by="quota")
+            action = "pause"
+        elif s["paused"] and sw.get("paused_by") == "quota" and left >= cfg["resume_at"]:
+            s["paused"] = False
+            sw.pop("paused_at", None); sw.pop("paused_by", None)
+            action = "resume"
+        eta = recovery_eta(s["quota"]["accounts"], [x for x in cfg["windows"] if x in WINDOW_NAMES], cfg["resume_at"])
+        if s["paused"] and sw.get("paused_by") == "quota":
+            sw["resume_eta"] = eta  # for the visualizer
+        else:
+            sw.pop("resume_eta", None)
+    if action == "pause":
+        back = f", expected around {when(eta)}" if eta else ""
+        channel("system", f"auto-paused to save Claude usage: {left:.0f}% of the {WINDOW_NAMES[w]} limit is left "
+                f"(the line is {cfg['pause_below']}%). It resumes by itself at {cfg['resume_at']}%{back}. {QUOTA_PAUSE_NOTE}", by="pulse")
+        notify("sliver swarm paused", f"Claude usage: {left:.0f}% of the {WINDOW_NAMES[w]} limit left. "
+               f"Resumes by itself{back}. `swarm resume` overrides.")
+    elif action == "resume":
+        channel("system", f"auto-resumed: Claude usage is back to {left:.0f}% left. Carry on where you left off.", by="pulse")
+        notify("sliver swarm resumed", f"Claude usage is back to {left:.0f}% left.")
+    return f"{left:.0f}%{'(' + action + ')' if action else ''}"
+
+
+def cmd_quota(a):
+    with state() as s:
+        cfg = s.setdefault("quota_cfg", {})
+        if a.on or a.off:
+            cfg["enabled"] = bool(a.on)
+        if a.pause_below is not None:
+            cfg["pause_below"] = a.pause_below
+        if a.resume_at is not None:
+            cfg["resume_at"] = a.resume_at
+        if a.windows:
+            ws = [w.strip() for w in a.windows.split(",") if w.strip()]
+            bad = [w for w in ws if w not in WINDOW_NAMES]
+            if bad:
+                sys.exit(f"unknown window(s) {', '.join(bad)}; use {', '.join(WINDOW_NAMES)}")
+            cfg["windows"] = ws
+        cfg = quota_cfg(s)
+        if cfg["resume_at"] <= cfg["pause_below"]:
+            sys.exit("--resume-at must be above --pause-below, or it would flap")
+    quota_tick(force=True)
+    with state(write=False) as s:
+        q, sw, paused = s.get("quota", {}), s["swarm"], s["paused"]
+        summ = quota_summary(s)
+    accounts = q.get("accounts", {})
+    print(f"Claude usage left (CLIProxyAPI's logins, checked {ago(q.get('at'))} ago)\n")
+    print(f"  {'':<26}" + "".join(f"{n:<26}" for n in WINDOW_NAMES.values()))
+    for e, acc in accounts.items():
+        cells = []
+        for w in WINDOW_NAMES:
+            r = (acc.get(w) or {}).get("resets")
+            cells.append(f"{acct_left(acc, w):>3.0f}%" + (f" (resets {when(r)})" if r and r > now() else ""))
+        print(f"  {e.split('@')[0]:<26}" + "".join(f"{c:<26}" for c in cells))
+    if accounts:
+        print(f"  {'together':<26}" + "".join(f"{pooled(accounts, w):>3.0f}%{'':<22}" for w in WINDOW_NAMES))
+    for err in q.get("errors", []):
+        print(color("33", f"  ! {err}"))
+    watched = " and ".join(WINDOW_NAMES[w] for w in cfg["windows"])
+    print(f"\nAuto-pause is {'on' if cfg['enabled'] else 'off'}: pauses at {cfg['pause_below']}% left, "
+          f"resumes at {cfg['resume_at']}%, watching the {watched} limit.")
+    if paused and sw.get("paused_by") == "quota":
+        eta = recovery_eta(accounts, cfg["windows"], cfg["resume_at"])
+        print(f"Paused to save usage since {when(sw.get('paused_at', now()))}" + (f", expected back around {when(eta)}." if eta else "."))
+    elif paused:
+        print("Paused by you, so it won't resume by itself.")
+    elif sw.get("quota_override"):
+        print("You resumed it while usage was low, so auto-pause is held off until usage recovers.")
+    elif summ:
+        print("Running.")
+
+
 def cmd_pulse(a):
     print(f"swarm pulse every {a.interval}s. Ctrl+C to stop. (`swarm pause` / `swarm resume`)")
     warned_blocked, warned_disk = set(), 0
     revive_at = {}
     while True:
         try:
+            try:
+                usage = quota_tick()
+            except Exception as e:  # a usage hiccup must never stop the pulse
+                usage = f"error({e.__class__.__name__})"
             with state() as s:
                 if s["paused"]:
                     print(time.strftime("%H:%M:%S"), "paused"); peers = {}
@@ -789,7 +1000,7 @@ def cmd_pulse(a):
                 warned_disk = now(); notify("sliver: disk low", f"{free:.1f} GB free, even after clearing idle peers' builds")
                 channel("system", f"disk low: {free:.1f} GB free. If you're building, `cargo clean` when you're done.", by="pulse")
             line = " ".join(f"{k}:{v}" for k, v in (("nudged", ",".join(n for k_, n, _ in actions if k_ == "nudge") or "-"),
-                                                    ("needs-human", ",".join(open_h) or "-")))
+                                                    ("needs-human", ",".join(open_h) or "-"), ("usage-left", usage)))
             print(time.strftime("%H:%M:%S"), line, flush=True)
         except SystemExit as e:
             print("pulse error:", e, file=sys.stderr)
@@ -816,10 +1027,15 @@ def cmd_pause(a):
     with state() as s:
         already = s["paused"]
         s["paused"] = True
-        s.setdefault("swarm", {})["paused_at"] = s["swarm"].get("paused_at") if already else now()
+        sw = s.setdefault("swarm", {})
+        sw["paused_at"] = sw.get("paused_at") if already else now()
+        took_over = sw.get("paused_by") == "quota"
+        sw["paused_by"] = "human"  # a human pause is never auto-resumed
         names = live_peers(s)
     if not already:
         channel("system", f"swarm paused by the human. {PAUSE_NOTE}", by="human")
+    elif took_over:
+        print("it was paused to save usage; now it's your pause, so it won't resume by itself.")
     working = still_working(names)
     print("paused. Nobody gets woken: not by the pulse, and not by messages (they queue until resume).")
     print(f"still finishing their current turn: {', '.join(working)}" if working else "everyone has settled.")
@@ -830,12 +1046,20 @@ def cmd_resume(a):
     with state() as s:
         was = s["paused"]
         s["paused"] = False
-        s.setdefault("swarm", {}).pop("paused_at", None)
+        sw = s.setdefault("swarm", {})
+        sw.pop("paused_at", None); sw.pop("paused_by", None)
         queued = {n: unread(n, s) for n in live_peers(s)}
+        summ, cfg = quota_summary(s), quota_cfg(s)
+        low = cfg["enabled"] and summ and summ[0] < cfg["resume_at"]
+        if low:
+            sw["quota_override"] = True  # don't immediately re-pause what the human just resumed
     if was:
         channel("system", "swarm resumed by the human. Carry on where you left off.", by="human")
     q = ", ".join(f"{n} ({c})" for n, c in queued.items() if c > 0)
     print("resumed." if was else "wasn't paused.")
+    if low:
+        print(f"Claude usage is low ({summ[0]:.0f}% of the {WINDOW_NAMES[summ[1]]} limit left), so auto-pause "
+              "is held off until it recovers. `swarm pause` if you change your mind.")
     if q:
         print(f"queued messages for: {q}")
     if pulse_running():
@@ -888,13 +1112,20 @@ def cmd_down(a):
 
 def cmd_status(a):
     with state(write=False) as s:
-        paused, names = s["paused"], live_peers(s)
+        paused, names, by = s["paused"], live_peers(s), s["swarm"].get("paused_by")
+        summ, cfg = quota_summary(s), quota_cfg(s)
+        eta = recovery_eta(s["quota"]["accounts"], cfg["windows"], cfg["resume_at"]) if summ and by == "quota" else None
     if paused:
         working = still_working(names)
         settle = f"still finishing: {', '.join(working)}" if working else "everyone has settled"
-        print(f"== sliver swarm (PAUSED, {settle}; `swarm resume` to continue)")
+        why = ("to save Claude usage, resumes by itself" + (f" around {when(eta)}" if eta else "") + "; `swarm resume` overrides"
+               if by == "quota" else "`swarm resume` to continue")
+        print(f"== sliver swarm (PAUSED {why}; {settle})")
     else:
         print("== sliver swarm")
+    if summ and cfg["enabled"]:
+        parts = ", ".join(f"{WINDOW_NAMES[w]} {v:.0f}%" for w, v in summ[2].items())
+        print(f"   Claude usage left: {parts} (auto-pause at {cfg['pause_below']}%; `swarm quota` for details)")
     print("\n== peers"); cmd_peers(argparse.Namespace(all=False))
     print("\n== needs human"); cmd_human(argparse.Namespace(sub="list", all=False, brief=True))
     print("\n== board"); cmd_task(argparse.Namespace(sub="list", all=False, mine=False))
@@ -964,6 +1195,11 @@ def main():
     x = sp.add_parser("pulse", help="(infra) wake idle peers that have work"); x.add_argument("--interval", type=int, default=45); x.set_defaults(f=cmd_pulse)
     sp.add_parser("pause").set_defaults(f=cmd_pause)
     sp.add_parser("resume").set_defaults(f=cmd_resume)
+    x = sp.add_parser("quota", help="Claude usage left, and the auto-pause/resume settings")
+    x.add_argument("--pause-below", type=int, metavar="PCT", help="auto-pause at this %% left (default 40)")
+    x.add_argument("--resume-at", type=int, metavar="PCT", help="auto-resume at this %% left (default 45)")
+    x.add_argument("--windows", help="which limits to watch: five_hour,seven_day (default both)")
+    x.add_argument("--on", action="store_true"); x.add_argument("--off", action="store_true"); x.set_defaults(f=cmd_quota)
     x = sp.add_parser("up", help="(human) create swarm tab, start pulse, spawn peers")
     x.add_argument("--peers", default=""); x.add_argument("--model"); x.set_defaults(f=cmd_up)
     sp.add_parser("down", help="(human) interrupt peers, stop pulse").set_defaults(f=cmd_down)
@@ -971,8 +1207,8 @@ def main():
     x.add_argument("--port", type=int, default=7777); x.add_argument("--host", default="127.0.0.1"); x.set_defaults(f=cmd_viz)
 
     a = ap.parse_args()
-    if a.cmd not in ("pause", "resume", "pulse", "viz", "up", "down") and is_peer() and is_paused():
-        print(f"\u23f8 {PAUSE_NOTE}\n", file=sys.stderr)
+    if a.cmd not in ("pause", "resume", "pulse", "viz", "up", "down", "quota") and is_peer() and is_paused():
+        print(f"\u23f8 {pause_note()}\n", file=sys.stderr)
     a.f(a)
 
 

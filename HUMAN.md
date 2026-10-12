@@ -18,6 +18,11 @@ swarm task add "..." --body "..."    # add work
 swarm pause                          # natural stop: peers finish their current turn, nobody gets woken,
                                      #   messages queue, panes and claims stay as they are
 swarm resume                         # pick up exactly where they left off
+swarm quota                          # Claude usage left per login, and the auto-pause settings
+# usage: the pulse checks Claude usage every 5 min (both CLIProxyAPI logins, 5-hour and weekly limits).
+#   At 40% left it pauses the swarm the same natural way; at 45% it resumes by itself.
+#   Your own `swarm pause` is never auto-resumed. `swarm resume` while usage is low holds off the
+#   auto-pause until usage recovers. Tune: swarm quota --pause-below 40 --resume-at 45 --windows five_hour,seven_day [--off]
 # disk: when free space drops below 15 GB the pulse deletes idle peers' target/ (build output) until ~25 GB is free
 swarm down                           # interrupt all peers and stop the pulse (state is kept)
 swarm up --peers ash,birch           # bring it back (`swarm spawn NAME --resume` revives a peer's session)
