@@ -54,10 +54,36 @@ Actions (`agent.rs` → `Effect`s run by main.rs):
 - `on-drag` runs at most every 50 ms, always with the final value. Sliders report 0–100 along
   their trough, other modules the bar x.
 
-## Status
-Works: key, clock, spacer, custom (static `format`), groups/drawers, icons (XDG theme → built-in
-fallbacks), gestures and actions above, `--render`, the real sliverd loop.
+## Context and data
+`sources.rs` runs the session source (sliver-session: logind, UPower, power-profiles, MPRIS,
+audio, notifications, brightness) and the desktop source (sliver-desktop, auto-detected
+compositor) on threads. They hand states to the main loop through a channel plus a wake pipe the
+loop polls. `context.rs` flattens them into the rule context (integration.md §1 keys). logind's
+`LockedHint` is only believed on Hyprland/sway/niri while a locker process runs, because it's
+verified stale on this machine, and believed as-is on GNOME/KDE.
 
-Not yet: session/desktop context and data-backed modules (battery, sliders, mpris, audio…), the
-public D-Bus API (`sliver_api`), `layout`/`signal`/`update`/module actions, user modules runtime
-(T21), hot reload (T26).
+Data modules: `battery` (tiny-dfr icons, states with lower-is-worse), `backlight`, `kbd-backlight`,
+`audio` (`node = "source"` for the mic), their `/slider` variants (`collapsed = true` shows just
+the icon until tapped, then closes after 5 s), `mpris` (values escaped as markup), `idle-inhibitor`,
+`power-profiles`, `language`, `window`, `mode`. Modules with no data are hidden. Format output is
+markup (waybar).
+
+Built-in behaviour goes through `Action::ModuleAction` exactly like user `actions = { … }`:
+- slider drag → `set`;
+- audio tap → `toggle-mute`;
+- mpris tap → `play-pause`, swipe left → `next`, swipe right → `previous`;
+- idle-inhibitor tap → `toggle`;
+- `expand` on any module.
+
+User `on-*` bindings win. Session changes run on an ops thread (logind `SetBrightness`, wpctl,
+MPRIS, the caffeine inhibitor), so the main loop never blocks on them.
+
+`sliver-agent --render out` uses the live sources too, and prints every cell with its rect,
+module key, CSS id/classes and content, which is handy for debugging configs and stylesheets.
+
+## Status
+Works: everything above, plus `--render` and the real sliverd loop.
+
+Not yet: the public D-Bus API (`sliver_api`: App controls/Status items placeholders, published
+items), `workspaces`/`taskbar`/`notifications`/`cpu`… modules, `layout`/`signal`/`update` actions,
+user modules runtime (T21), hot reload (T26).

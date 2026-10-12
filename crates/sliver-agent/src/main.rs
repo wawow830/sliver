@@ -16,14 +16,17 @@ use std::time::Duration;
 use chrono::Local;
 use rustix::event::{PollFd, PollFlags, poll};
 use sliver_agent::Agent;
-use sliver_agent::agent::Effect;
+use sliver_agent::agent::{Effect, SessionOp};
 use sliver_agent::icons::Icons;
 use sliver_agent::link::{Event, Link};
 use sliver_agent::modules::World;
+use sliver_agent::sources::{Msg, Op, Sources};
 use sliver_config::{Config, Loaded};
+use sliver_desktop::DesktopState;
 use sliver_ipc::proto::{DisplayState, Layer, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
 use sliver_render::{Fonts, Renderer, Stylesheet};
+use sliver_session::SessionState;
 
 struct Args {
     render: Option<PathBuf>,
@@ -125,8 +128,39 @@ fn load_stylesheet(config: &Config, config_path: Option<&Path>) -> Stylesheet {
     sheet
 }
 
-fn world() -> World {
-    World { now: Local::now() }
+/// What the sources told us so far.
+#[derive(Default)]
+struct Live {
+    session: SessionState,
+    desktop: DesktopState,
+    /// logind's raw `LockedHint`, before plausibility checks.
+    locked_hint: bool,
+}
+
+impl Live {
+    fn update(&mut self, msg: Msg) {
+        match msg {
+            Msg::Session(s) => {
+                self.locked_hint = s.locked;
+                self.session = s;
+            }
+            Msg::Desktop(d) => self.desktop = d,
+        }
+        // logind's LockedHint can be stale; see context::plausibly_locked.
+        self.session.locked = sliver_agent::context::plausibly_locked(
+            self.locked_hint,
+            self.desktop.backend,
+            sliver_agent::context::process_names,
+        );
+    }
+
+    fn world(&self) -> World {
+        World {
+            now: Local::now(),
+            session: self.session.clone(),
+            desktop: self.desktop.clone(),
+        }
+    }
 }
 
 fn main() {
@@ -143,7 +177,15 @@ fn main() {
             a.size.0,
             a.size.1,
         );
-        agent.render(&world());
+        // Give the live sources a moment to report, so the preview shows real state.
+        let mut live = Live::default();
+        if let Ok(sources) = Sources::start() {
+            std::thread::sleep(Duration::from_millis(1500));
+            for msg in sources.drain() {
+                live.update(msg);
+            }
+        }
+        agent.render(&live.world());
         agent
             .errors
             .iter()
@@ -155,11 +197,30 @@ fn main() {
                     .save_png(&p)
                     .unwrap_or_else(|e| die(&format!("{p}: {e}")));
                 println!("{p}");
+                // What's on it, for config debugging.
+                for (c, r) in f.cells.iter().zip(&f.layout.items) {
+                    use sliver_render::Content as C;
+                    let content = match &c.content {
+                        C::Markup(t) | C::Text(t) => t.clone(),
+                        C::IconMarkup(_, t) | C::IconText(_, t) => format!("[icon] {t}"),
+                        C::Icon(_) => "[icon]".into(),
+                        C::Slider { value, .. } => format!("[slider {:.0}%]", value * 100.0),
+                        C::Spacer => "[spacer]".into(),
+                        _ => "[blank]".into(),
+                    };
+                    let classes: String = c.classes.iter().map(|k| format!(".{k}")).collect();
+                    println!(
+                        "  {:>5}+{:<4} {:<34} #{}{classes}  {content}",
+                        r.x, r.w, c.key, c.css_id
+                    );
+                }
             }
         }
         return;
     }
 
+    let sources = Sources::start().unwrap_or_else(|e| die(&format!("starting sources: {e}")));
+    let mut live = Live::default();
     let mut backoff = Duration::from_millis(250);
     loop {
         match Conn::connect(&a.socket)
@@ -179,7 +240,7 @@ fn main() {
                     "sliver-agent: connected to sliverd ({}, {}x{}, {:?})",
                     link.panel.model, link.panel.width, link.panel.height, link.role
                 );
-                if let Err(e) = run(agent, link) {
+                if let Err(e) = run(agent, link, &sources, &mut live) {
                     eprintln!("sliver-agent: {e}");
                 }
                 eprintln!("sliver-agent: lost sliverd, reconnecting");
@@ -198,10 +259,39 @@ fn now_us() -> u64 {
 }
 
 /// Carries out the agent's effects. Returns whether a redraw is needed.
-fn apply(effects: Vec<Effect>, link: &Link, children: &mut Vec<Child>) -> std::io::Result<bool> {
+fn apply(
+    effects: Vec<Effect>,
+    link: &Link,
+    children: &mut Vec<Child>,
+    sources: &Sources,
+    live: &Live,
+) -> std::io::Result<bool> {
     let mut redraw = false;
     for e in effects {
         match e {
+            Effect::Session(op) => {
+                let op = match op {
+                    SessionOp::ScreenBrightness(pct) => Op::Brightness {
+                        keyboard: false,
+                        pct,
+                    },
+                    SessionOp::KeyboardBrightness(pct) => Op::Brightness {
+                        keyboard: true,
+                        pct,
+                    },
+                    SessionOp::Volume { mic, pct } => Op::Volume { mic, pct },
+                    SessionOp::ToggleMute { mic } => Op::Mute { mic },
+                    SessionOp::ToggleCaffeine => Op::Caffeine(!live.session.caffeine),
+                    SessionOp::Media(cmd) => match &live.session.media {
+                        Some(m) => Op::Media {
+                            player: m.player.clone(),
+                            cmd,
+                        },
+                        None => continue,
+                    },
+                };
+                sources.op(op);
+            }
             Effect::Redraw => redraw = true,
             Effect::EmitKeys(keys, mode) => link.emit_keys(&keys, mode)?,
             Effect::Log(msg) => eprintln!("sliver-agent: {msg}"),
@@ -228,12 +318,17 @@ fn apply(effects: Vec<Effect>, link: &Link, children: &mut Vec<Child>) -> std::i
 }
 
 /// Drives one sliverd connection until it closes.
-fn run(mut agent: Agent, mut link: Link) -> std::io::Result<()> {
+fn run(
+    mut agent: Agent,
+    mut link: Link,
+    sources: &Sources,
+    live: &mut Live,
+) -> std::io::Result<()> {
     let mut dirty = true;
     let mut children = Vec::new();
     loop {
         if dirty && agent.display != DisplayState::Off {
-            for layer in agent.render(&world()) {
+            for layer in agent.render(&live.world()) {
                 let f = agent.frame(layer).expect("just rendered");
                 link.present(layer, &f.image, &f.pressed, &f.regions)?;
             }
@@ -260,17 +355,29 @@ fn run(mut agent: Agent, mut link: Link) -> std::io::Result<()> {
                     tv_sec: ms / 1000,
                     tv_nsec: (ms % 1000) * 1_000_000,
                 });
-        let readable = {
-            let fd = link.fd();
-            let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+        let (readable, world_changed) = {
+            let (fd, wake) = (link.fd(), sources.fd());
+            let mut fds = [
+                PollFd::new(&fd, PollFlags::IN),
+                PollFd::new(&wake, PollFlags::IN),
+            ];
             match poll(&mut fds, timeout.as_ref()) {
                 Ok(_) | Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(e.into()),
             }
-            !fds[0].revents().is_empty()
+            (!fds[0].revents().is_empty(), !fds[1].revents().is_empty())
         };
+        if world_changed {
+            for msg in sources.drain() {
+                live.update(msg);
+                dirty = true;
+            }
+        }
         let fx = agent.tick(now_us());
-        dirty |= apply(fx, &link, &mut children)?;
+        dirty |= apply(fx, &link, &mut children, sources, live)?;
+        if world_changed && !readable {
+            continue;
+        }
         if !readable {
             // A module's content may be due to change. An early wakeup just re-renders the same
             // pixels, which the link then drops.
@@ -321,7 +428,7 @@ fn run(mut agent: Agent, mut link: Link) -> std::io::Result<()> {
                     Vec::new()
                 }
             };
-            dirty |= apply(fx, &link, &mut children)?;
+            dirty |= apply(fx, &link, &mut children, sources, live)?;
         }
     }
 }

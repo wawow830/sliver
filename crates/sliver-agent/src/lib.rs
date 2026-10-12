@@ -4,10 +4,12 @@
 //! `sliver_ipc::fake::FakeDaemon`.
 
 pub mod agent;
+pub mod context;
 pub mod frame;
 pub mod gesture;
 pub mod icons;
 pub mod link;
 pub mod modules;
+pub mod sources;
 
 pub use agent::Agent;

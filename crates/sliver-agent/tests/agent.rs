@@ -16,9 +16,7 @@ use sliver_ipc::proto::{Layer, RegionKind};
 use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};
 
 fn world(h: u32, m: u32) -> World {
-    World {
-        now: Local.with_ymd_and_hms(2026, 10, 12, h, m, 5).unwrap(),
-    }
+    World::at(Local.with_ymd_and_hms(2026, 10, 12, h, m, 5).unwrap())
 }
 
 fn agent(toml: &str) -> Agent {
@@ -348,4 +346,111 @@ fn touches_become_actions() {
         .filter(|r| matches!(r.kind, RegionKind::Key { .. }))
         .count();
     assert_eq!(keys, 12);
+}
+
+fn session_world() -> World {
+    use sliver_session::{BatteryState, Media, PlaybackStatus};
+    let mut w = world(9, 41);
+    let s = &mut w.session;
+    s.power.on_battery = Some(true);
+    s.power.battery_pct = Some(18);
+    s.power.battery_state = BatteryState::Discharging;
+    s.audio.volume_pct = Some(40);
+    s.audio.muted = Some(false);
+    s.brightness.screen_pct = Some(70);
+    s.brightness.keyboard_pct = Some(30);
+    s.caffeine = true;
+    s.media = Some(Media {
+        player: "org.mpris.MediaPlayer2.test".into(),
+        identity: "Test <Player>".into(),
+        status: PlaybackStatus::Playing,
+        title: "Song & Dance".into(),
+        artist: "Band".into(),
+        ..Media::default()
+    });
+    w
+}
+
+#[test]
+fn session_modules() {
+    use sliver_agent::agent::{Effect::*, SessionOp};
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        width = "fill"
+        modules = ["mpris", "idle-inhibitor"]
+        [[layouts.default.zones]]
+        name = "controls"
+        modules = ["battery", "backlight/slider", "audio/slider", "audio"]
+        [modules.battery]
+        states = { warning = 30, critical = 10 }
+        format = "{capacity}%"
+        [modules."audio/slider"]
+        collapsed = false
+        "#,
+    );
+    let (mut fake, mut link) = connect();
+    let w = session_world();
+    let layers = a.render(&w);
+    present(&a, &mut link, &mut fake, &layers);
+    assert!(fake.errors.is_empty(), "{:?}", fake.errors);
+    check("session-modules", &a.frame(Layer::Base).unwrap().image);
+    let cells = &a.frame(Layer::Base).unwrap().cells;
+    let battery = cells.iter().find(|c| c.kind == "battery").unwrap();
+    assert!(
+        battery.classes.contains(&"warning".to_string()),
+        "{:?}",
+        battery.classes
+    );
+    let mpris = cells.iter().find(|c| c.kind == "mpris").unwrap();
+    assert!(
+        matches!(&mpris.content, sliver_render::Content::Markup(t) if t == "⏸ Song &amp; Dance"),
+        "{:?}",
+        mpris.content
+    );
+    assert!(
+        cells
+            .iter()
+            .find(|c| c.kind == "idle-inhibitor")
+            .unwrap()
+            .checked
+    );
+
+    // Tap mpris → play/pause; the collapsed brightness slider opens on tap.
+    let (_, x) = region(&a, "mpris");
+    fake.tap(x, 30.0).unwrap();
+    assert!(
+        deliver(&mut a, &mut link, &mut fake).contains(&Session(SessionOp::Media(
+            sliver_session::mpris::Command::PlayPause
+        )))
+    );
+    let (_, x) = region(&a, "backlight/slider");
+    fake.tap(x, 30.0).unwrap();
+    assert!(deliver(&mut a, &mut link, &mut fake).contains(&Redraw));
+    let layers = a.render(&w);
+    present(&a, &mut link, &mut fake, &layers);
+    check("session-slider-open", &a.frame(Layer::Base).unwrap().image);
+
+    // Dragging the open volume slider sets the volume along its trough.
+    let f = a.frame(Layer::Base).unwrap();
+    let i = f
+        .cells
+        .iter()
+        .position(|c| c.kind == "audio/slider")
+        .unwrap();
+    let t = f.layout.tracks[i].expect("slider track");
+    fake.touch(2, TouchPhase::Down, t.x + t.w * 0.75, 30.0)
+        .unwrap();
+    fake.touch(2, TouchPhase::Up, t.x + t.w * 0.75, 30.0)
+        .unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(
+        fx.contains(&Session(SessionOp::Volume {
+            mic: false,
+            pct: 75
+        })),
+        "{fx:?}"
+    );
 }

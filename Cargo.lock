@@ -1517,9 +1517,12 @@ dependencies = [
  "chrono",
  "rustix",
  "sliver-config",
+ "sliver-desktop",
  "sliver-icons",
  "sliver-ipc",
  "sliver-render",
+ "sliver-session",
+ "zbus",
 ]
 
 [[package]]

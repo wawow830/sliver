@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Local};
-use sliver_config::{Action, Config, Context, Gesture as CGesture, LayerMode, Resolved};
+use sliver_config::{Action, Config, Context, CtxValue, Gesture as CGesture, LayerMode, Resolved};
 use sliver_ipc::proto::{DisplayState, KeyMode, Layer, TouchPhase};
 use sliver_render::{Renderer, Stylesheet};
 
@@ -33,6 +33,19 @@ pub enum Effect {
     Redraw,
     /// Not fatal, worth logging.
     Log(String),
+    /// Change session state (volume, brightness, media, inhibitors). Run off the main loop.
+    Session(SessionOp),
+}
+
+/// Session-side changes the built-in modules make.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionOp {
+    ScreenBrightness(u8),
+    KeyboardBrightness(u8),
+    Volume { mic: bool, pct: u8 },
+    ToggleMute { mic: bool },
+    Media(sliver_session::mpris::Command),
+    ToggleCaffeine,
 }
 
 pub struct Agent {
@@ -42,7 +55,12 @@ pub struct Agent {
     icons: Icons,
     pub width: u32,
     pub height: u32,
+    /// The context the last render resolved with (built from the world, plus `ctx_overrides`).
     pub ctx: Context,
+    /// Applied on top of the world's context, e.g. the settings app's "Preview as".
+    pub ctx_overrides: Vec<(String, CtxValue)>,
+    /// Whether this Mac has a physical Esc key (decides the `esc` zone).
+    pub physical_esc: bool,
     /// Custom layers opened over `base` (last = on top).
     pub layers: Vec<String>,
     ui: HashMap<String, UiState>,
@@ -87,10 +105,12 @@ impl Agent {
         width: u32,
         height: u32,
     ) -> Agent {
-        let mut ctx = Context::new();
         // tiny-dfr's heuristic (docs/hardware.md): only the 2170 px bars lack a physical Esc.
-        ctx.set("physical_esc", width < 2170);
+        let physical_esc = width < 2170;
+        let ctx = Context::new().with("physical_esc", physical_esc);
         Agent {
+            ctx_overrides: Vec::new(),
+            physical_esc,
             config,
             sheet,
             renderer,
@@ -131,6 +151,17 @@ impl Agent {
     /// rebuilt (callers present them; the link drops unchanged pixels).
     pub fn render(&mut self, world: &World) -> Vec<Layer> {
         self.errors.clear();
+        let mut ctx = crate::context::build(
+            &world.desktop,
+            &world.session,
+            world.now,
+            self.physical_esc,
+            self.base_layer(),
+        );
+        for (k, v) in &self.ctx_overrides {
+            ctx.set(k, v.clone());
+        }
+        self.ctx = ctx;
         let mut out = Vec::new();
         let base = self.base_layer().to_owned();
         for (layer, name) in [(Layer::Base, base.as_str()), (Layer::Fn, "fn")] {
@@ -495,8 +526,49 @@ impl Agent {
                 c.interface.clone(),
                 c.method.clone(),
             ])),
+            Action::ModuleAction(name) => {
+                let Some(cell) = region.and_then(|r| self.cell(r)).cloned() else {
+                    return;
+                };
+                self.module_action(&cell, name, value, fx);
+            }
             other => fx.push(Effect::Log(format!("action not supported yet: {other:?}"))),
         }
+    }
+}
+
+impl Agent {
+    /// A built-in module's own action (`actions = { on-hold = "…" }`, or its default bindings).
+    fn module_action(&mut self, cell: &Cell, name: &str, value: Option<f64>, fx: &mut Vec<Effect>) {
+        use sliver_session::mpris::Command;
+        let pct = value.map(|v| v.clamp(0.0, 100.0).round() as u8);
+        let kind = cell.kind.as_str();
+        let op = match (kind, name, pct) {
+            ("backlight" | "backlight/slider", "set", Some(p)) => SessionOp::ScreenBrightness(p),
+            ("kbd-backlight" | "kbd-backlight/slider", "set", Some(p)) => {
+                SessionOp::KeyboardBrightness(p)
+            }
+            ("audio" | "audio/slider", "set", Some(p)) => SessionOp::Volume {
+                mic: cell.mic,
+                pct: p,
+            },
+            ("audio" | "audio/slider", "toggle-mute", _) => SessionOp::ToggleMute { mic: cell.mic },
+            ("mpris", "play-pause", _) => SessionOp::Media(Command::PlayPause),
+            ("mpris", "next", _) => SessionOp::Media(Command::Next),
+            ("mpris", "previous", _) => SessionOp::Media(Command::Previous),
+            ("idle-inhibitor", "toggle", _) => SessionOp::ToggleCaffeine,
+            (_, "expand", _) => {
+                let ui = self.ui(&cell.key);
+                ui.expanded = !ui.expanded;
+                fx.push(Effect::Redraw);
+                return;
+            }
+            _ => {
+                fx.push(Effect::Log(format!("{kind}: no action {name:?}")));
+                return;
+            }
+        };
+        fx.push(Effect::Session(op));
     }
 }
 
