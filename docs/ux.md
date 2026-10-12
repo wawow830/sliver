@@ -29,6 +29,7 @@ feature tiers are in [features.md](features.md). The app is GTK4 + libadwaita (A
 | **Layer** | The slot a layout is shown in. **Base** is the default. **Fn** shows while Fn is held. Custom layers (Media, Emoji…) open from an action and close with their auto ✕ button, the bar's Esc if there is one, or an idle timeout. |
 | **Rule** | "When ‹conditions›, use ‹layout› for ‹layer›". |
 | **App controls** | A placeholder item. Items that the focused app publishes appear here. |
+| **Status items** | A placeholder item for third-party *status* items that show whatever app is focused (StatusNotifierItem / Control Strip analogue). By default it sits in Controls. |
 | **Profile** | A complete config: layouts, rules, appearance. One is active. |
 | **Preset** | A shareable export of a layout or profile. |
 
@@ -36,7 +37,8 @@ Resolution (what the bar shows): the agent takes the current layer and finds the
 The **most specific** match wins (an app+title rule beats an app rule, which beats a state rule).
 Ties go to the rule higher in the user's list. The Default rule always matches. The agent then
 resolves inheritance and fills App controls. The daemon's safe layer bypasses all of this
-(pending cedar: confirm the resolver lives in the agent).
+The resolver runs in the agent. sliverd only sees finished base/fn frames, plus its own safe
+layer and an "escape floor" check (api.md).
 
 ### Inheritance
 A layout can **extend** a parent. Inheritance is per **zone**: each zone is either *inherited*
@@ -185,15 +187,18 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 
 ## 6. Apps (published items)
 
-- When a focused app publishes items (API, pending cedar), they render inside the user's **App
-  controls** placeholder. If a layout has no placeholder, app items don't show. That's how a
-  user opts out per layout.
+- Apps only ever fill the two placeholders (docs/api.md §2). Focused-app items go in **App
+  controls** and background status items go in **Status items**. If a layout lacks a placeholder,
+  those items don't show. That's how a user opts out per layout. Both placeholders are in the
+  Library's *Apps* category. An empty placeholder collapses to zero width, and in the editor it
+  shows as a dashed outline labelled with what would go there ("Firefox controls").
 - An app may never cover the Esc zone or remove Fn → F-keys. Taking Main + Controls ("modal", e.g. a color picker)
-  needs the per-app "may take the whole bar" toggle, which defaults on for the focused app and
-  ends when focus leaves or on Esc.
+  needs the per-app "may take the whole bar" toggle, which defaults on. The agent draws a ✕, and
+  modal ends on ✕, focus loss, or the app hiding it (api.md: `CreateContext{modal:true}`).
 - Default policy for new apps is **Allow** (Q6). The Apps page lists every app seen, with
   Allow/Deny and its item IDs. Users can hide individual app items, or *pin* one into a
-  layout like a normal item (this needs stable item IDs, pending cedar).
+  layout like a normal item. The stable key is `(provider, item id)` (api.md). A pinned item
+  whose app isn't running shows nothing and collapses.
 
 ## 7. Invariants enforced by the editor
 
