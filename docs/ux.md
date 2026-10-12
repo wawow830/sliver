@@ -24,7 +24,7 @@ feature tiers are in [features.md](features.md). The app is GTK4 + libadwaita (A
 | **Bar** | The physical strip. |
 | **Item** | Anything on the bar: a button, widget, group or spacer. |
 | **Widget** | An item with live content (clock, volume, now playing). |
-| **Zone** | One of three fixed regions of a layout: **Esc** (left) · **Main** (flexible) · **Controls** (right, the collapsible control strip). The Esc zone is pinned and locked only on bars with no physical Esc (2170 px models). On 2008 px bars with a physical Esc (this Mac14,7, pending H2) it's empty by default and the user can put anything there, including an Esc. |
+| **Zone** | One of three fixed regions of a layout: **Esc** (left) · **Main** (flexible) · **Controls** (right, the collapsible control strip). The Esc zone is pinned and locked only on bars with no physical Esc (2170 px models). On 2008 px bars with a physical Esc (this Mac14,7, confirmed in H2) it's empty by default and the user can put anything there, including an Esc. |
 | **Layout** | Items arranged into zones. Has a name. |
 | **Layer** | The slot a layout is shown in. **Base** is the default. **Fn** shows while Fn is held. Custom layers (Media, Emoji…) open from an action and close with their auto ✕ button, the bar's Esc if there is one, or an idle timeout. |
 | **Rule** | "When ‹conditions›, use ‹layout› for ‹layer›". |

@@ -23,7 +23,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Feature | Tier | Prior art | Notes |
 |---|---|---|---|
 | Built-in **safe layer** inside sliverd: F1–F12 (with Esc first on bars that have no physical Esc), plus media on Fn | P0 | dfr (it's the only layer) | Shown whenever the agent, config or a widget fails. It needs no config and no fonts beyond the built-in ones. |
-| Esc is always reachable: on the bar when there's **no physical Esc** (2170 px bars), optional otherwise | P0 | mac, dfr | dfr adds Esc only on bars ≥2170 px. This 2008 px Mac14,7 most likely has a physical Esc (the keyboard reports `KEY_ESC`; H2 confirms). See ux.md §7. |
+| Esc is always reachable: on the bar when there's **no physical Esc** (2170 px bars), optional otherwise | P0 | mac, dfr | dfr adds Esc only on bars ≥2170 px. This 2008 px Mac14,7 has a physical Esc (confirmed in H2). See ux.md §7. |
 | Fn held → F-key layer, from any state | P0 | mac, dfr | Works even with app modals and custom layers. |
 | Per-app "show F-keys by default" | P1 | mac (Keyboard prefs) | For terminals, IDEs and games. Expressed as a rule (see §5). |
 | Render only on change, idle dim → off | P0 | dfr | Invariant 3. The bar is OLED, so this is also the main burn-in protection. Defaults: dim at 30 s, off at 60 s, like dfr. |
@@ -163,5 +163,5 @@ tiering only.
   measured. Assume ~60 Hz, keep animations short, and skip them when idle.
 - **OLED:** burn-in from static items is real. Rely on idle dim/off. Pixel shift is advanced
   and opt-in.
-- **Physical Esc:** most likely present on this machine (H2). If so, Esc on the bar is
+- **Physical Esc:** present on this machine (confirmed in H2). Esc on the bar is
   optional, and the F-keys are the only bar-only keys.
