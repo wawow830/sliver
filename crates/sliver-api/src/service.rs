@@ -9,7 +9,7 @@ use crate::item::{Gesture, Prop, Props};
 use crate::registry::{
     ApiError, ContextId, Focus, Interaction, Outgoing, Policy, Registry, Resolved, Scope,
 };
-use sliver_desktop::Window;
+use sliver_desktop::{DesktopState, Window, WindowInfo, Workspace, WorkspaceInfo};
 use sliver_ipc::dbus::{API_MINOR, BUS_NAME, ROOT_PATH};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -130,6 +130,8 @@ pub struct Shared {
     /// so a crashed editor (Mirror to Touch Bar) never leaves the bar on its layout.
     layout_owner: Option<String>,
     pub workspaces: Vec<Props>,
+    /// `Desktop1.SetWindows`: every window, as a DE integration reports them.
+    pub windows: Vec<Props>,
     display_state: String,
 }
 
@@ -983,6 +985,142 @@ impl Desktop {
         self.inner.host.changed();
         Ok(())
     }
+
+    /// Every window, for the taskbar module (GNOME/KDE; keys as in `SetFocus`, plus `workspace`,
+    /// `focused`, `urgent`). Replaces the previous list.
+    async fn set_windows(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &Connection,
+        windows: Vec<HashMap<String, OwnedValue>>,
+    ) -> Result<()> {
+        self.inner.admit_unsandboxed(conn, &hdr).await?;
+        self.inner.lock().windows = windows.iter().map(to_props).take(MAX_WINDOWS).collect();
+        self.inner.host.changed();
+        Ok(())
+    }
+
+    /// `SetWindows` for KWin scripts (`av`, each element an `a{sv}`).
+    async fn set_windows_v(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &Connection,
+        windows: Vec<OwnedValue>,
+    ) -> Result<()> {
+        self.inner.admit_unsandboxed(conn, &hdr).await?;
+        let list: Option<Vec<Props>> = windows
+            .iter()
+            .take(MAX_WINDOWS)
+            .map(|v| match prop_from_value(v) {
+                Some(Prop::Map(m)) => Some(m),
+                _ => None,
+            })
+            .collect();
+        let list =
+            list.ok_or_else(|| Error::InvalidArgs("every element must be an a{sv}".into()))?;
+        self.inner.lock().windows = list;
+        self.inner.host.changed();
+        Ok(())
+    }
+}
+
+/// `SetWindows` keeps at most this many windows.
+const MAX_WINDOWS: usize = 256;
+
+/// A workspace id as `SetWorkspaces` sends it (`"3"`; a name-like id gets its position).
+fn workspace_id(p: &Props, index: usize) -> i64 {
+    match p.get("id") {
+        Some(Prop::Str(s)) => s.parse().unwrap_or(index as i64 + 1),
+        Some(Prop::Int(i)) => *i,
+        _ => index as i64 + 1,
+    }
+}
+
+/// What a DE integration pushed over `Desktop1` (focus, workspaces, windows), as the desktop
+/// state the agent's own backends produce. `None` while nothing was pushed or the agent tracks
+/// focus itself.
+pub fn pushed_desktop(s: &Shared, backend: sliver_desktop::Backend) -> Option<DesktopState> {
+    if s.focus_source == FocusSource::Backend
+        || (s.focus.window.is_none() && s.workspaces.is_empty() && s.windows.is_empty())
+    {
+        return None;
+    }
+    let st = |p: &Props, k: &str| match p.get(k) {
+        Some(Prop::Str(v)) => v.clone(),
+        _ => String::new(),
+    };
+    let flag = |p: &Props, k: &str| matches!(p.get(k), Some(Prop::Bool(true)));
+    let mut windows: Vec<WindowInfo> = s
+        .windows
+        .iter()
+        .filter_map(|p| {
+            let w = focus_window(p)?;
+            Some(WindowInfo {
+                workspace: match p.get("workspace") {
+                    Some(Prop::Str(v)) => v.parse().unwrap_or(0),
+                    Some(Prop::Int(i)) => *i,
+                    _ => 0,
+                },
+                focused: flag(p, "focused"),
+                urgent: flag(p, "urgent"),
+                pid: w.pid,
+                address: w.address,
+                class: w.class,
+                title: w.title,
+            })
+        })
+        .collect();
+    let workspaces: Vec<WorkspaceInfo> = s
+        .workspaces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let id = workspace_id(p, i);
+            WorkspaceInfo {
+                id,
+                name: Some(st(p, "name"))
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(id.to_string()),
+                active: flag(p, "active"),
+                urgent: flag(p, "urgent"),
+                monitor: Some(st(p, "monitor")).filter(|m| !m.is_empty()),
+                windows: windows.iter().filter(|w| w.workspace == id).count() as u32,
+            }
+        })
+        .collect();
+    let workspace = workspaces
+        .iter()
+        .find(|w| w.active)
+        .map(|w| Workspace {
+            id: w.id,
+            name: w.name.clone(),
+        })
+        .or_else(|| {
+            let name = s.focus.workspace.clone()?;
+            Some(Workspace {
+                id: name.parse().unwrap_or(0),
+                name,
+            })
+        });
+    let window = s.focus.window.clone();
+    // A window list without a focused flag: the focused window is the one SetFocus named.
+    if !windows.iter().any(|w| w.focused)
+        && let Some(f) = &window
+    {
+        windows
+            .iter_mut()
+            .filter(|w| w.address == f.address)
+            .for_each(|w| w.focused = true);
+    }
+    Some(DesktopState {
+        connected: true,
+        backend,
+        window,
+        workspace,
+        workspaces,
+        windows,
+        ..DesktopState::default()
+    })
 }
 
 /// `SetFocus` keys (`docs/api.md` §5) → a window. Empty dict = nothing focused.

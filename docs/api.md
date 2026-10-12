@@ -25,6 +25,11 @@ ifaces   = NS.TouchBar1  NS.Context1  NS.Control1  NS.Desktop1
 The trailing digit is the **major** version. A breaking change creates `TouchBar2` alongside `TouchBar1`.
 Additive changes bump the `Version` property (minor).
 
+| minor | added |
+|---|---|
+| 0 | the first published interface |
+| 1 | `Control1.HoldLayout`, `ActiveLayout`/`ActiveLayoutSource`/`ActiveRule`/`ActiveRuleName`; item types `scrubber` (events `scrolled`) and working `popover`s; `ListContexts` `sandboxed`; `Desktop1.SetWindows`/`SetWindowsV` |
+
 ---
 
 ## 1. Mental model
@@ -295,9 +300,17 @@ script) feed it state.
 SetFocus(a{sv} window)      app-id s, pid u, title s, workspace s, window s (handle as in §2)
 SetWorkspaces(aa{sv})       id s, name s, active b, urgent b
 SetWorkspacesV(av)          the same, each element an a{sv} (for KWin scripts, which can't send aa{sv})
+SetWindows(aa{sv})          every window: the SetFocus keys (window, app-id, title, pid) plus
+                            workspace s (a SetWorkspaces id), focused b, urgent b; ≤ 256, replaces the list
+SetWindowsV(av)             the same as av (KWin)
 ```
 The first connection to call `SetFocus` becomes the focus source until it disconnects (others get
 `NS.Error.Busy`). A configured backend (Hyprland/sway IPC) takes precedence.
+
+Without its own backend, the agent treats what `Desktop1` pushes as the desktop: the focused
+window drives rules (`app_id`, `title`…) and App controls, the workspaces list feeds the
+`workspaces` module, and the window list the `taskbar` module (with `pinned` apps). A window
+list without `focused` flags takes the focus from `SetFocus`.
 
 ## 6. Private IPC: `sliverd` ⇄ `sliver-agent`
 

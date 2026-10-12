@@ -133,6 +133,19 @@
     <method name="SetWorkspacesV">
       <arg name="workspaces" type="av" direction="in"/>
     </method>
+    <!--
+    Every window, for the taskbar module (GNOME/KDE; keys as in `SetFocus`, plus `workspace`,
+    `focused`, `urgent`). Replaces the previous list.
+    -->
+    <method name="SetWindows">
+      <arg name="windows" type="aa{sv}" direction="in"/>
+    </method>
+    <!--
+    `SetWindows` for KWin scripts (`av`, each element an `a{sv}`).
+    -->
+    <method name="SetWindowsV">
+      <arg name="windows" type="av" direction="in"/>
+    </method>
   </interface>
   <interface name="io.github.wawow830.Sliver.TouchBar1">
     <method name="CreateContext">

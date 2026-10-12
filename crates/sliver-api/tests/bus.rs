@@ -511,3 +511,102 @@ fn set_layout_outlives_its_caller() {
         vec![Control::SetLayout("fkeys".into())]
     );
 }
+
+/// T100: what a GNOME/KDE integration pushes (focus, workspaces, windows) becomes a desktop state
+/// the agent uses like its own backend's.
+#[test]
+fn pushed_desktop_from_desktop1() {
+    use sliver_api::service::pushed_desktop;
+    use sliver_desktop::Backend;
+    let Some((bus, api, _host)) = setup() else {
+        return;
+    };
+    assert!(
+        pushed_desktop(&api.state(), Backend::Gnome).is_none(),
+        "nothing pushed yet"
+    );
+    let c = bus.client();
+    fn desk<B: serde::Serialize + zbus::zvariant::DynamicType>(
+        c: &Connection,
+        member: &str,
+        b: &B,
+    ) {
+        c.call_method(Some(BUS_NAME), ROOT_PATH, Some(IFACE_DESKTOP), member, b)
+            .unwrap();
+    }
+    desk(
+        &c,
+        "SetFocus",
+        &(opts(&[
+            ("window", Value::from("w2")),
+            ("app-id", Value::from("org.gnome.Nautilus")),
+            ("title", Value::from("Home")),
+        ]),),
+    );
+    desk(
+        &c,
+        "SetWorkspaces",
+        &(vec![
+            opts(&[("id", Value::from("1")), ("name", Value::from("Web"))]),
+            opts(&[("id", Value::from("2")), ("active", Value::from(true))]),
+        ],),
+    );
+    let win = |id: &str, app: &str, ws: &str| {
+        OwnedValue::try_from(Value::from(opts(&[
+            ("window", Value::from(id.to_owned())),
+            ("app-id", Value::from(app.to_owned())),
+            ("title", Value::from(format!("{app} window"))),
+            ("workspace", Value::from(ws.to_owned())),
+        ])))
+        .unwrap()
+    };
+    desk(
+        &c,
+        "SetWindowsV",
+        &(vec![
+            win("w1", "firefox", "1"),
+            win("w2", "org.gnome.Nautilus", "2"),
+            win("w3", "kitty", "2"),
+        ],),
+    );
+    let d = pushed_desktop(&api.state(), Backend::Gnome).unwrap();
+    assert!(d.connected);
+    assert_eq!(d.backend, Backend::Gnome);
+    assert_eq!(d.window.as_ref().unwrap().class, "org.gnome.Nautilus");
+    assert_eq!(d.workspace.as_ref().map(|w| w.id), Some(2));
+    let ws: Vec<(i64, &str, bool, u32)> = d
+        .workspaces
+        .iter()
+        .map(|w| (w.id, w.name.as_str(), w.active, w.windows))
+        .collect();
+    assert_eq!(ws, [(1, "Web", false, 1), (2, "2", true, 2)]);
+    let wins: Vec<(&str, i64, bool)> = d
+        .windows
+        .iter()
+        .map(|w| (w.class.as_str(), w.workspace, w.focused))
+        .collect();
+    assert_eq!(
+        wins,
+        [
+            ("firefox", 1, false),
+            ("org.gnome.Nautilus", 2, true),
+            ("kitty", 2, false)
+        ]
+    );
+    // The aa{sv} form works too, and replaces the list.
+    desk(
+        &c,
+        "SetWindows",
+        &(vec![opts(&[
+            ("window", Value::from("w9")),
+            ("app-id", Value::from("foot")),
+            ("focused", Value::from(true)),
+        ])],),
+    );
+    let d = pushed_desktop(&api.state(), Backend::Kde).unwrap();
+    assert_eq!(d.windows.len(), 1);
+    assert!(d.windows[0].focused);
+    // The agent's own backend wins: then nothing pushed counts.
+    api.set_focus(Default::default());
+    assert!(pushed_desktop(&api.state(), Backend::Gnome).is_none());
+}

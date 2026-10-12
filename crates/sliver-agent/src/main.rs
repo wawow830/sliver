@@ -315,6 +315,9 @@ struct Live {
     /// The registry changed since `published` was copied: copy it before the next frame (T99:
     /// not on every change, which an app may make hundreds of times a second).
     published_stale: bool,
+    /// Our own compositor backend (Hyprland/sway/niri IPC) is connected. Without one, what a
+    /// GNOME/KDE integration pushes over `Desktop1` is the desktop (T100).
+    own_desktop: bool,
     /// cpu/memory/... sampler, kept across frames for CPU deltas.
     stats: sliver_agent::modules::Stats,
     /// Installed applications (taskbar icons).
@@ -360,6 +363,7 @@ impl Live {
             api,
             published: Published::default(),
             published_stale: false,
+            own_desktop: false,
             stats: Default::default(),
             emoji: sliver_agent::modules::EmojiHandle::persistent(),
             apps: std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::from_paths(
@@ -378,8 +382,9 @@ impl Live {
                     self.outputs.insert(u.module.clone(), u.output.clone());
                 }
                 Feed::Session(s) => self.locked_hint = s.locked,
+                Feed::Desktop(d) => self.own_desktop = d.connected,
                 Feed::Note(n) => eprintln!("sliver-agent: {n}"),
-                Feed::Desktop(_) | Feed::Art { .. } => {}
+                Feed::Art { .. } => {}
             }
             self.agg.apply(f);
         }
@@ -394,6 +399,7 @@ impl Live {
     fn push_focus(&mut self) {
         let d = &self.agg.desktop;
         if let Some(api) = &self.api
+            && self.own_desktop
             && d.connected
         {
             api.set_focus(Focus {
@@ -402,6 +408,27 @@ impl Live {
                 locked: self.world_locked(),
             });
             self.published_stale = true;
+        }
+    }
+
+    /// Without our own backend, adopt what a DE integration pushed over `Desktop1` (focus,
+    /// workspaces, windows) as the desktop, so rules, the workspaces and taskbar modules and the
+    /// `app_id` context work on GNOME/KDE too. Returns whether it changed.
+    fn sync_pushed_desktop(&mut self) -> bool {
+        if self.own_desktop {
+            return false;
+        }
+        let Some(api) = &self.api else {
+            return false;
+        };
+        let backend = sliver_desktop::Backend::detect(|k| std::env::var(k).ok());
+        let pushed = sliver_api::service::pushed_desktop(&api.api.state(), backend);
+        match pushed {
+            Some(d) if d != self.agg.desktop => {
+                self.agg.apply(Feed::Desktop(d));
+                true
+            }
+            _ => false,
         }
     }
 
@@ -1122,6 +1149,7 @@ fn run(
             let (changed, requests) = api.drain();
             if changed {
                 live.published_stale = true;
+                live.sync_pushed_desktop();
                 pacer.changed();
             }
             for (req, reply) in requests {
