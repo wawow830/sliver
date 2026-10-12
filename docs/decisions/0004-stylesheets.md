@@ -21,14 +21,15 @@ CSS engine isn't available.
   - Bar: classes from the agent (`layer-fn`, `layout-x`, `locked`…).
 
   This follows docs/customization.md §7.
-- **Selectors:** type, `*`, `#id`, `.class`, `:active` (pressed; `:checked` alias), `:disabled`,
+- **Selectors:** type, `*`, `#id`, `.class`, `:active` (pressed), `:disabled`,
   `:first-child`, `:last-child`, `:not(compound)`, descendant and `>` combinators, and lists.
   `:hover`/`:focus`/… parse but never match (with a note). `+`/`~` are rejected for that selector
   only. Cascade is standard: `!important`, then specificity, then source order.
 - **Properties:** `color`, `background`/`background-color` (colors only), `border`,
   `border-width/-color/-style` (solid/none), `border-radius`, `padding*`, `margin*`, `font-family`
   (first installed wins, generic → embedded), `font-size`, `font-weight`, `opacity`, `min-width`,
-  `gap` (between zones on `bar`, modules in a `zone`, icon and label in a `module`), and
+  `gap` (between zones on `bar`, modules in a `zone`, icon and label in a `module`), `min-height`
+  (slider parts), and
   `-sliver-icon-size` (alias `-gtk-icon-size`). Units are `px`, `pt`, `em`, and bare numbers.
   `inherit`/`initial`/`unset` work. Inherited: color, font-*, icon size. `transition` is accepted
   and not yet animated.
@@ -40,9 +41,13 @@ CSS engine isn't available.
   file is unreadable. A typo can't blank the bar, and the safe layer doesn't use user CSS at all
   (sliverd renders it with the built-in `classic`).
 - **Themes are stylesheets.** `assets/themes/classic.css` reproduces tiny-dfr pixel-for-pixel
-  (identical snapshots to the old hard-coded theme). The `sliver` default theme (T18, H10) will
-  use `@accent`, which the agent predefines via `Stylesheet::new()` + `define_color()` before
-  `add_file()`. The tiny-dfr importer turns `ShowButtonOutlines=false` into
+  (identical snapshots to the old hard-coded theme). `sliver.css` is the default (T18, H10: macOS
+  look + desktop accent on `.on` toggles and slider fills). `@accent` is always defined
+  (`DEFAULT_ACCENT`); the agent overrides it via `Stylesheet::new()` + `define_color()` before
+  `add_file()`.
+- **Sliders** are styled through GTK/waybar child nodes `module > trough > {highlight, slider}`, so
+  waybar slider CSS carries over. `Layout::tracks` gives the trough rect for touch → value.
+  `:checked` is rejected with a hint to use `.on`, so toggled-on state has one spelling. The tiny-dfr importer turns `ShowButtonOutlines=false` into
   `module { background: transparent }`.
 - **Hot reload:** the agent's watcher (inotify) watches `Stylesheet::files()`, imports included,
   re-loads, and logs diagnostics. `Renderer` caches computed styles by `Stylesheet::generation()`,

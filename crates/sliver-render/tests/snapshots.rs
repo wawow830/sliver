@@ -196,3 +196,56 @@ fn waybar_style_stylesheet() {
     );
     check("stylesheet", &scene, &sheet);
 }
+
+#[test]
+fn sliver_theme() {
+    let mut fkeys = fkeys();
+    fkeys[3].pressed = true;
+    check("sliver-fkeys", &Scene::new(fkeys), &Stylesheet::sliver());
+
+    let scene = Scene::zoned(
+        vec![Item::text("esc").id("esc")],
+        vec![
+            Item::icon(icon("brightness_high")).class("on"),
+            Item::new(Content::Slider {
+                icon: Some(icon("brightness_low")),
+                value: 0.6,
+            })
+            .id("backlight-slider"),
+            Item::new(Content::Slider {
+                icon: Some(icon("volume_up")),
+                value: 0.25,
+            })
+            .id("audio-slider")
+            .pressed(true),
+        ],
+        vec![
+            Item::new(Content::IconText(icon("battery_1_bar"), "9%".into()))
+                .id("battery")
+                .class("critical"),
+            Item::icon(icon("mic_off")).disabled(true),
+            Item::text("12:34").id("clock"),
+        ],
+    );
+    check("sliver-controls", &scene, &Stylesheet::sliver());
+}
+
+#[test]
+fn slider_track_is_in_layout() {
+    let scene = Scene::new(vec![
+        Item::text("a"),
+        Item::new(Content::Slider {
+            icon: None,
+            value: 0.5,
+        }),
+    ]);
+    let mut r = Renderer::new(Fonts::embedded());
+    let layout = r.layout(&scene, &Stylesheet::sliver(), W, H);
+    assert_eq!(layout.tracks[0], None);
+    let t = layout.tracks[1].expect("slider has a track");
+    let item = layout.items[1];
+    assert!(
+        t.x >= item.x && t.right() <= item.right() && t.h == 8.0,
+        "{t:?} in {item:?}"
+    );
+}

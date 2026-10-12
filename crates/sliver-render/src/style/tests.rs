@@ -172,7 +172,7 @@ fn imports_files_and_builtins() {
     assert!(d[0].source.ends_with("themes/colors.css"));
     assert!(
         d[1].message
-            .contains("no built-in theme 'nope' (have: classic)")
+            .contains("no built-in theme 'nope' (have: classic, sliver)")
     );
     assert_eq!(s.files().len(), 2);
     let [b, _, m] = styles(&s, &tree(&[]), "x", false);

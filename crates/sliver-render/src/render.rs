@@ -13,12 +13,40 @@ use crate::{Align, Color, Content, Fonts, Icon, Item, Rect, Scene, Sizing, Width
 /// (ux.md §4: 60 px is the smallest usable touch target).
 const OVERFLOW_MIN: f32 = 60.0;
 
+/// Natural trough length when the stylesheet doesn't set `trough { min-width }`.
+const SLIDER_MIN_TRACK: f32 = 160.0;
+
+/// Slider trough: right of the icon (if any), the trough's `min-height` thick (default 6 px),
+/// vertically centered, inset by its margins.
+fn track_rect(item: Rect, s: &Style, trough: &Style, has_icon: bool) -> Rect {
+    let content = item.inset(s.padding.map(|p| p + s.border_width));
+    let icon = if has_icon {
+        s.icon_size.min(content.h.max(item.h * 0.5)).floor() + s.gap
+    } else {
+        0.0
+    };
+    let h = if trough.min_height > 0.0 {
+        trough.min_height
+    } else {
+        6.0
+    };
+    let r = Rect::new(
+        content.x + icon,
+        content.center().1 - h / 2.0,
+        content.w - icon,
+        h,
+    );
+    r.inset([0.0, trough.margin[1], 0.0, trough.margin[3]])
+}
+
 /// Where everything in a scene goes. All rects are in bar pixels, rounded to whole pixels.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub zones: Vec<Rect>,
     /// One per item, in [`Scene::items`] order. Use these for touch regions.
     pub items: Vec<Rect>,
+    /// Per item: for sliders, the trough rect. Map a touch's x across it to the value.
+    pub tracks: Vec<Option<Rect>>,
 }
 
 /// Computed styles for one scene.
@@ -26,6 +54,8 @@ struct Styles {
     bar: Arc<Style>,
     zones: Vec<Arc<Style>>,
     items: Vec<Arc<Style>>,
+    /// For sliders: trough, highlight, knob.
+    parts: Vec<Option<[Arc<Style>; 3]>>,
 }
 
 /// Draws scenes. Holds font, glyph, label and style caches, so keep one around.
@@ -62,6 +92,7 @@ impl Renderer {
         let bar = self.cached(&key, sheet, &[bar_el], None);
         let mut zones = Vec::new();
         let mut items = Vec::new();
+        let mut parts = Vec::new();
         let nz = scene.zones.len();
         for (zi, zone) in scene.zones.iter().enumerate() {
             // A zone's name is a class (`.zone-main`, like waybar's `.modules-left`), so `#id`
@@ -111,12 +142,47 @@ impl Renderer {
                     el.first as u8,
                     el.last as u8
                 ));
-                items.push(self.cached(&key, sheet, &[bar_el, zone_el, el], Some(&zs)));
+                let ms = self.cached(&key, sheet, &[bar_el, zone_el, el], Some(&zs));
+                parts.push(if matches!(item.content, Content::Slider { .. }) {
+                    let child = |tag| Element {
+                        tag,
+                        id: None,
+                        classes: &[],
+                        active: item.pressed,
+                        disabled: item.disabled,
+                        first: true,
+                        last: tag != "highlight",
+                    };
+                    let (trough, hl, knob) = (child("trough"), child("highlight"), child("slider"));
+                    let tk = format!("{key}>trough");
+                    let ts = self.cached(&tk, sheet, &[bar_el, zone_el, el, trough], Some(&ms));
+                    let hs = self.cached(
+                        &format!("{tk}>highlight"),
+                        sheet,
+                        &[bar_el, zone_el, el, trough, hl],
+                        Some(&ts),
+                    );
+                    let ks = self.cached(
+                        &format!("{tk}>slider"),
+                        sheet,
+                        &[bar_el, zone_el, el, trough, knob],
+                        Some(&ts),
+                    );
+                    Some([ts, hs, ks])
+                } else {
+                    None
+                });
+                items.push(ms);
             }
             zones.push(zs);
             key = format!("bar.{}", scene.classes.join("."));
         }
-        Styles { bar, zones, items }
+        Styles {
+            bar,
+            zones,
+            items,
+            parts,
+        }
     }
 
     fn cached(
@@ -145,15 +211,15 @@ impl Renderer {
         let bar = Rect::new(0.0, 0.0, width as f32, height as f32).inset(st.bar.padding);
         let mut item_sizes: Vec<Vec<Sizing>> = Vec::new();
         let mut zone_sizes = Vec::new();
-        let mut styles = st.items.iter();
+        let mut styles = st.items.iter().zip(&st.parts);
         for (zone, zs) in scene.zones.iter().zip(&st.zones) {
             let sizes: Vec<Sizing> = zone
                 .items
                 .iter()
                 .map(|item| {
-                    let s = styles.next().expect("one style per item");
+                    let (s, parts) = styles.next().expect("one style per item");
                     let chrome = s.padding[1] + s.padding[3] + 2.0 * s.border_width;
-                    let content = self.content_width(&item.content, s);
+                    let content = self.content_width(&item.content, s, parts.as_ref());
                     let natural = (content + chrome).max(s.min_width);
                     let margins = s.margin[1] + s.margin[3];
                     let fixed = |w: Width| match w {
@@ -187,7 +253,8 @@ impl Renderer {
         };
         let mut zones = Vec::new();
         let mut items = Vec::new();
-        let mut styles = st.items.iter();
+        let mut tracks = Vec::new();
+        let mut styles = st.items.iter().zip(&st.parts).zip(scene.items());
         let zone_spans = solve(&zone_sizes, bar.w, st.bar.gap, Align::Start);
         for (((zone, zs), (zx, zw)), sizes) in scene
             .zones
@@ -200,17 +267,32 @@ impl Renderer {
             let zrect = outer.inset([zs.margin[0], zs.margin[1], zs.margin[2], zs.margin[3]]);
             let inner = zrect.inset(zs.padding.map(|p| p + zs.border_width));
             for (ix, iw) in solve(sizes, inner.w, zs.gap, zone.align) {
-                let s = styles.next().expect("one style per item");
-                let r = Rect::new(inner.x + ix, inner.y, iw, inner.h).inset(s.margin);
-                items.push(round(r));
+                let ((s, parts), item) = styles.next().expect("one style per item");
+                let r = round(Rect::new(inner.x + ix, inner.y, iw, inner.h).inset(s.margin));
+                items.push(r);
+                tracks.push(match (&item.content, parts) {
+                    (Content::Slider { icon, .. }, Some([trough, ..])) => {
+                        Some(track_rect(r, s, trough, icon.is_some()))
+                    }
+                    _ => None,
+                });
             }
             zones.push(round(zrect));
         }
-        Layout { zones, items }
+        Layout {
+            zones,
+            items,
+            tracks,
+        }
     }
 
     /// Width of an item's content (no padding) at its preferred size.
-    fn content_width(&mut self, content: &Content, s: &Style) -> f32 {
+    fn content_width(
+        &mut self,
+        content: &Content,
+        s: &Style,
+        parts: Option<&[Arc<Style>; 3]>,
+    ) -> f32 {
         let family = self.fonts.pick_family(&s.font_family);
         let mut label =
             |t: &str| text::shape(&mut self.fonts, t, &family, s.font_weight, s.font_size).width;
@@ -219,6 +301,16 @@ impl Renderer {
             Content::Text(t) => label(t).ceil(),
             Content::Icon(_) => s.icon_size,
             Content::IconText(_, t) => s.icon_size + s.gap + label(t).ceil(),
+            Content::Slider { icon, .. } => {
+                let trough =
+                    parts.map_or(0.0, |p| p[0].min_width + p[0].margin[1] + p[0].margin[3]);
+                let icon = if icon.is_some() {
+                    s.icon_size + s.gap
+                } else {
+                    0.0
+                };
+                icon + trough.max(SLIDER_MIN_TRACK)
+            }
         }
     }
 
@@ -232,13 +324,24 @@ impl Renderer {
         let full = Rect::new(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
         let bar_opacity = st.bar.opacity;
         draw_box(pixmap, full, &st.bar, None, bar_opacity);
-        let mut items = scene.items().zip(&layout.items).zip(&st.items);
+        let mut items = scene
+            .items()
+            .zip(&layout.items)
+            .zip(&st.items)
+            .zip(&st.parts)
+            .zip(&layout.tracks);
         for ((zone, zs), zrect) in scene.zones.iter().zip(&st.zones).zip(&layout.zones) {
             let zone_opacity = bar_opacity * zs.opacity;
             draw_box(pixmap, *zrect, zs, None, zone_opacity);
             for _ in 0..zone.items.len() {
-                let ((item, rect), s) = items.next().expect("one rect per item");
-                self.draw_item(item, *rect, s, zone_opacity * s.opacity, pixmap);
+                let ((((item, rect), s), parts), track) = items.next().expect("one rect per item");
+                let opacity = zone_opacity * s.opacity;
+                self.draw_item(item, *rect, s, opacity, pixmap);
+                if let (Content::Slider { value, .. }, Some(parts), Some(track)) =
+                    (&item.content, parts, track)
+                {
+                    draw_slider(pixmap, *track, *value, parts, opacity);
+                }
             }
         }
         layout
@@ -283,6 +386,12 @@ impl Renderer {
                 let x = (cx - icon_size / 2.0).round();
                 let y = (cy - icon_size / 2.0).round();
                 draw_icon(icon, x, y, icon_size, fg, opacity, pixmap);
+            }
+            Content::Slider { icon, .. } => {
+                if let Some(icon) = icon {
+                    let y = (cy - icon_size / 2.0).round();
+                    draw_icon(icon, content.x.round(), y, icon_size, fg, opacity, pixmap);
+                }
             }
             Content::IconText(icon, t) => {
                 let label = self.fit_label(t, s, avail - icon_size - s.gap);
@@ -435,6 +544,44 @@ fn draw_box(pixmap: &mut Pixmap, r: Rect, s: &Style, bg_override: Option<Color>,
             ..Stroke::default()
         };
         pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+    }
+}
+
+/// Trough, then the filled highlight up to `value`, then the knob (if it has a size).
+fn draw_slider(
+    pixmap: &mut Pixmap,
+    track: Rect,
+    value: f32,
+    parts: &[Arc<Style>; 3],
+    opacity: f32,
+) {
+    let [trough, hl, knob] = parts;
+    let value = if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    draw_box(pixmap, track, trough, None, opacity * trough.opacity);
+    let fill = Rect::new(track.x, track.y, track.w * value, track.h);
+    draw_box(
+        pixmap,
+        fill,
+        hl,
+        None,
+        opacity * trough.opacity * hl.opacity,
+    );
+    let (kw, kh) = (knob.min_width, knob.min_height.max(knob.min_width));
+    if kw > 0.0 {
+        // The knob stays inside the trough's ends.
+        let cx = (track.x + track.w * value).clamp(track.x + kw / 2.0, track.right() - kw / 2.0);
+        let r = Rect::new(cx - kw / 2.0, track.center().1 - kh / 2.0, kw, kh);
+        draw_box(
+            pixmap,
+            r,
+            knob,
+            None,
+            opacity * trough.opacity * knob.opacity,
+        );
     }
 }
 

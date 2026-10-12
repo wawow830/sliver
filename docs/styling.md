@@ -24,12 +24,16 @@ bar   classes: layer-<name>, layout-<name>, <bar name>, locked, dimmed (set by t
 └─ zone   class .zone-<name> (.zone-esc, .zone-main, .zone-controls by default) + config `class`
    └─ module   #<type> (#clock, #battery, #custom-vpn, #key-f1), class .module,
                .<instance> (battery#bat2 → .bat2), state classes (.charging .warning
-               .critical .muted .playing …), script JSON `class`, config `class`
+               .critical .muted .playing, .on for toggles that are on …), script JSON
+               `class`, config `class`
+      └─ trough          sliders only (GTK/waybar node names)
+         ├─ highlight    the filled part, up to the value
+         └─ slider       the knob (drawn only if it has a min-width)
 ```
 `#id` only ever matches modules.
 
 ## Selectors
-`*`, `bar`/`zone`/`module`, `#id`, `.class`, `:active` (pressed; `:checked` is an alias),
+`*`, `bar`/`zone`/`module`, `#id`, `.class`, `:active` (pressed; toggles that are on use `.on`),
 `:disabled`, `:first-child`, `:last-child`, `:not(simple)`, descendant (`a b`) and child
 (`a > b`) combinators, and comma lists. `:hover`/`:focus` are accepted but never match on a touch
 strip. Sibling combinators (`+`, `~`) aren't supported.
@@ -51,7 +55,8 @@ Precedence is standard CSS: `!important`, then specificity, then later rules win
 | `font-weight` | `normal`, `bold`, 100–900 | yes | |
 | `-sliver-icon-size` (`-gtk-icon-size`) | length | yes | |
 | `opacity` | 0–1 or % | multiplies down the tree | |
-| `min-width` | length | no | Floor for `auto`-width modules |
+| `min-width` | length | no | Floor for `auto`-width modules. On `trough`: its natural length. On `slider`: knob width |
+| `min-height` | length | no | On `trough`: thickness (default 6 px). On `slider`: knob height |
 | `gap` | length | no | On `bar`: between zones. On `zone`: between modules. On `module`: icon to label |
 | `transition` | any | no | Accepted, not animated yet |
 
@@ -75,4 +80,5 @@ uses your stylesheet.
 
 ## Built-in themes
 - `classic`: tiny-dfr's look (gray 0.2/0.4 buttons, radius 8, 16 px gaps, 32 px bold).
-- `sliver`: macOS look + desktop accent (T18, coming).
+- `sliver` (the default): the macOS Touch Bar look. Toggles that are `.on` and slider fills use
+  `@accent`, which the agent sets from your desktop's accent color (falls back to `#3584e4`).

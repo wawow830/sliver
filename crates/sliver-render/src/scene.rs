@@ -12,6 +12,13 @@ pub enum Content {
     Icon(Icon),
     /// An icon followed by a label, centered together.
     IconText(Icon, String),
+    /// A horizontal slider, `value` in `0.0..=1.0`, with an optional icon on its left. Styled
+    /// with child nodes like GTK/waybar: `module > trough > highlight` (the filled part) and
+    /// `trough > slider` (the knob).
+    Slider {
+        icon: Option<Icon>,
+        value: f32,
+    },
 }
 
 /// One item (a `module` in the stylesheet).
@@ -83,6 +90,11 @@ impl Item {
 
     pub fn pressed(mut self, pressed: bool) -> Item {
         self.pressed = pressed;
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Item {
+        self.disabled = disabled;
         self
     }
 

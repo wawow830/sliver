@@ -44,9 +44,14 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+/// `@accent` until the agent defines the desktop's (GNOME's default blue).
+pub const DEFAULT_ACCENT: Color = Color::rgb(0x35, 0x84, 0xe4);
+
 /// Built-in themes, importable as `@import "sliver:NAME";`.
-pub const BUILTIN_THEMES: &[(&str, &str)] =
-    &[("classic", include_str!("../../assets/themes/classic.css"))];
+pub const BUILTIN_THEMES: &[(&str, &str)] = &[
+    ("classic", include_str!("../../assets/themes/classic.css")),
+    ("sliver", include_str!("../../assets/themes/sliver.css")),
+];
 
 /// The computed style of one element.
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +74,8 @@ pub struct Style {
     pub margin: [f32; 4],
     pub opacity: f32,
     pub min_width: f32,
+    /// Slider troughs: thickness. Slider knobs: height.
+    pub min_height: f32,
     /// Space between children: zones in the bar, modules in a zone, icon and label in a module.
     pub gap: f32,
 }
@@ -90,6 +97,7 @@ impl Style {
             margin: [0.0; 4],
             opacity: 1.0,
             min_width: 0.0,
+            min_height: 0.0,
             gap: 0.0,
         }
     }
@@ -114,6 +122,7 @@ enum Prop {
     Margin(usize),
     Opacity,
     MinWidth,
+    MinHeight,
     Gap,
 }
 
@@ -198,15 +207,21 @@ impl Stylesheet {
     fn empty() -> Stylesheet {
         Stylesheet {
             rules: Vec::new(),
-            colors: HashMap::new(),
+            // The agent overrides `@accent` with the desktop's accent color.
+            colors: HashMap::from([("accent".to_string(), DEFAULT_ACCENT)]),
             files: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
         }
     }
 
-    /// The built-in tiny-dfr look. Always valid.
+    /// The built-in tiny-dfr look. Always valid. The safe layer uses it.
     pub fn classic() -> Stylesheet {
         Stylesheet::builtin("classic").expect("classic theme exists")
+    }
+
+    /// The default theme: macOS Touch Bar look with the `@accent` color (H10).
+    pub fn sliver() -> Stylesheet {
+        Stylesheet::builtin("sliver").expect("sliver theme exists")
     }
 
     /// A built-in theme by name (see [`BUILTIN_THEMES`]).
@@ -419,6 +434,7 @@ impl Stylesheet {
             "margin" => (0..4).map(Prop::Margin).collect(),
             "opacity" => vec![Prop::Opacity],
             "min-width" => vec![Prop::MinWidth],
+            "min-height" => vec![Prop::MinHeight],
             "gap" | "column-gap" => vec![Prop::Gap],
             // Parsed for forward compatibility (customization.md §7); animations aren't drawn yet.
             "transition" => return Ok(Vec::new()),
@@ -619,6 +635,11 @@ impl Stylesheet {
             Prop::MinWidth,
             len(get(Prop::MinWidth), 0.0, 0.0),
             parent.min_width,
+        );
+        s.min_height = inherit_if(
+            Prop::MinHeight,
+            len(get(Prop::MinHeight), 0.0, 0.0),
+            parent.min_height,
         );
         s.gap = inherit_if(Prop::Gap, len(get(Prop::Gap), 0.0, 0.0), parent.gap);
         s

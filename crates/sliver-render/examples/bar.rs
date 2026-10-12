@@ -8,7 +8,8 @@
 //! button). Items are `Auto` width; prefix `xN:` for `Fill(N)` or `pN:` for `Fixed(N px)`. A `!`
 //! suffix shows it pressed. `|` splits Esc | Main | Controls zones. `--system-fonts` uses
 //! installed fonts (with fallback) instead of only the embedded one. `--size WxH` sets the bar size.
-//! `--style FILE.css` uses a stylesheet (default: the built-in classic theme). An item may be
+//! `slider:0.6` or `slider:ICON:0.6` is a slider. `--style FILE.css` uses a stylesheet and
+//! `--theme NAME` a built-in theme (default: classic). An item may be
 //! followed by `#id` and `.class`es, e.g. `icon:bolt#battery.charging`.
 
 use std::time::Instant;
@@ -47,6 +48,15 @@ fn parse_content(arg: &str) -> Item {
     let content = match rest {
         "-" => Content::Spacer,
         "_" => Content::Blank,
+        _ if rest.starts_with("slider:") => {
+            // slider:0.6 or slider:NAME:0.6
+            let spec = &rest["slider:".len()..];
+            let (icon, value) = spec.rsplit_once(':').unwrap_or(("", spec));
+            Content::Slider {
+                icon: (!icon.is_empty()).then(|| Icon::builtin(icon).expect("built-in icon")),
+                value: value.parse().expect("slider value 0..1"),
+            }
+        }
         _ => match rest.strip_prefix("icon:") {
             Some(name) if name.contains('/') => {
                 Content::Icon(Icon::load(name).unwrap_or_else(|e| panic!("{name}: {e}")))
@@ -74,6 +84,11 @@ fn main() {
         let (s, diags) = Stylesheet::load(path.as_ref()).expect("reading stylesheet");
         diags.iter().for_each(|d| eprintln!("{d}"));
         sheet = s;
+    }
+    if let Some(i) = args.iter().position(|a| a == "--theme") {
+        let name = args.remove(i + 1);
+        args.remove(i);
+        sheet = Stylesheet::builtin(&name).expect("no such built-in theme");
     }
     let (mut w, mut h) = (2008, 60);
     if let Some(i) = args.iter().position(|a| a == "--size") {

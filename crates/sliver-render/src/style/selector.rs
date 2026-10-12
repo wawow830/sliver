@@ -85,7 +85,13 @@ fn compound<'a>(mut s: &'a str, notes: &mut Vec<String>) -> Result<(Compound, &'
                 let (name, rest) = ident(after);
                 s = rest;
                 let pseudo = match name.to_ascii_lowercase().as_str() {
-                    "active" | "checked" => Pseudo::Active,
+                    "active" => Pseudo::Active,
+                    "checked" => {
+                        return Err(
+                            "':checked' isn't supported; toggles that are on have the class '.on'"
+                                .into(),
+                        );
+                    }
                     "disabled" => Pseudo::Disabled,
                     "first-child" => Pseudo::FirstChild,
                     "last-child" => Pseudo::LastChild,
