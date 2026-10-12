@@ -1,0 +1,16 @@
+[package]
+name = "sliver-api"
+description = "Sliver's public session D-Bus API server: contexts, items, focus binding, policy (docs/api.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sliver-ipc.workspace = true
+sliver-desktop.workspace = true
+regex-lite = "0.1"

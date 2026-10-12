@@ -825,6 +825,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
 name = "resvg"
 version = "0.48.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1008,6 +1014,15 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "sliver-agent"
 version = "0.1.0"
+
+[[package]]
+name = "sliver-api"
+version = "0.1.0"
+dependencies = [
+ "regex-lite",
+ "sliver-desktop",
+ "sliver-ipc",
+]
 
 [[package]]
 name = "sliver-config"
