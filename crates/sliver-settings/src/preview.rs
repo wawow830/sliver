@@ -160,6 +160,45 @@ impl Preview {
             .reduce(f32::max)
     }
 
+    /// Overflowing zones and too-narrow touch targets in the last render. Only items that react
+    /// to touch count (a plain clock isn't a target).
+    pub fn feedback(&self) -> Feedback {
+        let Some(f) = self.agent.frame(self.slot) else {
+            return Feedback::default();
+        };
+        let overflow = f
+            .layout
+            .overflow
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| **o)
+            .filter_map(|(i, _)| {
+                let z = f.layout.zones.get(i)?;
+                let name = f
+                    .scene
+                    .zones
+                    .get(i)
+                    .and_then(|z| z.name.clone())
+                    .unwrap_or_else(|| format!("zone {}", i + 1));
+                Some((name, z.x, z.w))
+            })
+            .collect();
+        let narrow = f
+            .layout
+            .items
+            .iter()
+            .zip(&f.cells)
+            .filter(|(r, c)| {
+                r.w > 0.0
+                    && r.w < COMFORT_PX
+                    && (!matches!(c.touch, sliver_agent::modules::Touch::None)
+                        || c.drawer.is_some())
+            })
+            .map(|(r, c)| (c.key.clone(), (r.x, r.w), r.w < MIN_PX))
+            .collect();
+        Feedback { overflow, narrow }
+    }
+
     /// Where a drop at bar x-coordinate `x` goes: the zone index, and the cell just left of `x` in
     /// that zone (insert after its module), or `None` to insert first.
     pub fn drop_target(&self, x: f32) -> Option<(usize, Option<Hit>)> {
@@ -203,6 +242,78 @@ impl Preview {
     }
 }
 
+/// Touch targets (ux.md §4 "Size limits", from the real panel: 2008 px over the digitizer's
+/// 230 mm, ≈ 8.7 px/mm). Narrower items still work; the editor only warns.
+pub const COMFORT_PX: f32 = 80.0;
+pub const MIN_PX: f32 = 60.0;
+pub const PX_PER_MM: f32 = 2008.0 / 230.0;
+
+/// Size problems in the last render (ux.md §4 "Size limits" and "Overflow").
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Feedback {
+    /// Zones whose items wanted more room than they got: `(name, x, w)` in bar px.
+    pub overflow: Vec<(String, f32, f32)>,
+    /// Touchable items narrower than [`COMFORT_PX`]: module key, `(x, w)` in bar px, and
+    /// whether it's below [`MIN_PX`] too.
+    pub narrow: Vec<(String, (f32, f32), bool)>,
+}
+
+impl Feedback {
+    /// One line for under the preview, or `None` when all is well.
+    pub fn summary(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if !self.overflow.is_empty() {
+            let zones: Vec<&str> = self.overflow.iter().map(|(n, ..)| n.as_str()).collect();
+            parts.push(format!(
+                "{} {} too full: items are squeezed and labels cut short. Set a Fill item to Auto, \
+                 remove one, or move some into a group. Saving still works.",
+                zones.join(", "),
+                if zones.len() == 1 { "is" } else { "are" },
+            ));
+        }
+        if !self.narrow.is_empty() {
+            let strong = self.narrow.iter().filter(|n| n.2).count();
+            let list: Vec<String> = self
+                .narrow
+                .iter()
+                .map(|(k, (_, w), _)| format!("{k} ({w:.0} px)"))
+                .collect();
+            parts.push(format!(
+                "{} narrower than {COMFORT_PX:.0} px (≈{:.0} mm), hard to hit{}: {}.",
+                if list.len() == 1 {
+                    "1 item is".to_owned()
+                } else {
+                    format!("{} items are", list.len())
+                },
+                COMFORT_PX / PX_PER_MM,
+                if strong > 0 {
+                    format!(", {strong} even below {MIN_PX:.0} px")
+                } else {
+                    String::new()
+                },
+                list.join(", "),
+            ));
+        }
+        (!parts.is_empty()).then(|| parts.join(" "))
+    }
+}
+
+/// The inspector's note for an item `w` bar px wide, if it's small for a finger.
+pub fn width_note(w: f32) -> Option<String> {
+    let mm = w / PX_PER_MM;
+    if w < MIN_PX {
+        Some(format!(
+            "Only {w:.0} px (≈{mm:.1} mm) wide: very hard to hit. {COMFORT_PX:.0} px or more is comfortable."
+        ))
+    } else if w < COMFORT_PX {
+        Some(format!(
+            "{w:.0} px (≈{mm:.1} mm) wide: a bit small to hit reliably. {COMFORT_PX:.0} px or more is comfortable."
+        ))
+    } else {
+        None
+    }
+}
+
 /// See [`Preview::hit`].
 pub struct Hit {
     pub zone: usize,
@@ -243,5 +354,87 @@ impl Hit {
             prev = Some(t);
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn preview(toml: &str) -> Preview {
+        let loaded = sliver_config::load_str(toml, Path::new("."));
+        assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
+        let mut p = Preview::new(loaded.config, Stylesheet::sliver());
+        p.render("base", Context::new()).unwrap();
+        p
+    }
+
+    #[test]
+    fn narrow_touch_targets_only() {
+        let p = preview(
+            r#"
+            [[layouts.default.zones]]
+            name = "main"
+            width = "fill"
+            modules = ["custom/tiny", "custom/small", "custom/fine", "clock"]
+            [modules."custom/tiny"]
+            format = "T"
+            width = 50
+            on-tap = "true"
+            [modules."custom/small"]
+            format = "S"
+            width = 70
+            on-tap = "true"
+            [modules."custom/fine"]
+            format = "F"
+            width = 120
+            on-tap = "true"
+            [modules.clock]
+            width = 40
+            "#,
+        );
+        let fb = p.feedback();
+        let got: Vec<(&str, bool)> = fb.narrow.iter().map(|(k, _, s)| (k.as_str(), *s)).collect();
+        assert_eq!(
+            got,
+            [("custom/tiny", true), ("custom/small", false)],
+            "{fb:?}"
+        );
+        assert!(fb.overflow.is_empty());
+        let s = fb.summary().unwrap();
+        assert!(
+            s.contains("2 items are narrower than 80 px") && s.contains("1 even below 60"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn overflowing_zone() {
+        // 12 x 200 px fixed: squeezed to ~140 px each. (Fixed widths used to be counted by their
+        // content only, so this wasn't reported.)
+        let mods: Vec<String> = (0..12).map(|i| format!("\"custom/m{i}\"")).collect();
+        let blocks: String = (0..12)
+            .map(|i| format!("[modules.\"custom/m{i}\"]\nformat = \"item {i}\"\nwidth = 200\non-tap = \"true\"\n"))
+            .collect();
+        let p = preview(&format!(
+            "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [{}]\n{blocks}",
+            mods.join(", ")
+        ));
+        let fb = p.feedback();
+        assert_eq!(fb.overflow.len(), 1, "{fb:?}");
+        assert_eq!(fb.overflow[0].0, "main");
+        assert!(fb.summary().unwrap().starts_with("main is too full"));
+    }
+
+    #[test]
+    fn width_notes() {
+        assert_eq!(width_note(120.0), None);
+        assert!(width_note(70.0).unwrap().contains("a bit small"));
+        assert!(width_note(40.0).unwrap().contains("very hard"));
+        assert!(
+            width_note(70.0).unwrap().contains("≈8.0 mm"),
+            "{:?}",
+            width_note(70.0)
+        );
     }
 }

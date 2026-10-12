@@ -10,7 +10,7 @@ use sliver_config::{Context, ModuleRef, Width, parse_cli_value};
 use toml::Value;
 
 use crate::pages::{group, row, surface, width_text};
-use crate::preview::{BAR, Preview};
+use crate::preview::{BAR, Feedback, Preview, width_note};
 use crate::{Ui, apply, edit};
 
 /// Feedback drawn on the preview while dragging (widget x coordinates).
@@ -126,6 +126,8 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     // Drawn at half scale (1004x30) so it stays legible; narrower windows scroll sideways.
     let frame: Rc<RefCell<Option<gtk::cairo::ImageSurface>>> = Rc::default();
     let caret: Rc<std::cell::Cell<Cue>> = Rc::default();
+    // Overflow and small touch targets in the current render (ux.md §4), drawn over the preview.
+    let sizes: Rc<RefCell<Feedback>> = Rc::default();
     let picture = gtk::DrawingArea::builder()
         .content_width(BAR.0 as i32 / 2)
         .content_height(BAR.1 as i32 / 2)
@@ -136,6 +138,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     {
         let frame = frame.clone();
         let caret = caret.clone();
+        let sizes = sizes.clone();
         picture.set_draw_func(move |_, cr, _, h| {
             if let Some(s) = frame.borrow().as_ref() {
                 cr.save().ok();
@@ -145,25 +148,49 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 let _ = cr.paint();
                 cr.restore().ok();
             }
+            // Bar px -> widget px (half scale). Overflowing zones: a red wash and a red right edge.
+            let h = h as f64;
+            let fb = sizes.borrow();
+            for (_, x, w) in &fb.overflow {
+                let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
+                cr.set_source_rgba(0.88, 0.11, 0.14, 0.18);
+                cr.rectangle(x, 0.0, w, h);
+                let _ = cr.fill();
+                cr.set_source_rgba(0.88, 0.11, 0.14, 0.9);
+                cr.rectangle(x + w - 2.0, 0.0, 2.0, h);
+                let _ = cr.fill();
+            }
+            // Small touch targets: a bar under the item, amber below 80 px, red below 60 px.
+            for (_, (x, w), strong) in &fb.narrow {
+                let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
+                if *strong {
+                    cr.set_source_rgba(0.88, 0.11, 0.14, 0.95);
+                } else {
+                    cr.set_source_rgba(0.96, 0.62, 0.0, 0.95);
+                }
+                cr.rectangle(x + 1.0, h - 3.0, (w - 2.0).max(1.0), 3.0);
+                let _ = cr.fill();
+            }
+            drop(fb);
             // Feedback while dragging (widget coordinates).
             match caret.get() {
                 Cue::None => {}
                 Cue::Insert(x) => {
                     cr.set_source_rgb(0.21, 0.52, 0.89);
-                    cr.rectangle(x - 1.5, 0.0, 3.0, h as f64);
+                    cr.rectangle(x - 1.5, 0.0, 3.0, h);
                     let _ = cr.fill();
                 }
                 Cue::Remove(x0, x1) => {
                     cr.set_source_rgba(0.88, 0.11, 0.14, 0.45);
-                    cr.rectangle(x0, 0.0, x1 - x0, h as f64);
+                    cr.rectangle(x0, 0.0, x1 - x0, h);
                     let _ = cr.fill();
                 }
                 Cue::Resize(x0, x1) => {
                     cr.set_source_rgba(0.21, 0.52, 0.89, 0.25);
-                    cr.rectangle(x0, 0.0, x1 - x0, h as f64);
+                    cr.rectangle(x0, 0.0, x1 - x0, h);
                     let _ = cr.fill();
                     cr.set_source_rgb(0.21, 0.52, 0.89);
-                    cr.rectangle(x1 - 1.5, 0.0, 3.0, h as f64);
+                    cr.rectangle(x1 - 1.5, 0.0, 3.0, h);
                     let _ = cr.fill();
                 }
             }
@@ -185,6 +212,13 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         .build();
     why.add_css_class("dim-label");
     page.append(&why);
+    let size_warning = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .visible(false)
+        .build();
+    size_warning.add_css_class("warning");
+    page.append(&size_warning);
 
     let zones = gtk::Box::new(gtk::Orientation::Vertical, 18);
     page.append(
@@ -200,6 +234,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     )));
     let refresh = {
         let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
+        let (sizes, size_warning) = (sizes.clone(), size_warning.clone());
         let (layer_dd, app_entry, locked, picture, why, zones, layers) = (
             layer_dd.clone(),
             app_entry.clone(),
@@ -249,6 +284,16 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                     zones.append(&row("Can't render", &e));
                 }
             }
+            let fb = preview.borrow().feedback();
+            size_warning.set_visible(fb.summary().is_some());
+            size_warning.set_text(&fb.summary().unwrap_or_default());
+            // Overflow is red, small targets amber (libadwaita style classes).
+            size_warning.set_css_classes(if fb.overflow.is_empty() {
+                &["warning"]
+            } else {
+                &["error"]
+            });
+            *sizes.borrow_mut() = fb;
             picture.queue_draw();
             let profile = sliver_config::profile::active();
             let in_profile = if profile == sliver_config::profile::DEFAULT {
@@ -316,6 +361,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 i,
                 &m.id().to_string(),
                 &state.loaded.config.module_block(m),
+                Some(hit.rect.1),
             );
         });
     }
@@ -608,7 +654,12 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
                     m.id().to_string(),
                 );
                 let block = block.clone();
-                r.connect_activated(move |_| inspector(&ui, &layout, &zone, i, &title, &block));
+                // A fixed px width is known without the preview (auto/fill ones are checked there).
+                let px = block
+                    .get("width")
+                    .and_then(|w| w.as_integer())
+                    .map(|w| w as f32);
+                r.connect_activated(move |_| inspector(&ui, &layout, &zone, i, &title, &block, px));
             }
             for (icon, tip, delta) in [
                 ("go-up-symbolic", "Move left", -1isize),
@@ -879,6 +930,8 @@ fn inspector(
     index: usize,
     title: &str,
     block: &toml::Table,
+    // Its width on the preview (bar px), when opened from there: warns if small for a finger.
+    width_px: Option<f32>,
 ) {
     let dialog = adw::PreferencesDialog::builder()
         .title(glib::markup_escape_text(title))
@@ -969,6 +1022,10 @@ fn inspector(
             }
         });
         actions.add(&combo);
+    }
+    if let Some(note) = width_px.and_then(width_note) {
+        let size = group("Size", Some(&note));
+        page.add(&size);
     }
     page.add(&look);
     page.add(&actions);

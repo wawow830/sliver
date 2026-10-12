@@ -356,7 +356,15 @@ impl Renderer {
             let outer = Rect::new(bar.x + zx, bar.y, zw, bar.h);
             let zrect = outer.inset([zs.margin[0], zs.margin[1], zs.margin[2], zs.margin[3]]);
             let inner = zrect.inset(zs.padding.map(|p| p + zs.border_width));
-            let wanted = sizes.iter().map(|s| s.natural).sum::<f32>()
+            // What the items ask for: a fixed width counts as itself (its `natural` is only its
+            // content), so squeezed fixed-width items are reported too (T113).
+            let wanted = sizes
+                .iter()
+                .map(|s| match s.width {
+                    Width::Fixed(px) => px.max(s.min),
+                    _ => s.natural,
+                })
+                .sum::<f32>()
                 + zs.gap * sizes.len().saturating_sub(1) as f32;
             overflow.push(!sizes.is_empty() && wanted > inner.w + 0.5);
             for (ix, iw) in solve(sizes, inner.w, zs.gap, zone.align) {
