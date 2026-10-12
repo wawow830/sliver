@@ -220,6 +220,26 @@ fn publish_resolve_and_unicast_events() {
         "org.example.Test"
     );
 
+    // ListContexts reports it (unsandboxed: this test process).
+    let list: Vec<HashMap<String, OwnedValue>> = b
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(sliver_ipc::dbus::IFACE_CONTROL),
+            "ListContexts",
+            &(),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(!bool::try_from(&list[0]["sandboxed"]).unwrap());
+    assert_eq!(
+        String::try_from(list[0]["provider"].try_clone().unwrap()).unwrap(),
+        "org.example.Test"
+    );
+
     // B can't touch A's context.
     let e = set_items(&b, &path, vec![]).unwrap_err();
     assert_eq!(error_name(e), error::ACCESS_DENIED);

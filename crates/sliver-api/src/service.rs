@@ -750,6 +750,11 @@ impl ControlIface {
                 p.insert("visible".into(), Prop::Bool(ctx.visible));
                 p.insert("on-screen".into(), Prop::Bool(ctx.on_screen));
                 p.insert("items".into(), Prop::Int(ctx.items.len() as i64));
+                let sandboxed = s
+                    .reg
+                    .client(&ctx.owner)
+                    .is_some_and(|c| c.identity.sandboxed());
+                p.insert("sandboxed".into(), Prop::Bool(sandboxed));
                 if let Scope::Target(t) = &ctx.opts.scope
                     && let Some(a) = &t.app_id
                 {

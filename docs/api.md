@@ -260,7 +260,8 @@ ValidateConfig(s toml) -> (as errors)
 Preview(s layout_toml, u timeout_ms)       show on the real bar, auto-revert (settings live preview)
 RenderPreview(s layout_toml, a{sv} options) -> (ay png)   same renderer, for on-screen WYSIWYG
 SetVariable(s name, v value)        user variables usable in context conditions ("per state" layouts)
-ListContexts() -> (aa{sv})          provider, title, scope, on-screen; for the settings app
+ListContexts() -> (aa{sv})          path, provider, title, scope, visible, on-screen, items, sandboxed,
+                                    target-app-id; for the settings app
 
 # Modules (waybar parity: `pkill -RTMIN+N waybar` and friends). `module` = any module id, built-in,
 # config-defined (`custom/vpn`, `clock#2`) or published (`app/<provider>#<item>`).
