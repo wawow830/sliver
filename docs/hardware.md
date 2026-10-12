@@ -340,6 +340,9 @@ so `sliver_hw::panel` now pads the width to a multiple of 64 px (pitch 256). Aft
 saw sharp labels on the panel, so adp needs a 64-byte-aligned stride (or at least 256-byte rows). **Lesson: `snap` shows what's in the buffer, not what
 the panel shows.** Confirm visuals by eye or photo.
 
+**Compositor sees our keys:** during a sliverd run `hyprctl devices` lists `sliver-touch-bar-keys`
+(us layout) as a keyboard, so keystrokes reach the session through the user's layout.
+
 **First real sliverd runs** (2026-10-12, `sliverd -v` via the harness): safe layer rendered (full
 flush 10–11 ms), taps → keys 59/63/88 down/up (50–70 ms holds), Fn → media row, double-press-hold
 Fn → F-key hatch, 24 contacts, clean exit before the deadline, tiny-dfr restored every time. If a
@@ -351,8 +354,13 @@ Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text 
 
 ## Open questions (need hardware or the human)
 1. ~~Physical Esc?~~ **Yes** (H2).
-2. ~~DRM caps~~: measured above. Still open: whether DPMS off or `ACTIVE=0` actually powers the
-   panel down (a power win over brightness 0), and what the panel shows while nobody owns it.
+2. ~~DRM caps~~: measured above. ~~Does `ACTIVE=0` blank the panel?~~ **No** (T48, H30): the
+   commit returns in ~80 µs but the bar keeps showing its last frame. The panel is command-mode
+   and holds its own copy, which is also why it keeps the last image while nobody owns the card.
+   **"Display off" = backlight 0** (what tiny-dfr and sliverd do). Whether ACTIVE=0 saves power
+   anyway is unmeasured: SMC "Total System Power" (hwmon `macsmc_hwmon`, readable on AC) swings by
+   seconds-scale watts under load, far more than the bar draws. It needs an idle machine and long
+   A/B runs (`sliver-hwprobe --power-cycle`).
 3. ~~Touch ranges, X direction~~: measured above. Still open: the finger limit above 3, the Y
    direction, and what the contact-size values mean.
 4. Does `systemd-backlight` for the bar fight a daemon that writes brightness? Probably not (it

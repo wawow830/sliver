@@ -249,8 +249,9 @@ impl DrmPanel {
         }
     }
 
-    /// Turns the CRTC on/off (display power). Untested on hardware so far (docs/hardware.md, open
-    /// question 2); the daemon uses backlight 0 for "off" until this is measured.
+    /// Turns the CRTC on/off. **Not a way to blank the bar:** measured on the Mac14,7, `ACTIVE=0`
+    /// commits in ~80 µs, but the command-mode DSI panel keeps showing its last frame (it holds its
+    /// own copy). Use backlight 0 for "off", like tiny-dfr. `ACTIVE=1` + full redraw takes ~29 ms.
     pub fn set_active(&self, on: bool) -> io::Result<()> {
         let mut req = atomic::AtomicModeReq::new();
         req.add_property(
