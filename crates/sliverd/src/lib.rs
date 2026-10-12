@@ -14,7 +14,7 @@
 //!   [`config`]: `/etc/sliver/sliverd.toml`.
 //! - [`testing`]: `TestDaemon`, the real core in-process for agent tests (FakeDaemon-compatible).
 //!
-//! Touch semantics are `sliver_ipc::router::TouchRouter`, shared with cedar's `FakeDaemon`.
+//! Touch semantics are `sliver_ipc::router::TouchRouter`, shared with sliver-ipc.
 
 pub mod backend;
 pub mod builtin;

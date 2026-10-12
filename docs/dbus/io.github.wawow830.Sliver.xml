@@ -112,6 +112,13 @@
     <method name="SetWorkspaces">
       <arg name="workspaces" type="aa{sv}" direction="in"/>
     </method>
+    <!--
+    `SetWorkspaces` for callers that can only send `av` (KWin scripts' `callDBus` turns JS
+    arrays into `av`). Each element must be an `a{sv}`.
+    -->
+    <method name="SetWorkspacesV">
+      <arg name="workspaces" type="av" direction="in"/>
+    </method>
   </interface>
   <interface name="io.github.wawow830.Sliver.TouchBar1">
     <method name="CreateContext">

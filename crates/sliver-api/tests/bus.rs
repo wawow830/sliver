@@ -351,6 +351,46 @@ fn control_and_desktop() {
         )
         .unwrap_err();
     assert_eq!(error_name(e), error::BUSY);
+    // Workspaces, both as aa{sv} and as av of a{sv} (KWin).
+    let ws = vec![opts(&[
+        ("id", Value::from("1")),
+        ("active", Value::from(true)),
+    ])];
+    c.call_method(
+        Some(BUS_NAME),
+        ROOT_PATH,
+        Some(IFACE_DESKTOP),
+        "SetWorkspaces",
+        &(ws,),
+    )
+    .unwrap();
+    assert_eq!(api.state().workspaces.len(), 1);
+    let wsv: Vec<OwnedValue> = (1..=3)
+        .map(|i| {
+            OwnedValue::try_from(Value::from(opts(&[("id", Value::from(i.to_string()))]))).unwrap()
+        })
+        .collect();
+    c.call_method(
+        Some(BUS_NAME),
+        ROOT_PATH,
+        Some(IFACE_DESKTOP),
+        "SetWorkspacesV",
+        &(wsv,),
+    )
+    .unwrap();
+    assert_eq!(api.state().workspaces.len(), 3);
+    let bad = vec![OwnedValue::from(5i32)];
+    let e = c
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_DESKTOP),
+            "SetWorkspacesV",
+            &(bad,),
+        )
+        .unwrap_err();
+    assert_eq!(error_name(e), error::INVALID_ARGS);
+
     // When the source leaves, someone else may take over.
     drop(props);
     c.close().unwrap();

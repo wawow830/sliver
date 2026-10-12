@@ -89,7 +89,7 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
 
 ## TestDaemon (`testing.rs`)
 `sliverd::testing::TestDaemon` (feature `testing`, so the daemon binary doesn't link it) is the real core in-process on fake hardware, over a real socket pair.
-It's API-compatible with `sliver_ipc::fake::FakeDaemon` (cedar's suite runs unchanged in
+It's API-compatible with the former `sliver_ipc::fake::FakeDaemon` (removed; cedar's suite runs unchanged in
 `tests/testing.rs`, and so do the agent's e2e tests with an alias import). Extras: `frame()` (the bar
 as a pixmap, incl. pressed feedback and hatch), `advance(ms)` (simulated time), `daemon()`, and
 `auto_pong` (default on: it answers the daemon's own pings, set false to test liveness).
@@ -103,5 +103,4 @@ Tests: `crates/sliverd/tests/daemon.rs` (core), `tests/server.rs` (real socket +
 ## Not yet
 - First full `sliverd` run on the real bar through the safe-swap harness (real mode exists, needs `SLIVER_SAFESWAP=1`).
 - RPM spec/COPR, SELinux policy (units + udev rules are in `packaging/`, ADR-0005).
-- Agent tests moving from `sliver_ipc::fake::FakeDaemon` to `TestDaemon`, then deleting FakeDaemon (ash, cedar).
 - Pixel shift, `follow_screen` reading the main backlight on change (it's read on activity now).

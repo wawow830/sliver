@@ -95,15 +95,26 @@ GTK4/libadwaita settings app with a live WYSIWYG editor for Touch Bar layouts.
 install -Dpm0755 target/rpm/sliverd %{buildroot}%{_libexecdir}/sliverd
 install -Dpm0755 target/rpm/sliver-agent %{buildroot}%{_bindir}/sliver-agent
 install -Dpm0755 target/rpm/sliverctl %{buildroot}%{_bindir}/sliverctl
+%{_mandir}/man1/sliverctl.1*
 install -Dpm0755 target/rpm/sliver-settings %{buildroot}%{_bindir}/sliver-settings
 
 install -Dpm0644 packaging/systemd/sliverd.service %{buildroot}%{_unitdir}/sliverd.service
 install -Dpm0644 packaging/systemd/sliverd.socket %{buildroot}%{_unitdir}/sliverd.socket
 install -Dpm0644 packaging/udev/99-z-sliverd.rules %{buildroot}%{_udevrulesdir}/99-z-sliverd.rules
+%{_mandir}/man8/sliverd.8*
 install -Dpm0644 packaging/systemd/user/sliver-agent.service %{buildroot}%{_userunitdir}/sliver-agent.service
 install -Dpm0644 packaging/systemd/user-preset/90-sliver.preset %{buildroot}%{_userpresetdir}/90-sliver.preset
+%{_mandir}/man1/sliver-agent.1*
+%{_mandir}/man5/sliver-config.5*
+%{_mandir}/man5/sliver-stylesheet.5*
 # T36: D-Bus activation once the agent owns the bus name:
 # install -Dpm0644 packaging/dbus/io.github.wawow830.Sliver.service %%{buildroot}%%{_datadir}/dbus-1/services/io.github.wawow830.Sliver.service
+
+install -Dpm0644 man/sliverctl.1 %{buildroot}%{_mandir}/man1/sliverctl.1
+install -Dpm0644 man/sliver-agent.1 %{buildroot}%{_mandir}/man1/sliver-agent.1
+install -Dpm0644 man/sliverd.8 %{buildroot}%{_mandir}/man8/sliverd.8
+install -Dpm0644 man/sliver-config.5 %{buildroot}%{_mandir}/man5/sliver-config.5
+install -Dpm0644 man/sliver-stylesheet.5 %{buildroot}%{_mandir}/man5/sliver-stylesheet.5
 
 install -Dpm0644 packaging/desktop/io.github.wawow830.Sliver.Settings.desktop \
     %{buildroot}%{_datadir}/applications/io.github.wawow830.Sliver.Settings.desktop
@@ -145,7 +156,7 @@ fi
 
 %files
 %license LICENSE.dependencies cargo-vendor.txt
-%doc README.md GOAL.md docs/api.md docs/customization.md docs/styling.md
+%doc README.md GOAL.md docs/user-guide.md docs/api.md docs/customization.md docs/styling.md
 %doc examples
 
 %files -n sliverd

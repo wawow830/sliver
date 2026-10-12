@@ -889,6 +889,30 @@ impl Desktop {
         self.inner.host.changed();
         Ok(())
     }
+
+    /// `SetWorkspaces` for callers that can only send `av` (KWin scripts' `callDBus` turns JS
+    /// arrays into `av`). Each element must be an `a{sv}`.
+    async fn set_workspaces_v(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &Connection,
+        workspaces: Vec<OwnedValue>,
+    ) -> Result<()> {
+        self.inner.admit_unsandboxed(conn, &hdr).await?;
+        let list: Option<Vec<Props>> = workspaces
+            .iter()
+            .take(64)
+            .map(|v| match prop_from_value(v) {
+                Some(Prop::Map(m)) => Some(m),
+                _ => None,
+            })
+            .collect();
+        let list =
+            list.ok_or_else(|| Error::InvalidArgs("every element must be an a{sv}".into()))?;
+        self.inner.lock().workspaces = list;
+        self.inner.host.changed();
+        Ok(())
+    }
 }
 
 /// `SetFocus` keys (`docs/api.md` §5) → a window. Empty dict = nothing focused.

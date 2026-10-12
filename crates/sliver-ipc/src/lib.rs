@@ -10,11 +10,10 @@
 //! - [`shm`]: sealed-memfd frame buffers (agent writes, daemon imports and copies).
 //! - [`router`]: the key-region touch semantics shared by sliverd and the fake.
 //! - [`hatch`]: the Fn double-press-and-hold safe hatch (invariant 1).
-//! - `fake` (feature `fake`): an in-process fake sliverd for headless tests.
+//! - Fake sliverd for headless tests: `sliverd::testing::TestDaemon` (feature `testing`), the real
+//!   daemon core on fake hardware.
 
 pub mod dbus;
-#[cfg(any(test, feature = "fake"))]
-pub mod fake;
 pub mod hatch;
 pub mod keys;
 pub mod proto;

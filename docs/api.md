@@ -266,6 +266,7 @@ script) feed it state.
 ```
 SetFocus(a{sv} window)      app-id s, pid u, title s, workspace s, window s (handle as in §2)
 SetWorkspaces(aa{sv})       id s, name s, active b, urgent b
+SetWorkspacesV(av)          the same, each element an a{sv} (for KWin scripts, which can't send aa{sv})
 ```
 The first connection to call `SetFocus` becomes the focus source until it disconnects (others get
 `NS.Error.Busy`). A configured backend (Hyprland/sway IPC) takes precedence.
@@ -292,9 +293,9 @@ and decides what they mean. sliverd **does** know:
 
 Implemented in `crates/sliver-ipc`. `proto` has the types and codec, `validate` and `keys` the checks below,
 `transport` the seqpacket connection with fd passing (peer hangup *and* reset both read as `Ok(None)`),
-`shm` the sealed memfd buffers, and `router` the key-region touch semantics. Feature `fake` adds
-`fake::FakeDaemon`, an in-process sliverd that speaks the real protocol: the agent's headless tests run
-against it, and T8 can use it as a reference. Error codes on the wire are the snake_case `ErrorCode` variants.
+`shm` the sealed memfd buffers, `router` the key-region touch semantics, and `hatch` the safe hatch.
+For headless agent tests, `sliverd::testing::TestDaemon` (feature `testing`) runs the real daemon core
+on fake hardware over a real socket. It replaced the earlier `sliver_ipc::fake::FakeDaemon`. Error codes on the wire are the snake_case `ErrorCode` variants.
 
 ### Handshake
 ```

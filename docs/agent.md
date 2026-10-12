@@ -33,7 +33,7 @@ agent.rs: the sans-IO core that ties it together. main.rs: config/stylesheet loa
 sliver-agent --render out              # headless: out-base.png, out-fn.png (system fonts/icons)
 sliver-agent [--config FILE] [--socket PATH]
 ```
-Tests: `crates/sliver-agent/tests/agent.rs` runs the real link against `sliver_ipc::fake::FakeDaemon`
+Tests: `crates/sliver-agent/tests/agent.rs` runs the real link against `sliverd::testing::TestDaemon`
 (real socket, memfds, validation, touch routing) and snapshots frames (`SLIVER_BLESS=1`).
 
 ## Gestures and actions
