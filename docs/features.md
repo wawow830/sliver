@@ -89,8 +89,8 @@ we want, if the hardware allows them.
 | Press-and-slide on a collapsed slider | P1 | done | mac | Touch the volume icon and slide without lifting. **Now:** The slider opens on press and the same touch slides it, relative to the current value (the value never jumps to where the finger landed). Using it keeps it open; it closes 5 s after the last touch. Tested headless through sliverd's router; not yet on the real bar. |
 | Swipe left/right on an item | P1 | done | Pock, MTMR | Item scope. Paged widgets (workspaces, media). |
 | Double-tap | P2 | done | BTT | Off by default. When it's set, it delays that item's single tap. |
-| Two-finger swipe across the whole bar (→ volume/brightness/custom) | P2 | todo | MTMR swipe | MT slots exist (count pending). There's little room for 3+ fingers on a 6 mm strip, so ship two-finger only. |
-| Edge swipe from Esc → reveal a hidden layer | P3 | todo | (none) | Experimental. |
+| Two-finger swipe across the whole bar (→ volume/brightness/custom) | P2 | done | MTMR swipe | There's little room for 3+ fingers on a 6 mm strip, so ship two-finger only. **Now:** `[gestures] two-finger-swipe-left/right` (T73), recognized over agent modules (plain key buttons press on touch-down in sliverd, so not over those). Tested headless; not yet on the real bar. |
+| Edge swipe from Esc → reveal a hidden layer | P3 | done | (none) | **Now:** `[gestures] edge-swipe-from-left/right` with any action, e.g. `{ layer = … }` (T73). It starts within 48 px of a bar end, over an agent module (a plain Esc key presses Esc on touch-down instead). Tested headless. |
 
 ## 5. Layers, layouts, contexts
 

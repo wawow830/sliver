@@ -297,8 +297,28 @@ Every `on-*` key takes one of these:
 | `{ module-action = NAME }` | `{ module-action = "next-player" }` | A built-in module action (also reachable via `actions`). |
 | array | `[{ keys = ["LeftCtrl","c"] }, { sleep = "100ms" }, "notify-send copied"]` | Macro, capped at 32 steps and 10 s total. |
 
-Bar-wide gestures live in `[gestures]`: `two-finger-swipe-left/right`, `edge-swipe-from-left`, and
-so on, with the same action forms.
+Bar-wide gestures live in `[gestures]`, with the same action forms:
+
+```toml
+[gestures]
+two-finger-swipe-left = { layer = "media" }
+two-finger-swipe-right = { close-layer = true }
+edge-swipe-from-left = { keys = ["LeftAlt", "Tab"] }
+edge-swipe-from-right = "notify-send hi"
+```
+
+- **Two-finger swipe:** both fingers travel at least 60 px the same way. Once a second finger
+  lands, neither finger taps, holds, swipes or drags its module. The gesture fires once per
+  contact.
+- **Edge swipe:** starts within 48 px of the bar's left/right end and travels at least 80 px
+  inward. It takes precedence over that module's own swipe, and a touch that doesn't move is
+  still a tap. Sliders keep their drag.
+- Unbound gestures cost nothing: without a `two-finger-*` binding, two fingers are just two
+  independent touches.
+- Gestures are recognized over modules the agent handles, which is everything except plain key
+  buttons. Esc, F-keys and other `{ key = … }` buttons go straight to keys in sliverd, which
+  presses them the instant a finger lands so they work even if the agent hangs. A swipe that
+  starts on one has already pressed it, so no bar gesture is recognized there.
 
 ## 6. Structure: zones, layers, layouts, rules
 

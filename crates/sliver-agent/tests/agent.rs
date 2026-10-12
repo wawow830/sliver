@@ -507,6 +507,62 @@ fn session_modules() {
     );
 }
 
+/// `[gestures]`: a two-finger swipe and an edge swipe run their actions, and the modules under
+/// the fingers don't fire.
+#[test]
+fn bar_gestures() {
+    use sliver_agent::agent::Effect::*;
+    use sliver_ipc::proto::{KeyMode, TouchPhase::*};
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        width = "fill"
+        modules = ["custom/a", "custom/b"]
+        [modules."custom/a"]
+        format = "A"
+        width = "fill"
+        on-tap = "echo a"
+        [modules."custom/b"]
+        format = "B"
+        width = "fill"
+        on-tap = "echo b"
+        [gestures]
+        two-finger-swipe-right = { layer = "media" }
+        edge-swipe-from-left = { keys = ["LeftCtrl", "c"] }
+        "#,
+    );
+    let (mut fake, mut link) = connect();
+    let layers = a.render(&world(9, 41));
+    present(&a, &mut link, &mut fake, &layers);
+    // (A plain tap does spawn, so "no Spawn" below means no tap.)
+    fake.tap(1400.0, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(fx.iter().any(|e| matches!(e, Spawn(_))), "{fx:?}");
+
+    // Edge swipe from the left end: the keys, and no tap on custom/a.
+    fake.touch(0, Down, 10.0, 30.0).unwrap();
+    fake.touch(0, Move, 60.0, 30.0).unwrap();
+    fake.touch(0, Move, 120.0, 30.0).unwrap();
+    fake.touch(0, Up, 120.0, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(fx.contains(&EmitKeys(vec![29, 46], KeyMode::Tap)), "{fx:?}");
+    assert!(!fx.iter().any(|e| matches!(e, Spawn(_))), "no tap: {fx:?}");
+
+    // Two fingers, one on each module, both to the right: the media layer; no taps.
+    fake.touch(0, Down, 400.0, 30.0).unwrap();
+    fake.touch(1, Down, 1400.0, 30.0).unwrap();
+    for dx in [30.0, 70.0, 90.0] {
+        fake.touch(0, Move, 400.0 + dx, 30.0).unwrap();
+        fake.touch(1, Move, 1400.0 + dx, 30.0).unwrap();
+    }
+    fake.touch(0, Up, 490.0, 30.0).unwrap();
+    fake.touch(1, Up, 1490.0, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert_eq!(a.base_layer(), "media", "{fx:?}");
+    assert!(!fx.iter().any(|e| matches!(e, Spawn(_))), "no taps: {fx:?}");
+}
+
 /// Touch a collapsed slider's icon and slide without lifting: it opens under the finger and
 /// the value moves by how far the finger slid (never jumping to where the finger landed).
 #[test]

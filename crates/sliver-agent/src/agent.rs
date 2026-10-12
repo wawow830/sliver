@@ -250,6 +250,14 @@ impl Agent {
             ctx.set(k, v.clone());
         }
         self.ctx = ctx;
+        let bound = |g: crate::gesture::BarGesture| self.config.gestures.contains_key(g.name());
+        use crate::gesture::BarGesture as BG;
+        self.recognizer.set_bar(crate::gesture::BarBindings {
+            two_finger: bound(BG::TwoFingerSwipeLeft) || bound(BG::TwoFingerSwipeRight),
+            edge_left: bound(BG::EdgeSwipeFromLeft),
+            edge_right: bound(BG::EdgeSwipeFromRight),
+            width: self.width as f32,
+        });
         let mut out = Vec::new();
         let base = self.base_layer().to_owned();
         for (layer, name) in [(Layer::Base, base.as_str()), (Layer::Fn, "fn")] {
@@ -590,9 +598,20 @@ impl Agent {
         };
         let b = bindings(cell);
         for (r, g) in self.recognizer.touch(region, b, slot, phase, x, time_us) {
-            self.dispatch(r, g, time_us, &mut fx);
+            if let Gesture::Bar(bg) = g {
+                self.bar_gesture(bg, time_us, &mut fx);
+            } else {
+                self.dispatch(r, g, time_us, &mut fx);
+            }
         }
         fx
+    }
+
+    /// A bar-wide gesture: run its `[gestures]` action.
+    fn bar_gesture(&mut self, g: crate::gesture::BarGesture, now: u64, fx: &mut Vec<Effect>) {
+        if let Some(a) = self.config.gestures.get(g.name()).cloned() {
+            self.execute(&a, None, None, now, fx);
+        }
     }
 
     /// Display off, hatch, layer switch: forget touches and pressed feedback.
@@ -629,6 +648,7 @@ impl Agent {
             return;
         }
         let want = match g {
+            Gesture::Bar(_) => return, // handled in `touch`
             Gesture::Pressed(on) => {
                 let changed = if on {
                     self.pressed.insert(cell.key.clone())
