@@ -19,6 +19,7 @@
   <url type="homepage">https://github.com/wawow830/sliver</url>
   <provides>
     <binary>sliver-settings</binary>
+    <mediatype>application/x-sliver-preset</mediatype>
   </provides>
   <keywords>
     <keyword>Touch Bar</keyword>

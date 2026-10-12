@@ -119,6 +119,8 @@ install -Dpm0644 packaging/desktop/io.github.wawow830.Sliver.Settings.desktop \
     %{buildroot}%{_datadir}/applications/io.github.wawow830.Sliver.Settings.desktop
 install -Dpm0644 packaging/desktop/io.github.wawow830.Sliver.Settings.metainfo.xml \
     %{buildroot}%{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
+install -Dpm0644 packaging/mime/io.github.wawow830.Sliver.xml \
+    %{buildroot}%{_datadir}/mime/packages/io.github.wawow830.Sliver.xml
 sed -i 's|@LICENSE@|%{sliver_license}|' %{buildroot}%{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
 
 %check
@@ -205,6 +207,8 @@ fi
 %{_bindir}/sliver-settings
 %{_datadir}/applications/io.github.wawow830.Sliver.Settings.desktop
 %{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
+# Opens .sliver presets (shared-mime-info's file trigger updates the MIME cache).
+%{_datadir}/mime/packages/io.github.wawow830.Sliver.xml
 
 %changelog
 * Mon Oct 12 2026 hazel <hazel@sliver.invalid> - 0.1.0-0.1

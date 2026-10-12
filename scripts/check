@@ -50,6 +50,9 @@ fi
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate packaging/desktop/*.desktop
 fi
+if command -v xmllint >/dev/null; then
+  xmllint --noout packaging/mime/*.xml
+fi
 
 # Tests must never start the real audio tools (they leak `pactl subscribe` orphans and touch the
 # real PipeWire): use fake scripts via audio::Tools { wpctl, pactl } or SessionOptions::hermetic().
