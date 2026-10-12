@@ -119,7 +119,10 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                         }
                     }
                 }
-                Err(e) => live.add(&row("The agent isn't answering", &e)),
+                Err(e) => {
+                    let (title, why) = crate::live::trouble(&e);
+                    live.add(&row(title, &why));
+                }
             }
         });
     }

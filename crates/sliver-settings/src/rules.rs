@@ -41,8 +41,9 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 }
             }
             Err(e) => {
-                now_row.set_title("The agent isn't answering");
-                now_row.set_subtitle(&format!("Start it to see what the bar shows ({e})."));
+                let (title, why) = crate::live::trouble(&e);
+                now_row.set_title(title);
+                now_row.set_subtitle(&glib::markup_escape_text(&why));
             }
         });
     }

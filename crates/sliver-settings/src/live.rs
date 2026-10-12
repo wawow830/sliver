@@ -315,3 +315,41 @@ mod active_tests {
         assert_eq!(explain(&Active::default()).0, "Nothing shown yet");
     }
 }
+
+/// A D-Bus failure talking to the agent, in words: not running, older than this app (it lacks a
+/// newer method or property), or something else (shown as is). Returns (title, subtitle).
+pub fn trouble(err: &str) -> (&'static str, String) {
+    let has = |s: &str| err.contains(s);
+    if has("ServiceUnknown") || has("NameHasNoOwner") || has("was not provided") {
+        (
+            "sliver-agent isn't running",
+            "Start it to see what the bar shows.".into(),
+        )
+    } else if has("UnknownProperty") || has("UnknownMethod") || has("UnknownInterface") {
+        (
+            "sliver-agent is older than this app",
+            "Restart it after updating sliver (systemctl --user restart sliver-agent).".into(),
+        )
+    } else {
+        ("The agent isn't answering", err.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod trouble_tests {
+    use super::trouble;
+
+    #[test]
+    fn words_for_common_failures() {
+        assert_eq!(
+            trouble("org.freedesktop.DBus.Error.ServiceUnknown: The name io.github.wawow830.Sliver was not provided by any .service files").0,
+            "sliver-agent isn't running"
+        );
+        assert_eq!(
+            trouble("org.freedesktop.DBus.Error.UnknownProperty: Unknown property 'ActiveLayout'")
+                .0,
+            "sliver-agent is older than this app"
+        );
+        assert_eq!(trouble("timeout").1, "timeout");
+    }
+}

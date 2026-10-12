@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Drive sliver-settings headlessly and screenshot it (docs/ux.md §12). Never touches the live
+# session: a private D-Bus (so Mirror, live status and profiles can't reach an installed agent),
+# a sandboxed XDG_CONFIG_HOME, and GTK's Broadway backend in a browser via agent-browser.
+#
+#   scripts/settings-headless OUT.png [STEP...]
+#
+# STEP is one of
+#   X,Y            click at X,Y (viewport 1280x820; the sidebar is at x≈100)
+#   drag=X1,Y1,X2,Y2      press, move in 8 steps, release
+#   key=NAME       press a key (agent-browser key names: Delete, Control+z, ...)
+#   shot=FILE      screenshot now
+#   sleep=SECS
+#
+# Environment:
+#   SANDBOX   config sandbox (default target/test-tmp/xdg-ui); put sliver/config.toml there first
+#   OPEN      a file to open (e.g. a .sliver preset)
+#   SESSION   agent-browser session name (default: $USER-settings)
+#
+# Broadway has no implicit pointer grab: a drag that leaves the widget it started on is lost unless
+# a common ancestor handles it (see crates/sliver-settings/src/bar.rs, the page-level drag).
+set -euo pipefail
+out=${1:?usage: scripts/settings-headless OUT.png [STEP...]}
+shift
+root=$(cd "$(dirname "$0")/.." && pwd)
+sandbox=${SANDBOX:-$root/target/test-tmp/xdg-ui}
+session=${SESSION:-${USER:-me}-settings}
+tmp=$root/target/test-tmp/headless.$$
+mkdir -p "$tmp" "$sandbox"
+pids=()
+cleanup() {
+    agent-browser --session "$session" close >/dev/null 2>&1 || true
+    for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
+    wait 2>/dev/null || true
+    rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+dbus-daemon --config-file="$root/integration/kwin/session.conf" --nofork \
+    --address="unix:path=$tmp/bus" >/dev/null 2>&1 &
+pids+=($!)
+display=$((20 + $$ % 50))
+gtk4-broadwayd ":$display" >/dev/null 2>&1 &
+pids+=($!)
+sleep 1
+DBUS_SESSION_BUS_ADDRESS="unix:path=$tmp/bus" XDG_CONFIG_HOME="$sandbox" GDK_DEBUG=no-portals \
+    GDK_BACKEND=broadway BROADWAY_DISPLAY=":$display" \
+    "$root/target/debug/sliver-settings" ${OPEN:+"$OPEN"} >"$tmp/app.log" 2>&1 &
+pids+=($!)
+sleep 3
+
+a() { agent-browser --session "$session" "$@" >/dev/null; }
+a set viewport 1280 820
+a open "http://127.0.0.1:$((8080 + display))/"
+sleep 3
+for step in "$@"; do
+    case $step in
+        shot=*) sleep 1; a screenshot "${step#shot=}"
+                [ -s "${step#shot=}" ] || echo "settings-headless: no screenshot at ${step#shot=}" >&2 ;;
+        key=*) a press "${step#key=}"; sleep 1.5 ;;
+        sleep=*) sleep "${step#sleep=}" ;;
+        drag=*)
+            IFS=, read -r x1 y1 x2 y2 <<<"${step#drag=}"
+            a mouse move "$x1" "$y1"; a mouse down
+            for i in 1 2 3 4 5 6 7 8; do
+                a mouse move $((x1 + (x2 - x1) * i / 8)) $((y1 + (y2 - y1) * i / 8))
+            done
+            sleep 0.4; a mouse up; sleep 2 ;;
+        *,*) a mouse move "${step%,*}" "${step#*,}"; a mouse down; a mouse up; sleep 1.5 ;;
+        *) echo "unknown step: $step" >&2; exit 2 ;;
+    esac
+done
+sleep 1
+a screenshot "$out"
+[ -s "$out" ] || { echo "settings-headless: no screenshot at $out" >&2; exit 1; }
+grep -v -e '^$' -e 'Theme parser' "$tmp/app.log" >&2 || true
+echo "$out"
