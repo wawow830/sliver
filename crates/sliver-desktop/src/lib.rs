@@ -10,9 +10,11 @@
 
 pub mod fake;
 pub mod hyprland;
+pub mod sway;
 
 use serde::{Deserialize, Serialize};
 use std::io;
+use std::ops::ControlFlow;
 
 /// The focused window, as far as the compositor exposes it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,9 +128,52 @@ impl DesktopState {
 
 /// A blocking stream of desktop state changes.
 pub trait DesktopSource {
+    /// The state as of the last change (the snapshot right after connecting, initially).
+    fn state(&self) -> &DesktopState;
+
     /// Block until the state changed, then return it. `Ok(None)` = the source is finished
     /// (compositor closed the connection, or the script ran out).
     fn next_change(&mut self) -> io::Result<Option<DesktopState>>;
+}
+
+/// Run until `on_change` breaks: connect, deliver the initial state and every change, and on
+/// disconnect deliver a `connected: false` state, then retry with backoff (0.25s .. 5s). The
+/// disconnected state is reported once, even if the compositor never comes back.
+pub fn watch<S: DesktopSource>(
+    mut connect: impl FnMut() -> io::Result<S>,
+    mut on_change: impl FnMut(&DesktopState) -> ControlFlow<()>,
+) {
+    use std::time::Duration;
+    let mut backoff = Duration::from_millis(250);
+    let mut told_disconnected = false;
+    loop {
+        match connect() {
+            Ok(mut src) => {
+                backoff = Duration::from_millis(250);
+                if on_change(src.state()).is_break() {
+                    return;
+                }
+                while let Ok(Some(s)) = src.next_change() {
+                    if on_change(&s).is_break() {
+                        return;
+                    }
+                }
+                told_disconnected = true;
+                if on_change(&DesktopState::default()).is_break() {
+                    return;
+                }
+            }
+            Err(_) if !told_disconnected => {
+                told_disconnected = true;
+                if on_change(&DesktopState::default()).is_break() {
+                    return;
+                }
+            }
+            Err(_) => {}
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_secs(5));
+    }
 }
 
 #[cfg(test)]

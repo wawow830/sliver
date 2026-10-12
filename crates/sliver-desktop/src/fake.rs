@@ -7,19 +7,29 @@ use std::io;
 #[derive(Debug, Default)]
 pub struct ScriptedSource {
     script: VecDeque<DesktopState>,
+    current: DesktopState,
 }
 
 impl ScriptedSource {
     pub fn new(states: impl IntoIterator<Item = DesktopState>) -> Self {
         Self {
             script: states.into_iter().collect(),
+            current: DesktopState::default(),
         }
     }
 }
 
 impl DesktopSource for ScriptedSource {
+    fn state(&self) -> &DesktopState {
+        &self.current
+    }
+
     fn next_change(&mut self) -> io::Result<Option<DesktopState>> {
-        Ok(self.script.pop_front())
+        let next = self.script.pop_front();
+        if let Some(s) = &next {
+            self.current = s.clone();
+        }
+        Ok(next)
     }
 }
 

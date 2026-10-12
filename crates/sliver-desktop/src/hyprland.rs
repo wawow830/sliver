@@ -374,10 +374,6 @@ impl Watcher {
         Ok(w)
     }
 
-    pub fn state(&self) -> &DesktopState {
-        &self.state
-    }
-
     /// Re-read everything from the command socket. Failures keep the previous value.
     fn resync(&mut self) {
         self.state.connected = true;
@@ -427,6 +423,10 @@ impl Watcher {
 }
 
 impl DesktopSource for Watcher {
+    fn state(&self) -> &DesktopState {
+        &self.state
+    }
+
     /// Sleeps in `read(2)` until Hyprland sends something; only returns on a real change.
     fn next_change(&mut self) -> io::Result<Option<DesktopState>> {
         loop {
@@ -463,42 +463,10 @@ impl DesktopSource for Watcher {
     }
 }
 
-/// Run until `on_change` breaks: connect, deliver the initial state and every change, and on
-/// disconnect deliver a `connected: false` state, then retry with backoff (0.25s .. 5s).
-/// This is the loop the agent runs on its own thread.
-pub fn watch(paths: &Paths, mut on_change: impl FnMut(&DesktopState) -> ControlFlow<()>) {
-    let mut backoff = Duration::from_millis(250);
-    let mut was_connected = false;
-    loop {
-        match Watcher::connect(paths) {
-            Ok(mut w) => {
-                backoff = Duration::from_millis(250);
-                was_connected = true;
-                if on_change(w.state()).is_break() {
-                    return;
-                }
-                while let Ok(Some(s)) = w.next_change() {
-                    if on_change(&s).is_break() {
-                        return;
-                    }
-                }
-                if on_change(&DesktopState::default()).is_break() {
-                    return;
-                }
-            }
-            Err(_) if was_connected => {
-                // Already told the caller we're disconnected; just keep retrying quietly.
-            }
-            Err(_) => {
-                was_connected = true; // report the disconnected state exactly once
-                if on_change(&DesktopState::default()).is_break() {
-                    return;
-                }
-            }
-        }
-        std::thread::sleep(backoff);
-        backoff = (backoff * 2).min(Duration::from_secs(5));
-    }
+/// [`crate::watch`] for Hyprland: connect, deliver the initial state and every change, retry
+/// with backoff. This is the loop the agent runs on its own thread.
+pub fn watch(paths: &Paths, on_change: impl FnMut(&DesktopState) -> ControlFlow<()>) {
+    crate::watch(|| Watcher::connect(paths), on_change);
 }
 
 #[cfg(test)]
