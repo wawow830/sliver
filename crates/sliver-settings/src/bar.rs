@@ -629,7 +629,8 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
         .get(layout)
         .map(|l| l.zones.iter().map(|z| z.name.clone()).collect())
         .unwrap_or_default();
-    for z in zones {
+    let count = zones.len();
+    for (zi, z) in zones.into_iter().enumerate() {
         let origin = if own.contains(&z.name) {
             String::new()
         } else {
@@ -641,7 +642,7 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
         );
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         header.append(&library_button(ui, layout, &z.name));
-        header.append(&zone_button(ui, layout, &z, origin.is_empty()));
+        header.append(&zone_button(ui, layout, &z, origin.is_empty(), (zi, count)));
         g.set_header_suffix(Some(&header));
         if z.modules.is_empty() {
             g.add(&row("(empty)", "Add modules with +"));
@@ -738,19 +739,32 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
 }
 
 /// The ⚙ on a zone's header: its settings dialog (T111).
-fn zone_button(ui: &Rc<Ui>, layout: &str, z: &sliver_config::Zone, own: bool) -> gtk::Button {
+fn zone_button(
+    ui: &Rc<Ui>,
+    layout: &str,
+    z: &sliver_config::Zone,
+    own: bool,
+    pos: (usize, usize),
+) -> gtk::Button {
     let b = gtk::Button::from_icon_name("emblem-system-symbolic");
     b.set_tooltip_text(Some("Zone settings"));
     b.add_css_class("flat");
     b.set_valign(gtk::Align::Center);
     let (ui, layout, z) = (ui.clone(), layout.to_owned(), z.clone());
-    b.connect_clicked(move |_| zone_dialog(&ui, &layout, &z, own));
+    b.connect_clicked(move |_| zone_dialog(&ui, &layout, &z, own, pos));
     b
 }
 
 /// A zone's settings: name, width, alignment, default module width, order, removal. Each applies
 /// on its own (instant apply + undo, Q3).
-fn zone_dialog(ui: &Rc<Ui>, layout: &str, z: &sliver_config::Zone, own: bool) {
+/// `pos`: the zone's index and how many zones the layout shows (for the move buttons).
+fn zone_dialog(
+    ui: &Rc<Ui>,
+    layout: &str,
+    z: &sliver_config::Zone,
+    own: bool,
+    (index, count): (usize, usize),
+) {
     let dialog = adw::PreferencesDialog::builder()
         .title(glib::markup_escape_text(&format!("Zone “{}”", z.name)))
         .build();
@@ -852,6 +866,11 @@ fn zone_dialog(ui: &Rc<Ui>, layout: &str, z: &sliver_config::Zone, own: bool) {
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     for (label, delta) in [("Move left", -1isize), ("Move right", 1)] {
         let b = gtk::Button::with_label(label);
+        b.set_sensitive(if delta < 0 {
+            index > 0
+        } else {
+            index + 1 < count
+        });
         let (ui, layout, zone, dialog) =
             (ui.clone(), layout.to_owned(), zone.clone(), dialog.clone());
         b.connect_clicked(move |_| {
@@ -865,6 +884,7 @@ fn zone_dialog(ui: &Rc<Ui>, layout: &str, z: &sliver_config::Zone, own: bool) {
     }
     let remove = gtk::Button::with_label("Remove zone");
     remove.add_css_class("destructive-action");
+    remove.set_sensitive(count > 1); // a layout keeps at least one zone
     {
         let (ui, layout, zone, dialog) =
             (ui.clone(), layout.to_owned(), zone.clone(), dialog.clone());
