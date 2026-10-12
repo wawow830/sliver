@@ -16,6 +16,7 @@ sliver-session = { path = "crates/sliver-session" }
 sliver-icons = { path = "crates/sliver-icons" }
 sliver-modules = { path = "crates/sliver-modules" }
 sliver-waybar = { path = "crates/sliver-waybar" }
+sliver-feeds = { path = "crates/sliver-feeds" }
 sliver-config = { path = "crates/sliver-config" }
 sliver-agent = { path = "crates/sliver-agent" }
 sliver-ipc = { path = "crates/sliver-ipc" }

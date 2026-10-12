@@ -1562,6 +1562,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sliver-feeds"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "sliver-config",
+ "sliver-desktop",
+ "sliver-icons",
+ "sliver-modules",
+ "sliver-session",
+ "zbus",
+]
+
+[[package]]
 name = "sliver-hw"
 version = "0.1.0"
 dependencies = [

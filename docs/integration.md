@@ -178,7 +178,11 @@ on this machine.
   use. It is only a *hint* that the locker sets; a stale value or a locker that doesn't maintain
   it is possible. Don't rely on it alone: treat `Lock` and `Unlock` signals as edges and
   combine with "is a locker process/surface present" (e.g. `hyprlock`) when the hint looks
-  stuck. Needs a per-compositor check before `locked` is trustworthy. GNOME also has
+  stuck. Needs a per-compositor check before `locked` is trustworthy. **Root cause found on the dev
+  machine:** quickshell's lock calls `loginctl lock-session` (sets the hint, emits `Lock`) but never
+  `unlock-session`, so the hint stays `yes` after unlocking. A rule on `locked` is therefore
+  advisory until the agent can see the locker itself (ext-session-lock has no client-side
+  observer; per-locker adapters such as hyprlock/quickshell process checks are the likely fix). GNOME also has
   `org.gnome.ScreenSaver.ActiveChanged`; KDE has `org.freedesktop.ScreenSaver`.
 - Idle for dimming the bar: sliverd should use its own touch/key idle timer (it sees the
   input). For "user is idle on the desktop" use `ext-idle-notify-v1` (Wayland) rather than
@@ -317,6 +321,15 @@ Compositor events win (§2). Input methods also change what the user is typing:
   and safe on a live Hyprland session.
 - For D-Bus sources, test against a private `dbus-daemon --session` with mock services
   (zbus makes this easy); never against the system bus.
+
+## 5b. `sliver-feeds`: the wiring
+
+`crates/sliver-feeds` runs the desktop watcher (`watch_auto`), the session sources and the
+`custom/*` runtime on threads, forwards everything on one channel with a wake fd, and folds it into
+the rule `Context`: `Feeds::new()`, `start_desktop(env)`, `start_session()`, `start_modules(specs)`,
+then poll `feeds.as_fd()` and call `feeds.drain()`; `Aggregate::apply(feed)` returns whether rules or a
+module output changed and `Aggregate::context()` gives the `CONTEXT_KEYS` (unknown values are left
+out, so they never match). `cargo run -p sliver-feeds --example context-dump` prints the live context.
 
 ## 6. Open items / next tasks
 

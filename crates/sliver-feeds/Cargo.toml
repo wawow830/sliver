@@ -1,0 +1,22 @@
+[package]
+name = "sliver-feeds"
+description = "Sliver agent inputs: desktop, session and user-module feeds merged into one rule Context, with a wake fd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sliver-config.workspace = true
+sliver-desktop.workspace = true
+sliver-session.workspace = true
+sliver-modules.workspace = true
+sliver-icons.workspace = true
+zbus = "5"
+
+[dev-dependencies]
+rustix.workspace = true
