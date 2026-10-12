@@ -58,16 +58,16 @@ pub fn from_managed(objs: &Managed) -> Bluetooth {
 
 pub fn read_into(conn: &Connection, bt: &mut Bluetooth) {
     *bt = Bluetooth::default();
-    let reply = conn.call_method(
-        Some("org.bluez"),
+    // Never start bluetoothd just to read it.
+    let objs: Option<Managed> = crate::props::call_no_autostart(
+        conn,
+        "org.bluez",
         "/",
-        Some("org.freedesktop.DBus.ObjectManager"),
+        "org.freedesktop.DBus.ObjectManager",
         "GetManagedObjects",
         &(),
     );
-    if let Ok(r) = reply {
-        if let Ok(objs) = r.body().deserialize::<Managed>() {
-            *bt = from_managed(&objs);
-        }
+    if let Some(objs) = objs {
+        *bt = from_managed(&objs);
     }
 }

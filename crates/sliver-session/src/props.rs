@@ -7,18 +7,48 @@ use zbus::zvariant::OwnedValue;
 pub(crate) type Props = HashMap<String, OwnedValue>;
 
 /// `GetAll(iface)` on `dest`/`path`; `None` if the service or object is absent.
+///
+/// Sent with `NoAutoStart`: reading state must never *start* a service (a notification daemon,
+/// say). Without it, on a bus where the service is activatable but not running, the call
+/// blocks on the activation, which stalled agent startup on fresh buses.
 pub(crate) fn get_all(conn: &Connection, dest: &str, path: &str, iface: &str) -> Option<Props> {
-    conn.call_method(
-        Some(dest),
+    call_no_autostart(
+        conn,
+        dest,
         path,
-        Some("org.freedesktop.DBus.Properties"),
+        "org.freedesktop.DBus.Properties",
         "GetAll",
         &(iface,),
     )
-    .ok()?
-    .body()
-    .deserialize::<Props>()
-    .ok()
+}
+
+/// A method call that fails at once instead of activating `dest` when it isn't running.
+pub(crate) fn call_no_autostart<B, R>(
+    conn: &Connection,
+    dest: &str,
+    path: &str,
+    iface: &str,
+    method: &str,
+    body: &B,
+) -> Option<R>
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+    R: for<'d> zbus::zvariant::DynamicDeserialize<'d>,
+{
+    let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(conn)
+        .destination(dest.to_owned())
+        .ok()?
+        .path(path.to_owned())
+        .ok()?
+        .interface(iface.to_owned())
+        .ok()?
+        .cache_properties(zbus::proxy::CacheProperties::No)
+        .build()
+        .ok()?;
+    proxy
+        .call_with_flags::<_, _, R>(method, zbus::proxy::MethodFlags::NoAutoStart.into(), body)
+        .ok()
+        .flatten()
 }
 
 pub(crate) fn boolean(p: &Props, k: &str) -> Option<bool> {
