@@ -8,6 +8,9 @@
 //!     Serve the real IPC socket with fake hardware: develop and test the agent without a bar.
 //!     The active uid defaults to your own. --frame-png rewrites a PNG on every panel flush.
 //! PANEL: [--width 2008] [--model Mac14,7] [--max-brightness 255]
+//! --backend real|fake (= --fake-hardware), --exit-after SECONDS.
+//! Under the safe-swap harness (SLIVER_SAFESWAP=1) the socket defaults to $SLIVER_OUT_DIR/sliverd.sock
+//! and sliverd exits 2 s before SLIVER_SAFESWAP_SECONDS.
 //! ```
 //! sliverd [--socket PATH] [--config PATH]
 //!     Real hardware (needs SLIVER_SAFESWAP=1: only via the safe-swap harness for now).
@@ -17,7 +20,7 @@
 
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sliver_ipc::proto::{PanelInfo, PixelFormat, SOCKET_PATH};
 use sliver_ipc::transport::Listener;
@@ -82,8 +85,38 @@ fn main() {
     if let Some(out) = args.value("--headless") {
         return headless(panel, &config, &out, args.flag("--fn"));
     }
-    let fake = args.flag("--fake-hardware");
-    let socket = args.value("--socket");
+    let fake = match args.value("--backend").as_deref() {
+        None | Some("real") => args.flag("--fake-hardware"),
+        Some("fake") => {
+            args.flag("--fake-hardware");
+            true
+        }
+        Some(b) => die(&format!("unknown --backend {b} (real, fake)")),
+    };
+    let harness = std::env::var("SLIVER_SAFESWAP").is_ok_and(|v| v == "1");
+    let out_dir = std::env::var_os("SLIVER_OUT_DIR").map(PathBuf::from);
+    // Under the harness only $SLIVER_OUT_DIR is writable, and the run is cut off at
+    // SLIVER_SAFESWAP_SECONDS: leave on our own a little before that.
+    let secs = |v: String| -> u64 {
+        v.parse()
+            .unwrap_or_else(|_| die(&format!("bad seconds: {v}")))
+    };
+    let exit_after = match args.value("--exit-after") {
+        Some(v) => Some(Duration::from_secs(secs(v))),
+        None => harness
+            .then(|| std::env::var("SLIVER_SAFESWAP_SECONDS").ok())
+            .flatten()
+            .map(|v| Duration::from_secs(secs(v).saturating_sub(2).max(1))),
+    };
+    let socket = args.value("--socket").or_else(|| {
+        harness
+            .then(|| {
+                out_dir
+                    .as_ref()
+                    .map(|d| d.join("sliverd.sock").display().to_string())
+            })
+            .flatten()
+    });
     let uid = args.parse("--uid", rustix::process::getuid().as_raw());
     let frame_png = args.value("--frame-png").map(PathBuf::from);
     if !args.0.is_empty() {
@@ -132,7 +165,19 @@ fn main() {
         )
     }
     .unwrap_or_else(|e| die(&e.to_string()));
-    if let Err(e) = server.run() {
+    let res = match exit_after {
+        None => server.run(),
+        Some(limit) => {
+            let end = clock + limit;
+            let mut res = Ok(());
+            while res.is_ok() && Instant::now() < end {
+                res = server.run_once(Some(end.saturating_duration_since(Instant::now())));
+            }
+            eprintln!("sliverd: --exit-after reached, exiting");
+            res
+        }
+    };
+    if let Err(e) = res {
         die(&format!("event loop: {e}"));
     }
 }

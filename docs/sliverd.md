@@ -26,6 +26,10 @@ conn per wakeup. A conn whose socket won't take a reply is dropped. Received fds
   Unknown keys and parse errors are warnings and the defaults apply. The daemon always starts.
 - **Socket**: systemd socket activation (`FileDescriptorName=ipc`, via `sliver_hw::listen_fd`), else
   bound at `--socket` (default `/run/sliver/sliverd.sock`, mode 0666).
+- **Harness** (docs/safe-swap.md): `bar run target/debug/sliverd --seconds N -- --backend real`. With
+  `SLIVER_SAFESWAP=1` the socket defaults to `$SLIVER_OUT_DIR/sliverd.sock`, and sliverd exits on its
+  own 2 s before `SLIVER_SAFESWAP_SECONDS`. `--exit-after S` does the same anywhere. The backlight fd
+  comes from `OpenFile=` (name `backlight`), so production sliverd needs no root for it either.
 - **Dev mode**: `sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH]` serves the real
   IPC with fake hardware. Point an agent at it, and `--frame-png` is rewritten on every panel flush.
 
