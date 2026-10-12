@@ -319,6 +319,186 @@ fn theme_row(ui: &Rc<Ui>, id: &'static str, name: &str, what: &str, current: &st
     row.upcast()
 }
 
+/// The user's stylesheet: `stylesheet = …`, else `style.css` beside the config.
+fn stylesheet_file(state: &crate::State, c: &sliver_config::Config) -> std::path::PathBuf {
+    let dir = state
+        .path
+        .as_deref()
+        .and_then(|p| p.parent())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| {
+            state
+                .edit_target()
+                .0
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default()
+        });
+    dir.join(c.stylesheet.as_deref().unwrap_or("style.css"))
+}
+
+/// Reads the managed look from `file`, lets `f` change it, and writes it back (the rest of the
+/// file untouched). The config directory is watched, so the window and preview refresh.
+fn change_look(ui: &Rc<Ui>, file: &std::path::Path, f: impl FnOnce(&mut crate::look::Look)) {
+    let text = std::fs::read_to_string(file).unwrap_or_default();
+    let mut look = crate::look::Look::parse(&text);
+    f(&mut look);
+    let new = look.splice(&text);
+    if new == text {
+        return;
+    }
+    let r = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|_| std::fs::write(file, new));
+    match r {
+        Ok(()) => ui.toast("Look saved to your stylesheet"),
+        Err(e) => ui.toast(&format!("Couldn't write {}: {e}", file.display())),
+    }
+}
+
+/// Sets one field of the look from a text field's text, or says why not.
+type LookSetter = Rc<dyn Fn(&mut crate::look::Look, &str) -> Result<(), String>>;
+
+/// Font, corner radius, outlines, accent, animations and press feedback, as a managed block in
+/// the stylesheet (look.rs).
+fn look_group(ui: &Rc<Ui>, file: &std::path::Path) -> adw::PreferencesGroup {
+    use crate::look::{Look, Press};
+    let look = std::fs::read_to_string(file)
+        .map(|t| Look::parse(&t))
+        .unwrap_or_default();
+    let g = group(
+        "Look",
+        Some(
+            "Saved as a block at the top of your stylesheet; rules you write below it still win. Empty = the theme's own.",
+        ),
+    );
+    let text_row = |title: &str, current: String, apply: LookSetter| {
+        let e = adw::EntryRow::builder()
+            .title(title)
+            .show_apply_button(true)
+            .build();
+        e.set_text(&current);
+        let (ui, file) = (ui.clone(), file.to_path_buf());
+        e.connect_apply(move |e| {
+            let t = e.text().trim().to_owned();
+            // Check on a scratch copy first, so a bad value is an error and not half a write.
+            if let Err(msg) = apply(&mut Look::default(), &t) {
+                ui.toast(&msg);
+                return;
+            }
+            change_look(&ui, &file, |l| {
+                let _ = apply(l, &t);
+            });
+        });
+        e
+    };
+    g.add(&text_row(
+        "Font family",
+        look.font_family.clone().unwrap_or_default(),
+        Rc::new(|l, t| {
+            if t.is_empty() {
+                l.font_family = None;
+                return Ok(());
+            }
+            Look::check_family(t)?;
+            l.font_family = Some(t.to_owned());
+            Ok(())
+        }),
+    ));
+    let number =
+        |min: u32, max: u32, what: &'static str, set: fn(&mut Look, Option<u32>)| -> LookSetter {
+            Rc::new(move |l, t| {
+                if t.is_empty() {
+                    set(l, None);
+                    return Ok(());
+                }
+                let n: u32 = t
+                    .trim_end_matches("px")
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("{what} is a number of pixels"))?;
+                if !(min..=max).contains(&n) {
+                    return Err(format!("{what} must be between {min} and {max} px"));
+                }
+                set(l, Some(n));
+                Ok(())
+            })
+        };
+    g.add(&text_row(
+        "Font size (px)",
+        look.font_size.map(|n| n.to_string()).unwrap_or_default(),
+        number(10, 48, "Font size", |l, n| l.font_size = n),
+    ));
+    g.add(&text_row(
+        "Corner radius (px)",
+        look.radius.map(|n| n.to_string()).unwrap_or_default(),
+        number(0, 30, "Corner radius", |l, n| l.radius = n),
+    ));
+    g.add(&text_row(
+        "Accent colour override (#rrggbb)",
+        look.accent.clone().unwrap_or_default(),
+        Rc::new(|l, t| {
+            if t.is_empty() {
+                l.accent = None;
+                return Ok(());
+            }
+            Look::check_accent(t)?;
+            l.accent = Some(t.to_ascii_lowercase());
+            Ok(())
+        }),
+    ));
+    let switch = |title: &str, subtitle: &str, on: bool, set: fn(&mut Look, bool)| {
+        let r = adw::SwitchRow::builder()
+            .title(title)
+            .subtitle(subtitle)
+            .active(on)
+            .build();
+        let (ui, file) = (ui.clone(), file.to_path_buf());
+        r.connect_active_notify(move |r| {
+            let on = r.is_active();
+            change_look(&ui, &file, |l| set(l, on));
+        });
+        r
+    };
+    g.add(&switch(
+        "Outlines",
+        "A light border around every key",
+        look.outlines,
+        |l, on| l.outlines = on,
+    ));
+    g.add(&switch(
+        "Turn animations off",
+        "No fades or slides. Your desktop's reduce-motion setting already does this.",
+        look.animations_off,
+        |l, on| l.animations_off = on,
+    ));
+    let model = gtk::StringList::new(&[]);
+    for (_, _, name) in Press::ALL {
+        model.append(name);
+    }
+    let combo = adw::ComboRow::builder()
+        .title("Press feedback")
+        .model(&model)
+        .selected(
+            Press::ALL
+                .iter()
+                .position(|(p, ..)| *p == look.press)
+                .unwrap_or(0) as u32,
+        )
+        .build();
+    {
+        let (ui, file) = (ui.clone(), file.to_path_buf());
+        combo.connect_selected_notify(move |c| {
+            if let Some((p, ..)) = Press::ALL.get(c.selected() as usize) {
+                change_look(&ui, &file, |l| l.press = *p);
+            }
+        });
+    }
+    g.add(&combo);
+    g
+}
+
 pub fn appearance_page(ui: &Rc<Ui>) -> gtk::Widget {
     let state = ui.state();
     let c = &state.loaded.config;
@@ -333,26 +513,15 @@ pub fn appearance_page(ui: &Rc<Ui>) -> gtk::Widget {
     }
     page.add(&g);
 
+    let file = stylesheet_file(&state, c);
+    page.add(&look_group(ui, &file));
+
     let css = group(
         "Stylesheet",
         Some(
             "waybar-style CSS: #clock, #battery.critical, .zone-main, :active, @define-color accent … (customization.md §7).",
         ),
     );
-    let dir = state
-        .path
-        .as_deref()
-        .and_then(|p| p.parent())
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| {
-            state
-                .edit_target()
-                .0
-                .parent()
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_default()
-        });
-    let file = dir.join(c.stylesheet.as_deref().unwrap_or("style.css"));
     let open = adw::ActionRow::builder()
         .title("Edit the stylesheet")
         .subtitle(glib::markup_escape_text(&file.display().to_string()))

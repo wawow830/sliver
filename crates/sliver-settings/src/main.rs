@@ -10,6 +10,7 @@ mod curve;
 mod dbus_presets;
 mod edit;
 mod live;
+mod look;
 mod pages;
 mod prefs;
 mod presets;

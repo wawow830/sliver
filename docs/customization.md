@@ -406,6 +406,12 @@ These are the selectors sliver guarantees, mirroring waybar:
 
   Every theme gets the desktop's `@accent`. An unknown name warns and falls back to `sliver`.
 
+  The settings app's Appearance page writes font family/size, corner radius, outlines, an accent
+  override, "animations off" and the press-feedback style (dim, invert, accent) as a **managed
+  block** at the top of your `style.css`, between `/* sliver-settings: begin … */` and
+  `/* sliver-settings: end */`. The first comment holds the values; everything you write outside the
+  block is left alone, and rules below it win. Setting everything back to the default removes the block.
+
 ## 8. Scripting from outside
 
 `sliverctl` and D-Bus Control1 (api.md) can:
