@@ -78,7 +78,8 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
   pong timeout or hangup → close + safe layer. Invalid frame → error, previous frame stays.
 - Liveness: ping on display wake (to On) and on an agent-region touch-down if none in 5 s. The
   pong deadline (2 s) is the only liveness timer, and it's armed only while a ping is outstanding.
-- Display power: `idle.rs`. Dims at 30 s, off at 60 s (or per the agent's `display_policy`), and off
+- Display power: `idle.rs`. "Off" is backlight 0 only: CRTC `ACTIVE=0` does **not** blank the Mac14,7 bar
+  (it's a command-mode panel that keeps its own frame; measured in T48, docs/hardware.md). Dims at 30 s, off at 60 s (or per the agent's `display_policy`), and off
   while the lid is closed. Backlight is written only on change. Nothing is flushed while off (it's
   flushed on wake). The wake touch is swallowed. No deadline while off.
 - Sessions: only `SessionChanged.active_uid` connections become active. A newer hello from the
