@@ -11,6 +11,7 @@ pub mod display;
 pub mod frame;
 pub mod gesture;
 pub mod icons;
+pub mod keymap;
 pub mod link;
 pub mod modules;
 pub mod ops;

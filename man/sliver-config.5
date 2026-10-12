@@ -608,6 +608,12 @@ Key names are tiny\-dfr's
 .BR BrightnessDown ,
 .BR PlayPause ,
 \&...).
+Letters, digits and punctuation mean the character on a US keyboard, and are sent as the key that
+types that character in your keyboard layout, so
+.B "[""LeftCtrl"", ""Z""]"
+is undo on AZERTY and QWERTZ too.
+This needs a compositor that reports the layout (Hyprland); elsewhere, and for characters a layout
+only has with Shift (AZERTY digits) or not at all (Greek), the US key position is sent.
 .TP
 .BR "{ layer = ""media"", mode = ""toggle"" }" ", " "{ close\-layer = true }"
 .B mode

@@ -1725,3 +1725,62 @@ fn active_layout_reports_the_rule() {
         Some(("fkeys".into(), None, String::new(), "forced"))
     );
 }
+
+/// T104: with an AZERTY keymap on sliverd's keyboard, a "Ctrl+Z" button sends the key that types
+/// "z" there (the US "w" position), on both the fast path (key region, sliverd presses it) and the
+/// agent path (EmitKeys). Without a known keymap: plain positions, as before.
+#[test]
+fn key_combos_follow_the_bar_keyboard_layout() {
+    use sliver_agent::agent::Effect::*;
+    use sliver_ipc::proto::KeyMode;
+    let toml = r#"
+        [[layouts.default.zones]]
+        name = "main"
+        width = "fill"
+        modules = ["custom/fast", "custom/slow"]
+        [modules."custom/fast"]
+        format = "undo"
+        width = "fill"
+        fire-on = "press"
+        on-tap = { keys = ["LeftCtrl", "Z"] }
+        [modules."custom/slow"]
+        format = "undo"
+        width = "fill"
+        on-tap = { keys = ["LeftCtrl", "Z"] }
+        "#;
+    const CTRL: u16 = 29;
+    let (key_z, key_w) = (44, 17);
+    for (keymap, want) in [
+        (None, key_z),
+        (
+            Some(sliver_desktop::XkbNames {
+                layout: "fr".into(),
+                ..Default::default()
+            }),
+            key_w,
+        ),
+    ] {
+        let mut a = agent(toml);
+        let mut w = world(9, 41);
+        w.desktop.bar_keymap = keymap.clone();
+        let (mut fake, mut link) = connect();
+        let layers = a.render(&w);
+        present(&a, &mut link, &mut fake, &layers);
+        let f = a.frame(Layer::Base).unwrap();
+        let fast = f
+            .regions
+            .iter()
+            .find_map(|r| match &r.kind {
+                RegionKind::Key { keys } => Some(keys.clone()),
+                _ => None,
+            })
+            .expect("fast-path key region");
+        assert_eq!(fast, vec![CTRL, want], "{keymap:?}");
+        fake.tap(1500.0, 30.0).unwrap();
+        let fx = deliver(&mut a, &mut link, &mut fake);
+        assert!(
+            fx.contains(&EmitKeys(vec![CTRL, want], KeyMode::Tap)),
+            "{keymap:?}: {fx:?}"
+        );
+    }
+}

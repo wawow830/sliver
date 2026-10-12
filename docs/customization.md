@@ -143,6 +143,11 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
 - **Parametric built-ins** need no block. `key/<KeyName>` is a key button with label and icon
   defaults and `on-tap = { key = "<KeyName>" }`. Key names are `input_linux::Key` variant names
   (what tiny-dfr accepts, e.g. `F1`, `BrightnessDown`, `PlayPause`), matched case-insensitively.
+  Letters, digits and punctuation in `key`/`keys` mean the *character* on a US keyboard: they're
+  sent as the key that types that character in the layout of sliverd's keyboard, so
+  `["LeftCtrl", "Z"]` is undo on AZERTY/QWERTZ too, not Ctrl+W/Ctrl+Y (T104). It needs the
+  compositor to report that keyboard's layout (Hyprland does). A character the layout has only
+  with Shift (AZERTY digits) or not at all (Greek) is sent by US position, as everywhere else.
   A `[modules."key/F1"]` block, if present, is merged on top.
 - **Inline modules:** a zone's `modules` list may contain an inline table instead of a name, for
   example `{ type = "custom", format = "TTY1", on-tap = { keys = ["LeftCtrl","LeftAlt","F1"] } }`.

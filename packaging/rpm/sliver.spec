@@ -24,6 +24,7 @@ ExclusiveArch:  aarch64 x86_64
 BuildRequires:  cargo-rpm-macros >= 26
 BuildRequires:  pkgconfig(gtk4) >= 4.22
 BuildRequires:  pkgconfig(libadwaita-1) >= 1.8
+BuildRequires:  pkgconfig(xkbcommon)
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  desktop-file-utils
 BuildRequires:  appstream

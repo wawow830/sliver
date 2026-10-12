@@ -423,6 +423,30 @@ pub fn layout_from_devices_json(json: &str) -> Option<String> {
     pick.get("active_keymap")?.as_str().map(str::to_string)
 }
 
+/// The keymap Hyprland applies to sliverd's virtual keyboard (it lowercases and dashes device
+/// names: `sliver-touch-bar-keys`). Empty rules/model mean Hyprland's defaults.
+pub fn bar_keymap_from_devices_json(json: &str) -> Option<crate::XkbNames> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let want = crate::BAR_KEYBOARD.to_lowercase().replace(' ', "-");
+    let k = v
+        .get("keyboards")?
+        .as_array()?
+        .iter()
+        .find(|k| k.get("name").and_then(|n| n.as_str()) == Some(want.as_str()))?;
+    let s = |f: &str| k.get(f).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    Some(crate::XkbNames {
+        rules: s("rules"),
+        model: s("model"),
+        layout: s("layout"),
+        variant: s("variant"),
+        options: s("options"),
+        index: k
+            .get("active_layout_index")
+            .and_then(|i| i.as_u64())
+            .unwrap_or(0) as u32,
+    })
+}
+
 /// The layouts configured on the same keyboard, as `us`, `de(nodeadkeys)` (Hyprland only gives
 /// the comma-separated `layout` and `variant` options, not the long names, and not which one is
 /// active, so the picker labels by code).
@@ -517,6 +541,7 @@ impl Watcher {
                 self.state.keyboard_layout = Some(l);
             }
             self.state.keyboard_layouts = layouts_from_devices_json(&j);
+            self.state.bar_keymap = bar_keymap_from_devices_json(&j);
         }
         if let Ok(s) = request(&self.paths.command, "submap") {
             let s = s.trim();
@@ -612,6 +637,16 @@ impl DesktopSource for Watcher {
                 Event::ActiveWindowV2 { address: Some(_) } => {
                     let before = self.state.clone();
                     self.refresh_window();
+                    changed = self.state != before;
+                }
+                // Our virtual keyboard switched layout: re-read its keymap (combos follow it).
+                Event::ActiveLayout { ref keyboard, .. }
+                    if *keyboard == crate::BAR_KEYBOARD.to_lowercase().replace(' ', "-") =>
+                {
+                    let before = self.state.clone();
+                    if let Ok(j) = request(&self.paths.command, "j/devices") {
+                        self.state.bar_keymap = bar_keymap_from_devices_json(&j);
+                    }
                     changed = self.state != before;
                 }
                 Event::MonitorsChanged => {
@@ -1000,5 +1035,30 @@ mod tests {
             ControlFlow::Break(())
         });
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn bar_keymap_from_hyprland_devices() {
+        // As `hyprctl devices -j` reported it on the Mac14,7 (T104), plus a second layout.
+        let devs = r#"{"keyboards":[
+            {"name":"apple-mtp-keyboard","layout":"us","variant":"","options":"","active_layout_index":0,"main":false},
+            {"name":"sliver-touch-bar-keys","rules":"","model":"","layout":"fr,us","variant":"azerty,","options":"caps:escape","active_layout_index":1,"active_keymap":"English (US)","capsLock":false,"numLock":true,"main":true}]}"#;
+        assert_eq!(
+            bar_keymap_from_devices_json(devs),
+            Some(crate::XkbNames {
+                rules: String::new(),
+                model: String::new(),
+                layout: "fr,us".into(),
+                variant: "azerty,".into(),
+                options: "caps:escape".into(),
+                index: 1,
+            })
+        );
+        let without = r#"{"keyboards":[{"name":"apple-mtp-keyboard","layout":"us"}]}"#;
+        assert_eq!(
+            bar_keymap_from_devices_json(without),
+            None,
+            "sliverd not running"
+        );
     }
 }

@@ -124,6 +124,22 @@ pub struct WindowInfo {
 
 /// Everything the compositor tells us. Only fields that changed behaviour-relevantly are here;
 /// system signals (power, media, lock...) come from other sources, see `docs/integration.md`.
+/// An xkb keymap by RMLVO names, plus the active layout (group) index.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct XkbNames {
+    pub rules: String,
+    pub model: String,
+    /// Comma-separated, e.g. `us,de`.
+    pub layout: String,
+    pub variant: String,
+    pub options: String,
+    /// Which of `layout` is active.
+    pub index: u32,
+}
+
+/// The name sliverd gives its uinput keyboard (`sliver_hw::uinput`).
+pub const BAR_KEYBOARD: &str = "Sliver Touch Bar Keys";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DesktopState {
     /// False while the compositor connection is down (the agent should fall back to defaults).
@@ -141,6 +157,10 @@ pub struct DesktopState {
     pub keyboard_layouts: Vec<String>,
     /// Position of the active layout in `keyboard_layouts`, when the backend knows it.
     pub keyboard_layout_index: Option<usize>,
+    /// The xkb keymap the compositor applies to sliverd's virtual keyboard
+    /// (`sliver-touch-bar-keys`), so key combos can follow the user's layout (T104). `None` when
+    /// the backend can't say; combos then use plain US positions.
+    pub bar_keymap: Option<XkbNames>,
     /// Active keybind submap / sway mode. `None` = default.
     pub submap: Option<String>,
     /// Something is screen-sharing (a recording indicator widget can use it).

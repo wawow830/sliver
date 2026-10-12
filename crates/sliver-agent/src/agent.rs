@@ -97,6 +97,10 @@ pub struct Agent {
     pub config: Config,
     pub sheet: Stylesheet,
     renderer: Renderer,
+    /// Character keys in combos follow the bar keyboard's layout (T104), and the keymap they came
+    /// from (rebuilt only when it changes).
+    keymap: crate::keymap::KeyMapper,
+    keymap_names: Option<sliver_desktop::XkbNames>,
     icons: Icons,
     pub width: u32,
     pub height: u32,
@@ -198,6 +202,8 @@ impl Agent {
             config,
             sheet,
             renderer,
+            keymap: crate::keymap::KeyMapper::positional(),
+            keymap_names: None,
             icons,
             width,
             height,
@@ -544,6 +550,19 @@ impl Agent {
             classes.push("modal".into());
         }
         let mut per_zone = per_zone;
+        // Fast-path key regions (sliverd presses them itself) get layout-mapped keys too.
+        if world.desktop.bar_keymap != self.keymap_names {
+            self.keymap_names = world.desktop.bar_keymap.clone();
+            self.keymap = match &self.keymap_names {
+                Some(n) => crate::keymap::KeyMapper::new(n),
+                None => crate::keymap::KeyMapper::positional(),
+            };
+        }
+        for c in per_zone.iter_mut().flatten() {
+            if let crate::modules::Touch::Keys(keys) = &mut c.touch {
+                *keys = self.keymap.map_all(keys);
+            }
+        }
         if self.ctx.flag("locked") {
             for cells in &mut per_zone {
                 cells.retain(crate::privacy::allowed);
@@ -1031,9 +1050,12 @@ impl Agent {
             None => s.to_owned(),
         };
         match a {
-            Action::Key(k) => fx.push(Effect::EmitKeys(vec![k.code()], KeyMode::Tap)),
+            Action::Key(k) => fx.push(Effect::EmitKeys(
+                vec![self.keymap.map(k.code())],
+                KeyMode::Tap,
+            )),
             Action::Keys(ks) => fx.push(Effect::EmitKeys(
-                ks.iter().map(|k| k.code()).collect(),
+                ks.iter().map(|k| self.keymap.map(k.code())).collect(),
                 KeyMode::Tap,
             )),
             Action::Shell(cmd) => {

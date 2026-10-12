@@ -30,6 +30,7 @@ zbus = "5"
 signal-hook = "0.3"
 sliver-reload.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+xkbcommon = { version = "0.8", default-features = false }
 
 [dev-dependencies]
 sliver-testbus.workspace = true
