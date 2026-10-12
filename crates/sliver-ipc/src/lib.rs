@@ -10,9 +10,11 @@
 //! - [`shm`]: sealed-memfd frame buffers (agent writes, daemon imports and copies).
 //! - [`router`]: the key-region touch semantics shared by sliverd and the fake.
 //! - [`hatch`]: the Fn double-press-and-hold safe hatch (invariant 1).
+//! - [`curve`]: the adaptive brightness curve math (sliverd applies it, settings plots it).
 //! - Fake sliverd for headless tests: `sliverd::testing::TestDaemon` (feature `testing`), the real
 //!   daemon core on fake hardware.
 
+pub mod curve;
 pub mod dbus;
 pub mod hatch;
 pub mod keys;

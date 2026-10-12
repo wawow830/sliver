@@ -4,6 +4,7 @@
 //! While off with the lid closed or no timeouts set, there's no deadline at all, so the daemon
 //! sleeps until input arrives. (tiny-dfr polls every 10 s instead.)
 
+use sliver_ipc::curve;
 use sliver_ipc::proto::{DisplayPolicy, DisplayState};
 
 /// tiny-dfr's timeouts.
@@ -20,9 +21,8 @@ pub struct Idle {
     /// 0 = never.
     off_after_ms: u64,
     follow_screen: bool,
-    /// Normalised adaptive curve (per-mille `(screen, bar)`, ≥ 2 points, screens increasing).
-    /// Empty = tiny-dfr's sqrt.
-    curve: Vec<(u16, u16)>,
+    /// Normalised adaptive curve ([`sliver_ipc::curve`]). Empty = tiny-dfr's sqrt.
+    curve: Vec<[u16; 2]>,
     state: DisplayState,
     last_activity_ms: u64,
     lid_closed: bool,
@@ -70,7 +70,7 @@ impl Idle {
             self.follow_screen = f;
         }
         if let Some(c) = &p.curve {
-            self.curve = normalise_curve(c);
+            self.curve = curve::normalise(c);
         }
         self.tick(now)
     }
@@ -129,53 +129,12 @@ impl Idle {
             DisplayState::Dimmed => self.dim,
             DisplayState::On => match (self.follow_screen, screen) {
                 (true, Some(f)) if self.max > 0 => {
-                    let f = if f.is_nan() { 1.0 } else { f.clamp(0.0, 1.0) };
-                    let v = if self.curve.is_empty() {
-                        f.sqrt() * self.active as f32 + 1.0
-                    } else {
-                        interpolate(&self.curve, f) * self.active as f32
-                    };
-                    (v.round() as u32).clamp(1, self.max)
+                    curve::level(&self.curve, f, self.active, self.max)
                 }
                 _ => self.active,
             },
         }
     }
-}
-
-/// Untrusted curve → usable one: values clamped to 1000, sorted by screen, duplicate screens
-/// dropped (first wins), at most 16 points. Fewer than 2 points = no curve (sqrt).
-fn normalise_curve(points: &[[u16; 2]]) -> Vec<(u16, u16)> {
-    const MAX_POINTS: usize = 16;
-    let mut c: Vec<(u16, u16)> = points
-        .iter()
-        .take(64) // bound the work on hostile input; the packet size limit bounds it anyway
-        .map(|&[s, b]| (s.min(1000), b.min(1000)))
-        .collect();
-    c.sort_by_key(|&(s, _)| s); // stable: the first of equal screens stays first
-    c.dedup_by_key(|&mut (s, _)| s);
-    c.truncate(MAX_POINTS);
-    if c.len() < 2 {
-        c.clear();
-    }
-    c
-}
-
-/// Bar fraction (0–1) for screen fraction `f` (0–1) on a normalised curve.
-fn interpolate(curve: &[(u16, u16)], f: f32) -> f32 {
-    let x = f * 1000.0;
-    let (first, last) = (curve[0], curve[curve.len() - 1]);
-    let y = if x <= first.0 as f32 {
-        first.1 as f32
-    } else if x >= last.0 as f32 {
-        last.1 as f32
-    } else {
-        let i = curve.partition_point(|&(s, _)| (s as f32) <= x);
-        let ((x0, y0), (x1, y1)) = (curve[i - 1], curve[i]);
-        let t = (x - x0 as f32) / (x1 - x0) as f32;
-        y0 as f32 + t * (y1 as f32 - y0 as f32)
-    };
-    y / 1000.0
 }
 
 #[cfg(test)]
@@ -197,48 +156,22 @@ mod tests {
     }
 
     #[test]
-    fn curve_is_piecewise_linear_and_flat_beyond_the_ends() {
-        let i = adaptive(vec![[200, 100], [600, 500], [1000, 1000]]);
-        assert_eq!(i.brightness(Some(0.0)), 20); // flat below the first point: 0.1 * 200
-        assert_eq!(i.brightness(Some(0.2)), 20);
-        assert_eq!(i.brightness(Some(0.4)), 60); // halfway 100..500 = 300
-        assert_eq!(i.brightness(Some(0.6)), 100);
-        assert_eq!(i.brightness(Some(0.8)), 150);
-        assert_eq!(i.brightness(Some(1.0)), 200);
-        assert_eq!(i.brightness(Some(f32::NAN)), 200);
+    fn curve_from_policy() {
+        // The math is tested in sliver_ipc::curve; here: Idle stores, resets and keeps it.
+        let i = adaptive(vec![[1000, 9999], [0, 0], [0, 1000]]);
+        assert_eq!(i.curve, vec![[0, 0], [1000, 1000]], "normalised");
+        assert_eq!(i.brightness(Some(0.5)), 100);
         assert_eq!(i.brightness(None), 200, "no screen reading: active level");
-    }
-
-    #[test]
-    fn curve_never_turns_an_on_bar_dark() {
-        let i = adaptive(vec![[0, 0], [1000, 0]]);
-        assert_eq!(i.brightness(Some(0.5)), 1);
-    }
-
-    #[test]
-    fn hostile_curves_are_normalised() {
-        // Unsorted, out of range, duplicate screens (first wins).
-        let i = adaptive(vec![[1000, 9999], [0, 0], [0, 1000], [5000, 0]]);
-        assert_eq!(i.curve, vec![(0, 0), (1000, 1000)]);
-        // One point, or none: back to sqrt.
-        let i = adaptive(vec![[500, 500]]);
-        assert!(i.curve.is_empty());
-        assert_eq!(i.brightness(Some(0.25)), 101); // sqrt(0.25) * 200 + 1
-        // Too many points: the 16 lowest screens are kept.
-        let many: Vec<[u16; 2]> = (0..100).map(|n| [n * 10, 500]).collect();
-        assert_eq!(adaptive(many).curve.len(), 16);
-        // An empty curve resets a previous one.
         let mut i = adaptive(vec![[0, 0], [1000, 1000]]);
+        i.set_policy(&DisplayPolicy::default(), 0);
+        assert_eq!(i.curve.len(), 2, "a policy without curve keeps it");
         let reset = DisplayPolicy {
             curve: Some(vec![]),
             ..Default::default()
         };
         i.set_policy(&reset, 0);
-        assert!(i.curve.is_empty());
-        // A policy without `curve` keeps it.
-        let mut i = adaptive(vec![[0, 0], [1000, 1000]]);
-        i.set_policy(&DisplayPolicy::default(), 0);
-        assert_eq!(i.curve.len(), 2);
+        assert!(i.curve.is_empty(), "[] resets to sqrt");
+        assert_eq!(i.brightness(Some(0.25)), 101);
     }
 
     #[test]

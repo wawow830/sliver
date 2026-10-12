@@ -53,9 +53,9 @@ pub struct Display {
     pub dim_after: Option<Duration>,
     pub off_after: Option<Duration>,
     pub pixel_shift: bool,
-    /// Adaptive brightness curve: `(screen, bar)` fractions (0–1) of the main display's brightness
-    /// and of `max_brightness`, screens strictly increasing, 2–16 points. Empty = tiny-dfr's
-    /// `sqrt` (the default).
+    /// Adaptive brightness curve: `(screen, bar)` in percent (0–100) of the main display's
+    /// brightness and of `max_brightness`, screens strictly increasing, 2–16 points. Empty =
+    /// tiny-dfr's `sqrt` (the default). Math: `sliver_ipc::curve` (per-mille = percent × 10).
     pub curve: Vec<(f32, f32)>,
     /// `[display.on-battery]`: replaces the values above while running on battery.
     pub on_battery: DisplayOverride,
@@ -508,7 +508,7 @@ fn parse_display(t: &Table, d: &mut Diagnostics) -> Display {
     x
 }
 
-/// `curve = [[screen, bar], ...]`: fractions 0–1, screens strictly increasing, 2–16 points. Any
+/// `curve = [[screen, bar], ...]`: percent 0–100, screens strictly increasing, 2–16 points. Any
 /// problem is an error and leaves the default (sqrt).
 fn parse_curve(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<(f32, f32)> {
     let num = |v: &Value| match v {
@@ -537,10 +537,10 @@ fn parse_curve(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<(f32, f32)> {
             );
             return Vec::new();
         };
-        if !(0.0..=1.0).contains(&sx) || !(0.0..=1.0).contains(&bx) {
+        if !(0.0..=100.0).contains(&sx) || !(0.0..=100.0).contains(&bx) {
             d.error(
                 format!("{path}[{i}]"),
-                "screen and bar are fractions from 0 to 1",
+                "screen and bar are percentages from 0 to 100",
             );
             return Vec::new();
         }
@@ -761,12 +761,15 @@ mod tests {
 
     #[test]
     fn display_curve() {
-        let t: Table = "[display]\ncurve = [[0, 0.05], [0.5, 0.4], [1, 1]]\n"
+        let t: Table = "[display]\ncurve = [[0, 5], [50, 40.5], [100, 100]]\n"
             .parse()
             .unwrap();
         let (c, d) = Config::from_table(&t);
         assert!(d.ok() && d.warnings.is_empty(), "{d:#?}");
-        assert_eq!(c.display.curve, vec![(0.0, 0.05), (0.5, 0.4), (1.0, 1.0)]);
+        assert_eq!(
+            c.display.curve,
+            vec![(0.0, 5.0), (50.0, 40.5), (100.0, 100.0)]
+        );
         assert!(
             Display::default().curve.is_empty(),
             "default: tiny-dfr's sqrt"
@@ -775,8 +778,9 @@ mod tests {
             ("curve = [[0, 0]]", "display.curve"),
             ("curve = 3", "display.curve"),
             ("curve = [[0, 0], [1]]", "display.curve[1]"),
-            ("curve = [[0, 0], [1.5, 1]]", "display.curve[1]"),
-            ("curve = [[0.5, 0], [0.5, 1]]", "display.curve[1]"),
+            ("curve = [[0, 0], [101, 1]]", "display.curve[1]"),
+            ("curve = [[0, 0], [50, -1]]", "display.curve[1]"),
+            ("curve = [[50, 0], [50, 100]]", "display.curve[1]"),
             ("curve = [[0, 0], [\"x\", 1]]", "display.curve[1]"),
         ] {
             let t: Table = format!("[display]\n{bad}\n").parse().unwrap();
