@@ -185,7 +185,8 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 | `idle-inhibitor` | `idle_inhibitor` | P1 | Caffeine. |
 | `dnd` | (none; swaync etc. via custom) | P1 | |
 | `power-profiles` | `power-profiles-daemon` | P2 | |
-| `cpu`, `memory`, `temperature`, `disk`, `load`, `network`, `bluetooth` | same | P2 | |
+| `cpu`, `memory`, `temperature`, `disk`, `load` | same | P2 | Done (`sliver-stats`). Read from /proc and /sys when drawn, refreshed on `interval` (defaults: cpu/temperature/load 10 s, memory/disk 30 s) only while on the bar and the display is on. Placeholders: cpu `{usage}` `{load}` `{avg_frequency}`; memory `{percentage}` `{used}` `{total}` `{avail}` (GiB) `{swapPercentage}` `{swapUsed}` `{swapTotal}` `{swapAvail}`; load `{load1}` `{load5}` `{load15}`; temperature `{temperatureC}` `{temperatureF}` `{temperatureK}`, keys `thermal-zone`, `hwmon-path`, `critical-threshold` (adds `.critical`; default source is the hottest sensor); disk `{percentage_used}` `{percentage_free}` `{used}` `{free}` `{total}` (GiB) `{path}`, key `path` (default `/`). `states` use `percentage` (cpu, memory, disk). |
+| `network`, `bluetooth` | same | P2 | Not yet. |
 | `graph` (`custom-graph/<name>`) | `custom-graph` | P2 | A sparkline over `percentage` history. Suits the strip well. |
 | `privacy` | `privacy` | P2 | Screenshare/mic/camera in-use indicator. |
 | `systemd-failed-units` | same | P3 | |

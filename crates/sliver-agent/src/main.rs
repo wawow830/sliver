@@ -285,6 +285,8 @@ struct Live {
     /// The public D-Bus API, if the session bus is there.
     api: Option<ApiLink>,
     published: Published,
+    /// cpu/memory/... sampler, kept across frames for CPU deltas.
+    stats: sliver_agent::modules::Stats,
 }
 
 impl Live {
@@ -319,6 +321,7 @@ impl Live {
             ops,
             api,
             published: Published::default(),
+            stats: Default::default(),
         })
     }
 
@@ -379,6 +382,7 @@ impl Live {
             outputs: self.outputs.clone(),
             published: self.published.clone(),
             preview: false,
+            stats: self.stats.clone(),
         }
     }
 

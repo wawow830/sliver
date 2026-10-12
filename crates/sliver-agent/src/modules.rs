@@ -20,6 +20,33 @@ use sliver_session::{BatteryState, SessionState};
 
 use crate::icons::Icons;
 
+/// Shared system-statistics sampler (CPU usage needs the previous sample, so one instance lives
+/// as long as the agent). Cheap to clone; reads files only when a stats module asks.
+#[derive(Clone, Default)]
+pub struct Stats(std::sync::Arc<std::sync::Mutex<sliver_stats::Sampler>>);
+
+impl std::fmt::Debug for Stats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Stats")
+    }
+}
+
+impl Stats {
+    fn with<R>(&self, f: impl FnOnce(&mut sliver_stats::Sampler) -> R) -> R {
+        f(&mut self.0.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// A sampler reading these roots instead of `/proc` and `/sys` (tests).
+    pub fn with_roots(
+        proc_root: impl Into<std::path::PathBuf>,
+        sys_root: impl Into<std::path::PathBuf>,
+    ) -> Stats {
+        Stats(std::sync::Arc::new(std::sync::Mutex::new(
+            sliver_stats::Sampler::with_roots(proc_root, sys_root),
+        )))
+    }
+}
+
 /// Everything modules and rules can read.
 #[derive(Debug, Clone)]
 pub struct World {
@@ -34,6 +61,8 @@ pub struct World {
     pub published: crate::published::Published,
     /// The settings app's editor: show empty placeholders as outlined `.placeholder` cells.
     pub preview: bool,
+    /// cpu, memory, load, temperature, disk.
+    pub stats: Stats,
 }
 
 impl World {
@@ -47,6 +76,7 @@ impl World {
             outputs: HashMap::new(),
             published: Default::default(),
             preview: false,
+            stats: Stats::default(),
         }
     }
 
@@ -273,6 +303,8 @@ struct Spec {
     extra_classes: Vec<String>,
     /// The text is already formatted (user modules): don't apply `format` again.
     raw: bool,
+    /// Polled modules: redraw after this long.
+    refresh: Option<std::time::Duration>,
 }
 
 impl Spec {
@@ -289,6 +321,7 @@ impl Spec {
             defaults: Vec::new(),
             extra_classes: Vec::new(),
             raw: false,
+            refresh: None,
         }
     }
 
@@ -477,9 +510,137 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
             let m = world.desktop.submap.as_deref()?;
             Spec::new(ValueMap::new().with("", esc(m)), "{}")
         }
+        "cpu" | "memory" | "temperature" | "disk" | "load" => return stat_spec(m, world),
         // No data source wired yet: show nothing rather than a broken placeholder.
         _ => return None,
     })
+}
+
+const GIB: f64 = (1u64 << 30) as f64;
+
+/// Rounds like waybar's integer percentages and one-decimal sizes.
+fn pct0(v: f64) -> FmtValue {
+    FmtValue::Num(v.round())
+}
+
+fn gib(bytes: u64) -> FmtValue {
+    FmtValue::Num((bytes as f64 / GIB * 10.0).round() / 10.0)
+}
+
+/// How often a polled module refreshes: its `interval`, else the module's own default.
+fn poll_every(m: &ModuleInstance, default_secs: u64) -> std::time::Duration {
+    match m.common.interval {
+        Some(sliver_config::Interval::Every(d)) => d,
+        _ => std::time::Duration::from_secs(default_secs),
+    }
+}
+
+/// `cpu`, `memory`, `load`, `temperature`, `disk`: read when drawn, redrawn on their interval
+/// (the agent's loop wakes only while such a cell is on the bar and the display is on).
+fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
+    let stats = &world.stats;
+    let now = std::time::Instant::now();
+    let mut sp = match m.id.kind.as_str() {
+        "cpu" => {
+            let (usage, load, ghz) = stats.with(|s| (s.cpu_usage(now), s.load(), s.cpu_ghz()));
+            let usage = usage?;
+            let v = ValueMap::new()
+                .with("usage", pct0(usage))
+                .with("", pct0(usage))
+                .with("load", load.map_or(0.0, |l| l.one))
+                .with("avg_frequency", (ghz.unwrap_or(0.0) * 10.0).round() / 10.0);
+            let mut sp = Spec::new(v, "CPU {usage}%");
+            sp.percentage = Some(usage);
+            sp
+        }
+        "memory" => {
+            let mem = stats.with(|s| s.mem())?;
+            let v = ValueMap::new()
+                .with("percentage", pct0(mem.percent_used()))
+                .with("", pct0(mem.percent_used()))
+                .with("used", gib(mem.used()))
+                .with("total", gib(mem.total))
+                .with("avail", gib(mem.available))
+                .with("swapPercentage", pct0(mem.swap_percent()))
+                .with("swapUsed", gib(mem.swap_used()))
+                .with("swapTotal", gib(mem.swap_total))
+                .with("swapAvail", gib(mem.swap_free));
+            let mut sp = Spec::new(v, "MEM {percentage}%");
+            sp.percentage = Some(mem.percent_used());
+            sp
+        }
+        "load" => {
+            let l = stats.with(|s| s.load())?;
+            let v = ValueMap::new()
+                .with("load1", l.one)
+                .with("load5", l.five)
+                .with("load15", l.fifteen)
+                .with("", l.one);
+            Spec::new(v, "{load1}")
+        }
+        "temperature" => {
+            let c = temperature(m, stats)?;
+            let v = ValueMap::new()
+                .with("temperatureC", c.round())
+                .with("temperatureF", (c * 9.0 / 5.0 + 32.0).round())
+                .with("temperatureK", (c + 273.15).round())
+                .with("", c.round());
+            let mut sp = Spec::new(v, "{temperatureC}°C");
+            let critical = m
+                .config
+                .get("critical-threshold")
+                .and_then(|t| t.as_float().or(t.as_integer().map(|i| i as f64)));
+            sp.status = critical.filter(|t| c >= *t).map(|_| "critical");
+            sp
+        }
+        "disk" => {
+            let path = m.config.get("path").and_then(|p| p.as_str()).unwrap_or("/");
+            let d = sliver_stats::disk(std::path::Path::new(path))?;
+            let v = ValueMap::new()
+                .with("percentage_used", pct0(d.percent_used()))
+                .with("percentage_free", pct0(d.percent_free()))
+                .with("used", gib(d.used()))
+                .with("free", gib(d.free))
+                .with("total", gib(d.total))
+                .with("path", esc(path))
+                .with("", pct0(d.percent_used()));
+            let mut sp = Spec::new(v, "{percentage_used}%");
+            sp.percentage = Some(d.percent_used());
+            sp
+        }
+        _ => return None,
+    };
+    let default = match m.id.kind.as_str() {
+        "memory" | "disk" => 30,
+        _ => 10,
+    };
+    sp.refresh = Some(poll_every(m, default));
+    Some(sp)
+}
+
+/// The temperature to show: `hwmon-path` (a `temp*_input` file), `thermal-zone` (an index), or the
+/// hottest sensor.
+fn temperature(m: &ModuleInstance, stats: &Stats) -> Option<f64> {
+    let read = |p: &std::path::Path| {
+        std::fs::read_to_string(p)
+            .ok()?
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|v| v / 1000.0)
+    };
+    if let Some(p) = m.config.get("hwmon-path").and_then(|v| v.as_str()) {
+        return read(std::path::Path::new(p));
+    }
+    if let Some(z) = m.config.get("thermal-zone").and_then(|v| v.as_integer()) {
+        let root = stats.with(|s| s.sys_root().to_path_buf());
+        return read(&root.join(format!("class/thermal/thermal_zone{z}/temp")));
+    }
+    stats
+        .with(|s| s.sensors())
+        .iter()
+        .map(|s| s.celsius)
+        .fold(None, |a: Option<f64>, c| Some(a.map_or(c, |a| a.max(c))))
 }
 
 /// Sliders: collapsed ones show just their icon until tapped open (like macOS's control strip).
@@ -533,8 +694,16 @@ fn cell(
 ) -> Option<Cell> {
     let c = &m.common;
     let sp = spec(m, world, ui)?;
-    let next_change = (m.id.kind == "clock")
-        .then(|| next_clock_tick(world.now, c.format.as_deref().unwrap_or(CLOCK_DEFAULT)));
+    let next_change = if m.id.kind == "clock" {
+        Some(next_clock_tick(
+            world.now,
+            c.format.as_deref().unwrap_or(CLOCK_DEFAULT),
+        ))
+    } else {
+        sp.refresh
+            .and_then(|d| chrono::Duration::from_std(d).ok())
+            .map(|d| world.now + d)
+    };
     let st = State {
         percentage: sp.percentage,
         status: sp.status,
@@ -715,6 +884,96 @@ mod tests {
         assert!(matches!(&cells[0].content, Content::Markup(t) if t == "F1"));
         assert_eq!(cells[0].css_id, "key-f1");
         assert_eq!(cells[0].width, Width::Fill(1));
+    }
+
+    fn stat_cells(toml: &str, w: &World) -> Vec<Cell> {
+        let loaded = load_str(toml, std::path::Path::new("."));
+        assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
+        let r = loaded.config.resolve("base", &Context::new()).unwrap();
+        let mut out = Vec::new();
+        let mut icons = Icons::builtin_only();
+        for z in &r.zones {
+            cells(
+                &z.modules,
+                w,
+                &mut icons,
+                36,
+                &|_| UiState::default(),
+                &mut out,
+            );
+        }
+        out
+    }
+
+    #[test]
+    fn stats_modules_read_files_and_schedule_their_own_refresh() {
+        let dir = std::env::temp_dir().join(format!("sliver-agent-stats-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let put = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        put("proc/stat", "cpu  100 0 100 800 0 0 0 0 0 0\n");
+        put(
+            "proc/meminfo",
+            "MemTotal: 16777216 kB\nMemAvailable: 4194304 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n",
+        );
+        put("proc/loadavg", "1.50 1.00 0.50 1/100 1\n");
+        put("sys/class/hwmon/hwmon0/name", "chip\n");
+        put("sys/class/hwmon/hwmon0/temp1_input", "61500\n");
+        let mut w = world();
+        w.stats = Stats::with_roots(dir.join("proc"), dir.join("sys"));
+        let cells = stat_cells(
+            r#"
+            [[layouts.default.zones]]
+            name = "main"
+            modules = ["cpu", "memory", "load", "temperature", "temperature#hot", "disk", "cpu#fast"]
+            [modules.cpu]
+            format = "{usage}% @{avg_frequency}"
+            [modules.memory]
+            format = "{used}/{total}G {percentage}%"
+            [modules.load]
+            format = "L {load1}/{load5}"
+            [modules."temperature#hot"]
+            critical-threshold = 60
+            [modules.disk]
+            path = "/"
+            [modules."cpu#fast"]
+            interval = "2s"
+            "#,
+            &w,
+        );
+        let text = |c: &Cell| match &c.content {
+            Content::Markup(t) | Content::Text(t) => t.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(text(&cells[0]), "20% @0");
+        assert_eq!(text(&cells[1]), "12/16G 75%");
+        assert_eq!(text(&cells[2]), "L 1.5/1");
+        assert_eq!(text(&cells[3]), "62°C");
+        assert!(!cells[3].classes.contains(&"critical".to_string()));
+        assert!(
+            cells[4].classes.contains(&"critical".to_string()),
+            "61.5 >= 60: {:?}",
+            cells[4].classes
+        );
+        assert!(text(&cells[5]).ends_with('%'));
+        // refresh: the module's interval, else its default; the clock-like wake-up the loop uses
+        let due = |c: &Cell| (c.next_change.unwrap() - w.now).num_seconds();
+        assert_eq!(
+            (due(&cells[0]), due(&cells[1]), due(&cells[6])),
+            (10, 30, 2)
+        );
+        // with no data source (no /proc here) the module hides instead of showing zeros
+        let mut empty = world();
+        empty.stats = Stats::with_roots("/nonexistent", "/nonexistent");
+        let none = stat_cells(
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"cpu\", \"memory\", \"temperature\"]\n",
+            &empty,
+        );
+        assert!(none.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

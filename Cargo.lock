@@ -1526,6 +1526,7 @@ dependencies = [
  "sliver-modules",
  "sliver-render",
  "sliver-session",
+ "sliver-stats",
  "sliverd",
  "zbus",
 ]
@@ -1656,6 +1657,13 @@ dependencies = [
  "sliver-ipc",
  "sliver-render",
  "toml",
+]
+
+[[package]]
+name = "sliver-stats"
+version = "0.1.0"
+dependencies = [
+ "rustix",
 ]
 
 [[package]]
