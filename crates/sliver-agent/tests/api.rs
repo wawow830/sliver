@@ -555,17 +555,12 @@ fn scrubber_scrolls_and_picks() {
         shown(&mut a, &world),
         ["‹", "Tab 4", "Tab 5", "Tab 6", "Tab 7", "›"]
     );
-    // The snapshot from a fresh agent: the live one is mid-transition (cells animate).
-    let mut fresh = Agent::new(
-        sliver_config::load_str("", std::path::Path::new(".")).config,
-        Stylesheet::sliver(),
-        Renderer::new(Fonts::embedded()),
-        Icons::builtin_only(),
-        2008,
-        60,
-    );
-    fresh.render(&world);
-    check("api-scrubber", &fresh.frame(Layer::Base).unwrap().image);
+    // Cells glide to their new widths (`transition: width`): snapshot once that has settled.
+    while let Some(due) = a.animation_deadline() {
+        std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
+        a.render(&world);
+    }
+    check("api-scrubber", &a.frame(Layer::Base).unwrap().image);
     // The › arrow: the last page is full, so it stops at 6.
     let r = region(&a, "#tabs.next");
     let mut fx = a.touch(r, 0, TouchPhase::Down, 1.0, 1_000_000);
