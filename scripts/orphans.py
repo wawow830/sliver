@@ -92,11 +92,23 @@ def leftovers(since, root):
     while p > 1 and len(ancestors) < 64:
         ancestors.add(p)
         p = procs.get(p, (0, 0))[1]
+    # Siblings of the check in the caller's pipeline (`scripts/check | tail`) are children of one
+    # of its ancestors. Real orphans get reparented to init or a subreaper (systemd --user), never
+    # to a plain shell, so those parents are the exception.
+    def comm(pid):
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    sibling_parents = {a for a in ancestors if a > 1 and comm(a) != "systemd"}
     return [
         pid
-        for pid, (start, _) in procs.items()
+        for pid, (start, ppid) in procs.items()
         if start >= t0
         and pid not in ancestors
+        and ppid not in sibling_parents
         and pid != os.getpid()
         and not live_descendant(pid)
         and belongs(pid, root)
