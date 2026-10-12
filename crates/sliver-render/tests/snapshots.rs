@@ -262,3 +262,78 @@ fn empty_zones_take_no_space() {
     let layout = r.layout(&scene, &Stylesheet::sliver(), W, H);
     assert_eq!(layout.items[0].right(), W as f32);
 }
+
+fn markup_items() -> Vec<Item> {
+    vec![
+        Item::text("plain").fill(1),
+        Item::markup("<b>bold</b> <span foreground=\"#ff4040\">red</span>").fill(1),
+        Item::markup("<u>under</u> <s>strike</s>").fill(1),
+        Item::markup("<big>big</big> <small>small</small>").fill(1),
+        Item::markup("<span foreground=\"#40ff80\" size=\"x-large\">&lt;5&gt;</span>").fill(1),
+        Item::new(Content::IconMarkup(
+            icon("play_pause"),
+            "<i>song</i> <b>title that is much too long to fit</b>".into(),
+        ))
+        .fill(1),
+    ]
+}
+
+#[test]
+fn markup_labels() {
+    check(
+        "markup",
+        &Scene::new(markup_items()),
+        &Stylesheet::classic(),
+    );
+}
+
+/// Pixel-level facts independent of the snapshot: colours apply, tags don't print, bold is wider.
+#[test]
+fn markup_semantics() {
+    let render = |item: Item| {
+        let mut r = Renderer::new(Fonts::embedded());
+        r.render_new(
+            &Scene::new(vec![item.fill(1)]),
+            &Stylesheet::classic(),
+            400,
+            60,
+        )
+    };
+    let ink = |p: &Pixmap| -> (usize, Vec<[u8; 3]>) {
+        let px: Vec<[u8; 4]> = p
+            .data()
+            .chunks(4)
+            .map(|c| [c[0], c[1], c[2], c[3]])
+            .collect();
+        let lit: Vec<[u8; 3]> = px
+            .iter()
+            .filter(|c| c[0] > 100 || c[1] > 100 || c[2] > 100)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect();
+        (lit.len(), lit)
+    };
+    let plain = render(Item::text("red"));
+    let tagged = render(Item::markup("<span foreground=\"#ff0000\">red</span>"));
+    let (_, plain_lit) = ink(&plain);
+    let (n_tagged, tagged_lit) = ink(&tagged);
+    assert!(n_tagged > 0);
+    assert!(
+        plain_lit.iter().any(|c| c[1] > 100),
+        "classic text is white"
+    );
+    assert!(
+        tagged_lit.iter().all(|c| c[1] < 100 && c[2] < 100),
+        "markup colour reaches the glyphs: no green/blue ink"
+    );
+    // literal text: an escaped `<` shows, a real tag does not
+    let lt = render(Item::markup("a&lt;b"));
+    let literal = render(Item::text("a<b"));
+    assert_eq!(lt.data(), literal.data(), "&lt; renders as the character");
+    let tag_text = render(Item::markup("<i>a</i>"));
+    let bare = render(Item::markup("a"));
+    assert_eq!(ink(&tag_text).0 > 0, ink(&bare).0 > 0);
+    // underline adds ink under the text
+    let u = render(Item::markup("<u>aaaa</u>"));
+    let nu = render(Item::markup("aaaa"));
+    assert!(ink(&u).0 > ink(&nu).0, "an underline draws extra pixels");
+}

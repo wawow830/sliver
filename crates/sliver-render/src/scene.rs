@@ -9,9 +9,14 @@ pub enum Content {
     /// A button with no content.
     Blank,
     Text(String),
+    /// Text in the Pango-markup subset of [`crate::markup`] (`<b>`, `<span foreground=…>`).
+    /// Waybar `format` strings are markup unless the module sets `escape`.
+    Markup(String),
     Icon(Icon),
     /// An icon followed by a label, centered together.
     IconText(Icon, String),
+    /// An icon followed by markup text.
+    IconMarkup(Icon, String),
     /// A horizontal slider, `value` in `0.0..=1.0`, with an optional icon on its left. Styled
     /// with child nodes like GTK/waybar: `module > trough > highlight` (the filled part) and
     /// `trough > slider` (the knob).
@@ -61,6 +66,11 @@ impl Item {
 
     pub fn text(text: impl Into<String>) -> Item {
         Item::new(Content::Text(text.into()))
+    }
+
+    /// A label in the markup subset.
+    pub fn markup(text: impl Into<String>) -> Item {
+        Item::new(Content::Markup(text.into()))
     }
 
     pub fn icon(icon: Icon) -> Item {

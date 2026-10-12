@@ -17,6 +17,7 @@
 mod color;
 mod geometry;
 mod icon;
+pub mod markup;
 pub mod panel;
 mod render;
 mod scene;

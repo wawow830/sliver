@@ -359,7 +359,7 @@ These are the selectors sliver guarantees, mirroring waybar:
 | `cffi` (in-process C plugins) | Crash safety: a plugin must never take the bar down | `custom/*` exec, or the D-Bus API for long-running programs |
 | `cava` | Power cost (invariant 3) | P3, maybe an opt-in with a frame-rate cap |
 | GtkBuilder `menu-file` | No GTK on the bar | `menu = [...]` sub-bar |
-| Pango markup | The renderer isn't Pango (ADR-0002) | A markup subset (gap G4) |
+| Pango markup | The renderer isn't Pango (ADR-0002) | A markup subset: tags `b i u s big small sub sup tt span`; `span` attributes `foreground/fgcolor/color`, `weight`, `style`, `size` (keywords, `NN%`, `larger`/`smaller`), `underline`, `strikethrough`, `font_family/face`; entities `&amp; &lt; &gt; &quot; &apos; &#N;`. Background colours, baseline shift and font descriptions are ignored (stylesheets cover them). Bad markup keeps its text and reports a warning (`markup::parse(..).warnings`); it never blanks a module. Output that must stay literal is escaped (`escape = true`) and still goes through the markup path. |
 
 ## 11. Gaps → tasks
 
@@ -368,7 +368,7 @@ These are the selectors sliver guarantees, mirroring waybar:
 | G1 Config language: includes, deep merge, aliases, conditions, validation, resolver, tiny-dfr import | T11 (elm) |
 | G2 Module runtime for `custom/*` with the shared output contract for built-ins | T21 |
 | G3 Stylesheet engine and selectors from §7 | T22 |
-| G4 Markup subset in format strings (`<b>`, `<i>`, `<span color=…>`) | new |
+| G4 Markup subset in format strings (`<b>`, `<i>`, `<span color=…>`) | done: `sliver_render::markup` + `Content::Markup` / `IconMarkup` (T28) |
 | G5 `format` engine: placeholders, `{name:spec}`, format-icons/states/alt/status resolution, shared by all modules | done: `sliver_config::format` (T25) |
 | G6 StatusNotifierItem host → `status-items`/`tray` | new |
 | G7 Hot reload watcher + last-good fallback + `sliverctl reload`/SIGUSR2 | new |
