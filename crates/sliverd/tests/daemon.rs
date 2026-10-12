@@ -890,6 +890,45 @@ fn display_policy_and_wake() {
     assert_eq!(error_codes(&out, A), vec![ErrorCode::RateLimited]);
 }
 
+/// The agent re-sends its policy when the power source changes (T68, `[display.on-battery]`): the
+/// new levels apply at once in whatever state the bar is in, and shorter timers take effect
+/// against the time already idle.
+#[test]
+fn policy_change_applies_in_current_state() {
+    let (mut rig, _) = rig_with_agent();
+    let ac = DisplayPolicy {
+        brightness: Some(200),
+        dim_brightness: Some(40),
+        dim_after_ms: Some(30_000),
+        off_after_ms: Some(60_000),
+        ..Default::default()
+    };
+    rig.send(A, AgentMsg::DisplayPolicy(ac.clone()));
+    assert_eq!(rig.hw.backlight.current(), Some(200));
+    rig.advance(30_000);
+    assert_eq!(rig.hw.backlight.current(), Some(40), "dimmed");
+    // Unplugged while dimmed: the battery dim level applies right away, no touch needed.
+    let battery = DisplayPolicy {
+        brightness: Some(120),
+        dim_brightness: Some(10),
+        dim_after_ms: Some(10_000),
+        off_after_ms: Some(40_000),
+        ..Default::default()
+    };
+    let out = rig.send(A, AgentMsg::DisplayPolicy(battery));
+    assert!(sent(&out, A).is_empty(), "still dim: no display message");
+    assert_eq!(rig.hw.backlight.current(), Some(10));
+    // Already idle 30 s of the new 40 s: off 10 s later, not 40.
+    assert_eq!(rig.d.next_deadline(), Some(rig.now + 10_000));
+    // A touch wakes it to the battery's active level.
+    rig.down(0, 100.0);
+    rig.up(0, 100.0);
+    assert_eq!(rig.hw.backlight.current(), Some(120));
+    // Plugged in again while on: the AC level at once.
+    rig.send(A, AgentMsg::DisplayPolicy(ac));
+    assert_eq!(rig.hw.backlight.current(), Some(200));
+}
+
 #[test]
 fn emit_keys_tap_and_up_only_releases_own_keys() {
     let (mut rig, regions) = rig_with_agent();
