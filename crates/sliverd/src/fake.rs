@@ -7,7 +7,7 @@ use std::rc::Rc;
 use sliver_render::Pixmap;
 use sliver_render::panel::{Orientation, Span, blit_xrgb8888};
 
-use crate::backend::{Backends, Backlight, Display, Keys, PixelSource};
+use crate::backend::{Backends, Backlight, Display, HwEvent, InputSource, Keys, PixelSource};
 
 /// A panel with a real XRGB8888 framebuffer in its native orientation (60x2008 on Apple
 /// Silicon), written through the same `panel::blit_xrgb8888` path a DRM backend uses.
@@ -23,6 +23,8 @@ pub struct FakeDisplayState {
     pub fb: Vec<u8>,
     /// Damage of every flush so far.
     pub flushes: Vec<Vec<Span>>,
+    /// If set, every flush also writes the panel contents here (dev runs: watch what sliverd shows).
+    pub png: Option<std::path::PathBuf>,
 }
 
 impl FakeDisplay {
@@ -36,11 +38,16 @@ impl FakeDisplay {
             stride,
             fb: vec![0; stride * ph as usize],
             flushes: Vec::new(),
+            png: None,
         })))
     }
 
     pub fn state(&self) -> std::cell::Ref<'_, FakeDisplayState> {
         self.0.borrow()
+    }
+
+    pub fn set_png_output(&self, path: Option<std::path::PathBuf>) {
+        self.0.borrow_mut().png = path;
     }
 
     pub fn flush_count(&self) -> usize {
@@ -77,6 +84,13 @@ impl Display for FakeDisplay {
             blit_xrgb8888(frame, orientation, Some(*span), &mut s.fb, stride);
         }
         s.flushes.push(damage.to_vec());
+        let png = s.png.clone();
+        drop(s);
+        if let Some(path) = png {
+            if let Err(e) = self.frame().save_png(&path) {
+                eprintln!("sliverd: writing {}: {e}", path.display());
+            }
+        }
     }
 }
 
@@ -205,5 +219,59 @@ impl FakeHardware {
             backlight: Box::new(self.backlight.clone()),
             keys: Box::new(self.keys.clone()),
         }
+    }
+}
+
+/// Pollable fake input: push events through the [`FakeInputHandle`], and the event loop sees
+/// the source become readable.
+pub struct FakeInput {
+    queue: Rc<RefCell<std::collections::VecDeque<HwEvent>>>,
+    rx: std::os::unix::net::UnixStream,
+}
+
+#[derive(Clone)]
+pub struct FakeInputHandle {
+    queue: Rc<RefCell<std::collections::VecDeque<HwEvent>>>,
+    tx: Rc<std::os::unix::net::UnixStream>,
+}
+
+impl FakeInput {
+    pub fn new() -> std::io::Result<(FakeInput, FakeInputHandle)> {
+        let (tx, rx) = std::os::unix::net::UnixStream::pair()?;
+        rx.set_nonblocking(true)?;
+        let queue = Rc::new(RefCell::new(std::collections::VecDeque::new()));
+        Ok((
+            FakeInput {
+                queue: queue.clone(),
+                rx,
+            },
+            FakeInputHandle {
+                queue,
+                tx: Rc::new(tx),
+            },
+        ))
+    }
+}
+
+impl FakeInputHandle {
+    pub fn push(&self, e: HwEvent) {
+        use std::io::Write;
+        self.queue.borrow_mut().push_back(e);
+        let _ = (&*self.tx).write(&[1]);
+    }
+}
+
+impl std::os::fd::AsFd for FakeInput {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.rx.as_fd()
+    }
+}
+
+impl InputSource for FakeInput {
+    fn drain(&mut self) -> Vec<HwEvent> {
+        use std::io::Read;
+        let mut buf = [0u8; 256];
+        while matches!((&self.rx).read(&mut buf), Ok(n) if n > 0) {}
+        self.queue.borrow_mut().drain(..).collect()
     }
 }

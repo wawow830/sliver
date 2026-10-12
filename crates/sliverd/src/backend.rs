@@ -57,3 +57,23 @@ pub trait PixelSource {
     /// Copies the frame out, tightly packed (`width * 4` bytes per row), replacing `dst`.
     fn copy_tight(&self, dst: &mut Vec<u8>);
 }
+
+/// Input from the hardware: the bar digitizer plus seat0 (Fn, lid, other activity).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HwEvent {
+    Touch(TouchEvent),
+    FnKey {
+        held: bool,
+    },
+    /// Any other user input on seat0 (keyboard, pointer): keeps the bar awake.
+    Activity,
+    Lid {
+        closed: bool,
+    },
+}
+
+/// A pollable input source. The event loop polls [`std::os::fd::AsFd::as_fd`] for readability
+/// and then calls [`InputSource::drain`], which must not block.
+pub trait InputSource: std::os::fd::AsFd {
+    fn drain(&mut self) -> Vec<HwEvent>;
+}

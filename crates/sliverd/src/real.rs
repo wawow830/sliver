@@ -87,6 +87,21 @@ pub fn input(ev: HwEvent) -> Input {
     }
 }
 
+impl crate::backend::InputSource for HwInput {
+    fn drain(&mut self) -> Vec<crate::backend::HwEvent> {
+        use crate::backend::HwEvent as E;
+        HwInput::drain(self)
+            .into_iter()
+            .map(|ev| match ev {
+                HwEvent::Touch(c) => E::Touch(touch_event(c)),
+                HwEvent::Fn(held) => E::FnKey { held },
+                HwEvent::Activity => E::Activity,
+                HwEvent::Lid { closed } => E::Lid { closed },
+            })
+            .collect()
+    }
+}
+
 /// Everything opened for a real run.
 pub struct RealHardware {
     pub backends: Backends,

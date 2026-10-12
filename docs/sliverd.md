@@ -14,12 +14,28 @@ Owner: **hazel**. Contract with the agent: `docs/api.md` §6 (cedar). Hardware: 
 - `ipc::import_attachment(msg, fds)` turns `sliver_ipc::transport` fds into an `Attachment`
   (`MappedBuffer::import` does the seal and size check).
 
+## Event loop (`server.rs`)
+One `poll(2)` over the listener, agent conns, `InputSource`s and the seat watch. The timeout is
+`Daemon::next_deadline()`, and with no deadline it blocks (no idle wakeups). At most 64 packets per
+conn per wakeup. A conn whose socket won't take a reply is dropped. Received fds go through
+`ipc::import_attachment`. Single-threaded.
+
+- **Active uid** (`session.rs`): `/run/systemd/seats/seat0` `ACTIVE_UID=`, watched with inotify (what
+  sd-login does internally). No D-Bus and no libsystemd in the privileged daemon.
+- **Config** (`config.rs`): `/etc/sliver/sliverd.toml` with `physical_esc` and `media_layer_default`.
+  Unknown keys and parse errors are warnings and the defaults apply. The daemon always starts.
+- **Socket**: systemd socket activation (`FileDescriptorName=ipc`, via `sliver_hw::listen_fd`), else
+  bound at `--socket` (default `/run/sliver/sliverd.sock`, mode 0666).
+- **Dev mode**: `sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH]` serves the real
+  IPC with fake hardware. Point an agent at it, and `--frame-png` is rewritten on every panel flush.
+
 ## Backends (`backend.rs`)
 | trait | real impl (birch, `sliver-hw`) | fake (`fake.rs`) |
 |---|---|---|
 | `Display::flush(&Pixmap, &[Span])`: landscape frame + damaged bar columns | DRM dumb buffer, rotate via `panel::blit_xrgb8888`, DIRTYFB | real rotated XRGB fb; `frame()` reads it back as PNG |
 | `Backlight::set(u32)`, `screen_fraction()` | sysfs fd from `OpenFile=` | records writes |
 | `Keys::key(code, down)`, `sync()` | uinput, every key registered up front | records `KeyEvent`s |
+| `InputSource` (`AsFd` + `drain() -> Vec<HwEvent>`) | evdev bar digitizer + seat0 (Fn, lid, activity) | `FakeInput` + handle |
 | `PixelSource::copy_tight` | `sliver_ipc::shm::MappedBuffer` | `FakeShm` |
 
 sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
@@ -61,11 +77,11 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
 ## Headless
 `cargo run -p sliverd -- --headless out.png [--fn] [--width 2170 --model MacBookPro15,1 --max-brightness 2]`
 writes what the panel would show (through the rotated fake framebuffer).
-Tests: `crates/sliverd/tests/daemon.rs`. Snapshots are in `tests/snapshots/`
+Tests: `crates/sliverd/tests/daemon.rs` (core), `tests/server.rs` (real socket + memfds). Snapshots are in `tests/snapshots/`
 (`SLIVER_BLESS=1` to update, then look at them).
 
 ## Not yet
-- Real event loop (epoll over listener/conns/input fd + timerfd) and real backends (birch, T-next).
-- `/etc/sliver/sliverd.toml` parsing (`Config` is ready).
+- Real backends and the real-hardware mode of `main` (T30, birch).
+- systemd units, udev and tiny-dfr coexistence (packaging).
 - Merge cedar's `FakeDaemon` into `sliverd::Daemon` + fake hardware (agreed, once this is stable).
 - Pixel shift, `follow_screen` reading the main backlight on change (it's read on activity now).

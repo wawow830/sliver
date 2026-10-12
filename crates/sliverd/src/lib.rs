@@ -10,11 +10,14 @@
 //!   DRM/evdev/uinput/sysfs backends only run through the safe-swap harness.
 //! - [`ipc`]: glue from `sliver_ipc::transport` packets/fds to [`daemon::Input`].
 //! - [`profile`]: per-model quirks (docs/hardware.md).
+//! - [`server`]: the `poll(2)` event loop around the core. [`session`]: seat0's active uid.
+//!   [`config`]: `/etc/sliver/sliverd.toml`.
 //!
 //! Touch semantics are `sliver_ipc::router::TouchRouter`, shared with cedar's `FakeDaemon`.
 
 pub mod backend;
 pub mod builtin;
+pub mod config;
 pub mod daemon;
 pub mod fake;
 pub mod idle;
@@ -22,5 +25,7 @@ pub mod ipc;
 pub mod keystate;
 pub mod profile;
 pub mod real;
+pub mod server;
+pub mod session;
 
 pub use daemon::{ClientId, Config, Daemon, Input, Out, View};

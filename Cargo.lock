@@ -1146,9 +1146,12 @@ dependencies = [
 name = "sliverd"
 version = "0.1.0"
 dependencies = [
+ "rustix",
+ "serde",
  "sliver-hw",
  "sliver-ipc",
  "sliver-render",
+ "toml",
 ]
 
 [[package]]

@@ -29,6 +29,9 @@ pub struct DeviceProfile {
 const MODELS: &[(&str, Family)] = &[
     ("Mac14,7", Family::AppleSilicon),
     ("MacBookPro17,1", Family::AppleSilicon),
+    // Device-tree compatibles, if DMI is missing.
+    ("apple,j493", Family::AppleSilicon),
+    ("apple,j293", Family::AppleSilicon),
     ("MacBookPro15,", Family::T2),
     ("MacBookPro16,", Family::T2),
     ("MacBookPro13,", Family::T1),
