@@ -108,8 +108,9 @@ real sliverd backends. Its `sliver-hwprobe` binary refuses to open any device un
 `SLIVER_SAFESWAP=1` (only `--sysfs-only` works anywhere). Any code that opens bar devices should
 call `sliver_hw::require_harness()` the same way. The only other way past the gate is the packaged
 `sliverd.service`, which sets `SLIVER_SYSTEM_UNIT=1` (its OnFailure=tiny-dfr is the safety net). The
-variable only counts when `/proc/self/cgroup` is `0::/system.slice/sliverd.service`, so setting it by
-hand in a shell is refused. Planned order, each step a `hardware` ask:
+variable only counts inside that unit: `/proc/self/cgroup` is `0::/system.slice/sliverd.service`, or
+`0::/` (its private cgroup namespace) with a DynamicUser uid. Setting it by hand in a shell is
+refused. Planned order, each step a `hardware` ask:
 ```
 cargo build -p sliver-hw
 harness/safeswap/bar snap tinydfr.png                                      # 1. snap tiny-dfr, check orientation

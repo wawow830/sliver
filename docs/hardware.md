@@ -361,7 +361,12 @@ Debug-build latencies from that run: touch → agent present 27–38 ms, touch �
 ash's press fast path (8cdca17) plus a release build should bring it to ~10–15 ms.
 
 **First real install** (RPM .198, H42): sliverd from `sliverd.service` runs in cgroup
-`0::/system.slice/sliverd.service` (the hardware gate checks this), bar backlight `root:video 0664`
+`/system.slice/sliverd.service` *as seen from the host*. Inside the unit,
+`ProtectControlGroups=strict` (systemd 259) gives it a private cgroup namespace, so its own
+`/proc/self/cgroup` reads `0::/` and its uid is a DynamicUser one (65132). The hardware gate
+accepts that pair (59a1eb4). A gate that only accepted the host path crash-looped the .256
+upgrade into the tiny-dfr fallback. Check sandbox-visible facts from inside the sandbox.
+Bar backlight `root:video 0664`
 via 99-z-sliverd.rules, agent connected, Hyprland lists `sliver-touch-bar-keys`, no AVCs.
 **Harness on the installed system** (H43, d9789ad): a 30 s run held the bar with sliverd *and*
 sliverd.socket stopped (the agent waited instead of re-activating sliverd), then restore brought back
