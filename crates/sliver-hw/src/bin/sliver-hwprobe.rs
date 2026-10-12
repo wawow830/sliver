@@ -6,7 +6,8 @@
 //! Default: read-only. Opens the card (becomes DRM master automatically since tiny-dfr is
 //! stopped) but never commits. Lists caps, connectors, CRTCs, planes and their properties,
 //! plus the touch axis ranges. `--draw S` does a tiny-dfr-style atomic modeset and shows an
-//! orientation test pattern for S seconds. `--touch S` logs raw touch events (no grab).
+//! orientation test pattern for S seconds. `--touch S` logs raw touch events (no grab) for S
+//! seconds from startup, in parallel with `--draw`.
 //! `--backlight N` writes N to the harness-provided backlight fd.
 
 use std::fs::{File, OpenOptions};
@@ -106,16 +107,26 @@ fn main() {
     );
 
     let mut failed = false;
+    // Touch first, in a thread, so touches made while the test pattern is up get logged too.
+    let touch_thread = touch.clone().map(|(dev, _)| {
+        let secs = opts.touch;
+        std::thread::spawn(move || probe_touch(&dev, secs))
+    });
+    std::thread::sleep(Duration::from_millis(200)); // let the touch header print first
     if let Some(c) = &card {
         if let Err(e) = probe_drm(c, opts.draw) {
             println!("drm: ERROR {e}");
             failed = true;
         }
     }
-    if let Some((dev, _)) = &touch {
-        if let Err(e) = probe_touch(dev, opts.touch) {
-            println!("touch: ERROR {e}");
-            failed = true;
+    if let Some(t) = touch_thread {
+        match t.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                println!("touch: ERROR {e}");
+                failed = true;
+            }
+            Err(_) => failed = true,
         }
     }
     if let Some(n) = opts.backlight {
@@ -361,7 +372,7 @@ fn probe_touch(dev: &Path, secs: Option<u64>) -> std::io::Result<()> {
         }
     }
     let Some(secs) = secs else { return Ok(()) };
-    println!("== touch events for {secs}s (touch the bar)");
+    println!("== touch events for {secs}s from now (touch the bar), concurrent with --draw");
     let deadline = Instant::now() + Duration::from_secs(secs);
     let mut buf = [0u8; 24];
     while Instant::now() < deadline {
