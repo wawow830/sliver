@@ -487,6 +487,129 @@ pub fn move_module_to(
     Ok(format!("Moved {label} to {to_zone}"))
 }
 
+// --- groups (ux.md §4 "Group", customization.md §3.1) -------------------------------------------
+
+fn group_path(group: &str) -> String {
+    format!("modules.{}.modules", key(group))
+}
+
+/// A group's members: the user's list, else the effective one (e.g. the built-in control strip).
+pub fn group_members(ed: &Editor, merged: &Table, group: &str) -> Result<Vec<Value>, String> {
+    match ed.get(&group_path(group))? {
+        Some(Value::Array(a)) => return Ok(a),
+        Some(_) => return Err(format!("{group}: modules isn't a list")),
+        None => {}
+    }
+    Ok(merged
+        .get("modules")
+        .and_then(|m| m.get(group))
+        .and_then(|g| g.get("modules"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn set_members(ed: &mut Editor, group: &str, members: Vec<Value>) -> Result<(), String> {
+    ed.set(&group_path(group), &Value::Array(members))
+}
+
+/// Adds `module` at the end of `group`.
+pub fn add_group_member(
+    ed: &mut Editor,
+    merged: &Table,
+    group: &str,
+    module: &str,
+) -> Result<String, String> {
+    ModuleId::parse(module)?;
+    if module == group {
+        return Err("a group can't contain itself".into());
+    }
+    let mut m = group_members(ed, merged, group)?;
+    m.push(Value::String(module.to_owned()));
+    set_members(ed, group, m)?;
+    Ok(format!("Added {module} to {group}"))
+}
+
+pub fn remove_group_member(
+    ed: &mut Editor,
+    merged: &Table,
+    group: &str,
+    index: usize,
+) -> Result<String, String> {
+    let mut m = group_members(ed, merged, group)?;
+    if index >= m.len() {
+        return Err("no such member".into());
+    }
+    let gone = m.remove(index);
+    set_members(ed, group, m)?;
+    Ok(format!("Removed {} from {group}", describe(&gone)))
+}
+
+/// Moves member `index` one step left (`-1`) or right (`1`).
+pub fn move_group_member(
+    ed: &mut Editor,
+    merged: &Table,
+    group: &str,
+    index: usize,
+    delta: isize,
+) -> Result<String, String> {
+    let mut m = group_members(ed, merged, group)?;
+    let to = index as isize + delta;
+    if index >= m.len() || to < 0 || to as usize >= m.len() {
+        return Err("can't move further".into());
+    }
+    m.swap(index, to as usize);
+    let label = describe(&m[to as usize]);
+    set_members(ed, group, m)?;
+    Ok(format!("Moved {label} in {group}"))
+}
+
+/// Makes `group/<name>` from the modules at `indices` of `zone` (in zone order) and puts it in
+/// the zone where the first of them was (ux.md §4 "Group").
+pub fn make_group(
+    ed: &mut Editor,
+    merged: &Table,
+    layout: &str,
+    zone: &str,
+    indices: &[usize],
+    name: &str,
+) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("a group name needs letters, digits, - or _".into());
+    }
+    let group = format!("group/{name}");
+    if merged.get("modules").and_then(|m| m.get(&group)).is_some() {
+        return Err(format!("{group} already exists"));
+    }
+    let zi = ensure_zone(ed, merged, layout, zone)?;
+    let all = modules(ed, layout, zi)?;
+    let mut picked: Vec<usize> = indices.iter().copied().filter(|&i| i < all.len()).collect();
+    picked.sort_unstable();
+    picked.dedup();
+    let Some(&first) = picked.first() else {
+        return Err("pick at least one module".into());
+    };
+    let members: Vec<Value> = picked.iter().map(|&i| all[i].clone()).collect();
+    let mut rest: Vec<Value> = Vec::new();
+    for (i, m) in all.into_iter().enumerate() {
+        if i == first {
+            rest.push(Value::String(group.clone()));
+        }
+        if !picked.contains(&i) {
+            rest.push(m);
+        }
+    }
+    let n = members.len();
+    set_members(ed, &group, members)?;
+    ed.set(&modules_path(layout, zi), &Value::Array(rest))?;
+    Ok(format!("Grouped {n} modules as {group}"))
+}
+
 fn describe(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -965,6 +1088,50 @@ mod tests {
         assert_eq!(&ids[1][..3], ["key/F3", "key/F2", "key/F4"]);
         let merged = ed.load().merged;
         assert!(move_module(&mut ed, &merged, "fkeys", "main", 0, -1).is_err());
+    }
+
+    #[test]
+    fn group_members_and_make_group() {
+        let (mut ed, merged) = fresh("version = 1\n");
+        let strip = "group/control-strip";
+        let built_in = group_members(&ed, &merged, strip).unwrap();
+        assert_eq!(built_in.len(), 6, "the built-in strip, before any edit");
+        remove_group_member(&mut ed, &merged, strip, 2).unwrap();
+        let merged = ed.load().merged;
+        move_group_member(&mut ed, &merged, strip, 0, 1).unwrap();
+        let merged = ed.load().merged;
+        add_group_member(&mut ed, &merged, strip, "clock").unwrap();
+        let merged = ed.load().merged;
+        let m: Vec<String> = group_members(&ed, &merged, strip)
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            m,
+            [
+                "kbd-backlight/slider",
+                "custom/expand",
+                "key/PreviousSong",
+                "key/PlayPause",
+                "key/NextSong",
+                "clock"
+            ]
+        );
+        assert!(move_group_member(&mut ed, &merged, strip, 5, 1).is_err());
+        assert!(add_group_member(&mut ed, &merged, strip, strip).is_err());
+        assert!(ed.check(HERE).ok());
+
+        // Group F1, F3 and F5 of the fn layout's main zone.
+        let merged = ed.load().merged;
+        make_group(&mut ed, &merged, "fkeys", "main", &[4, 0, 2], "odd").unwrap();
+        let l = ed.load();
+        assert!(l.diagnostics.ok(), "{:#?}", l.diagnostics);
+        let ids = resolved_ids(&ed, "fn", &Context::new().with("physical_esc", true));
+        assert_eq!(&ids[1][..4], ["group/odd", "key/F2", "key/F4", "key/F6"]);
+        assert!(make_group(&mut ed, &l.merged, "fkeys", "main", &[0], "odd").is_err());
+        assert!(make_group(&mut ed, &l.merged, "fkeys", "main", &[], "x").is_err());
+        assert!(make_group(&mut ed, &l.merged, "fkeys", "main", &[0], "a b").is_err());
     }
 
     #[test]
