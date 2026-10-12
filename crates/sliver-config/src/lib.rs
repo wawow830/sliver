@@ -32,6 +32,7 @@ mod resolve;
 pub mod tinydfr;
 mod validate;
 mod values;
+pub mod writer;
 
 pub use action::{Action, DBusCall, LayerMode, MAX_MACRO_STEPS, MAX_MACRO_TIME};
 pub use condition::{CONTEXT_KEYS, Condition, Context, CtxValue, Matcher, canonical_key};
@@ -50,6 +51,7 @@ pub use resolve::{
 };
 pub use validate::{COMFORTABLE_TARGET_PX, Hardware, TINY_TARGET_PX};
 pub use values::{Align, FireOn, Interval, MIN_INTERVAL, Width, parse_duration};
+pub use writer::{Editor, parse_cli_value};
 
 /// Native Touch Bar panel size in landscape orientation (width, height) on Apple Silicon.
 pub const PANEL_SIZE: (u32, u32) = (2008, 60);

@@ -1052,6 +1052,7 @@ version = "0.1.0"
 dependencies = [
  "regex-lite",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -1306,6 +1307,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 
