@@ -11,3 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+cosmic-text.workspace = true
+resvg.workspace = true
+thiserror.workspace = true
+tiny-skia.workspace = true
