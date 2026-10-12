@@ -36,34 +36,48 @@ impl std::error::Error for NotUnderHarness {}
 /// the safety net). Never set either by hand.
 pub fn require_harness() -> Result<(), NotUnderHarness> {
     let cgroup = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    // SAFETY: getuid has no preconditions and can't fail.
+    let uid = unsafe { libc::getuid() };
     harness_env_ok(
         std::env::var("SLIVER_SAFESWAP").ok().as_deref(),
         std::env::var("SLIVER_SYSTEM_UNIT").ok().as_deref(),
         &cgroup,
+        uid,
     )
 }
 
-/// `SLIVER_SYSTEM_UNIT=1` only counts inside the system unit itself (`/proc/self/cgroup` is
-/// `0::/system.slice/sliverd.service`, verified on the real install), which only root can start,
-/// so setting the variable by hand in a dev shell still doesn't grab the bar.
+/// `SLIVER_SYSTEM_UNIT=1` only counts inside the system unit itself, so setting the variable by
+/// hand in a dev shell still doesn't grab the bar. Either proves it, and neither is possible
+/// without root:
+/// - `/proc/self/cgroup` is `0::/system.slice/sliverd.service` (no cgroup namespace), or
+/// - a private cgroup namespace (`0::/`, what `ProtectControlGroups=strict` gives on systemd
+///   ≥ 257, so this is the real unit's case) *and* a `DynamicUser=` uid (61184–65519).
+///   Measured on the installed Mac14,7 (systemd 259): `0::/`, uid 65132. The first version of this
+///   check looked only for the unit path and crash-looped the RPM into the tiny-dfr fallback.
 fn harness_env_ok(
     safeswap: Option<&str>,
     system_unit: Option<&str>,
     cgroup: &str,
+    uid: u32,
 ) -> Result<(), NotUnderHarness> {
     match (safeswap, system_unit) {
         (Some("1"), _) => Ok(()),
-        (_, Some("1")) if in_sliverd_unit(cgroup) => Ok(()),
+        (_, Some("1")) if in_sliverd_unit(cgroup, uid) => Ok(()),
         _ => Err(NotUnderHarness),
     }
 }
 
-/// cgroup v2 path of the system sliverd unit. Not a user unit or anything merely named like it.
-fn in_sliverd_unit(cgroup: &str) -> bool {
+/// systemd's `DynamicUser=` uid range (systemd's `DYNAMIC_UID_MIN..=DYNAMIC_UID_MAX`).
+const DYNAMIC_UIDS: std::ops::RangeInclusive<u32> = 61184..=65519;
+
+/// See [`harness_env_ok`]. Not a user unit or anything merely named like the system unit.
+fn in_sliverd_unit(cgroup: &str, uid: u32) -> bool {
     cgroup
         .lines()
         .filter_map(|l| l.strip_prefix("0::"))
-        .any(|path| path == "/system.slice/sliverd.service")
+        .any(|path| {
+            path == "/system.slice/sliverd.service" || (path == "/" && DYNAMIC_UIDS.contains(&uid))
+        })
 }
 
 /// Find an fd passed by systemd `OpenFile=`/socket activation by its name (`LISTEN_FDNAMES`).
@@ -97,20 +111,37 @@ mod tests {
     fn harness_gate() {
         const UNIT: &str = "0::/system.slice/sliverd.service\n";
         const SHELL: &str = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/x.scope\n";
-        assert!(harness_env_ok(Some("1"), None, SHELL).is_ok());
-        assert!(harness_env_ok(None, Some("1"), UNIT).is_ok());
+        // The real installed unit (ProtectControlGroups=strict, DynamicUser), measured: 0::/ + 65132.
+        const PRIVATE_NS: &str = "0::/\n";
+        const ME: u32 = 1000;
+        const DYN: u32 = 65132;
+        assert!(harness_env_ok(Some("1"), None, SHELL, ME).is_ok());
+        assert!(harness_env_ok(None, Some("1"), UNIT, DYN).is_ok());
+        assert!(harness_env_ok(None, Some("1"), PRIVATE_NS, DYN).is_ok());
         // Set by hand outside the unit: refused.
-        assert!(harness_env_ok(None, Some("1"), SHELL).is_err());
-        assert!(harness_env_ok(None, Some("1"), "").is_err());
-        assert!(harness_env_ok(None, None, UNIT).is_err());
-        assert!(harness_env_ok(None, None, SHELL).is_err());
-        assert!(harness_env_ok(Some("0"), None, SHELL).is_err());
-        assert!(harness_env_ok(Some("yes"), Some("true"), UNIT).is_err());
-        assert!(!in_sliverd_unit("0::/system.slice/sliverd.service.d\n"));
-        assert!(!in_sliverd_unit("0::/system.slice/sliver-swap.service\n"));
+        assert!(harness_env_ok(None, Some("1"), SHELL, ME).is_err());
+        assert!(harness_env_ok(None, Some("1"), "", ME).is_err());
+        // A private cgroup namespace alone (e.g. unshare -C in a user namespace) isn't enough.
+        assert!(harness_env_ok(None, Some("1"), PRIVATE_NS, ME).is_err());
+        assert!(harness_env_ok(None, Some("1"), PRIVATE_NS, 0).is_err());
+        assert!(harness_env_ok(None, None, UNIT, DYN).is_err());
+        assert!(harness_env_ok(None, None, SHELL, ME).is_err());
+        assert!(harness_env_ok(Some("0"), None, SHELL, ME).is_err());
+        assert!(harness_env_ok(Some("yes"), Some("true"), UNIT, DYN).is_err());
         assert!(!in_sliverd_unit(
-            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/sliverd.service\n"
+            "0::/system.slice/sliverd.service.d\n",
+            DYN
         ));
+        assert!(!in_sliverd_unit(
+            "0::/system.slice/sliver-swap.service\n",
+            DYN
+        ));
+        assert!(!in_sliverd_unit(
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/sliverd.service\n",
+            DYN
+        ));
+        assert!(!in_sliverd_unit("0::/\n", 61183));
+        assert!(!in_sliverd_unit("0::/\n", 65520));
     }
 
     #[test]
