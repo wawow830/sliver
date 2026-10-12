@@ -147,6 +147,61 @@ pub fn parse_json(line: &str) -> Result<Output, String> {
 mod tests {
     use super::*;
 
+    /// Script output is untrusted: no line may panic the parsers (fixed-seed random lines).
+    #[test]
+    fn random_lines_never_panic() {
+        const BITS: &[&str] = &[
+            "{",
+            "}",
+            "[",
+            "]",
+            "\"",
+            ":",
+            ",",
+            "\"text\"",
+            "\"alt\"",
+            "\"class\"",
+            "\"percentage\"",
+            "\"tooltip\"",
+            "\"value\"",
+            "\"icon\"",
+            "null",
+            "true",
+            "1e999",
+            "-1",
+            "NaN",
+            "\"\\u0000\"",
+            "\"\\ud800\"",
+            "<b>",
+            "&amp;",
+            "&",
+            "\t",
+            "\u{0}",
+            "\u{1f600}",
+            "x",
+            " ",
+            "999999999999999999999999",
+        ];
+        let mut x: u64 = 0x5eed_0005;
+        let mut next = || {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            x.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        };
+        for _ in 0..20_000 {
+            let n = next() % 16 + 1;
+            let line: String = (0..n)
+                .map(|_| BITS[(next() % BITS.len() as u64) as usize])
+                .collect();
+            let r = std::panic::catch_unwind(|| {
+                let _ = parse_json(&line);
+                let _ = parse_text(&line);
+            });
+            assert!(r.is_ok(), "panicked on {line:?}");
+        }
+    }
+
     #[test]
     fn text_lines() {
         let o = parse_text("up 3d\nsince monday\ngood fast\n");

@@ -88,6 +88,29 @@ builtin_icons![
     "volume_up",
 ];
 
+/// Raster icons (PNG/JPEG, including apps' `icon-data` and album art) larger than this on
+/// either side are refused before decoding: a few bytes of PNG can claim 30000x30000 pixels,
+/// and allocating that would abort the agent. 4096 still fits big album covers.
+pub const MAX_RASTER_SIDE: u32 = 4096;
+
+/// A PNG's size from its IHDR chunk, without decoding anything.
+fn png_size(data: &[u8]) -> Option<(u32, u32)> {
+    const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if data.len() < 24 || &data[..8] != SIG || &data[12..16] != b"IHDR" {
+        return None;
+    }
+    let be = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+    Some((be(&data[16..20]), be(&data[20..24])))
+}
+
+fn too_big(w: u32, h: u32) -> Option<IconError> {
+    (w > MAX_RASTER_SIDE || h > MAX_RASTER_SIDE).then(|| {
+        IconError::Png(format!(
+            "{w}x{h} is larger than {MAX_RASTER_SIDE}x{MAX_RASTER_SIDE}"
+        ))
+    })
+}
+
 impl Icon {
     pub fn from_svg(data: &[u8]) -> Result<Icon, IconError> {
         let tree = usvg::Tree::from_data(data, &usvg::Options::default())?;
@@ -98,6 +121,9 @@ impl Icon {
     }
 
     pub fn from_png(data: &[u8]) -> Result<Icon, IconError> {
+        if let Some(e) = png_size(data).and_then(|(w, h)| too_big(w, h)) {
+            return Err(e);
+        }
         let pixmap = Pixmap::decode_png(data).map_err(|e| IconError::Png(e.to_string()))?;
         Ok(Icon {
             image: Image::Raster(Arc::new(pixmap)),
@@ -110,7 +136,11 @@ impl Icon {
         use zune_jpeg::JpegDecoder;
         use zune_jpeg::zune_core::colorspace::ColorSpace;
         use zune_jpeg::zune_core::options::DecoderOptions;
-        let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+        let side = MAX_RASTER_SIDE as usize;
+        let opts = DecoderOptions::default()
+            .jpeg_set_out_colorspace(ColorSpace::RGBA)
+            .set_max_width(side)
+            .set_max_height(side);
         let mut dec = JpegDecoder::new_with_options(data, opts);
         let pixels = dec
             .decode()
@@ -119,10 +149,17 @@ impl Icon {
             .info()
             .ok_or_else(|| IconError::Png("jpeg: no header".into()))?;
         let (w, h) = (u32::from(info.width), u32::from(info.height));
+        if let Some(e) = too_big(w, h) {
+            return Err(e);
+        }
         let mut pm = Pixmap::new(w, h).ok_or_else(|| IconError::Png("jpeg: empty".into()))?;
-        // Opaque pixels: premultiplication changes nothing.
-        pm.data_mut()
-            .copy_from_slice(&pixels[..(w * h * 4) as usize]);
+        // Opaque pixels: premultiplication changes nothing. A decoder that returned fewer
+        // pixels than the header promised is an error, not a panic.
+        let n = (w * h * 4) as usize;
+        let src = pixels
+            .get(..n)
+            .ok_or_else(|| IconError::Png("jpeg: truncated pixel data".into()))?;
+        pm.data_mut().copy_from_slice(src);
         Ok(Icon {
             image: Image::Raster(Arc::new(pm)),
             symbolic: false,
@@ -184,6 +221,37 @@ mod tests {
 #[cfg(test)]
 mod jpeg_tests {
     use super::*;
+
+    /// A PNG that is only a header claiming `w` x `h` (a decompression bomb's opening).
+    fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut d = b"\x89PNG\r\n\x1a\n".to_vec();
+        d.extend(13u32.to_be_bytes());
+        d.extend(b"IHDR");
+        d.extend(w.to_be_bytes());
+        d.extend(h.to_be_bytes());
+        d.extend([8, 6, 0, 0, 0]); // 8-bit RGBA
+        d.extend([0; 4]); // CRC (never reached)
+        d
+    }
+
+    #[test]
+    fn oversized_rasters_are_refused_before_decoding() {
+        let t = std::time::Instant::now();
+        let e = Icon::from_png(&png_header(40_000, 40_000)).unwrap_err();
+        assert!(e.to_string().contains("larger than"), "{e}");
+        assert!(
+            Icon::from_png(&png_header(10, 5000)).is_err(),
+            "either side"
+        );
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(50),
+            "no allocation attempt"
+        );
+        // A real, normal-sized PNG still decodes.
+        let mut pm = Pixmap::new(8, 8).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        assert!(Icon::from_png(&pm.encode_png().unwrap()).is_ok());
+    }
 
     #[test]
     fn decodes_a_jpeg_and_loads_it_by_extension() {

@@ -106,6 +106,23 @@ Keys, sliders, toggles, the clock, battery, workspaces, the keyboard layout, the
 count and media play/pause (status glyph only) stay. Both layers apply to the base and Fn
 frames. Tested in `tests/agent.rs` (`locked_screen_shows_nothing_private`).
 
+## Untrusted input (T98)
+
+Script output, app-published items and user stylesheets are untrusted. None of them may take
+the agent down, because systemd would restart it into the same input over and over.
+
+- **Raster icons** (`icon-data`, files, album art) larger than 4096 px on either side are
+  refused before decoding (`sliver_render::icon::MAX_RASTER_SIDE`). A few bytes of PNG can
+  claim 30000x30000. JPEGs with less pixel data than their header promises are an error, not a
+  panic. SVGs never decode embedded raster images (resvg's raster feature is off).
+- **Tests:** fixed-seed random inputs check that nothing panics. That covers markup, text and
+  mangled stylesheets through to pixels (`sliver-render/tests/robustness.rs`), script output
+  lines (`sliver-modules` `output.rs`), and random format strings with random outputs through
+  a full agent frame (`sliver-agent/tests/robustness.rs`).
+- **Panic guard:** building a frame runs under `catch_unwind`. If a module panics anyway, that
+  layer keeps its last good frame, the error is logged to the journal
+  (`journalctl --user -u sliver-agent`), and the next change renders normally.
+
 ## Public D-Bus API
 `api.rs` serves cedar's `sliver_api` on the session bus. `Host::changed` sets a flag and pokes a
 wake socket the main loop polls. `Host::control` hands `Control1` requests to the main loop and

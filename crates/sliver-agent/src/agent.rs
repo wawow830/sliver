@@ -121,6 +121,9 @@ pub struct Agent {
     /// A base-layer change animating (`-sliver-layer-transition`), and the layer depth the base
     /// frame was last drawn at (deeper = slide forward).
     layer_anim: Option<frame::LayerAnim>,
+    /// Tests: make the next frame build panic (to exercise the guard in `render`).
+    #[cfg(test)]
+    panic_in_build: bool,
     base_depth: usize,
     recognizer: Recognizer,
     /// Cell keys being touched (agent regions).
@@ -206,6 +209,8 @@ impl Agent {
             fn_held: false,
             frames: [None, None],
             layer_anim: None,
+            #[cfg(test)]
+            panic_in_build: false,
             base_depth: 0,
             recognizer: Recognizer::new(),
             pressed: HashSet::new(),
@@ -299,7 +304,25 @@ impl Agent {
                         let rule = r.rule.filter(|_| self.layout_override.is_none());
                         self.active = Some((r.layout.clone(), rule));
                     }
-                    let mut f = self.build(&r, world, id_base);
+                    // A panic while building (a module bug, input nobody foresaw) must not take
+                    // the agent down: systemd would restart it into the same panic, over and
+                    // over. Keep showing this layer's last good frame and report it instead.
+                    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.build(&r, world, id_base)
+                    }));
+                    let mut f = match built {
+                        Ok(f) => f,
+                        Err(p) => {
+                            let msg = p
+                                .downcast_ref::<String>()
+                                .map(String::as_str)
+                                .or_else(|| p.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic");
+                            self.errors
+                                .push(format!("layer {name}: building the frame panicked: {msg}"));
+                            continue;
+                        }
+                    };
                     if layer == Layer::Base {
                         self.animate_layer_change(&mut f);
                     }
@@ -352,6 +375,10 @@ impl Agent {
     }
 
     fn build(&mut self, r: &Resolved, world: &World, id_base: u32) -> Frame {
+        #[cfg(test)]
+        if self.panic_in_build {
+            panic!("test panic in build");
+        }
         let mut world_pushed;
         let world = if self.pushed.is_empty() {
             world
@@ -1678,5 +1705,44 @@ fn slot(layer: Layer) -> usize {
     match layer {
         Layer::Base => 0,
         Layer::Fn => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    /// A panic while building a frame is caught: the layer keeps its last good frame, the
+    /// error is reported, and the next render works again.
+    #[test]
+    fn a_panicking_build_keeps_the_last_frame() {
+        let l = sliver_config::load_str("", std::path::Path::new("."));
+        let mut a = Agent::new(
+            l.config,
+            Stylesheet::sliver(),
+            Renderer::new(sliver_render::Fonts::embedded()),
+            crate::icons::Icons::builtin_only(),
+            2008,
+            60,
+        );
+        let w = World::at(
+            chrono::Local
+                .with_ymd_and_hms(2026, 10, 12, 9, 41, 0)
+                .unwrap(),
+        );
+        assert_eq!(a.render(&w), [Layer::Base, Layer::Fn]);
+        let good = a.frame(Layer::Base).unwrap().image.clone();
+        a.panic_in_build = true;
+        assert!(a.render(&w).is_empty(), "nothing new to present");
+        assert!(
+            a.errors.iter().any(|e| e.contains("panicked")),
+            "{:?}",
+            a.errors
+        );
+        assert_eq!(a.frame(Layer::Base).unwrap().image.data(), good.data());
+        a.panic_in_build = false;
+        assert_eq!(a.render(&w), [Layer::Base, Layer::Fn]);
+        assert!(a.errors.is_empty());
     }
 }
