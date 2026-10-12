@@ -23,6 +23,11 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full rel
 `scripts/check` runs `rpmspec -P` on the spec when rpm is installed.
 
 ### Install behaviour
+- **Rules applied at install:** `%post` reloads udev and sends a `change` event to the bar's DRM card
+  (`/dev/sliver_display` alias, needed by `BindsTo=`) and the bar backlight (group-writable). Without this,
+  the first `systemctl start sliverd` before a reboot timed out on the device and fell back to tiny-dfr
+  (seen on the first real install). If the backlight still isn't writable, sliverd runs with brightness
+  control disabled instead of exiting.
 - **No takeover at install.** sliverd's udev rule applies from the next boot (or the next digitizer
   `add` event). Switch right away with `sudo systemctl start sliverd`, and `Conflicts=` stops tiny-dfr.
 - **Uninstall gives the bar back:** `%preun` stops sliverd, and `%postun` starts tiny-dfr (if it's

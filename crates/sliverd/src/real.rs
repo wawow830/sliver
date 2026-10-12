@@ -102,6 +102,16 @@ impl crate::backend::InputSource for HwInput {
     }
 }
 
+/// Stand-in when the bar backlight can't be opened: brightness writes are dropped.
+struct NoBacklight;
+
+impl Backlight for NoBacklight {
+    fn set(&mut self, _value: u32) {}
+    fn screen_fraction(&mut self) -> Option<f32> {
+        None
+    }
+}
+
 /// Everything opened for a real run.
 pub struct RealHardware {
     pub backends: Backends,
@@ -127,13 +137,25 @@ pub fn open() -> io::Result<RealHardware> {
         input.device_names(),
         input.hotplug()
     );
-    let backlight = SysfsBacklight::open()?;
-    let max_brightness = backlight.max();
+    // A backlight we can't write (udev hasn't applied 99-z-sliverd.rules yet, missing fd) must not
+    // keep the safe layer off the bar: run at whatever brightness it's at (invariant 1 first).
+    let (backlight, max_brightness): (Box<dyn Backlight>, u32) = match SysfsBacklight::open() {
+        Ok(b) => {
+            let max = b.max();
+            (Box::new(b), max)
+        }
+        Err(e) => {
+            eprintln!("sliverd: bar backlight not writable ({e}); brightness control disabled");
+            let max = sliver_hw::discover::bar_backlight(Path::new("/sys/class/backlight"))
+                .map_or(255, |b| b.max);
+            (Box::new(NoBacklight), max)
+        }
+    };
     let keys = UinputKeys::create()?;
     Ok(RealHardware {
         backends: Backends {
             display: Box::new(panel),
-            backlight: Box::new(backlight),
+            backlight,
             keys: Box::new(keys),
         },
         input,

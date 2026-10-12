@@ -130,6 +130,20 @@ appstreamcli validate --no-net --explain %{buildroot}%{_metainfodir}/*.metainfo.
 %post -n sliverd
 %systemd_post sliverd.service sliverd.socket
 %udev_rules_update
+# Apply 99-z-sliverd.rules to the devices that already exist, so `systemctl start sliverd` works
+# without a reboot: the bar card's /dev/sliver_display alias (BindsTo=) and the backlight's
+# permissions. The rules reload normally happens at the end of the transaction, too late for this.
+# Only the bar's own card and backlight get a change event (not the main display's card).
+udevadm control --reload >/dev/null 2>&1 || :
+for card in /sys/class/drm/card[0-9]*; do
+    case "$(basename "$(readlink -f "$card/device/driver" 2>/dev/null)")" in
+        adp|appletbdrm) udevadm trigger --action=change "$card" >/dev/null 2>&1 || : ;;
+    esac
+done
+udevadm trigger --action=change --subsystem-match=backlight \
+    --sysname-match=228600000.dsi.0 --sysname-match=228200000.display-pipe.0 \
+    --sysname-match=appletb_backlight >/dev/null 2>&1 || :
+udevadm settle --timeout=5 >/dev/null 2>&1 || :
 # No takeover at install time: the bar switches to sliverd at the next boot, or now with
 # `systemctl start sliverd` (Conflicts= stops tiny-dfr). docs/packaging.md.
 
