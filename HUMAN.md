@@ -8,8 +8,9 @@ Run these from `~/Projects/sliver` (or anywhere in the repo). `alias swarm=~/Pro
 
 ```
 swarm status                         # everything at a glance
-swarm human list                     # what needs you
-swarm human answer H3 "done, installed"   # reply; the asking peer gets woken
+swarm human                          # answer open questions one at a time (a / b / ok / any text)
+swarm human list [--brief]           # read them all (--brief: one line each, * = recommended)
+swarm human answer H3 b              # reply directly; the peer that asked gets woken
 swarm send ash "please prioritize per-app layouts"   # talk to one peer
 swarm say "new priority: ..."        # talk to everyone
 swarm task add "..." --body "..."    # add work

@@ -8,7 +8,7 @@ it only wakes idle peers that have something to do.
 
 Peers may (and should) improve this tool. Keep the state format backward compatible.
 """
-import argparse, fcntl, json, os, re, shutil, subprocess, sys, time
+import argparse, fcntl, json, os, re, shutil, subprocess, sys, textwrap, time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -281,39 +281,149 @@ def cmd_log(a):
 
 # ---------------------------------------------------------------- humans
 
+MAX_QUESTION = 200  # the question itself; context goes in --detail
+
+
+def color(code, s):
+    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+        return s
+    return f"\033[{code}m{s}\033[0m"
+
+
+def wrap(text, indent, first=None, style=None):
+    width = min(shutil.get_terminal_size((100, 24)).columns, 100) - 1
+    out, first = [], first if first is not None else indent
+    for para in str(text).split("\n"):
+        if not para.strip():
+            out.append(""); continue
+        for line in textwrap.wrap(para, width=width, initial_indent=first, subsequent_indent=indent):
+            out.append(color(style, line) if style else line)
+        first = indent
+    return out
+
+
+def letter(i):
+    return chr(ord("a") + i)
+
+
+def render_human(h):
+    meta = " · ".join(x for x in (h["kind"], h["by"], f"{ago(h['at'])} ago", h.get("task")) if x)
+    out = [f"{color('1;33', h['id'])}  {color('2', meta)}"]
+    out += wrap(h["text"], "  ", style="1")
+    if h.get("detail"):
+        out += [""] + wrap(h["detail"], "  ")
+    opts, pick = h.get("options") or [], h.get("pick")
+    if opts:
+        out.append("")
+        for i, o in enumerate(opts):
+            lines = wrap(o, "       ", first=f"    {letter(i)}) ")
+            if i == pick:
+                lines[-1] += color("32", "  ← recommended")
+            out += lines
+    if h["status"] == "answered":
+        out += [""] + wrap(h.get("answer", ""), "    ", first="  ✓ ", style="32")
+    else:
+        choices = "/".join(letter(i) for i in range(len(opts)))
+        hint = f"swarm human answer {h['id']} " + (f"{choices}" + ("/ok" if pick is not None else "") + " or text" if opts else '"..."')
+        out += ["", color("2", f"  → {hint}")]
+    return "\n".join(out)
+
+
+def brief_human(h):
+    opts, pick = h.get("options") or [], h.get("pick")
+    choice = " [" + "/".join(letter(i) + ("*" if i == pick else "") for i in range(len(opts))) + "]" if opts else ""
+    q = h["text"].split("\n")[0]
+    q = q if len(q) <= 70 else q[:67] + "..."
+    return f"{h['id']:>4} {h['kind']:<9} {h['by']:<7} {q}{choice}"
+
+
+def expand_answer(h, text):
+    """'b' -> 'b) <option>', 'ok' -> the recommended option."""
+    opts, pick, t = h.get("options") or [], h.get("pick"), text.strip()
+    if opts and t.lower() in ("ok", "y", "yes", "pick") and pick is not None:
+        return f"{letter(pick)}) {opts[pick]} (your recommendation)"
+    if opts and len(t) == 1 and t.lower() in [letter(i) for i in range(len(opts))]:
+        i = ord(t.lower()) - ord("a")
+        return f"{letter(i)}) {opts[i]}"
+    m = re.match(r"^([a-z])[)\s:,-]+(.+)$", t, re.I | re.S)
+    if opts and m and m.group(1).lower() in [letter(i) for i in range(len(opts))]:
+        i = ord(m.group(1).lower()) - ord("a")
+        return f"{letter(i)}) {opts[i]}. Note: {m.group(2)}"
+    return t
+
+
+def answer_human(hid, text):
+    with state() as s:
+        h = s["humans"].get(hid) or sys.exit(f"no {hid}")
+        ans = expand_answer(h, text)
+        h.update(status="answered", answer=ans, answered_at=now())
+        asker = h["by"]
+        if s["peers"].get(asker, {}).get("status") == "waiting":
+            s["peers"][asker]["status"] = "active"
+    channel("human", f"{hid} answered: {ans}", by="human")
+    deliver(asker, "human", f"answer to {hid} ({h['text'][:100]}): {ans}", kind="human-answer")
+    return ans
+
+
+def open_humans(s, all_=False):
+    hs = [h for h in s["humans"].values() if all_ or h["status"] == "open"]
+    return sorted(hs, key=lambda h: int(h["id"][1:]))
+
+
 def cmd_human(a):
-    if a.sub == "ask":
+    sub = a.sub or ("go" if sys.stdin.isatty() and sys.stdout.isatty() else "list")
+    if sub == "ask":
         by = me()
+        if len(a.text) > MAX_QUESTION:
+            sys.exit(f"question is {len(a.text)} chars; keep it to one short sentence (<= {MAX_QUESTION}). "
+                     "Put context in --detail and choices in --option (repeatable) with --pick. One question per ask.")
+        opts = a.option or []
+        pick = None
+        if a.pick:
+            p = a.pick.strip().lower()
+            pick = int(p) - 1 if p.isdigit() else ord(p) - ord("a")
+            if not 0 <= pick < len(opts):
+                sys.exit("--pick must name one of the --option entries (a, b, ... or 1, 2, ...)")
         with state() as s:
             hid = f"H{s['next_human']}"; s["next_human"] += 1
             s["humans"][hid] = {"id": hid, "by": by, "kind": a.kind, "task": a.task, "text": a.text,
+                                "detail": a.detail or "", "options": opts, "pick": pick,
                                 "status": "open", "at": now()}
             if a.block:
                 s["peers"].setdefault(by, {})["status"] = "waiting"
         channel("human", f"{hid} ({a.kind}) {a.text}", by=by)
         notify(f"sliver needs you: {hid} ({a.kind})", f"{by}: {a.text}")
         print(hid)
-    elif a.sub == "list":
+    elif sub == "list":
         with state(write=False) as s:
-            hs = [h for h in s["humans"].values() if a.all or h["status"] == "open"]
-            for h in sorted(hs, key=lambda h: int(h["id"][1:])):
-                print(f"{h['id']:>4} {h['status']:<8} {h['kind']:<9} from {h['by']} {ago(h['at'])} ago"
-                      + (f" re {h['task']}" if h.get("task") else ""))
-                print("     " + h["text"].replace("\n", "\n     "))
-                if h.get("answer"):
-                    print("  => " + h["answer"])
-            if not hs:
-                print("(nothing needs you)")
-    elif a.sub == "answer":
-        with state() as s:
-            h = s["humans"].get(a.id) or sys.exit(f"no {a.id}")
-            h.update(status="answered", answer=a.text, answered_at=now())
-            asker = h["by"]
-            if s["peers"].get(asker, {}).get("status") == "waiting":
-                s["peers"][asker]["status"] = "active"
-        channel("human", f"{a.id} answered: {a.text}", by="human")
-        deliver(asker, "human", f"answer to {a.id} ({h['text'][:80]}): {a.text}", kind="human-answer")
-        print("ok")
+            hs = open_humans(s, a.all)
+        if not hs:
+            print("(nothing needs you)"); return
+        if a.brief:
+            print("\n".join(brief_human(h) for h in hs)); return
+        rule = color("2", "─" * min(shutil.get_terminal_size((100, 24)).columns, 100))
+        print(f"\n{rule}\n".join(render_human(h) for h in hs))
+        if not a.all:
+            print(color("2", f"\n{len(hs)} open. `swarm human` walks through them one at a time."))
+    elif sub == "answer":
+        print(answer_human(a.id, a.text))
+    elif sub == "go":
+        with state(write=False) as s:
+            hs = open_humans(s)
+        if not hs:
+            print("(nothing needs you)"); return
+        print(color("2", "Enter = skip, q = quit. Reply with a letter, 'ok' for the recommendation, or any text.\n"))
+        for n, h in enumerate(hs, 1):
+            print(color("2", f"[{n}/{len(hs)}]"), render_human(h).rsplit("\n", 2)[0])
+            try:
+                ans = input(color("1;36", "\n  answer› ")).strip()
+            except (EOFError, KeyboardInterrupt):
+                print(); return
+            if ans.lower() in ("q", "quit"):
+                return
+            if ans:
+                print(color("32", "  ✓ " + answer_human(h["id"], ans)))
+            print()
 
 
 # ---------------------------------------------------------------- peers
@@ -630,7 +740,7 @@ def cmd_status(a):
         paused = " (PAUSED)" if s["paused"] else ""
         print(f"== sliver swarm{paused}")
     print("\n== peers"); cmd_peers(argparse.Namespace(all=False))
-    print("\n== needs human"); cmd_human(argparse.Namespace(sub="list", all=False))
+    print("\n== needs human"); cmd_human(argparse.Namespace(sub="list", all=False, brief=True))
     print("\n== board"); cmd_task(argparse.Namespace(sub="list", all=False, mine=False))
     print("\n== channel"); cmd_log(argparse.Namespace(n=a.n))
 
@@ -664,11 +774,16 @@ def main():
     x = sp.add_parser("inbox"); x.add_argument("--peek", action="store_true"); x.add_argument("--all", action="store_true"); x.set_defaults(f=cmd_inbox)
     x = sp.add_parser("log", help="read the channel"); x.add_argument("-n", type=int, default=30); x.set_defaults(f=cmd_log)
 
-    h = sp.add_parser("human", help="needs-human queue"); hs = h.add_subparsers(dest="sub", required=True)
-    x = hs.add_parser("ask"); x.add_argument("text")
+    h = sp.add_parser("human", help="needs-human queue (no subcommand: answer interactively)")
+    hs = h.add_subparsers(dest="sub")
+    x = hs.add_parser("ask"); x.add_argument("text", help="ONE short question")
+    x.add_argument("--detail", help="context the human needs to answer")
+    x.add_argument("--option", action="append", help="a choice (repeat for each)")
+    x.add_argument("--pick", help="your recommendation: a/b/... or 1/2/...")
     x.add_argument("--kind", default="decision", choices=["sudo", "hardware", "taste", "decision", "external", "system", "secret"])
     x.add_argument("--task"); x.add_argument("--block", action="store_true", help="mark yourself waiting until answered")
-    hs.add_parser("list").add_argument("--all", action="store_true")
+    x = hs.add_parser("list"); x.add_argument("--all", action="store_true"); x.add_argument("--brief", action="store_true")
+    hs.add_parser("go", help="answer open questions one by one")
     x = hs.add_parser("answer"); x.add_argument("id"); x.add_argument("text")
     h.set_defaults(f=cmd_human)
 

@@ -50,7 +50,7 @@ swarm task list [--all|--mine] | show T# | claim T# | note T# ".." | done T# "..
 swarm say "TEXT"                     broadcast to everyone (sparingly)
 swarm send PEER "TEXT" [--now]       direct message (--now interrupts them mid-turn: urgent only)
 swarm inbox | log -n N               read
-swarm human ask "TEXT" --kind K [--task T#] [--block]
+swarm human ask "ONE SHORT QUESTION?" --kind K --detail ".." --option ".." --option ".." --pick a [--task T#] [--block]
 swarm rest "why" | wake
 swarm spawn NAME --why ".." [--model ..] [--knows ..] [--brief ".."]
 swarm retire [NAME]
@@ -67,8 +67,20 @@ swarm land
 - **Retire** yourself if your area is finished and nobody needs your context. Release your tasks first.
 
 ## Ask the human. Never do these yourself
-Use `swarm human ask "..." --kind <kind>`. Include the exact command or decision and your
-recommendation. Keep working on something else unless you truly can't (`--block`).
+Use `swarm human ask`. The human reads these on a laptop screen between other things, so make them
+easy to answer:
+- **One question per ask**, as a short plain sentence (≤200 chars, enforced). Several decisions
+  means several asks.
+- Context goes in `--detail`: what it's for, the exact command to run (for `sudo`), and what happens next.
+- Choices go in `--option` (repeat it), with your recommendation in `--pick`. The human can then reply
+  with just `a`, `b` or `ok`. Use plain words, not jargon or abbreviations.
+
+```
+swarm human ask "Can you install librsvg2-devel?" --kind sudo --task T4 \
+  --detail "Needed to render SVG icons. Run: sudo dnf install -y librsvg2-devel" \
+  --option "installed" --option "no, use the pure-Rust renderer instead" --pick a
+```
+Keep working on something else unless you truly can't (`--block`).
 
 | kind | when |
 |---|---|
