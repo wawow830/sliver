@@ -144,7 +144,7 @@ tiering only.
 | Hyprland backend | P1 | done |  |
 | sway/wlroots, GNOME extension, KWin script | P2 | partial | sway, niri and the KWin script (tested nested) done; the GNOME extension is untested on a real shell; no generic wlroots backend. |
 | MPRIS, PipeWire, logind backlight, UPower, notifications | P1/P2 | done | Plus Bluetooth, network and the tray. |
-| RPM + COPR, udev, polkit, SELinux-clean, man pages | P1 (RPM) / P2 (rest) | partial | An RPM spec exists (T41); COPR, polkit, SELinux checks and man pages are open. |
+| RPM + COPR, udev, polkit, SELinux-clean, man pages | P1 (RPM) / P2 (rest) | partial | An RPM spec exists (T41) and installs the man pages (T42: sliverctl(1), sliver-agent(1), sliverd(8), sliver-config(5), sliver-stylesheet(5)); COPR, polkit and SELinux checks are open. |
 | Intel T2 (t2linux) | P2 | todo |  |
 
 ## 9. Hardware facts that shape features (from birch, docs/hardware.md)

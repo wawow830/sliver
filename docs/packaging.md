@@ -54,5 +54,5 @@ Creating the COPR project is an `external` ask for the human. Chroots: `fedora-*
 - **polkit:** nothing needed. sliverd authorises agents by seat0 session ownership, the agent is
   per user, and nothing asks for privileges at runtime. (The safe-swap harness policy is a dev tool
   and isn't packaged.)
-- **Man pages** (T42, cedar): add to `%files` when they land.
+- **Man pages** (T42, cedar): `man/`, installed by the spec. `crates/sliverctl/tests/man_pages.rs` checks them against the CLI and config keys.
 - **Icon** for the settings app: it uses the theme's `input-keyboard` until we have one.
