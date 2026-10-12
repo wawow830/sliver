@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "Sliver contributors"
+            }
+        ],
+        "Description": "Tells the Sliver Touch Bar agent which window and virtual desktop are active",
+        "EnabledByDefault": false,
+        "Id": "sliver-focus",
+        "License": "MIT",
+        "Name": "Sliver focus"
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js"
+}

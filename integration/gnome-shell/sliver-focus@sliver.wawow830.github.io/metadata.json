@@ -1,0 +1,7 @@
+{
+    "uuid": "sliver-focus@sliver.wawow830.github.io",
+    "name": "Sliver focus",
+    "description": "Tells the Sliver Touch Bar agent which window and workspace are active (io.github.wawow830.Sliver.Desktop1).",
+    "shell-version": ["45", "46", "47", "48", "49", "50"],
+    "url": "https://github.com/wawow830/sliver"
+}

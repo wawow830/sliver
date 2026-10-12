@@ -27,4 +27,14 @@ if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then
   udevadm verify --no-summary packaging/udev/*.rules
 fi
 
+if command -v node >/dev/null; then
+  echo "== desktop integration scripts"
+  for f in integration/kwin/sliver-focus/contents/code/main.js integration/gnome-shell/*/extension.js; do
+    tmp=$(mktemp --suffix=.mjs); cp "$f" "$tmp"; node --check "$tmp"; rm -f "$tmp"
+  done
+  for f in integration/kwin/sliver-focus/metadata.json integration/gnome-shell/*/metadata.json; do
+    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f"
+  done
+fi
+
 echo "check: ok"
