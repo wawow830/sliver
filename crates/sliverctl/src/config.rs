@@ -18,6 +18,7 @@ Config (offline, edits files; comments are kept, and invalid edits are refused)
   config unset KEY
   config resolve [LAYER] [CTX=VALUE...]   which layout and modules show, e.g. app_id=foot locked=true
   config import-tiny-dfr [--force]        write config.toml + style.css from tiny-dfr's config
+  config import-waybar [FILE] [--force]   write config.toml from a waybar config (default ~/.config/waybar/config.jsonc|config)
 ";
 
 /// The file `set`/`unset`/`import` edit: the first entry of the search path (the user's).
@@ -132,6 +133,7 @@ fn run_inner(args: &[String]) -> Result<ExitCode, String> {
         ("unset", [key]) => edit(|ed| ed.remove(key).map(|_| ())),
         ("resolve", ctx_args) => resolve(ctx_args),
         ("import-tiny-dfr", flags) => import_tiny_dfr(flags.contains(&"--force")),
+        ("import-waybar", args) => import_waybar(args),
         (other, _) => Err(format!(
             "unknown or malformed config command {other:?}\n\n{USAGE}"
         )),
@@ -233,5 +235,58 @@ fn import_tiny_dfr(force: bool) -> Result<ExitCode, String> {
         eprintln!("warning: {w}");
     }
     println!("wrote {} and {}", cfg.display(), css.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+fn import_waybar(args: &[&str]) -> Result<ExitCode, String> {
+    let force = args.contains(&"--force");
+    let files: Vec<&str> = args.iter().copied().filter(|a| *a != "--force").collect();
+    let src = match files.as_slice() {
+        [f] => PathBuf::from(f),
+        [] => {
+            let dir = std::env::var_os("XDG_CONFIG_HOME")
+                .filter(|x| !x.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+                .ok_or("no HOME")?
+                .join("waybar");
+            ["config.jsonc", "config"]
+                .iter()
+                .map(|n| dir.join(n))
+                .find(|p| p.is_file())
+                .ok_or_else(|| format!("no waybar config in {}", dir.display()))?
+        }
+        _ => return Err("import-waybar takes at most one FILE".into()),
+    };
+    // Reuse waybar's style.css when it sits next to the config (sliver accepts the GTK-isms).
+    let css = src.with_file_name("style.css");
+    let opts = sliver_waybar::Options {
+        stylesheet: css.is_file().then(|| css.display().to_string()),
+    };
+    let imp = sliver_waybar::import_path(&src, &opts)?;
+    let cfg = user_config();
+    if cfg.exists() && !force {
+        return Err(format!(
+            "{} exists; use --force to overwrite",
+            cfg.display()
+        ));
+    }
+    let dir = cfg.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::write(&cfg, &imp.toml).map_err(|e| format!("{}: {e}", cfg.display()))?;
+    for n in &imp.notes {
+        eprintln!(
+            "{}: {}: {}",
+            format!("{:?}", n.level).to_lowercase(),
+            n.path,
+            n.message
+        );
+    }
+    println!(
+        "wrote {} ({} modules, {} dropped)",
+        cfg.display(),
+        imp.modules.len(),
+        imp.dropped.len()
+    );
     Ok(ExitCode::SUCCESS)
 }

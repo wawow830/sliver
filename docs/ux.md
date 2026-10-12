@@ -276,8 +276,9 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   and layouts with inheritance. **Display & Power** is read-only. **Status** shows config
   validity, every problem with its key path, the hardware/Esc situation, and the safe hatch.
   Reload re-reads the config. The other pages say what will go there.
-- Module content in the preview is a placeholder until the agent's ResolvedZone→Scene mapping
-  (T24) is a shared function. With a running agent the preview should come from its render.
+- The preview runs the agent's own pipeline (`sliver_agent::Agent`, offline) for the chosen layer
+  and simulated context, so it's pixel-identical to the bar. Sample values for data-backed
+  modules and dashed empty placeholders depend on ash's `World.preview` (asked).
 - Next slices: editing via `sliver_config::Editor` (instant apply + undo, Q3), drag and drop
   from a Library, the inspector, live agent/daemon status over D-Bus, and Mirror to Touch Bar.
 - **Testing headless** (never on the live session): `gtk4-broadwayd :7 &` then

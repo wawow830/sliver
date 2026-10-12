@@ -1618,10 +1618,12 @@ dependencies = [
 name = "sliver-settings"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "gtk4",
  "libadwaita",
+ "sliver-agent",
  "sliver-config",
- "sliver-icons",
+ "sliver-ipc",
  "sliver-render",
 ]
 
@@ -1643,6 +1645,7 @@ dependencies = [
  "sliver-client",
  "sliver-config",
  "sliver-ipc",
+ "sliver-waybar",
  "toml",
  "zbus",
 ]

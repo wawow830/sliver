@@ -65,22 +65,25 @@ fn main() -> glib::ExitCode {
             .default_width(1180)
             .default_height(760)
             .build();
-        let preview = Rc::new(RefCell::new(Preview::new()));
-        rebuild(&win, &preview);
+        rebuild(&win);
         win.present();
     });
     app.run()
 }
 
 /// (Re)builds the whole window from a fresh config load.
-fn rebuild(win: &adw::ApplicationWindow, preview: &Rc<RefCell<Preview>>) {
+fn rebuild(win: &adw::ApplicationWindow) {
     let state = Rc::new(State::load());
+    let preview = Rc::new(RefCell::new(Preview::new(
+        state.loaded.config.clone(),
+        state.sheet.clone(),
+    )));
     let pages: Vec<(&str, &str, &str, gtk::Widget)> = vec![
         (
             "bar",
             "Bar",
             "input-keyboard-symbolic",
-            bar_page(&state, preview),
+            bar_page(&state, &preview),
         ),
         (
             "rules",
@@ -180,8 +183,8 @@ fn rebuild(win: &adw::ApplicationWindow, preview: &Rc<RefCell<Preview>>) {
     let reload = gtk::Button::from_icon_name("view-refresh-symbolic");
     reload.set_tooltip_text(Some("Reload config"));
     {
-        let (win, preview) = (win.clone(), preview.clone());
-        reload.connect_clicked(move |_| rebuild(&win, &preview));
+        let win = win.clone();
+        reload.connect_clicked(move |_| rebuild(&win));
     }
     let sidebar_page = adw::NavigationPage::new(&toolbar(&sidebar, Some(&reload)), "Sliver");
     split.set_sidebar(Some(&sidebar_page));
@@ -339,8 +342,13 @@ fn bar_page(state: &Rc<State>, preview: &Rc<RefCell<Preview>>) -> gtk::Widget {
             let config = &state.loaded.config;
             match config.resolve(&layer, &ctx) {
                 Ok(r) => {
-                    let pixmap = preview.borrow_mut().render(&r, &state.sheet);
-                    *frame.borrow_mut() = surface(&pixmap);
+                    match preview.borrow_mut().render(&layer, ctx.clone()) {
+                        Ok(pixmap) => *frame.borrow_mut() = surface(&pixmap),
+                        Err(e) => {
+                            *frame.borrow_mut() = None;
+                            zones.append(&row("Can't render", &e));
+                        }
+                    }
                     picture.queue_draw();
                     why.set_text(&match r.rule {
                         Some(i) => format!(
