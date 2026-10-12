@@ -1911,7 +1911,9 @@ mod tests {
         )
         .unwrap();
         let mut w = world();
-        w.apps = std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::scan(&[dir.clone()]));
+        w.apps = std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::scan(
+            std::slice::from_ref(&dir),
+        ));
         w.desktop.connected = true;
         w.desktop.workspace = Some(sliver_desktop::Workspace {
             id: 1,
