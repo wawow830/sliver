@@ -13,6 +13,7 @@ pub mod fake;
 pub mod hyprland;
 pub mod niri;
 pub mod sway;
+pub mod wlr;
 
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -45,6 +46,8 @@ pub enum Backend {
     Hyprland,
     Sway,
     Niri,
+    /// Any other Wayland compositor with wlr-foreign-toplevel-management (river, labwc, wayfire…).
+    Wlroots,
     Gnome,
     Kde,
     X11,
@@ -83,6 +86,10 @@ impl Backend {
         }
         if set("DISPLAY") && !set("WAYLAND_DISPLAY") {
             return Backend::X11;
+        }
+        // Some other Wayland compositor (river, labwc, wayfire…): try the generic protocols.
+        if set("WAYLAND_DISPLAY") {
+            return Backend::Wlroots;
         }
         Backend::Unknown
     }
@@ -252,6 +259,7 @@ pub fn watch_auto(
             let sock = niri::socket_from_env(&get).ok_or_else(|| missing("NIRI_SOCKET"))?;
             niri::watch(&sock, on_change);
         }
+        Backend::Wlroots => wlr::watch(on_change)?,
         other => {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -336,7 +344,15 @@ mod tests {
         assert_eq!(Backend::detect(env(&[("DISPLAY", ":0")])), Backend::X11);
         assert_eq!(
             Backend::detect(env(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1")])),
-            Backend::Unknown
+            Backend::Wlroots,
+            "an unknown Wayland compositor: try the generic protocols"
+        );
+        assert_eq!(
+            Backend::detect(env(&[
+                ("WAYLAND_DISPLAY", "wayland-1"),
+                ("XDG_CURRENT_DESKTOP", "river")
+            ])),
+            Backend::Wlroots
         );
         assert_eq!(Backend::detect(env(&[])), Backend::Unknown);
     }

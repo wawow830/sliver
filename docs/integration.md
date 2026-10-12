@@ -71,7 +71,7 @@ is in `sliver_desktop::Backend::detect` (env: `HYPRLAND_INSTANCE_SIGNATURE`, `NI
 | **Hyprland** | `socket2` event stream + `socket1` JSON queries | yes | small | **done** (`sliver_desktop::hyprland`) |
 | sway / i3 | i3-ipc over `$SWAYSOCK`, `SUBSCRIBE ["window","workspace","input","mode"]` | yes | small | **done** (`sliver_desktop::sway`; fake-server tests, not run on a real sway) |
 | niri | JSON IPC over `$NIRI_SOCKET`, `"EventStream"` request | yes | small | **done** (`sliver_desktop::niri`; fake-server tests, not run on a real niri) |
-| wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | yes | medium | todo, fallback |
+| wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | yes | medium | **done** (`sliver-desktop::wlr`; tested against a mock compositor, **not yet on a real river/labwc/wayfire**) |
 | KDE Plasma 6 | KWin script (JS) calling our D-Bus service | yes | medium | **done** (`integration/kwin`; tested in nested `kwin_wayland --virtual`) |
 | GNOME Shell | extension calling our D-Bus service | yes | medium-large | **written, untested** (`integration/gnome-shell`; see integration/README.md); also switches workspaces for the agent |
 | X11 | `_NET_ACTIVE_WINDOW` on the root window | yes | small | todo, last |
@@ -131,6 +131,19 @@ without a dedicated backend. Crates: `wayland-client` + `wayland-protocols-wlr` 
 backend, no libwayland needed at build; `wayland-client` 1.25 is installed anyway **(verified)**).
 `ext-foreign-toplevel-list-v1` is the standard replacement but has no "activated" state, so it
 can't answer "which is focused".
+
+**Implemented (T84, `sliver-desktop/src/wlr.rs`).** Used for any Wayland session that isn't
+Hyprland, sway, niri, GNOME or KDE (`Backend::Wlroots`). One thread owns the connection and sleeps
+in `poll(2)` on it and on a wake pipe; actions (focus, close, switch workspace) are requests on
+that same connection, which `control::run` hands over through a channel, because the protocols
+give no ids a second connection could use (ids are numbers handed out by the watcher). The
+protocols don't say which workspace a window is on, so all windows show on the active workspace.
+There is no pid, floating or keyboard-layout info. A compositor without
+`wlr-foreign-toplevel-management` makes the watcher stop at once (no retry loop). The test
+(`crates/sliver-desktop/tests/wlr.rs`) runs a mock compositor (wayland-server) speaking both
+protocols and checks the initial burst, live changes and the three actions over a real socket. A
+headless Hyprland could not be started here (`CBackend::create() failed`), so no real compositor
+has been tried.
 
 ### KDE Plasma 6 (KWin script)
 

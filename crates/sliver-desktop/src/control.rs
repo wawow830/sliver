@@ -147,6 +147,7 @@ pub fn run(get: impl Fn(&str) -> Option<String>, a: &Action) -> io::Result<()> {
             let req = niri_request(a).ok_or_else(|| io::Error::other("bad niri window id"))?;
             niri_run(&sock, &req)
         }
+        Backend::Wlroots => crate::wlr::send(a),
         other => Err(io::Error::new(
             io::ErrorKind::Unsupported,
             format!("no desktop control for {other:?}"),
