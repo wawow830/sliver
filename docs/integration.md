@@ -69,8 +69,8 @@ is in `sliver_desktop::Backend::detect` (env: `HYPRLAND_INSTANCE_SIGNATURE`, `NI
 | backend | mechanism | events | effort | status |
 |---|---|---|---|---|
 | **Hyprland** | `socket2` event stream + `socket1` JSON queries | yes | small | **done** (`sliver_desktop::hyprland`) |
-| sway / i3 | i3-ipc over `$SWAYSOCK`, `SUBSCRIBE ["window","workspace","input","mode"]` | yes | small | todo |
-| niri | JSON IPC over `$NIRI_SOCKET`, `"EventStream"` request | yes | small | todo |
+| sway / i3 | i3-ipc over `$SWAYSOCK`, `SUBSCRIBE ["window","workspace","input","mode"]` | yes | small | **done** (`sliver_desktop::sway`; fake-server tests, not run on a real sway) |
+| niri | JSON IPC over `$NIRI_SOCKET`, `"EventStream"` request | yes | small | **done** (`sliver_desktop::niri`; fake-server tests, not run on a real niri) |
 | wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | yes | medium | todo, fallback |
 | KDE Plasma 6 | KWin script (JS) calling our D-Bus service | yes | medium | todo |
 | GNOME Shell | extension exporting a D-Bus interface | yes | medium-large | todo |
