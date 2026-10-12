@@ -754,3 +754,55 @@ fn emoji_picker_types_pages_and_closes() {
         "back on the base layer"
     );
 }
+
+/// A module with `menu = [...]` opens a sub-bar (entries + ✕) on its trigger gesture; picking an
+/// entry runs its action and closes it.
+#[test]
+fn menu_sub_bar_opens_runs_and_closes() {
+    use sliver_agent::agent::Effect;
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"custom/pw\"]\n[modules.\"custom/pw\"]\nformat = \"P\"\nmenu = [{ label = \"Lock\", on-tap = \"echo lock\" }, { label = \"Off\", on-tap = \"echo off\" }]\n",
+    );
+    let w = world(9, 41);
+    a.render(&w);
+    let keys = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|c| c.key.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(keys(&a).contains(&"custom/pw".to_string()));
+    let tap = |a: &mut Agent, key: &str, t: u64| {
+        let (id, x) = region(a, key);
+        let mut fx = a.touch(id, 0, TouchPhase::Down, x, t);
+        fx.extend(a.touch(id, 0, TouchPhase::Up, x, t + 40_000));
+        fx.extend(a.tick(t + 400_000));
+        fx
+    };
+    let fx = tap(&mut a, "custom/pw", 1_000);
+    assert!(fx.contains(&Effect::Redraw), "{fx:?}");
+    a.render(&w);
+    // like a modal context, the sub-bar covers everything but the layout's first zone
+    assert_eq!(keys(&a), ["custom/pw", "menu/0", "menu/1", "menu/close"]);
+    // picking runs the action and closes
+    let fx = tap(&mut a, "menu/1", 2_000_000);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Spawn(argv) if argv.last().is_some_and(|s| s.contains("echo off")))),
+        "{fx:?}"
+    );
+    a.render(&w);
+    assert!(
+        !keys(&a).contains(&"menu/0".to_string()),
+        "closed after a pick"
+    );
+    // ✕ closes without doing anything
+    tap(&mut a, "custom/pw", 3_000_000);
+    a.render(&w);
+    let fx = tap(&mut a, "menu/close", 4_000_000);
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn(_))));
+    a.render(&w);
+    assert!(!keys(&a).contains(&"menu/close".to_string()));
+}

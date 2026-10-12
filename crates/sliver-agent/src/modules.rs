@@ -267,6 +267,8 @@ pub struct Cell {
     pub target: Option<sliver_desktop::control::Action>,
     /// `timer` modules: the configured total.
     pub timer_total: Option<std::time::Duration>,
+    /// `menu = [...]`: the entries of the sub-bar this module opens.
+    pub menu: Vec<sliver_config::MenuEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -452,6 +454,7 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         pass_through: false,
         target: None,
         timer_total: None,
+        menu: Vec::new(),
     };
     let act = |name: String| Action::ModuleAction(name);
     for t in 0..=Group::ALL.len() {
@@ -490,6 +493,69 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         &["emoji-close"],
         vec![(Gesture::Tap, act("close".into()))],
     ));
+}
+
+/// The cells of an open `menu` sub-bar: one per entry (label and/or icon), then a ✕.
+pub fn menu_cells(
+    entries: &[sliver_config::MenuEntry],
+    icons: &mut Icons,
+    icon_size: u32,
+) -> Vec<Cell> {
+    let cell = |key: String, content: Content, width: Width, classes: &[&str], tap: String| Cell {
+        key,
+        id: "menu".into(),
+        kind: "menu".into(),
+        mic: false,
+        css_id: "menu".into(),
+        classes: classes.iter().map(|c| c.to_string()).collect(),
+        width,
+        content,
+        touch: Touch::Agent,
+        on: vec![(Gesture::Tap, Action::ModuleAction(tap))],
+        next_change: None,
+        pressed: false,
+        checked: false,
+        drawer: None,
+        disabled: false,
+        foreground: None,
+        background: None,
+        published: None,
+        pass_through: false,
+        target: None,
+        timer_total: None,
+        menu: Vec::new(),
+    };
+    let mut out = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        let icon = e
+            .icon
+            .as_deref()
+            .and_then(|n| icons.get(n, None, icon_size));
+        let label = sliver_render::markup::escape(&e.label);
+        let content = match (icon, label.is_empty()) {
+            (Some(ic), false) => Content::IconMarkup(ic, label),
+            (Some(ic), true) => Content::Icon(ic),
+            (None, _) => Content::Markup(label),
+        };
+        out.push(cell(
+            format!("menu/{i}"),
+            content,
+            Width::Fill(1),
+            &["menu-item"],
+            format!("menu:pick:{i}"),
+        ));
+    }
+    let x = icons
+        .get("window-close-symbolic", None, icon_size)
+        .map_or_else(|| Content::Markup("✕".into()), Content::Icon);
+    out.push(cell(
+        "menu/close".into(),
+        x,
+        Width::Fixed(72.0),
+        &["menu-close"],
+        "menu:close".into(),
+    ));
+    out
 }
 
 /// Which workspaces/windows a `workspaces` / `taskbar` module shows (indexes into the lists).
@@ -1231,6 +1297,17 @@ fn cell(
             on.push((g, a));
         }
     }
+    // `menu = [...]`: the trigger gesture (default: tap, or hold when the module also taps) opens
+    // the sub-bar instead of whatever that gesture did.
+    if !m.common.menu.is_empty() {
+        let has_tap = on.iter().any(|(g, _)| *g == Gesture::Tap);
+        let trigger =
+            m.common
+                .menu_trigger
+                .unwrap_or(if has_tap { Gesture::Hold } else { Gesture::Tap });
+        on.retain(|(g, _)| *g != trigger);
+        on.push((trigger, Action::ModuleAction("menu:open".into())));
+    }
     let collapsed_slider = m.id.kind.ends_with("/slider") && sp.slider.is_none();
     let mut touch = touch_kind(m, &on);
     if collapsed_slider {
@@ -1262,6 +1339,7 @@ fn cell(
         pass_through: false,
         target: sp.target,
         timer_total: sp.timer_total,
+        menu: m.common.menu.clone(),
         drawer: (collapsed_slider
             || m.id.kind.ends_with("/slider") && ui.expanded && is_collapsible(m))
         .then(|| Drawer {
@@ -1743,6 +1821,7 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
         pass_through: false,
         target: None,
         timer_total: None,
+        menu: Vec::new(),
     }
 }
 

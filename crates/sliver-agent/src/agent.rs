@@ -105,6 +105,8 @@ pub struct Agent {
     pub errors: Vec<String>,
     /// The emoji picker's recents (shared with the worlds it draws).
     emoji: modules::EmojiHandle,
+    /// An open `menu` sub-bar: the entries it shows.
+    menu: Option<Vec<sliver_config::MenuEntry>>,
     /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
     pub hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
@@ -174,6 +176,7 @@ impl Agent {
             pushed: HashMap::new(),
             errors: Vec::new(),
             emoji: Default::default(),
+            menu: None,
         }
     }
 
@@ -254,6 +257,19 @@ impl Agent {
             .then(|| world.published.app.clone())
             .flatten();
         let mut zones = r.zones.clone();
+        let menu = (id_base == 0 && modal.is_none())
+            .then(|| self.menu.clone())
+            .flatten();
+        if menu.is_some() && !zones.is_empty() {
+            zones.truncate(1);
+            zones.push(sliver_config::ResolvedZone {
+                name: "menu".into(),
+                width: sliver_config::Width::Fill(1),
+                align: sliver_config::Align::Start,
+                class: vec!["menu".into()],
+                modules: Vec::new(),
+            });
+        }
         if modal.is_some() && !zones.is_empty() {
             zones.truncate(1);
             zones.push(sliver_config::ResolvedZone {
@@ -270,6 +286,16 @@ impl Agent {
         let per_zone: Vec<Vec<Cell>> = zones
             .iter()
             .map(|z| {
+                if z.name == "menu"
+                    && let Some(entries) = &menu
+                {
+                    let mut cells =
+                        crate::modules::menu_cells(entries, &mut self.icons, ICON_LOOKUP_SIZE);
+                    for c in &mut cells {
+                        c.pressed = self.pressed.contains(&c.key);
+                    }
+                    return cells;
+                }
                 if z.name == "modal"
                     && let Some(ctx) = &modal
                 {
@@ -935,6 +961,32 @@ impl Agent {
                 let key = cell.key.clone();
                 self.ui(&key).timer = None;
                 fx.push(Effect::Redraw);
+                return;
+            }
+            (_, "menu:open", _) => {
+                if !cell.menu.is_empty() {
+                    self.menu = Some(cell.menu.clone());
+                    fx.extend(self.cancel_touches());
+                    fx.push(Effect::Redraw);
+                }
+                return;
+            }
+            ("menu", "menu:close", _) => {
+                self.menu = None;
+                fx.extend(self.cancel_touches());
+                fx.push(Effect::Redraw);
+                return;
+            }
+            ("menu", n, _) if n.starts_with("menu:pick:") => {
+                let pick = n["menu:pick:".len()..].parse::<usize>().ok();
+                if let Some(entry) =
+                    pick.and_then(|i| self.menu.as_ref().and_then(|m| m.get(i)).cloned())
+                {
+                    self.menu = None;
+                    fx.extend(self.cancel_touches());
+                    fx.push(Effect::Redraw);
+                    self.execute(&entry.on_tap, None, None, now, fx);
+                }
                 return;
             }
             ("emoji", n, _) => {
