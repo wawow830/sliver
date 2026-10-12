@@ -402,7 +402,13 @@ def cmd_human(a):
         pick = None
         if a.pick:
             p = a.pick.strip().lower()
-            pick = int(p) - 1 if p.isdigit() else ord(p) - ord("a")
+            low = [o.strip().lower() for o in opts]
+            if p.isdigit():
+                pick = int(p) - 1
+            elif len(p) == 1:
+                pick = ord(p) - ord("a")
+            else:  # the option's own text is fine too
+                pick = low.index(p) if p in low else -1
             if not 0 <= pick < len(opts):
                 sys.exit("--pick must name one of the --option entries (a, b, ... or 1, 2, ...)")
         with state() as s:
