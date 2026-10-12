@@ -4,6 +4,7 @@
 //! file: it's applied instantly (Q3), validated before it's written (a broken config never lands),
 //! and can be undone from the toast. The running agent hot-reloads the file.
 
+mod apps;
 mod bar;
 mod edit;
 mod live;
@@ -288,11 +289,7 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
             "apps",
             "Apps",
             "application-x-executable-symbolic",
-            pages::todo_page(
-                "Apps",
-                "Apps that put buttons on the bar: allow or deny each one, and hide or pin their items.",
-                &state,
-            ),
+            apps::page(ui),
         ),
         (
             "profiles",

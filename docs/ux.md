@@ -307,7 +307,11 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
 - **Profiles & Presets**: import tiny-dfr (config + style.css) or a waybar config, export the
   config as a preset, and use a preset, which lists the commands it would run first. All go
   through a confirmation and Undo. Named profiles wait on agent support.
-- Next: drag and drop on the preview, and the Apps page (T53).
+- **Apps** (T53): defaults for all apps (whole-bar takeover, scripts targeting other apps),
+  providers publishing right now (live `ListContexts`) with a Show switch, per-app App controls
+  switches, and adding an app to block. It writes `[apps]`/`[providers]`/`[api]`
+  (customization.md §6b). The agent enforces them (cedar).
+- Next: drag and drop on the preview.
 - **Testing headless** (never on the live session):
   - Run `gtk4-broadwayd :7 &`, then
     `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_DEBUG=no-portals GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`.

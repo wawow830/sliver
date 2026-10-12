@@ -135,3 +135,75 @@ pub fn set_layout_now(layout: &str) {
         hold(&c, layout);
     }
 }
+
+/// One published context, as `Control1.ListContexts` reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextInfo {
+    pub provider: String,
+    pub title: String,
+    pub scope: String,
+    pub items: i64,
+    pub on_screen: bool,
+}
+
+fn list_contexts() -> Result<Vec<ContextInfo>, String> {
+    use std::collections::HashMap;
+    let conn = Connection::session().map_err(|e| e.to_string())?;
+    let reply = conn
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_CONTROL),
+            "ListContexts",
+            &(),
+        )
+        .map_err(|e| e.to_string())?;
+    let list: Vec<HashMap<String, OwnedValue>> =
+        reply.body().deserialize().map_err(|e| e.to_string())?;
+    let text = |d: &HashMap<String, OwnedValue>, k: &str| {
+        d.get(k)
+            .and_then(|v| String::try_from(v.try_clone().ok()?).ok())
+            .unwrap_or_default()
+    };
+    Ok(list
+        .iter()
+        .map(|d| ContextInfo {
+            provider: text(d, "provider"),
+            title: text(d, "title"),
+            scope: text(d, "scope"),
+            items: d
+                .get("items")
+                .and_then(|v| i64::try_from(v.try_clone().ok()?).ok())
+                .unwrap_or(0),
+            on_screen: d
+                .get("on-screen")
+                .and_then(|v| bool::try_from(v.try_clone().ok()?).ok())
+                .unwrap_or(false),
+        })
+        .collect())
+}
+
+/// Lists the agent's published contexts in the background; `done` runs on the main loop.
+pub fn contexts(done: impl Fn(Result<Vec<ContextInfo>, String>) + 'static) {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(list_contexts());
+    });
+    let mut waited = Duration::ZERO;
+    gtk::glib::timeout_add_local(Duration::from_millis(50), move || {
+        waited += Duration::from_millis(50);
+        match rx.try_recv() {
+            Ok(r) => {
+                done(r);
+                gtk::glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) if waited < Duration::from_secs(3) => {
+                gtk::glib::ControlFlow::Continue
+            }
+            Err(_) => {
+                done(Err("no answer within 3 s".into()));
+                gtk::glib::ControlFlow::Break
+            }
+        }
+    });
+}

@@ -191,15 +191,3 @@ pub(crate) fn status_page(state: &State) -> gtk::Widget {
     });
     page.upcast()
 }
-
-pub(crate) fn todo_page(title: &str, what: &str, state: &State) -> gtk::Widget {
-    adw::StatusPage::builder()
-        .icon_name("document-edit-symbolic")
-        .title(title)
-        .description(glib::markup_escape_text(&format!(
-            "{what}\n\nNot editable here yet. Everything is in your config file:\n{}",
-            config_location(state)
-        )))
-        .build()
-        .upcast()
-}
