@@ -836,3 +836,36 @@ fn language_tap_switches_layout() {
     fx.extend(a.tick(400_000));
     assert!(fx.contains(&Effect::Desktop(Desk::NextLayout)), "{fx:?}");
 }
+
+/// Tapping the network, bluetooth and dnd modules asks for the matching switch.
+#[test]
+fn network_bluetooth_dnd_taps_toggle() {
+    use sliver_agent::agent::{Effect, SessionOp};
+    use sliver_ipc::proto::TouchPhase;
+    use sliver_session::network::{NetKind, NetState};
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"network\", \"bluetooth\", \"dnd\"]\n",
+    );
+    let mut w = world(9, 41);
+    w.session.network.state = NetState::Connected;
+    w.session.network.kind = NetKind::Wifi;
+    w.session.network.ssid = Some("Home".into());
+    w.session.network.wifi_enabled = Some(true);
+    w.session.bluetooth.available = true;
+    w.session.bluetooth.powered = true;
+    w.session.notifications.dnd = Some(false);
+    a.render(&w);
+    let mut t = 1_000u64;
+    for (key, want) in [
+        ("network", SessionOp::ToggleWifi),
+        ("bluetooth", SessionOp::ToggleBluetooth),
+        ("dnd", SessionOp::ToggleDnd),
+    ] {
+        let (id, x) = region(&a, key);
+        let mut fx = a.touch(id, 0, TouchPhase::Down, x, t);
+        fx.extend(a.touch(id, 0, TouchPhase::Up, x, t + 40_000));
+        fx.extend(a.tick(t + 400_000));
+        assert!(fx.contains(&Effect::Session(want.clone())), "{key}: {fx:?}");
+        t += 1_000_000;
+    }
+}

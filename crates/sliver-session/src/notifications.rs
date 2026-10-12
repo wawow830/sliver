@@ -101,6 +101,22 @@ pub fn read_dnd(conn: &Connection) -> Option<bool> {
     })
 }
 
+/// Turn Do Not Disturb on or off where the daemon allows it: dunst (`paused`). Other daemons
+/// (KDE, mako, swaync, quickshell) have no standard control; the error says so.
+pub fn set_dnd(conn: &Connection, on: bool) -> Result<(), String> {
+    let dunst = props::set_no_autostart(
+        conn,
+        "org.freedesktop.Notifications",
+        "/org/dunstproject/cmd0",
+        "org.dunstproject.cmd0",
+        "paused",
+        zbus::zvariant::Value::from(on),
+    );
+    dunst.map_err(|e| {
+        format!("no notification daemon with a Do Not Disturb switch (dunst supported): {e}")
+    })
+}
+
 impl Handle {
     /// Start tracking notifications.
     ///

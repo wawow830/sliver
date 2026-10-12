@@ -45,6 +45,8 @@ pub struct Network {
     pub signal_pct: Option<u8>,
     pub iface: Option<String>,
     pub ipv4: Option<String>,
+    /// The Wi-Fi radio switch (`WirelessEnabled`); `None` without NetworkManager.
+    pub wifi_enabled: Option<bool>,
 }
 
 pub fn parse_state(n: u32) -> NetState {
@@ -90,6 +92,7 @@ pub fn read_into(conn: &Connection, net: &mut Network) {
     net.state = props::uint(&m, "State")
         .map(parse_state)
         .unwrap_or_default();
+    net.wifi_enabled = props::boolean(&m, "WirelessEnabled");
     let Some(active) = path_of(&m, "PrimaryConnection") else {
         return;
     };
@@ -144,6 +147,18 @@ pub fn read_into(conn: &Connection, net: &mut Network) {
                 .filter(|s| !s.is_empty());
         }
     }
+}
+
+/// Switch the Wi-Fi radio on or off (`WirelessEnabled`). Never starts NetworkManager.
+pub fn set_wifi(conn: &Connection, on: bool) -> Result<(), String> {
+    props::set_no_autostart(
+        conn,
+        NM,
+        NM_PATH,
+        NM,
+        "WirelessEnabled",
+        zbus::zvariant::Value::from(on),
+    )
 }
 
 #[cfg(test)]

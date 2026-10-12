@@ -51,6 +51,31 @@ where
         .flatten()
 }
 
+/// `Properties.Set(iface, name, value)` that fails at once instead of starting `dest`.
+pub(crate) fn set_no_autostart(
+    conn: &Connection,
+    dest: &str,
+    path: &str,
+    iface: &str,
+    name: &str,
+    value: zbus::zvariant::Value<'_>,
+) -> Result<(), String> {
+    let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(conn)
+        .destination(dest.to_owned())
+        .and_then(|b| b.path(path.to_owned()))
+        .and_then(|b| b.interface("org.freedesktop.DBus.Properties"))
+        .and_then(|b| b.cache_properties(zbus::proxy::CacheProperties::No).build())
+        .map_err(|e| e.to_string())?;
+    proxy
+        .call_with_flags::<_, _, ()>(
+            "Set",
+            zbus::proxy::MethodFlags::NoAutoStart.into(),
+            &(iface, name, value),
+        )
+        .map_err(|e| format!("{dest}: {e}"))?;
+    Ok(())
+}
+
 pub(crate) fn boolean(p: &Props, k: &str) -> Option<bool> {
     bool::try_from(p.get(k)?.try_clone().ok()?).ok()
 }

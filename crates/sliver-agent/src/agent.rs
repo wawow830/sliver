@@ -64,6 +64,9 @@ pub enum SessionOp {
     ToggleMute { mic: bool },
     Media(sliver_session::mpris::Command),
     ToggleCaffeine,
+    ToggleWifi,
+    ToggleBluetooth,
+    ToggleDnd,
 }
 
 pub struct Agent {
@@ -948,6 +951,9 @@ impl Agent {
             ("mpris", "next", _) => SessionOp::Media(Command::Next),
             ("mpris", "previous", _) => SessionOp::Media(Command::Previous),
             ("idle-inhibitor", "toggle", _) => SessionOp::ToggleCaffeine,
+            ("network", "toggle", _) => SessionOp::ToggleWifi,
+            ("bluetooth", "toggle", _) => SessionOp::ToggleBluetooth,
+            ("dnd", "toggle", _) => SessionOp::ToggleDnd,
             ("timer", "toggle", _) => {
                 let total = cell
                     .timer_total

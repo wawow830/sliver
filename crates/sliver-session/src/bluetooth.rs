@@ -21,6 +21,8 @@ pub struct Bluetooth {
     /// A Bluetooth adapter exists.
     pub available: bool,
     pub powered: bool,
+    /// Object path of the first adapter (what [`set_powered`] switches).
+    pub adapter: Option<String>,
     pub connected: Vec<BtDevice>,
 }
 
@@ -37,6 +39,7 @@ pub fn from_managed(objs: &Managed) -> Bluetooth {
         let ifaces = &objs[path];
         if let Some(a) = ifaces.get("org.bluez.Adapter1") {
             bt.available = true;
+            bt.adapter.get_or_insert_with(|| path.as_str().to_string());
             bt.powered |= get::<bool>(a, "Powered").unwrap_or(false);
         }
         if let Some(d) = ifaces.get("org.bluez.Device1") {
@@ -54,6 +57,18 @@ pub fn from_managed(objs: &Managed) -> Bluetooth {
         }
     }
     bt
+}
+
+/// Power the adapter on or off. Never starts bluetoothd.
+pub fn set_powered(conn: &Connection, adapter: &str, on: bool) -> Result<(), String> {
+    crate::props::set_no_autostart(
+        conn,
+        "org.bluez",
+        adapter,
+        "org.bluez.Adapter1",
+        "Powered",
+        zbus::zvariant::Value::from(on),
+    )
 }
 
 pub fn read_into(conn: &Connection, bt: &mut Bluetooth) {

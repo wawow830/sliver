@@ -831,6 +831,9 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
                 return None; // no NetworkManager
             }
             let (status, icon): (&'static str, String) = match (n.state, n.kind) {
+                _ if n.wifi_enabled == Some(false) => {
+                    ("off", "network-wireless-disabled-symbolic".into())
+                }
                 (NetState::Disconnected, _) => {
                     ("disconnected", "network-wireless-offline-symbolic".into())
                 }
@@ -867,9 +870,10 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
                 "disconnected" | "connecting" => "",
                 _ => "{ifname}",
             };
-            let mut sp = Spec::new(v, default).icon(icon);
+            let mut sp = Spec::new(v, default).icon(icon).on(Gesture::Tap, "toggle");
             sp.percentage = n.signal_pct.map(f64::from);
             sp.status = Some(status);
+            sp.checked = n.wifi_enabled == Some(true) && status != "disconnected";
             sp
         }
         "bluetooth" => {
@@ -904,7 +908,7 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             } else {
                 ""
             };
-            let mut sp = Spec::new(v, default).icon(icon);
+            let mut sp = Spec::new(v, default).icon(icon).on(Gesture::Tap, "toggle");
             sp.status = Some(status);
             sp.checked = status == "connected";
             sp
@@ -996,6 +1000,8 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             });
             sp.status = Some(if on { "on" } else { "off" });
             sp.checked = on;
+            sp.defaults
+                .push((Gesture::Tap, Action::ModuleAction("toggle".into())));
             sp
         }
         "workspaces" => {

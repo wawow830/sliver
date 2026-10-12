@@ -592,6 +592,19 @@ fn apply(
                     SessionOp::Volume { mic, pct } => Op::Volume { mic, pct },
                     SessionOp::ToggleMute { mic } => Op::Mute { mic },
                     SessionOp::ToggleCaffeine => Op::Caffeine(!live.agg.session.caffeine),
+                    SessionOp::ToggleWifi => {
+                        Op::Wifi(!live.agg.session.network.wifi_enabled.unwrap_or(true))
+                    }
+                    SessionOp::ToggleBluetooth => match &live.agg.session.bluetooth.adapter {
+                        Some(a) => Op::Bluetooth {
+                            adapter: a.clone(),
+                            on: !live.agg.session.bluetooth.powered,
+                        },
+                        None => continue,
+                    },
+                    SessionOp::ToggleDnd => {
+                        Op::Dnd(!live.agg.session.notifications.dnd.unwrap_or(false))
+                    }
                     SessionOp::Media(cmd) => match &live.agg.session.media {
                         Some(m) => Op::Media {
                             player: m.player.clone(),

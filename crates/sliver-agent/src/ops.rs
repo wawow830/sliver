@@ -14,11 +14,29 @@ use zbus::blocking::Connection;
 /// (which player, whether caffeine is on).
 #[derive(Debug, Clone)]
 pub enum Op {
-    Brightness { keyboard: bool, pct: u8 },
-    Volume { mic: bool, pct: u8 },
-    Mute { mic: bool },
-    Media { player: String, cmd: Command },
+    Brightness {
+        keyboard: bool,
+        pct: u8,
+    },
+    Volume {
+        mic: bool,
+        pct: u8,
+    },
+    Mute {
+        mic: bool,
+    },
+    Media {
+        player: String,
+        cmd: Command,
+    },
     Caffeine(bool),
+    /// Switch Wi-Fi / Bluetooth / Do Not Disturb to this state.
+    Wifi(bool),
+    Bluetooth {
+        adapter: String,
+        on: bool,
+    },
+    Dnd(bool),
 }
 
 /// Starts the ops thread. `handle` comes from the session feed.
@@ -72,6 +90,11 @@ fn run_ops(
                 sliver_session::mpris::control(&ses, &player, cmd).map_err(|e| e.to_string())
             }
             Op::Caffeine(on) => handle.set_caffeine(on).map_err(|e| e.to_string()),
+            Op::Wifi(on) => sliver_session::network::set_wifi(&sys, on),
+            Op::Bluetooth { adapter, on } => {
+                sliver_session::bluetooth::set_powered(&sys, &adapter, on)
+            }
+            Op::Dnd(on) => sliver_session::notifications::set_dnd(&ses, on),
         };
         if let Err(e) = r {
             eprintln!("sliver-agent: {e}");

@@ -46,7 +46,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | **Brightness / volume / kbd-backlight slider** | P1 | done | mac control strip, BTT | press-and-slide, drag, tap to expand | logind backlight, PipeWire/wpctl | Backlight (logind), audio (PipeWire) and keyboard-backlight sliders. |
 | **Now playing (MPRIS)**: title/artist/art, prev/play/next, scrub | P1 | partial | mac, Pock, MTMR music | tap = play/pause, swipe = next/prev, long-press = player picker | MPRIS | Title, play/pause, swipe next/previous work. Missing: album art, scrub, player picker. |
 | **Workspaces**: Hyprland first, then sway, GNOME, KDE | P1 | partial | Pock (Dock), BTT | tap = switch, swipe = next/prev | compositor backend (T7) | Hyprland, sway and niri done (with focus actions). GNOME and KDE workspace lists are not wired. |
-| **Toggle** with state: mic, DND, caffeine (idle inhibit), dark mode, Wi-Fi/BT | P1 | partial | MTMR dnd/darkMode, mac | tap; state shown by icon and color | per-toggle backend | Mute, mic mute and caffeine done. Missing: DND toggle, dark mode, Wi-Fi/Bluetooth toggles. |
+| **Toggle** with state: mic, DND, caffeine (idle inhibit), dark mode, Wi-Fi/BT | P1 | partial | MTMR dnd/darkMode, mac | tap; state shown by icon and color | per-toggle backend | Mute, mic mute, caffeine, Wi-Fi, Bluetooth and DND (dunst only) done. Missing: dark mode, DND on KDE/mako/swaync. |
 | Screenshot / lock / suspend / power menu | P1 | done | mac control strip | tap; power uses a confirm sub-bar | logind, portal | The `menu` sub-bar is implemented; `examples/config/power-menu.toml` is a ready preset (power menu, screenshot key). Not built in, because the validator warns about unplaced modules. |
 | **Script widget**: command output → text/icon/color, refresh interval or on-signal | P1 | done | MTMR shellScriptTitledButton, BTT | any | agent runs it sandboxed with a timeout | `custom/*` runtime: exec, interval, continuous, signal, JSON. |
 | **App controls placeholder**: where focused-app items go | P1 | done | mac app region | from the app | public API (cedar) |  |
@@ -68,7 +68,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Switch layer: momentary (while held), toggle, one-shot (back after the next press) | P0/P1 | done | dfr Fn | P0 has only Fn. |
 | Shell command (detached, no shell by default, optional `sh -c`) | P1 | done | MTMR, BTT | Runs in the user session (agent), never as root. |
 | Open app (desktop ID) / open URL or file (xdg-open, portal) | P1 | partial | BTT | Works as a command (`xdg-open`, `gtk-launch`); no dedicated action or portal. |
-| Toggle with state (bound to a toggle widget) | P1 | partial | MTMR | Mute, mic mute and caffeine only. |
+| Toggle with state (bound to a toggle widget) | P1 | partial | MTMR | Mute, mic mute, caffeine, Wi-Fi, Bluetooth, DND (dunst). |
 | D-Bus method call | P2 | done | BTT | Includes a picker for common targets (MPRIS, logind, notifications). **Now:** Picker in the settings app is not built. |
 | Switch layout or profile | P2 | partial | BTT | Layout switching done (config, API, sliverctl); profiles exist in the API but have no editor. |
 | Macro: a sequence of actions with delays | P2 | done | BTT | Max length and total time are capped. |

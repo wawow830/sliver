@@ -16,7 +16,7 @@ fn op(s: &str) -> OwnedObjectPath {
     ObjectPath::try_from(s.to_string()).unwrap().into()
 }
 
-struct Nm(Arc<Mutex<u32>>);
+struct Nm(Arc<Mutex<u32>>, Arc<Mutex<bool>>);
 struct Active;
 struct Ip4;
 struct Dev;
@@ -32,6 +32,14 @@ impl Nm {
     #[zbus(property)]
     fn primary_connection(&self) -> OwnedObjectPath {
         op("/org/freedesktop/NetworkManager/ActiveConnection/1")
+    }
+    #[zbus(property)]
+    fn wireless_enabled(&self) -> bool {
+        *self.1.lock().unwrap()
+    }
+    #[zbus(property)]
+    fn set_wireless_enabled(&mut self, v: bool) {
+        *self.1.lock().unwrap() = v;
     }
 }
 
@@ -101,7 +109,7 @@ impl Ap {
     }
 }
 
-struct Adapter;
+struct Adapter(Arc<Mutex<bool>>);
 struct Device1;
 struct Battery1;
 
@@ -109,7 +117,11 @@ struct Battery1;
 impl Adapter {
     #[zbus(property)]
     fn powered(&self) -> bool {
-        true
+        *self.0.lock().unwrap()
+    }
+    #[zbus(property)]
+    fn set_powered(&mut self, v: bool) {
+        *self.0.lock().unwrap() = v;
     }
 }
 
@@ -165,8 +177,12 @@ fn network_and_bluetooth_follow_their_services() {
     let strength = Arc::new(Mutex::new(66u8));
     let nm = bus.service("org.freedesktop.NetworkManager");
     let os = nm.object_server();
-    os.at("/org/freedesktop/NetworkManager", Nm(state.clone()))
-        .unwrap();
+    let wifi = Arc::new(Mutex::new(true));
+    os.at(
+        "/org/freedesktop/NetworkManager",
+        Nm(state.clone(), wifi.clone()),
+    )
+    .unwrap();
     os.at("/org/freedesktop/NetworkManager/ActiveConnection/1", Active)
         .unwrap();
     os.at("/org/freedesktop/NetworkManager/IP4Config/1", Ip4)
@@ -184,11 +200,13 @@ fn network_and_bluetooth_follow_their_services() {
     let bz = bus.service("org.bluez");
     let os = bz.object_server();
     os.at("/", zbus::fdo::ObjectManager).unwrap();
-    os.at("/org/bluez/hci0", Adapter).unwrap();
+    let powered = Arc::new(Mutex::new(true));
+    os.at("/org/bluez/hci0", Adapter(powered.clone())).unwrap();
     os.at("/org/bluez/hci0/dev_AA", Device1).unwrap();
     os.at("/org/bluez/hci0/dev_AA", Battery1).unwrap();
 
     let client = bus.connect();
+    let client2 = bus.connect();
     let session = Session::start(client.clone(), client);
     let rx = spawn_states(session);
     let s = next(&rx);
@@ -199,7 +217,20 @@ fn network_and_bluetooth_follow_their_services() {
     assert_eq!(s.network.signal_pct, Some(66));
     assert_eq!(s.network.iface.as_deref(), Some("wlan0"));
     assert_eq!(s.network.ipv4.as_deref(), Some("192.168.1.5"));
+    assert_eq!(s.network.wifi_enabled, Some(true));
+    assert_eq!(s.bluetooth.adapter.as_deref(), Some("/org/bluez/hci0"));
     assert!(s.bluetooth.available && s.bluetooth.powered);
+
+    // the switches write through to the services
+    sliver_session::network::set_wifi(&client2, false).unwrap();
+    assert!(!*wifi.lock().unwrap());
+    sliver_session::bluetooth::set_powered(&client2, "/org/bluez/hci0", false).unwrap();
+    assert!(!*powered.lock().unwrap());
+    assert!(sliver_session::network::set_wifi(&bus.connect(), true).is_ok());
+    assert!(*wifi.lock().unwrap());
+    // the mocks announce their own property changes: let those states pass
+    std::thread::sleep(Duration::from_millis(300));
+    while rx.try_recv().is_ok() {}
     assert_eq!(
         s.bluetooth.connected,
         vec![BtDevice {
@@ -253,4 +284,37 @@ fn missing_services_leave_unknown() {
     assert_eq!(s.network.state, NetState::Unknown);
     assert_eq!(s.network.kind, NetKind::None);
     assert!(!s.bluetooth.available);
+}
+
+struct Dunst(Arc<Mutex<bool>>);
+
+#[zbus::interface(name = "org.dunstproject.cmd0")]
+impl Dunst {
+    #[zbus(property, name = "paused")]
+    fn paused(&self) -> bool {
+        *self.0.lock().unwrap()
+    }
+    #[zbus(property, name = "paused")]
+    fn set_paused(&mut self, v: bool) {
+        *self.0.lock().unwrap() = v;
+    }
+}
+
+#[test]
+fn dnd_toggles_on_dunst_and_says_so_elsewhere() {
+    let Some(bus) = Bus::start() else {
+        return;
+    };
+    let client = bus.connect();
+    let e = sliver_session::notifications::set_dnd(&client, true).unwrap_err();
+    assert!(e.contains("Do Not Disturb"), "{e}");
+    let paused = Arc::new(Mutex::new(false));
+    let d = bus.service("org.freedesktop.Notifications");
+    d.object_server()
+        .at("/org/dunstproject/cmd0", Dunst(paused.clone()))
+        .unwrap();
+    sliver_session::notifications::set_dnd(&client, true).unwrap();
+    assert!(*paused.lock().unwrap());
+    sliver_session::notifications::set_dnd(&client, false).unwrap();
+    assert!(!*paused.lock().unwrap());
 }
