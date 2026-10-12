@@ -308,8 +308,14 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   `main` zone), and "sliver-agent isn't running" [Start] (`systemctl --user start sliver-agent`).
   Ctrl+Z undoes and Ctrl+Shift+Z or Ctrl+Y redoes the last edit (`history.rs`: the file's text on
   each side of the edit, so it's exact); a focused text field keeps its own Ctrl+Z. A new edit
-  clears the redo chain. There's no "selected module" in the Bar editor yet, so Delete on the
-  selection isn't done: a module's inspector has its remove button.
+  clears the redo chain.
+- **Keyboard and screen readers on the preview (T114).** The bar preview takes keyboard focus
+  (Tab, or a click). ←/→ and Home/End select a module (a blue ring; the preview scrolls to keep
+  it in view), Alt+←/→ moves it within its zone, Delete removes it, Enter or Space opens its
+  inspector. Selection and focus survive the rebuild after each edit. The preview's accessible
+  name follows the selection ("Touch Bar preview: Volume slider, Controls zone, 3 of 4"), so
+  screen readers speak it; `GtkAccessible::announce` isn't used because it crashed GTK 4.22
+  without an AT-SPI bus.
 - **Display & Power, Appearance, Gestures** are editable (T52). Appearance picks the theme (`theme`)
   from a list that previews your own base layer in each one, with your stylesheet on top (T60),
   and opens the stylesheet in your editor, showing its problems. Gestures has tap timing, the Fn

@@ -124,6 +124,32 @@ impl Preview {
         })
     }
 
+    /// The bar-x span of the cells that show the `index`-th module of zone `zone` (whose
+    /// top-level module ids are `zone_ids`): a group's children together. For the keyboard
+    /// focus ring (T114).
+    pub fn module_span(
+        &self,
+        zone: usize,
+        zone_ids: &[String],
+        index: usize,
+    ) -> Option<(f32, f32)> {
+        let f = self.agent.frame(self.slot)?;
+        let (mut x0, mut x1) = (f32::MAX, f32::MIN);
+        for r in &f.layout.items {
+            if r.w <= 0.0 {
+                continue;
+            }
+            let Some(h) = self.hit(r.x + r.w / 2.0) else {
+                continue;
+            };
+            if h.zone == zone && h.module_index(zone_ids) == Some(index) {
+                x0 = x0.min(r.x);
+                x1 = x1.max(r.x + r.w);
+            }
+        }
+        (x1 > x0).then_some((x0, x1 - x0))
+    }
+
     /// The cell whose right edge is within a few pixels of bar x-coordinate `x` (the width
     /// handle), if it is a whole top-level module (not inside a group).
     pub fn edge_at(&self, x: f32) -> Option<Hit> {

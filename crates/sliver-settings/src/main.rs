@@ -102,6 +102,10 @@ pub(crate) struct Ui {
     mirrored: RefCell<Option<String>>,
     /// The layout the Bar page shows, mirrored again when the window regains focus.
     mirror_wanted: RefCell<Option<String>>,
+    /// The Bar preview's keyboard selection (zone index, module index in that zone) and whether
+    /// the preview had keyboard focus, kept across the rebuild after every edit (T114).
+    pub bar_selection: Cell<Option<(usize, usize)>>,
+    pub bar_focused: Cell<bool>,
 }
 
 impl Ui {
@@ -198,6 +202,8 @@ fn main() -> glib::ExitCode {
             mirror: Cell::new(true),
             mirrored: RefCell::default(),
             mirror_wanted: RefCell::default(),
+            bar_selection: Cell::new(None),
+            bar_focused: Cell::new(false),
         });
         // Mirroring only while the window is focused, and never after it closes (ux.md §4).
         {
