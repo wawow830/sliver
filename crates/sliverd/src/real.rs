@@ -102,6 +102,9 @@ impl crate::backend::InputSource for HwInput {
     }
 }
 
+/// The fallback daemon's unit (sliverd.service has OnFailure= on it).
+const TINY_DFR_UNIT: &str = "/usr/lib/systemd/system/tiny-dfr.service";
+
 /// Stand-in when the bar backlight can't be opened: brightness writes are dropped.
 struct NoBacklight;
 
@@ -137,15 +140,26 @@ pub fn open() -> io::Result<RealHardware> {
         input.device_names(),
         input.hotplug()
     );
-    // A backlight we can't write (udev hasn't applied 99-z-sliverd.rules yet, missing fd) must not
-    // keep the safe layer off the bar: run at whatever brightness it's at (invariant 1 first).
+    // A backlight we can't write (udev hasn't applied 99-z-sliverd.rules yet, missing fd) means we
+    // could never dim or turn off the OLED bar (burn-in, power: invariant 3). If tiny-dfr is
+    // installed, exit: systemd retries (udev may just be late), then falls back to tiny-dfr, which
+    // has working dim/off. Only without any fallback do we run anyway, since Esc/F-keys at full
+    // brightness beat no bar at all (invariant 1).
     let (backlight, max_brightness): (Box<dyn Backlight>, u32) = match SysfsBacklight::open() {
         Ok(b) => {
             let max = b.max();
             (Box::new(b), max)
         }
+        Err(e) if Path::new(TINY_DFR_UNIT).exists() => {
+            return Err(io::Error::other(format!(
+                "bar backlight not writable ({e}); exiting so systemd can fall back to tiny-dfr"
+            )));
+        }
         Err(e) => {
-            eprintln!("sliverd: bar backlight not writable ({e}); brightness control disabled");
+            eprintln!(
+                "sliverd: WARNING: bar backlight not writable ({e}) and no tiny-dfr to fall back to; \
+                 running without dim/off. Fix: udevadm trigger --action=change on the bar backlight"
+            );
             let max = sliver_hw::discover::bar_backlight(Path::new("/sys/class/backlight"))
                 .map_or(255, |b| b.max);
             (Box::new(NoBacklight), max)
