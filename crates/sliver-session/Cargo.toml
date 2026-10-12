@@ -1,0 +1,15 @@
+[package]
+name = "sliver-session"
+description = "Sliver session state: lock, power, media (MPRIS) from logind, UPower and the session bus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+zbus = "5"

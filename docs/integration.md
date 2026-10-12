@@ -5,7 +5,9 @@ layouts (per app / workspace / state) and drive widgets. Written against this ma
 (Fedora Asahi 44, Hyprland 0.56.2, PipeWire 1.6.8, UPower, logind, quickshell as the shell) but
 the backend list covers the other targets in `GOAL.md`.
 
-Code: `crates/sliver-desktop` (`DesktopState`, `DesktopSource`, Hyprland watcher, scripted fake).
+Code: `crates/sliver-desktop` (`DesktopState`, `DesktopSource`, Hyprland watcher, scripted fake)
+and `crates/sliver-session` (`SessionState`, `SessionSource`: logind, UPower, power-profiles,
+MPRIS; `mpris::control` for transport commands; `Session::start(system_conn, session_conn)`).
 Facts below marked **(verified)** were checked on this machine; the rest is from protocol docs
 and should be re-verified when that backend is built.
 
@@ -280,6 +282,11 @@ Compositor events win (§2). Input methods also change what the user is typing:
   agent tests.
 - The Hyprland backend is tested against a fake compositor on a temp Unix socket
   (`cargo test -p sliver-desktop`).
+- `sliver-session` has `ScriptedSession` and `tests/dbus.rs`: mock logind/UPower/MPRIS services
+  on a private `dbus-daemon` (skipped if the binary is missing). `cargo run -p sliver-session
+  --example session-watch` prints live state (read-only).
+- Lesson from that test: **subscribe to signals before the initial read**, or changes between the
+  two are lost (the sources do this; keep it when adding new ones).
 - `cargo run -p sliver-desktop --example hypr-watch` prints live JSON states; it is read-only
   and safe on a live Hyprland session.
 - For D-Bus sources, test against a private `dbus-daemon --session` with mock services
