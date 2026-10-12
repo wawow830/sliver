@@ -201,10 +201,12 @@ the Rust crate `sliver-client`, and recipes for GTK/GJS, Qt and Electron/Node in
 the focused window's tabs (swipe to scroll, tap to switch), back, forward and reload on the bar.
 Load the extension from `/usr/share/sliver/browser/` (see `integration/browser/README.md`).
 
-**GNOME and KDE** need a small integration so the agent knows the focused app and workspaces: the
-GNOME Shell extension or the KWin script in `integration/` (copy it as `integration/README.md`
-says and enable it once per user; the packages don't ship them yet). Hyprland,
-sway, niri and other wlroots compositors need nothing.
+**GNOME and KDE** need a small integration so the agent knows the focused app, workspaces and
+windows. The packages `gnome-shell-extension-sliver` and `sliver-kwin` come along automatically
+when GNOME or KWin is installed, but you enable them yourself, once:
+GNOME: `gnome-extensions enable sliver-focus@sliver.wawow830.github.io`, then log out and in.
+KDE: System Settings → Window Management → KWin Scripts → *Sliver focus*.
+Hyprland, sway, niri and other wlroots compositors need nothing.
 
 ## 11. Troubleshooting
 
