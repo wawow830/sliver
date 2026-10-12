@@ -1,0 +1,101 @@
+.\" sliver-settings(1). Prose: docs/user-guide.md, docs/ux.md.
+.TH SLIVER\-SETTINGS 1 2026-10-13 "sliver 0.1.0" "User Commands"
+.SH NAME
+sliver\-settings \- edit the Touch Bar layout, rules and appearance
+.SH SYNOPSIS
+.B sliver\-settings
+.RI [ preset.sliver ...]
+.br
+.B sliver\-settings
+.BR \-\-version " | " \-V
+.SH DESCRIPTION
+.B sliver\-settings
+is the graphical editor for Sliver, a GTK4/libadwaita app.
+Everything it changes is written to your configuration file
+.RB ( sliver\-config (5)),
+keeping your comments and formatting, and the running
+.BR sliver\-agent (1)
+picks it up at once.
+Hand edits and the app can be mixed freely: when the file changes on disk, the window reloads it.
+.PP
+On first launch, when you have no configuration yet, it explains the safe hatch (press Fn twice and
+hold it to get Escape and F1\(enF12, whatever the layout says) and offers a starting point.
+.PP
+Given
+.I preset.sliver
+files (or when a file manager opens one), it shows each preset for review: the layout, and every
+script and command it would run, before anything is imported.
+.SH PAGES
+.TP
+.B Bar
+A live preview of any layer (base, Fn, custom layers), as it would look in a chosen context.
+Drag modules from the library onto the preview, drag to reorder, drag off to remove, and drag the
+width handle to resize.
+The inspector edits the selected module: its content, style and actions.
+.B Mirror
+also shows the layout you're editing on the real Touch Bar while the window is focused.
+.TP
+.B Layouts & Rules
+Which layout shows when: per app, workspace and state (media playing, screen locked, on battery,
+\&...).
+The rule winning right now is marked
+.BR "Active now" ,
+with the reason.
+.TP
+.B Gestures
+When taps fire (on touch or on lift), how the Fn key works (hold or toggle), and what
+whole\-bar gestures (swipes) do.
+.TP
+.B Appearance
+Theme, stylesheet, fonts, corner radius, outlines, accent colour, animations and press feedback.
+.TP
+.B Display & Power
+Brightness (adaptive or fixed, with a curve editor), dim and off timeouts, the on\-battery profile,
+and pixel shift.
+.TP
+.B Apps
+Which apps and scripts may put items on the bar through the D\-Bus API.
+.TP
+.B Profiles & Presets
+Switch, create and delete profiles (whole configurations), and export or import presets.
+.TP
+.B Status
+Which configuration file is in use and whether it loads, the files being watched, hardware facts
+(physical Escape key or not, the safe hatch), and configuration problems.
+.SH BANNERS
+Across the top of the window:
+.B sliver\-agent isn't running
+(with
+.BR Start ),
+an invalid configuration (with a way to open the file), and a layout that leaves the F\-keys
+reachable only through the safe hatch (with
+.BR "Add F\-keys back" ).
+.SH OPTIONS
+.TP
+.BR \-V ", " \-\-version
+Show the version.
+.SH KEYS
+.TP
+.B Ctrl+Z
+Undo the last change.
+.TP
+.BR Ctrl+Shift+Z ", " Ctrl+Y
+Redo.
+.SH FILES
+.TP
+.I ~/.config/sliver/sliver.toml
+The configuration it edits
+.RI ( $XDG_CONFIG_HOME
+is honoured).
+.TP
+.I ~/.config/sliver/profiles/
+Named profiles.
+.SH SEE ALSO
+.BR sliver\-config (5),
+.BR sliver\-stylesheet (5),
+.BR sliverctl (1),
+.BR sliver\-agent (1),
+.BR sliverd (8)
+.PP
+.I docs/user\-guide.md
+in the sliver sources.

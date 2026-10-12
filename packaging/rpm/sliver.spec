@@ -114,6 +114,7 @@ install -Dpm0644 man/sliver-agent.1 %{buildroot}%{_mandir}/man1/sliver-agent.1
 install -Dpm0644 man/sliverd.8 %{buildroot}%{_mandir}/man8/sliverd.8
 install -Dpm0644 man/sliver-config.5 %{buildroot}%{_mandir}/man5/sliver-config.5
 install -Dpm0644 man/sliver-stylesheet.5 %{buildroot}%{_mandir}/man5/sliver-stylesheet.5
+install -Dpm0644 man/sliver-settings.1 %{buildroot}%{_mandir}/man1/sliver-settings.1
 
 install -Dpm0644 packaging/desktop/io.github.wawow830.Sliver.Settings.desktop \
     %{buildroot}%{_datadir}/applications/io.github.wawow830.Sliver.Settings.desktop
@@ -217,6 +218,7 @@ fi
 %files -n sliver-settings
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
 %{_bindir}/sliver-settings
+%{_mandir}/man1/sliver-settings.1*
 %{_datadir}/applications/io.github.wawow830.Sliver.Settings.desktop
 %{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
 # Opens .sliver presets (shared-mime-info's file trigger updates the MIME cache).

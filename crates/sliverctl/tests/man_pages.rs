@@ -1,6 +1,7 @@
 //! The man pages in `man/` must cover what the code knows about, so they can't silently drift:
-//! every `sliverctl` command and option in `sliverctl help`, and every module type, common module
-//! key, context key and bar gesture in `sliver-config`. Also lints the pages with groff if it's
+//! every `sliverctl` command and option in `sliverctl help`, every module type, common module
+//! key, context key and bar gesture in `sliver-config`, and every sidebar page and option of
+//! `sliver-settings`. Also lints the pages with groff if it's
 //! installed.
 
 use std::path::{Path, PathBuf};
@@ -157,6 +158,52 @@ fn daemon_and_agent_pages_cover_their_flags() {
     }
 }
 
+/// The settings app's sidebar pages: the titles in `rebuild`'s `pages` list (`(id, title, icon,
+/// widget)` tuples), read from the source so a new page can't go undocumented.
+fn settings_pages() -> Vec<String> {
+    let src =
+        std::fs::read_to_string(man_dir().join("../crates/sliver-settings/src/main.rs")).unwrap();
+    let start = src
+        .find("let pages: Vec<")
+        .expect("pages list in sliver-settings main.rs");
+    let block = &src[start..start + src[start..].find("];").expect("end of pages list")];
+    block
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn settings_page_covers_pages_and_flags() {
+    let man = page("sliver-settings.1");
+    let pages = settings_pages();
+    assert!(
+        pages.len() >= 5,
+        "page scan of sliver-settings broke: {pages:?}"
+    );
+    let words: Vec<&str> = pages.iter().map(String::as_str).collect();
+    assert_eq!(
+        missing(&man, &words),
+        Vec::<String>::new(),
+        "settings pages missing from man/sliver-settings.1"
+    );
+    // `--user`: the systemctl argument behind the "Start the agent" button, not an app option.
+    let flags = source_flags("crates/sliver-settings/src/main.rs", &["--user"]);
+    assert!(
+        flags.iter().any(|f| f == "--version"),
+        "flag scan broke: {flags:?}"
+    );
+    let words: Vec<&str> = flags.iter().map(String::as_str).collect();
+    assert_eq!(
+        missing(&man, &words),
+        Vec::<String>::new(),
+        "options parsed by sliver-settings missing from its man page"
+    );
+}
+
 #[test]
 fn config_page_covers_the_schema() {
     let man = page("sliver-config.5");
@@ -186,6 +233,7 @@ fn pages_are_lint_clean() {
         "sliverd.8",
         "sliver-config.5",
         "sliver-stylesheet.5",
+        "sliver-settings.1",
     ] {
         assert!(
             pages.iter().any(|p| p.ends_with(want)),

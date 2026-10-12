@@ -7,8 +7,8 @@ it, and **Escape and the F-keys always stay reachable.**
 > Status: development snapshot (0.1.0). Packages aren't published yet. The pieces below that say
 > *(soon)* are still being wired up.
 
-Reference: `man sliverctl`, `man sliver-config`, `man sliver-stylesheet`, `man sliver-agent`,
-`man sliverd` (sources in `man/`; read one without installing via `man -l man/sliver-config.5`).
+Reference: `man sliverctl`, `man sliver-config`, `man sliver-stylesheet`, `man sliver-settings`,
+`man sliver-agent`, `man sliverd` (sources in `man/`; read one without installing via `man -l man/sliver-config.5`).
 
 ## 1. How it fits together
 
