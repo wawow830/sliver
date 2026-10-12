@@ -46,7 +46,8 @@ function describe(w) {
 
 function reportWorkspaces() {
     const active = workspace.currentDesktop;
-    call("SetWorkspaces", workspace.desktops.map(function (d, i) {
+    // KWin's callDBus sends JS arrays as `av`, so this uses SetWorkspacesV (elements are a{sv}).
+    call("SetWorkspacesV", workspace.desktops.map(function (d, i) {
         return {
             "id": String(i + 1),
             "name": String(d.name),

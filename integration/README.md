@@ -22,8 +22,8 @@ headless `kwin_wayland --virtual`, loads the script, opens a `kitty` window and 
 
 Wire types as KWin's `callDBus` produces them (mock log): strings `s`, booleans `b`, **integers `i`**
 (not `u`: the service must accept any integer type for `pid`, and it does), and **arrays arrive as
-`av`, not `aa{sv}`**. So `SetWorkspaces` from KWin is rejected by the `aa{sv}` signature; the script
-still calls it (failures are ignored) until the API offers a way to take it.
+`av`, never `aa{sv}`**. So the script reports desktops with `SetWorkspacesV(av)` (elements are `a{sv}`
+variants); GNOME's GJS can send `aa{sv}` to `SetWorkspaces` natively.
 
 ## GNOME extension: untested on a real shell
 

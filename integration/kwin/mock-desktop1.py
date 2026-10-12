@@ -16,6 +16,7 @@ XML = """
   <interface name="io.github.wawow830.Sliver.Desktop1">
     <method name="SetFocus"><arg name="window" type="a{sv}" direction="in"/></method>
     <method name="SetWorkspaces"><arg name="workspaces" type="aa{sv}" direction="in"/></method>
+    <method name="SetWorkspacesV"><arg name="workspaces" type="av" direction="in"/></method>
   </interface>
 </node>
 """

@@ -46,4 +46,5 @@ for _ in $(seq 1 50); do
 done
 cat "$log"
 grep -q '"app-id"' "$log" && grep -q 'sliver-test-app' "$log" || { echo "FAIL: no SetFocus for the test window"; cat "$work/kwin.log" | tail -20; exit 1; }
-echo "ok: kwin script reported the focused window"
+grep -q '"method": "SetWorkspacesV"' "$log" || { echo "FAIL: no SetWorkspacesV"; exit 1; }
+echo "ok: kwin script reported the focused window and the desktops"
