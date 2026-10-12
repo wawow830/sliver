@@ -38,8 +38,14 @@ impl Preview {
 
     /// The user's stylesheet on top of the default theme, plus any problems for the Status page.
     pub fn stylesheet(config: &Config, config_dir: Option<&Path>) -> (Stylesheet, Vec<String>) {
-        let mut sheet = Stylesheet::sliver();
         let mut problems = Vec::new();
+        let mut sheet = match config.theme.as_deref() {
+            None => Stylesheet::sliver(),
+            Some(t) => Stylesheet::builtin(t).unwrap_or_else(|| {
+                problems.push(format!("theme {t:?} isn't a built-in theme; using sliver"));
+                Stylesheet::sliver()
+            }),
+        };
         let Some(name) = &config.stylesheet else {
             return (sheet, problems);
         };

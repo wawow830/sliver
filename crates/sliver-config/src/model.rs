@@ -128,6 +128,8 @@ pub const BAR_GESTURES: &[&str] = &[
 pub struct Config {
     pub version: u32,
     pub stylesheet: Option<String>,
+    /// The built-in base theme (`sliver`, `classic`) under the user's stylesheet. `None` = `sliver`.
+    pub theme: Option<String>,
     pub bar: Bar,
     pub display: Display,
     /// Layer name → its default layout. `base` and `fn` are reserved.
@@ -160,6 +162,7 @@ impl Config {
             None => {}
         }
         c.stylesheet = r.string("stylesheet", &mut d);
+        c.theme = r.string("theme", &mut d);
         if let Some(b) = r.table("bar", &mut d) {
             c.bar = parse_bar(b, &mut d);
         }

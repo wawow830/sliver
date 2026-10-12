@@ -55,9 +55,21 @@ fn load_sheet(
     config_path: Option<&Path>,
     accent: Option<sliver_render::Color>,
 ) -> Result<(Stylesheet, Vec<String>), String> {
-    let mut sheet = match accent {
+    // The base theme (`theme = "classic"`), then the user's stylesheet on top. The default
+    // `sliver` theme gets the desktop's accent.
+    let mut warnings = Vec::new();
+    let sliver = || match accent {
         Some(c) => Stylesheet::sliver_with_accent(c),
         None => Stylesheet::sliver(),
+    };
+    let mut sheet = match config.theme.as_deref() {
+        None | Some("sliver") => sliver(),
+        Some(t) => Stylesheet::builtin(t).unwrap_or_else(|| {
+            warnings.push(format!(
+                "theme {t:?} isn't a built-in theme (sliver, classic); using sliver"
+            ));
+            sliver()
+        }),
     };
     let dir = config_path.and_then(Path::parent);
     let user = match (&config.stylesheet, dir) {
@@ -66,7 +78,6 @@ fn load_sheet(
         (None, Some(d)) => Some(d.join("style.css")).filter(|p| p.is_file()),
         (None, None) => None,
     };
-    let mut warnings = Vec::new();
     if let Some(p) = user {
         let mut diags = Vec::new();
         sheet

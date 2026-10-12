@@ -37,6 +37,7 @@ are the invariants in §9.
 version = 1
 include = ["modules.toml"]   # optional; the built-in defaults are always underneath
 stylesheet = "style.css"
+theme = "sliver"          # base theme under your stylesheet: sliver (default) | classic (tiny-dfr's look)
 
 [bar]                     # bar-wide options (waybar's per-bar options that make sense here)
 name = "main"             # becomes a CSS class on the bar
@@ -315,7 +316,8 @@ These are the selectors sliver guarantees, mirroring waybar:
   `border-color`, `border-width`, `padding`, `margin`, `font-family`, `font-size`, `font-weight`,
   `opacity`, `min-width`, `transition`. GTK-isms that waybar users paste are accepted: `@define-color`, `@import`, `alpha()`, `shade()`,
   `mix()`. Unsupported properties or selectors warn with file:line and never fail the load.
-  Themes are just stylesheets. The default `sliver` theme
+  Themes are just stylesheets. `theme = "classic"` in config.toml picks the built-in base theme
+  (default `sliver`); your stylesheet goes on top of it, and can also `@import "sliver:NAME"`. The default `sliver` theme
   (Q8/H10: macOS look plus the desktop accent) is a stylesheet using `@accent`, which the agent
   defines from the desktop.
 

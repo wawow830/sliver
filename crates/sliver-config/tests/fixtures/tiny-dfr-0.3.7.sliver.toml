@@ -1,6 +1,7 @@
 # Imported from tiny-dfr by sliver. Edit freely; see docs/customization.md.
 # As in tiny-dfr, the bar shows F-keys and holding Fn shows media keys.
 version = 1
+theme = "classic"
 stylesheet = "style.css"
 
 [display]

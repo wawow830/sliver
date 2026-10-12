@@ -8,6 +8,7 @@ mod bar;
 mod edit;
 mod live;
 mod pages;
+mod prefs;
 mod preview;
 mod rules;
 
@@ -268,27 +269,19 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
             "gestures",
             "Gestures",
             "input-touchpad-symbolic",
-            pages::todo_page(
-                "Gestures",
-                "Two-finger swipes, long-press timing, double-tap, and whether taps fire on press or release.",
-                &state,
-            ),
+            prefs::gestures_page(ui),
         ),
         (
             "appearance",
             "Appearance",
             "applications-graphics-symbolic",
-            pages::todo_page(
-                "Appearance",
-                "Theme, accent, font, icon theme, outlines and animations. They're all a stylesheet underneath (style.css).",
-                &state,
-            ),
+            prefs::appearance_page(ui),
         ),
         (
             "display",
             "Display & Power",
             "display-brightness-symbolic",
-            pages::display_page(&state),
+            prefs::display_page(ui),
         ),
         (
             "apps",

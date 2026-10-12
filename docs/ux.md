@@ -301,7 +301,10 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   edited shows on the real bar (`Control1.SetLayout`). It's reset when focus leaves, the window
   closes, or the switch is turned off. If the app is killed, the agent should drop the override
   when its caller leaves the bus (asked ash).
-- Next: drag and drop on the preview, and the Gestures/Appearance/Apps/Profiles pages.
+- **Display & Power, Appearance, Gestures** are editable (T52). Appearance has the theme (`theme`)
+  and opens the stylesheet in your editor, showing its problems. Gestures has tap timing, the Fn
+  mode and whole-bar gestures.
+- Next: drag and drop on the preview, and the Apps and Profiles pages.
 - **Testing headless** (never on the live session):
   - Run `gtk4-broadwayd :7 &`, then
     `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_DEBUG=no-portals GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`.

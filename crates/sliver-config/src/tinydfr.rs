@@ -94,6 +94,7 @@ pub fn import(base: &str, overlay: Option<&str>) -> Result<Import, String> {
         "# Imported from tiny-dfr by sliver. Edit freely; see docs/customization.md.\n\
          # As in tiny-dfr, the bar shows {} and holding Fn shows {}.\n\
          version = 1\n\
+         theme = \"classic\"\n\
          stylesheet = \"style.css\"\n\n\
          [display]\n\
          brightness = \"{}\"\n\
@@ -400,7 +401,7 @@ fn battery_icons() -> Value {
 fn stylesheet(outlines: bool, font: &str, w: &mut Vec<String>) -> String {
     let mut css = String::from(
         "/* Imported from tiny-dfr by sliver. */\n\
-         @import \"themes/tiny-dfr.css\";\n",
+         /* The look itself is theme = \"classic\" in config.toml; these are your overrides. */\n",
     );
     let (family, style) = font.split_once(':').unwrap_or((font, ""));
     let mut rules = Vec::new();

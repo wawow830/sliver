@@ -88,41 +88,6 @@ pub(crate) fn summarize(c: &Condition) -> String {
     parts.join(" and ")
 }
 
-pub(crate) fn display_page(state: &State) -> gtk::Widget {
-    let d = &state.loaded.config.display;
-    let page = adw::PreferencesPage::new();
-    let g = group(
-        "Brightness and idle",
-        Some(
-            "Read-only for now. Edit [display] in config.toml, or use `sliverctl config set display.dim-after 20s`.",
-        ),
-    );
-    let secs = |t: Option<std::time::Duration>| {
-        t.map(|t| format!("{} s", t.as_secs()))
-            .unwrap_or_else(|| "never".into())
-    };
-    g.add(&row(
-        "Brightness",
-        if d.adaptive {
-            "adaptive (follows the main display)"
-        } else {
-            "fixed"
-        },
-    ));
-    g.add(&row(
-        "Maximum brightness",
-        &format!("{} / 255", d.max_brightness),
-    ));
-    g.add(&row("Dim after", &secs(d.dim_after)));
-    g.add(&row("Turn off after", &secs(d.off_after)));
-    g.add(&row(
-        "Pixel shift",
-        if d.pixel_shift { "on" } else { "off" },
-    ));
-    page.add(&g);
-    page.upcast()
-}
-
 pub(crate) fn status_page(state: &State) -> gtk::Widget {
     let page = adw::PreferencesPage::new();
     let cfg = group("Config", None);

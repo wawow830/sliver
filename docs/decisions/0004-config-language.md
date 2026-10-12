@@ -49,5 +49,5 @@ We need one config language that the agent, settings app, sliverctl, importers a
   module block is a few µs.
 - sliverd (T8) and api.md drop the frame-level "escape floor" in favor of the safe hatch.
 - The tiny-dfr importer (`sliver_config::tinydfr`) writes `config.toml` + `style.css`. The
-  stylesheet imports `themes/tiny-dfr.css`, which the render/style work has to ship.
+  stylesheet imports `sliver:classic` (tiny-dfr's look, shipped in sliver-render).
 - Comment-preserving writes from the settings app (toml_edit) are later work (customization.md G9).
