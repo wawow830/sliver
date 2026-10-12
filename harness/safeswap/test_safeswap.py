@@ -39,11 +39,24 @@ class Props(unittest.TestCase):
         )
 
     def test_restores_tiny_dfr(self):
-        self.assertEqual(self.props["Conflicts"], ["tiny-dfr.service"])
-        self.assertEqual(self.props["After"], ["tiny-dfr.service"])
+        self.assertEqual(self.props["Conflicts"], ["tiny-dfr.service", "sliverd.service"])
+        self.assertEqual(self.props["After"], ["tiny-dfr.service", "sliverd.service"])
         (post,) = self.props["ExecStopPost"]
         self.assertTrue(post.startswith("+"), "restore must run as root")
         self.assertIn("/usr/local/libexec/sliver-safeswap restore", post)
+        self.assertTrue(post.endswith("--restore-to tiny-dfr.service"))
+
+    def test_restores_sliverd_when_it_owned_the_bar(self):
+        m = ss.Mode(user=False, helper="/h", target="sliverd.service")
+        props = props_dict(ss.run_unit_props(m, 5, 1000, Path("/o"), None, None))
+        self.assertTrue(props["ExecStopPost"][0].endswith("--restore-to sliverd.service"))
+        self.assertEqual(ss.restore_timer_cmd(m, 5)[-2:], ["--restore-to", "sliverd.service"])
+
+    def test_restore_to_validated(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ss.main(["restore", "--restore-to", "sshd.service"]), 2)
+        self.assertIn("--restore-to must be one of", err.getvalue())
 
     def test_bounded(self):
         self.assertEqual(self.props["RuntimeMaxSec"], ["30"])
@@ -61,7 +74,7 @@ class Props(unittest.TestCase):
     def test_timer_after_deadline(self):
         cmd = ss.restore_timer_cmd(self.mode, 30)
         self.assertIn(f"--on-active={30 + ss.STOP_TIMEOUT + ss.GRACE}s", cmd)
-        self.assertEqual(cmd[-3:], ["restore", "--reason", "timer"])
+        self.assertEqual(cmd[-5:], ["restore", "--reason", "timer", "--restore-to", "tiny-dfr.service"])
 
     def test_user_mode_never_uses_system_manager(self):
         m = ss.Mode(user=True, target="fake.service")
@@ -111,7 +124,7 @@ class Validation(unittest.TestCase):
                 ss.invoking_uid(m, env)
 
     def test_test_overrides_rejected_in_real_mode(self):
-        for argv in (["--target", "sshd.service", "restore"], ["--allow-script", "status"]):
+        for argv in (["--target", "sshd.service", "restore"], ["--alt-target", "x.service", "status"], ["--allow-script", "status"]):
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(ss.main(argv), 2)
 

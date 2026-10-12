@@ -19,6 +19,12 @@ so what runs is exactly what was checked), and at most 32 args after `--`.
 bar and for how long, and ask them to watch it and confirm tiny-dfr came back. Then look at
 `bar snap` yourself.
 
+## Which daemon comes back
+A run conflicts with **every** bar owner (`tiny-dfr.service` and `sliverd.service`, once the
+packaging from ADR-0005 is installed) and restores **whichever was active when the run started**
+(tiny-dfr if none was). Below, "tiny-dfr" means "the previous owner". `restore --restore-to` only
+accepts those two units.
+
 ## Guarantees: how tiny-dfr always comes back
 The payload runs in a transient **system** unit `sliver-swap.service`. Restoring is systemd's
 job, not the job of a process that might die:
@@ -86,6 +92,11 @@ systemd-guaranteed restore and (b) run a binary *as the calling user* with fewer
 that user already has, plus a backlight fd. `snap` only reads the bar's framebuffer. Test-only
 flags (`--user-mode`, `--target`, ...) are rejected when not in user mode, and user mode
 refuses root, so the target unit can't be redirected (e.g. to `Conflicts=sshd`).
+
+**Reinstall after helper changes**: the installed copy at `/usr/local/libexec/sliver-safeswap`
+doesn't update itself. Check with `cmp /usr/local/libexec/sliver-safeswap harness/safeswap/sliver-safeswap`.
+In particular, reinstall *before* installing the sliverd packaging, or runs won't conflict with
+or restore sliverd.
 
 Remove: `sudo harness/safeswap/uninstall.sh` (restores tiny-dfr, deletes the three files and
 `/run/sliver-safeswap`).

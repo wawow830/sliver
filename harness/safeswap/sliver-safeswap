@@ -58,7 +58,10 @@ class Mode:
     """Everything that differs between the real (root/system) and test (user) setups."""
 
     user: bool  # True: talk to the *user* systemd manager (tests). Never touches hardware.
-    target: str = "tiny-dfr.service"
+    target: str = "tiny-dfr.service"  # the daemon to restore (picked at run time from owners)
+    # Every unit that can own the bar. A run conflicts with all of them and restores whichever
+    # was active when it started (tiny-dfr if none). Restore targets are validated against this.
+    owners: list[str] = field(default_factory=lambda: ["tiny-dfr.service", "sliverd.service"])
     run_unit: str = "sliver-swap.service"
     timer_name: str = "sliver-swap-restore"
     state_dir: Path = Path("/run/sliver-safeswap")
@@ -74,7 +77,7 @@ class Mode:
     def helper_cmd(self) -> list[str]:
         cmd = [sys.executable, self.helper]
         if self.user:
-            cmd += ["--user-mode", "--target", self.target, "--state-dir", str(self.state_dir)]
+            cmd += ["--user-mode", "--target", self.owners[0], "--alt-target", self.owners[1], "--state-dir", str(self.state_dir)]
         return cmd
 
 
@@ -173,8 +176,10 @@ def run_unit_props(
     p = [
         "Type=exec",
         f"Description=sliver safe-swap run ({seconds}s, restores {mode.target})",
-        f"Conflicts={mode.target}",
-        f"After={mode.target}",  # wait for tiny-dfr to fully stop (release DRM master) first
+        # Conflicts with every bar owner; After= so the owner fully stops (releasing DRM master)
+        # before we start.
+        *[f"Conflicts={u}" for u in mode.owners],
+        *[f"After={u}" for u in mode.owners],
         f"RuntimeMaxSec={seconds}",
         f"TimeoutStopSec={STOP_TIMEOUT}",
         "KillMode=control-group",
@@ -204,7 +209,7 @@ def run_unit_props(
     ]
     # '+' = outside the sandbox and with the manager's privileges (root for the system
     # manager), even though the payload itself runs as the user.
-    restore = " ".join(mode.helper_cmd() + ["restore", "--reason", "stop-post"])
+    restore = " ".join(mode.helper_cmd() + ["restore", "--reason", "stop-post", "--restore-to", mode.target])
     p.append(f"ExecStopPost=+{restore}")
     if not mode.user:
         p += [
@@ -235,6 +240,8 @@ def restore_timer_cmd(mode: Mode, seconds: int) -> list[str]:
         "restore",
         "--reason",
         "timer",
+        "--restore-to",
+        mode.target,
     ]
 
 
@@ -283,8 +290,16 @@ def cmd_stop(mode: Mode) -> int:
     return cmd_restore(mode, "stop")
 
 
+def pick_owner(mode: Mode) -> str:
+    """The bar owner to restore after a run: whichever is active now, else the first (tiny-dfr)."""
+    for u in mode.owners:
+        if is_live(unit_state(mode, u)):
+            return u
+    return mode.owners[0]
+
+
 def cmd_status(mode: Mode) -> int:
-    for unit in (mode.target, mode.run_unit, f"{mode.timer_name}.timer"):
+    for unit in (*mode.owners, mode.run_unit, f"{mode.timer_name}.timer"):
         s = unit_state(mode, unit)
         print(f"{unit:32} {s.get('ActiveState', '?')}/{s.get('SubState', '?')} result={s.get('Result', '-')}")
     out = mode.state_dir / "out"
@@ -367,6 +382,7 @@ def cmd_run(mode: Mode, binary: str, seconds: int, wait: bool, extra: list[str])
         raise SwapError("a previous run's restore timer is pending; run `sliver-safeswap restore` first")
     sh(mode.systemctl() + ["reset-failed", mode.run_unit], check=False, capture=True)
     sh(mode.systemctl() + ["reset-failed", f"{mode.timer_name}.service"], check=False, capture=True)
+    mode.target = pick_owner(mode)
 
     bin_dir, out_dir = prepare_dirs(mode, uid)
     if mode.user:
@@ -458,7 +474,7 @@ def cmd_snap(mode: Mode) -> int:
         raise SwapError("snap needs the real card; not available in --user-mode")
     if os.geteuid() != 0:
         raise SwapError("snap must run as root (pkexec)")
-    if not (is_live(unit_state(mode, mode.target)) or is_live(unit_state(mode, mode.run_unit))):
+    if not any(is_live(unit_state(mode, u)) for u in (*mode.owners, mode.run_unit)):
         raise SwapError("nothing owns the bar right now; refusing to open the card")
     if sys.stdout.isatty():
         raise SwapError("redirect stdout to a file: sliver-safeswap snap > bar.png")
@@ -519,13 +535,14 @@ def cmd_snap(mode: Mode) -> int:
 
 def build_mode(ns: argparse.Namespace) -> Mode:
     if not ns.user_mode:
-        if ns.target or ns.state_dir or ns.allow_script:
-            raise SwapError("--target/--state-dir/--allow-script are only for --user-mode tests")
+        if ns.target or ns.alt_target or ns.state_dir or ns.allow_script:
+            raise SwapError("--target/--alt-target/--state-dir/--allow-script are only for --user-mode tests")
         return Mode(user=False)
     if os.geteuid() == 0:
         raise SwapError("--user-mode must not run as root")
     m = Mode(user=True, allow_script=ns.allow_script)
     m.target = ns.target or "sliver-fake-tinydfr.service"
+    m.owners = [m.target, ns.alt_target or "sliver-fake-sliverd.service"]
     m.state_dir = Path(ns.state_dir or f"/run/user/{os.getuid()}/sliver-safeswap-test")
     m.run_unit = "sliver-swap-test.service"
     m.timer_name = "sliver-swap-test-restore"
@@ -536,6 +553,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="sliver-safeswap", description="run a sliver build on the Touch Bar, safely")
     ap.add_argument("--user-mode", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--target", help=argparse.SUPPRESS)
+    ap.add_argument("--alt-target", help=argparse.SUPPRESS)
     ap.add_argument("--state-dir", help=argparse.SUPPRESS)
     ap.add_argument("--allow-script", action="store_true", help=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -546,6 +564,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("stop", help="end the run now and restore")
     rs = sub.add_parser("restore", help="idempotently restore tiny-dfr")
     rs.add_argument("--reason", default="manual")
+    rs.add_argument("--restore-to", help="which bar owner to start (tiny-dfr.service or sliverd.service)")
     sub.add_parser("status")
     sub.add_parser("snap", help="PNG of the bar's current contents to stdout")
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -556,6 +575,10 @@ def main(argv: list[str] | None = None) -> int:
     ns = ap.parse_args(argv)
     try:
         mode = build_mode(ns)
+        if getattr(ns, "restore_to", None):
+            if ns.restore_to not in mode.owners:
+                raise SwapError(f"--restore-to must be one of {mode.owners}")
+            mode.target = ns.restore_to
         if ns.cmd == "run":
             return cmd_run(mode, ns.binary, ns.seconds, ns.wait, extra)
         if ns.cmd in ("stop", "restore") and not mode.user and os.geteuid() != 0:

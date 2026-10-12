@@ -7,12 +7,13 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 HELPER="$HERE/sliver-safeswap"
 TARGET=sliver-fake-tinydfr.service
+ALT=sliver-fake-sliverd.service
 RUN=sliver-swap-test.service
 TIMER=sliver-swap-test-restore.timer
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 STATE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sliver-safeswap-itest"
 WORK="$(mktemp -d /tmp/sliver-safeswap-itest.XXXXXX)"
-ss() { "$HELPER" --user-mode --target "$TARGET" --state-dir "$STATE" --allow-script "$@"; }
+ss() { "$HELPER" --user-mode --target "$TARGET" --alt-target "$ALT" --state-dir "$STATE" --allow-script "$@"; }
 sc() { systemctl --user "$@"; }
 active() { [[ "$(sc is-active "$1" 2>/dev/null)" =~ ^(active|activating|deactivating)$ ]]; }
 pass=0
@@ -20,9 +21,9 @@ fail() { echo "FAIL: $*" >&2; sc status "$TARGET" "$RUN" --no-pager -n 5 >&2 || 
 ok() { echo "ok: $*"; pass=$((pass + 1)); }
 
 cleanup() {
-  sc stop "$RUN" "$TIMER" "$TARGET" >/dev/null 2>&1 || true
-  sc reset-failed "$RUN" "${TIMER%.timer}.service" "$TARGET" >/dev/null 2>&1 || true
-  rm -f "$UNIT_DIR/$TARGET"
+  sc stop "$RUN" "$TIMER" "$TARGET" "$ALT" >/dev/null 2>&1 || true
+  sc reset-failed "$RUN" "${TIMER%.timer}.service" "$TARGET" "$ALT" >/dev/null 2>&1 || true
+  rm -f "$UNIT_DIR/$TARGET" "$UNIT_DIR/$ALT"
   sc daemon-reload || true
   rm -rf "$WORK" "$STATE"
 }
@@ -32,6 +33,13 @@ mkdir -p "$UNIT_DIR"
 cat >"$UNIT_DIR/$TARGET" <<EOF
 [Unit]
 Description=fake tiny-dfr for sliver-safeswap itest
+[Service]
+ExecStart=/usr/bin/sleep infinity
+EOF
+cat >"$UNIT_DIR/$ALT" <<EOF
+[Unit]
+Description=fake sliverd for sliver-safeswap itest
+Conflicts=$TARGET
 [Service]
 ExecStart=/usr/bin/sleep infinity
 EOF
@@ -95,7 +103,7 @@ ok "stop restores"
 
 # 6. --wait caller dies: PDEATHSIG ends the run early.
 # The helper's direct parent is this sh (the trailing `; :` stops sh from exec'ing it).
-sh -c '"$@"; :' _ "$HELPER" --user-mode --target "$TARGET" --state-dir "$STATE" --allow-script \
+sh -c '"$@"; :' _ "$HELPER" --user-mode --target "$TARGET" --alt-target "$ALT" --state-dir "$STATE" --allow-script \
   run "$p" --seconds 30 --wait 2>/dev/null &
 sub=$!
 sleep 1.5
@@ -120,14 +128,14 @@ loader = importlib.machinery.SourceFileLoader("ss", sys.argv[1])
 spec = importlib.util.spec_from_loader("ss", loader); ss = importlib.util.module_from_spec(spec)
 sys.modules["ss"] = ss; loader.exec_module(ss)
 m = ss.Mode(user=True, target=sys.argv[2], state_dir=Path(sys.argv[3]), helper=sys.argv[1],
-            timer_name="sliver-swap-test-restore")
+            timer_name="sliver-swap-test-restore", owners=[sys.argv[2], "sliver-fake-sliverd.service"])
 cmd = [c if not c.startswith("--on-active=") else "--on-active=2s" for c in ss.restore_timer_cmd(m, 1)]
 subprocess.run(cmd, check=True)
 PY
 active "$TARGET" && fail "target came back before the timer fired"
 wait_restored 6 || fail "dead-man timer didn't restore"
 ok "dead-man timer restores on its own"
-"$HELPER" --user-mode --target "$TARGET" --state-dir "$STATE" restore --reason itest 2>/dev/null
+"$HELPER" --user-mode --target "$TARGET" --alt-target "$ALT" --state-dir "$STATE" restore --reason itest 2>/dev/null
 wait_restored 5 || fail "manual restore"
 ok "restore is idempotent"
 
@@ -137,5 +145,20 @@ if ss run "$p" --seconds 30 2>/dev/null; then fail "second concurrent run accept
 ss stop 2>/dev/null
 wait_restored 8 || fail "stop after double-run check"
 ok "concurrent runs refused"
+
+# 10. sliverd owns the bar (installed packaging): the run must stop it and bring IT back,
+#     not tiny-dfr.
+sc start "$ALT" # Conflicts= stops the fake tiny-dfr
+sleep 0.3
+active "$TARGET" && fail "fake sliverd didn't displace fake tiny-dfr"
+ss run "$(payload alt 'sleep 2')" --seconds 10 2>/dev/null
+sleep 0.5
+active "$ALT" && fail "fake sliverd still running during the run"
+for _ in $(seq 1 80); do active "$ALT" && ! active "$RUN" && break; sleep 0.1; done
+active "$ALT" || fail "fake sliverd not restored"
+active "$TARGET" && fail "restored tiny-dfr instead of the owner (sliverd)"
+ok "restores whichever daemon owned the bar (sliverd)"
+sc stop "$ALT"
+sc start "$TARGET"
 
 echo "itest-user: $pass passed"
