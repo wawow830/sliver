@@ -120,6 +120,14 @@ impl Editor {
         Ok(Editor { path: None, doc })
     }
 
+    /// Replaces the whole document (an import or a preset), keeping the file it saves to.
+    pub fn replace_text(&mut self, text: &str) -> Result<(), String> {
+        self.doc = text
+            .parse::<DocumentMut>()
+            .map_err(|e| format!("TOML syntax: {e}"))?;
+        Ok(())
+    }
+
     pub fn text(&self) -> String {
         self.doc.to_string()
     }

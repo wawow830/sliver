@@ -9,6 +9,7 @@ mod edit;
 mod live;
 mod pages;
 mod prefs;
+mod presets;
 mod preview;
 mod rules;
 
@@ -297,11 +298,7 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
             "profiles",
             "Profiles & Presets",
             "folder-symbolic",
-            pages::todo_page(
-                "Profiles & Presets",
-                "Switch profiles, import your tiny-dfr setup (`sliverctl config import-tiny-dfr` works today), and export or import presets.",
-                &state,
-            ),
+            presets::page(ui),
         ),
         (
             "status",

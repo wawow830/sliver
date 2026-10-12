@@ -1676,6 +1676,7 @@ dependencies = [
  "sliver-config",
  "sliver-ipc",
  "sliver-render",
+ "sliver-waybar",
  "toml",
  "zbus",
 ]
