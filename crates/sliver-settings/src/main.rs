@@ -7,6 +7,7 @@
 mod apps;
 mod bar;
 mod curve;
+mod dbus_presets;
 mod edit;
 mod live;
 mod pages;

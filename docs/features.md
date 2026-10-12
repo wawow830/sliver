@@ -69,7 +69,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Shell command (detached, no shell by default, optional `sh -c`) | P1 | done | MTMR, BTT | Runs in the user session (agent), never as root. |
 | Open app (desktop ID) / open URL or file (xdg-open, portal) | P1 | done | BTT | `{ open = "id" }` (gtk-launch) and `{ url = "…" }` (xdg-open) actions. |
 | Toggle with state (bound to a toggle widget) | P1 | done | MTMR | Mute, mic mute, caffeine, Wi-Fi, Bluetooth, DND, dark mode. |
-| D-Bus method call | P2 | done | BTT | Includes a picker for common targets (MPRIS, logind, notifications). **Now:** Picker in the settings app is not built. |
+| D-Bus method call | P2 | done | BTT | The module inspector in the settings app has a picker that fills “On tap” with common targets (logind lock/suspend/reboot/power off, Spotify/VLC MPRIS, dunst, GNOME/KDE lock screen); every preset is parsed by the real config parser in a test. The dialog itself was not looked at on screen. |
 | Switch layout or profile | P2 | done | BTT | Layouts and profiles both switch from config actions (`{ layout }`, `{ profile }`), the API, sliverctl and the settings app (T64). |
 | Macro: a sequence of actions with delays | P2 | done | BTT | Max length and total time are capped. |
 | Open group / close group | P1 | done | MTMR |  |
