@@ -47,7 +47,8 @@ sleep 1
 DBUS_SESSION_BUS_ADDRESS="unix:path=$tmp/bus" XDG_CONFIG_HOME="$sandbox" GDK_DEBUG=no-portals \
     GDK_BACKEND=broadway BROADWAY_DISPLAY=":$display" \
     "$root/target/debug/sliver-settings" ${OPEN:+"$OPEN"} >"$tmp/app.log" 2>&1 &
-pids+=($!)
+app=$!
+pids+=($app)
 sleep 3
 
 a() { agent-browser --session "$session" "$@" >/dev/null; }
@@ -75,6 +76,11 @@ for step in "$@"; do
     esac
 done
 sleep 1
+if ! kill -0 "$app" 2>/dev/null; then
+    wait "$app"; status=$?
+    echo "settings-headless: sliver-settings exited (status $status); its log:" >&2
+    cat "$tmp/app.log" >&2
+fi
 a screenshot "$out"
 [ -s "$out" ] || { echo "settings-headless: no screenshot at $out" >&2; exit 1; }
 grep -v -e '^$' -e 'Theme parser' "$tmp/app.log" >&2 || true

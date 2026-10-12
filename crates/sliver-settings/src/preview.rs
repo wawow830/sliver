@@ -12,7 +12,15 @@ use sliver_config::{Config, Context};
 use sliver_ipc::proto::Layer;
 use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};
 
-pub const BAR: (u32, u32) = (2008, 60);
+/// The bar's size in pixels: 2008x60 on Macs with a physical Esc key, 2170x60 on those without
+/// (docs/hardware.md). The preview renders at the real size, so it shows what the bar will.
+pub fn bar_size(hw: sliver_config::Hardware) -> (u32, u32) {
+    if hw.physical_esc {
+        (2008, 60)
+    } else {
+        (2170, 60)
+    }
+}
 
 pub struct Preview {
     agent: Agent,
@@ -21,14 +29,14 @@ pub struct Preview {
 }
 
 impl Preview {
-    pub fn new(config: Config, sheet: Stylesheet) -> Self {
+    pub fn new(config: Config, sheet: Stylesheet, (w, h): (u32, u32)) -> Self {
         let agent = Agent::new(
             config,
             sheet,
             Renderer::new(Fonts::system()),
             Icons::system(),
-            BAR.0,
-            BAR.1,
+            w,
+            h,
         );
         Self {
             agent,
@@ -271,26 +279,32 @@ impl Feedback {
                 if zones.len() == 1 { "is" } else { "are" },
             ));
         }
-        if !self.narrow.is_empty() {
-            let strong = self.narrow.iter().filter(|n| n.2).count();
-            let list: Vec<String> = self
-                .narrow
+        // Under COMFORT_PX only gets the amber mark on the preview and the inspector's note: the
+        // stock bar has 76-79 px keys (the theme's min-width), and nagging about those in text
+        // would make the line meaningless. Words are for what's really hard to hit.
+        let strong: Vec<&(String, (f32, f32), bool)> = self.narrow.iter().filter(|n| n.2).collect();
+        if !strong.is_empty() {
+            // `group/fkeys/key/F1` reads as `key/F1`; at most three names.
+            let name = |k: &str| match k.strip_prefix("group/") {
+                Some(rest) => rest.split_once('/').map_or(k, |(_, m)| m).to_owned(),
+                None => k.to_owned(),
+            };
+            let mut list: Vec<String> = strong
                 .iter()
-                .map(|(k, (_, w), _)| format!("{k} ({w:.0} px)"))
+                .take(3)
+                .map(|(k, (_, w), _)| format!("{} ({w:.0} px)", name(k)))
                 .collect();
+            if strong.len() > 3 {
+                list.push(format!("{} more", strong.len() - 3));
+            }
             parts.push(format!(
-                "{} narrower than {COMFORT_PX:.0} px (≈{:.0} mm), hard to hit{}: {}.",
-                if list.len() == 1 {
+                "{} narrower than {MIN_PX:.0} px (≈{:.0} mm), very hard to hit: {}.",
+                if strong.len() == 1 {
                     "1 item is".to_owned()
                 } else {
-                    format!("{} items are", list.len())
+                    format!("{} items are", strong.len())
                 },
-                COMFORT_PX / PX_PER_MM,
-                if strong > 0 {
-                    format!(", {strong} even below {MIN_PX:.0} px")
-                } else {
-                    String::new()
-                },
+                MIN_PX / PX_PER_MM,
                 list.join(", "),
             ));
         }
@@ -364,7 +378,7 @@ mod tests {
     fn preview(toml: &str) -> Preview {
         let loaded = sliver_config::load_str(toml, Path::new("."));
         assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
-        let mut p = Preview::new(loaded.config, Stylesheet::sliver());
+        let mut p = Preview::new(loaded.config, Stylesheet::sliver(), (2008, 60));
         p.render("base", Context::new()).unwrap();
         p
     }
@@ -403,8 +417,12 @@ mod tests {
         assert!(fb.overflow.is_empty());
         let s = fb.summary().unwrap();
         assert!(
-            s.contains("2 items are narrower than 80 px") && s.contains("1 even below 60"),
+            s.contains("1 item is narrower than 60 px") && s.contains("custom/tiny"),
             "{s}"
+        );
+        assert!(
+            !s.contains("custom/small"),
+            "under 80 px is only marked, not listed: {s}"
         );
     }
 
@@ -424,6 +442,18 @@ mod tests {
         assert_eq!(fb.overflow.len(), 1, "{fb:?}");
         assert_eq!(fb.overflow[0].0, "main");
         assert!(fb.summary().unwrap().starts_with("main is too full"));
+    }
+
+    #[test]
+    fn the_stock_bar_is_quiet() {
+        // A 2008 px bar is a Mac with a physical Esc (the preview's size).
+        let loaded = sliver_config::load_str("", Path::new("."));
+        let mut p = Preview::new(loaded.config, Stylesheet::sliver(), (2008, 60));
+        p.render("base", Context::new().with("physical_esc", true))
+            .unwrap();
+        let fb = p.feedback();
+        assert!(fb.overflow.is_empty(), "{fb:?}");
+        assert_eq!(fb.summary(), None, "{fb:?}");
     }
 
     #[test]

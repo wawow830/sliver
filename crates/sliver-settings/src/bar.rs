@@ -10,7 +10,7 @@ use sliver_config::{Context, ModuleRef, Width, parse_cli_value};
 use toml::Value;
 
 use crate::pages::{group, row, surface, width_text};
-use crate::preview::{BAR, Feedback, Preview, width_note};
+use crate::preview::{Feedback, Preview, width_note};
 use crate::{Ui, apply, edit};
 
 /// Feedback drawn on the preview while dragging (widget x coordinates).
@@ -123,14 +123,16 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     controls.append(&mirror);
     page.append(&controls);
 
-    // Drawn at half scale (1004x30) so it stays legible; narrower windows scroll sideways.
+    // Drawn at half scale (1004x30 or 1085x30) so it stays legible; narrower windows scroll
+    // sideways.
+    let size = crate::preview::bar_size(state.hw);
     let frame: Rc<RefCell<Option<gtk::cairo::ImageSurface>>> = Rc::default();
     let caret: Rc<std::cell::Cell<Cue>> = Rc::default();
     // Overflow and small touch targets in the current render (ux.md §4), drawn over the preview.
     let sizes: Rc<RefCell<Feedback>> = Rc::default();
     let picture = gtk::DrawingArea::builder()
-        .content_width(BAR.0 as i32 / 2)
-        .content_height(BAR.1 as i32 / 2)
+        .content_width(size.0 as i32 / 2)
+        .content_height(size.1 as i32 / 2)
         .halign(gtk::Align::Center)
         // Room for the overlay scrollbar, so it never sits on (and swallows clicks on) the bar.
         .margin_bottom(12)
@@ -231,6 +233,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     let preview = Rc::new(RefCell::new(Preview::new(
         state.loaded.config.clone(),
         state.sheet.clone(),
+        size,
     )));
     let refresh = {
         let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());

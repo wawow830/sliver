@@ -10,7 +10,7 @@ use sliver_config::{BAR_GESTURES, parse_cli_value, writer::inline};
 use toml::Value;
 
 use crate::pages::{group, row};
-use crate::preview::{BAR, Preview};
+use crate::preview::Preview;
 use crate::{Ui, apply};
 
 fn set_key(ui: &Rc<Ui>, path: impl Into<String>, label: String, value: Option<Value>) {
@@ -275,13 +275,14 @@ fn theme_row(ui: &Rc<Ui>, id: &'static str, name: &str, what: &str, current: &st
     config.theme = Some(id.to_owned());
     let (sheet, _) = Preview::stylesheet(&config, state.style_dir.as_deref());
     let ctx = sliver_config::Context::new().with("physical_esc", state.hw.physical_esc);
-    if let Ok(p) = Preview::new(config, sheet).render("base", ctx)
+    let size = crate::preview::bar_size(state.hw);
+    if let Ok(p) = Preview::new(config, sheet, size).render("base", ctx)
         && let Some(s) = crate::pages::surface(&p)
     {
         // A quarter of the bar's pixel size, at the panel's aspect ratio.
         let area = gtk::DrawingArea::builder()
-            .content_width((BAR.0 / 4) as i32)
-            .content_height((BAR.1 / 4) as i32)
+            .content_width((size.0 / 4) as i32)
+            .content_height((size.1 / 4) as i32)
             .halign(gtk::Align::Start)
             .build();
         area.set_draw_func(move |_, cr, _, _| {
