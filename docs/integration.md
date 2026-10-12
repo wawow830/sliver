@@ -313,7 +313,7 @@ Compositor events win (§2). Input methods also change what the user is typing:
   --example session-watch` prints live state (read-only).
 - Lesson from that test: **subscribe to signals before the initial read**, or changes between the
   two are lost (the sources do this; keep it when adding new ones).
-- `cargo run -p sliver-desktop --example hypr-watch` prints live JSON states; it is read-only
+- `cargo run -p sliver-desktop --example desktop-watch` (any supported compositor; `hypr-watch` for Hyprland only) prints live JSON states; it is read-only
   and safe on a live Hyprland session.
 - For D-Bus sources, test against a private `dbus-daemon --session` with mock services
   (zbus makes this easy); never against the system bus.

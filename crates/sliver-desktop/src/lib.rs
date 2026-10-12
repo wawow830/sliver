@@ -177,9 +177,67 @@ pub fn watch<S: DesktopSource>(
     }
 }
 
+/// Pick the compositor backend from the environment and run [`watch`] on it. Blocks until
+/// `on_change` breaks. GNOME, KDE and X11 have no in-process backend here: GNOME and KDE push
+/// focus through `Desktop1.SetFocus` (their extension/script), so they return
+/// `ErrorKind::Unsupported` and the caller should wait for that instead.
+pub fn watch_auto(
+    get: impl Fn(&str) -> Option<String>,
+    on_change: impl FnMut(&DesktopState) -> ControlFlow<()>,
+) -> io::Result<()> {
+    let backend = Backend::detect(&get);
+    let missing =
+        |what: &str| io::Error::new(io::ErrorKind::NotFound, format!("{what} is not set"));
+    match backend {
+        Backend::Hyprland => {
+            let paths = hyprland::Paths::from_env(&get)
+                .ok_or_else(|| missing("HYPRLAND_INSTANCE_SIGNATURE"))?;
+            hyprland::watch(&paths, on_change);
+        }
+        Backend::Sway => {
+            let sock = sway::socket_from_env(&get).ok_or_else(|| missing("SWAYSOCK"))?;
+            sway::watch(&sock, on_change);
+        }
+        Backend::Niri => {
+            let sock = niri::socket_from_env(&get).ok_or_else(|| missing("NIRI_SOCKET"))?;
+            niri::watch(&sock, on_change);
+        }
+        other => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("no in-process desktop backend for {other:?}; use Desktop1.SetFocus"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watch_auto_picks_or_refuses() {
+        let none = |_: &str| None::<String>;
+        let e = watch_auto(none, |_| ControlFlow::Break(())).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::Unsupported);
+        let gnome = |k: &str| (k == "XDG_CURRENT_DESKTOP").then(|| "GNOME".to_string());
+        assert_eq!(
+            watch_auto(gnome, |_| ControlFlow::Break(()))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
+        // niri selected, socket missing: reports "disconnected" once and we stop.
+        let niri = |k: &str| (k == "NIRI_SOCKET").then(|| "/nonexistent/niri.sock".to_string());
+        let mut seen = Vec::new();
+        watch_auto(niri, |s| {
+            seen.push(s.clone());
+            ControlFlow::Break(())
+        })
+        .unwrap();
+        assert_eq!(seen, [DesktopState::default()]);
+    }
 
     fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |k| {
