@@ -309,7 +309,7 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   mode and whole-bar gestures. Display & Power also has the on-battery overrides
   (`[display.on-battery]`, T68/T69) and the brightness-curve editor (T75): a graph of bar
   brightness against main-display brightness. Drag points, double-click to add, right-click to
-  remove, Reset back to tiny-dfr's √ (shown dashed). It writes `[display] curve` (fractions,
+  remove, Reset back to tiny-dfr's √ (shown dashed). It writes `[display] curve` (percent,
   at most 16 points; sliverd applies it, T74).
 - **Profiles & Presets**: import tiny-dfr (config + style.css) or a waybar config. Presets are
   cedar's `.sliver` bundles (T67, T69): export the setup in use; Use a preset… (or

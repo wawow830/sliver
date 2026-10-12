@@ -1,7 +1,7 @@
 //! The brightness-curve editor (T75, GOAL Appearance): how bright the bar is for each brightness
 //! of the main display, in adaptive mode. It edits `[display] curve = [[screen, bar], …]`
-//! (fractions 0–1; bar is a fraction of max-brightness; T74). The editor works in percent and
-//! writes hundredths. Without a curve, sliverd uses tiny-dfr's square root, drawn dashed.
+//! (percent; bar is a percentage of max-brightness; T74). The graph uses sliverd's own math
+//! (`sliver_ipc::curve`). Without a curve that's tiny-dfr's square root, drawn dashed.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -21,35 +21,23 @@ const TOP: f64 = 10.0;
 const RIGHT: f64 = 20.0;
 /// How close (px) a press must be to grab a point.
 const GRAB: f64 = 12.0;
-/// sliver-config accepts 2 to 16 points.
-const MAX_POINTS: usize = 16;
+use sliver_ipc::curve::MAX_POINTS;
 
 type Points = Vec<(f64, f64)>;
 
-/// tiny-dfr's adaptive brightness, as percent of max: `sqrt(screen)`.
-fn default_at(screen: f64) -> f64 {
-    (screen / 100.0).clamp(0.0, 1.0).sqrt() * 100.0
+/// Bar brightness (% of max) for main-display brightness `screen` (%), as sliverd computes it.
+fn curve_at(pts: &[(f64, f64)], screen: f64) -> f64 {
+    let permille: Vec<[u16; 2]> = pts
+        .iter()
+        .map(|&(x, y)| [(x * 10.0).round() as u16, (y * 10.0).round() as u16])
+        .collect();
+    let curve = sliver_ipc::curve::normalise(&permille);
+    sliver_ipc::curve::bar_fraction(&curve, (screen / 100.0) as f32) as f64 * 100.0
 }
 
-/// Piecewise-linear through `pts` (sorted by screen), flat outside the ends.
-fn curve_at(pts: &[(f64, f64)], screen: f64) -> f64 {
-    let Some(first) = pts.first() else {
-        return default_at(screen);
-    };
-    if screen <= first.0 {
-        return first.1;
-    }
-    for w in pts.windows(2) {
-        let ((x0, y0), (x1, y1)) = (w[0], w[1]);
-        if screen <= x1 {
-            return if x1 > x0 {
-                y0 + (y1 - y0) * (screen - x0) / (x1 - x0)
-            } else {
-                y1
-            };
-        }
-    }
-    pts.last().map_or(0.0, |p| p.1)
+/// The default without a curve: tiny-dfr's `sqrt(screen)`.
+fn default_at(screen: f64) -> f64 {
+    curve_at(&[], screen)
 }
 
 /// The config's curve in percent, if one is set (an invalid one is reported by the validator and
@@ -58,7 +46,7 @@ pub fn read(d: &Display) -> Option<Points> {
     (d.curve.len() >= 2).then(|| {
         d.curve
             .iter()
-            .map(|&(s, b)| ((s as f64 * 100.0).round(), (b as f64 * 100.0).round()))
+            .map(|&(s, b)| ((s as f64).round(), (b as f64).round()))
             .collect()
     })
 }
@@ -84,7 +72,7 @@ fn normalized(mut pts: Points) -> Points {
 fn to_value(pts: &[(f64, f64)]) -> Value {
     Value::Array(
         pts.iter()
-            .map(|&(x, y)| Value::Array(vec![Value::Float(x / 100.0), Value::Float(y / 100.0)]))
+            .map(|&(x, y)| Value::Array(vec![Value::Integer(x as i64), Value::Integer(y as i64)]))
             .collect(),
     )
 }
@@ -333,19 +321,19 @@ mod tests {
 
     #[test]
     fn interpolation_and_normalizing() {
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
         let p = vec![(0.0, 10.0), (50.0, 30.0), (100.0, 100.0)];
-        assert_eq!(curve_at(&p, 25.0), 20.0);
-        assert_eq!(curve_at(&p, 75.0), 65.0);
-        assert_eq!(
-            curve_at(&[(20.0, 5.0), (80.0, 50.0)], 0.0),
-            5.0,
+        assert!(near(curve_at(&p, 25.0), 20.0));
+        assert!(near(curve_at(&p, 75.0), 65.0));
+        assert!(
+            near(curve_at(&[(20.0, 5.0), (80.0, 50.0)], 0.0), 5.0),
             "flat below"
         );
-        assert_eq!(curve_at(&[], 25.0), 50.0, "no curve: sqrt");
+        assert!(near(curve_at(&[], 25.0), 50.0), "no curve: sqrt");
         let n = normalized(vec![(60.4, 101.0), (10.0, -3.0), (60.0, 7.0)]);
         assert_eq!(n, [(10.0, 0.0), (60.0, 100.0)]);
         let c = sliver_config::load_str(
-            "[display]\ncurve = [[0, 0.05], [1, 0.9]]\n",
+            "[display]\ncurve = [[0, 5], [100, 90]]\n",
             std::path::Path::new("."),
         );
         assert!(c.diagnostics.ok(), "{:?}", c.diagnostics);
@@ -353,7 +341,7 @@ mod tests {
             read(&c.config.display),
             Some(vec![(0.0, 5.0), (100.0, 90.0)])
         );
-        // What the editor writes loads (fractions, strictly increasing).
+        // What the editor writes loads (percent, strictly increasing).
         let text = format!(
             "[display]\ncurve = {}\n",
             to_value(&normalized(vec![(51.0, 26.0), (0.0, 0.0), (100.0, 100.0)]))
