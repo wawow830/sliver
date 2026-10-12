@@ -86,6 +86,8 @@ pub enum Event {
         monitor: String,
     },
     Screencast(bool),
+    /// An output appeared or vanished (`monitoraddedv2` / `monitorremovedv2`): re-query them.
+    MonitorsChanged,
     /// Config reloaded: a good moment to resync from the command socket.
     ConfigReloaded,
     /// Anything we don't track.
@@ -178,6 +180,9 @@ pub fn parse_event(line: &str) -> Event {
             }
         }
         "screencast" => Event::Screencast(data.starts_with('1')),
+        "monitoraddedv2" | "monitorremovedv2" | "monitorremoved" | "monitoradded" => {
+            Event::MonitorsChanged
+        }
         "configreloaded" => Event::ConfigReloaded,
         _ => Event::Other,
     }
@@ -255,7 +260,8 @@ pub fn apply(state: &mut DesktopState, event: &Event) -> bool {
             }
         }
         Event::Screencast(on) => state.screencast = *on,
-        Event::Workspace { .. } | Event::ConfigReloaded | Event::Other => {}
+        Event::Workspace { .. } | Event::MonitorsChanged | Event::ConfigReloaded | Event::Other => {
+        }
     }
     *state != before
 }
@@ -299,6 +305,19 @@ pub fn workspace_from_json(json: &str) -> Option<(Workspace, Option<String>)> {
             .and_then(|m| m.as_str())
             .map(str::to_string),
     ))
+}
+
+/// Parse `j/monitors` into output names (enabled ones; `j/monitors` omits disabled outputs).
+pub fn monitors_from_json(json: &str) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut names: Vec<String> = v
+        .as_array()?
+        .iter()
+        .filter(|m| m.get("disabled").and_then(|d| d.as_bool()) != Some(true))
+        .filter_map(|m| m.get("name")?.as_str().map(str::to_string))
+        .collect();
+    names.sort();
+    Some(names)
 }
 
 /// Parse `j/devices`: the active layout of the main keyboard, else of the first physical one.
@@ -370,6 +389,7 @@ impl Watcher {
                 self.state.monitor = mon.or(self.state.monitor.take());
             }
         }
+        self.refresh_monitors();
         if let Ok(j) = request(&self.paths.command, "j/devices") {
             if let Some(l) = layout_from_devices_json(&j) {
                 self.state.keyboard_layout = Some(l);
@@ -378,6 +398,14 @@ impl Watcher {
         if let Ok(s) = request(&self.paths.command, "submap") {
             let s = s.trim();
             self.state.submap = (s != "default" && !s.is_empty()).then(|| s.to_string());
+        }
+    }
+
+    fn refresh_monitors(&mut self) {
+        if let Ok(j) = request(&self.paths.command, "j/monitors") {
+            if let Some(names) = monitors_from_json(&j) {
+                self.state.set_monitors(names);
+            }
         }
     }
 
@@ -414,6 +442,11 @@ impl DesktopSource for Watcher {
                 Event::ActiveWindowV2 { address: Some(_) } => {
                     let before = self.state.clone();
                     self.refresh_window();
+                    changed = self.state != before;
+                }
+                Event::MonitorsChanged => {
+                    let before = self.state.clone();
+                    self.refresh_monitors();
                     changed = self.state != before;
                 }
                 Event::ConfigReloaded => {
@@ -533,6 +566,14 @@ mod tests {
         );
         assert_eq!(ev("screencast>>1,2"), Event::Screencast(true));
         assert_eq!(ev("screencast>>0,2"), Event::Screencast(false));
+        assert_eq!(
+            ev("monitoraddedv2>>1,HDMI-A-1,desc"),
+            Event::MonitorsChanged
+        );
+        assert_eq!(
+            ev("monitorremovedv2>>1,HDMI-A-1,desc"),
+            Event::MonitorsChanged
+        );
         assert_eq!(ev("somethingnew>>x"), Event::Other);
         assert_eq!(ev("garbage"), Event::Other);
         assert_eq!(ev("workspacev2>>x,y"), Event::Other);
@@ -607,6 +648,12 @@ mod tests {
                 xwayland: true
             }
         );
+        assert_eq!(
+            monitors_from_json(
+                r#"[{"name":"HDMI-A-1"},{"name":"eDP-1"},{"name":"X","disabled":true}]"#
+            ),
+            Some(vec!["HDMI-A-1".to_string(), "eDP-1".to_string()])
+        );
         assert_eq!(window_from_json("{}"), None);
         assert_eq!(window_from_json("Invalid"), None);
         let (ws, mon) = workspace_from_json(r#"{"id":1,"name":"1","monitor":"eDP-1"}"#).unwrap();
@@ -660,6 +707,7 @@ mod tests {
                             r#"{"address":"0xa1","pid":7,"class":"kitty","title":"sh","floating":false,"fullscreen":0,"xwayland":false}"#
                         }
                         "j/activeworkspace" => r#"{"id":1,"name":"1","monitor":"eDP-1"}"#,
+                        "j/monitors" => r#"[{"name":"eDP-1"},{"name":"HDMI-A-1","disabled":true}]"#,
                         "j/devices" => {
                             r#"{"keyboards":[{"name":"kb","active_keymap":"English (US)","main":true}]}"#
                         }
@@ -707,6 +755,11 @@ mod tests {
         assert_eq!(s0.monitor.as_deref(), Some("eDP-1"));
         assert_eq!(s0.keyboard_layout.as_deref(), Some("English (US)"));
         assert_eq!(s0.submap, None);
+        assert_eq!(
+            (s0.monitors, s0.external_display),
+            (1, false),
+            "disabled output ignored"
+        );
 
         let s2 = w.next_change().unwrap().unwrap();
         assert_eq!(

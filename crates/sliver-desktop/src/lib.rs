@@ -102,6 +102,26 @@ pub struct DesktopState {
     pub submap: Option<String>,
     /// Something is screen-sharing (a recording indicator widget can use it).
     pub screencast: bool,
+    /// Names of the enabled outputs (`eDP-1`, `HDMI-A-1`, ...).
+    pub monitor_names: Vec<String>,
+    /// Number of enabled outputs.
+    pub monitors: u32,
+    /// Any enabled output that is not the built-in panel (see [`is_internal_output`]).
+    pub external_display: bool,
+}
+
+/// Is this connector the laptop's own panel? (`eDP-*`, `LVDS-*`, `DSI-*`.)
+pub fn is_internal_output(name: &str) -> bool {
+    ["eDP", "LVDS", "DSI"].iter().any(|p| name.starts_with(p))
+}
+
+impl DesktopState {
+    /// Set the output list and the derived `monitors` / `external_display`.
+    pub fn set_monitors(&mut self, names: Vec<String>) {
+        self.monitors = names.len() as u32;
+        self.external_display = names.iter().any(|n| !is_internal_output(n));
+        self.monitor_names = names;
+    }
 }
 
 /// A blocking stream of desktop state changes.
@@ -136,6 +156,17 @@ mod tests {
             Backend::detect(env(&[("NIRI_SOCKET", "/s")])),
             Backend::Niri
         );
+    }
+
+    #[test]
+    fn external_display_derivation() {
+        let mut s = DesktopState::default();
+        s.set_monitors(vec!["eDP-1".into()]);
+        assert_eq!((s.monitors, s.external_display), (1, false));
+        s.set_monitors(vec!["eDP-1".into(), "HDMI-A-1".into()]);
+        assert_eq!((s.monitors, s.external_display), (2, true));
+        s.set_monitors(vec![]);
+        assert_eq!((s.monitors, s.external_display), (0, false));
     }
 
     #[test]

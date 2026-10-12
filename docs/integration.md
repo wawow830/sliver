@@ -42,6 +42,7 @@ notifications      ─┘
 | `pid` | u32 | compositor |
 | `fullscreen`, `floating`, `xwayland` | bool | compositor |
 | `workspace` (id + name), `special_workspace`, `monitor` | | compositor |
+| `monitors` (count), `external_display` (bool), `monitor_names` | | compositor (`monitoraddedv2`/`monitorremovedv2` + `j/monitors`; internal = `eDP`/`LVDS`/`DSI` prefix) |
 | `keyboard_layout` | string | compositor (see §3) |
 | `submap` / `mode` | string? | compositor |
 | `screencast` | bool | Hyprland event; other DEs: PipeWire/portal sessions |
