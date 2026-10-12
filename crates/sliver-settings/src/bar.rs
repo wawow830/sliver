@@ -1117,7 +1117,7 @@ fn inspector(
         "Touch",
         Some("A shell command, or TOML for typed actions: { key = \"F5\" }, { layer = \"media\" }"),
     );
-    let fields: [(&adw::PreferencesGroup, &str, &str); 6] = [
+    let fields: [(&adw::PreferencesGroup, &str, &str); 5] = [
         (&look, "format", "Format"),
         (&look, "icon", "Icon (name or path)"),
         (
@@ -1127,11 +1127,6 @@ fn inspector(
         ),
         (&actions, "on-tap", "On tap"),
         (&actions, "on-hold", "On hold"),
-        (
-            &actions,
-            "when",
-            "Show only when, e.g. { on-battery = true }",
-        ),
     ];
     let tap_entry: Rc<RefCell<Option<adw::EntryRow>>> = Rc::default();
     for (g, key, label) in fields {
@@ -1201,6 +1196,21 @@ fn inspector(
     }
     page.add(&look);
     page.add(&actions);
+    // Visibility (ux.md §4.3): the condition builder, as on rules.
+    let write: Rc<dyn Fn(Option<Value>)> = {
+        let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());
+        Rc::new(move |v| {
+            let (layout, zone) = (layout.clone(), zone.clone());
+            apply(&ui, move |ed, merged| {
+                edit::set_module_key(ed, merged, &layout, &zone, index, "when", v)
+            });
+        })
+    };
+    page.add(&crate::cond::editor(
+        "Show only when",
+        block.get("when"),
+        write,
+    ));
     dialog.add(&page);
     dialog.present(Some(&ui.win_widget()));
 }

@@ -6,7 +6,6 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use sliver_config::{parse_cli_value, writer::inline};
 use toml::{Table, Value};
 
 use crate::pages::{group, row, summarize};
@@ -204,53 +203,74 @@ fn rule_dialog(ui: &Rc<Ui>, index: usize, title: &str) {
     let g = group(
         "Rule",
         Some(
-            "When is a table of context keys (customization.md §6), e.g. { app-id = \"firefox\" }, { app-id = [\"foot\", \"kitty\"], fullscreen = true }, { on-battery = true }.",
+            "While its condition holds, the layer shows this layout. Rules are checked top to bottom; the first match wins.",
         ),
     );
-    let layouts: Vec<String> = state.loaded.config.layouts.keys().cloned().collect();
-    let fields = [
-        ("name", "Name", None),
-        ("when", "When", None),
-        ("layer", "Layer (default: base)", None),
-        (
-            "layout",
-            "Layout",
-            Some(format!("one of: {}", layouts.join(", "))),
-        ),
-    ];
-    for (key, label, hint) in fields {
-        let e = adw::EntryRow::builder()
-            .title(label)
-            .show_apply_button(true)
-            .build();
-        if let Some(h) = hint {
-            e.set_tooltip_text(Some(&h));
-        }
-        e.set_text(
-            &raw.get(key)
-                .map(|v| match v {
-                    Value::String(s) => s.clone(),
-                    other => inline(other),
-                })
-                .unwrap_or_default(),
-        );
+    // Name: free text.
+    let name = adw::EntryRow::builder()
+        .title("Name")
+        .show_apply_button(true)
+        .text(raw.get("name").and_then(Value::as_str).unwrap_or_default())
+        .build();
+    {
         let ui = ui.clone();
-        e.connect_apply(move |e| {
-            let text = e.text().trim().to_owned();
-            let value = (!text.is_empty()).then(|| {
-                if key == "when" {
-                    parse_cli_value(&text)
-                } else {
-                    Value::String(text.clone())
-                }
-            });
+        name.connect_apply(move |e| {
+            let t = e.text().trim().to_owned();
+            let v = (!t.is_empty()).then(|| Value::String(t.clone()));
             apply(&ui, move |ed, merged| {
-                edit::set_rule_key(ed, merged, index, key, value)
+                edit::set_rule_key(ed, merged, index, "name", v)
             });
         });
-        g.add(&e);
     }
+    g.add(&name);
+    // Layer and layout: picked from what the config has.
+    let choose = |key: &'static str, title: &str, options: Vec<String>, current: &str| {
+        let c = adw::ComboRow::builder()
+            .title(title)
+            .model(&gtk::StringList::new(
+                &options.iter().map(String::as_str).collect::<Vec<_>>(),
+            ))
+            .selected(options.iter().position(|o| o == current).unwrap_or(0) as u32)
+            .build();
+        // Connected after the initial selection, so opening the dialog writes nothing.
+        let ui = ui.clone();
+        c.connect_selected_notify(move |c| {
+            let Some(v) = options.get(c.selected() as usize).cloned() else {
+                return;
+            };
+            apply(&ui, move |ed, merged| {
+                edit::set_rule_key(ed, merged, index, key, Some(Value::String(v)))
+            });
+        });
+        c
+    };
+    let layers: Vec<String> = state.loaded.config.layers.keys().cloned().collect();
+    let layouts: Vec<String> = state.loaded.config.layouts.keys().cloned().collect();
+    g.add(&choose(
+        "layer",
+        "On layer",
+        layers,
+        raw.get("layer").and_then(Value::as_str).unwrap_or("base"),
+    ));
+    g.add(&choose(
+        "layout",
+        "Show layout",
+        layouts,
+        raw.get("layout")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    ));
     page.add(&g);
+    // When: the condition builder (ux.md §5).
+    let write: Rc<dyn Fn(Option<Value>)> = {
+        let ui = ui.clone();
+        Rc::new(move |v| {
+            apply(&ui, move |ed, merged| {
+                edit::set_rule_key(ed, merged, index, "when", v)
+            });
+        })
+    };
+    page.add(&crate::cond::editor("When", raw.get("when"), write));
     dialog.add(&page);
     dialog.present(Some(&ui.win_widget()));
 }

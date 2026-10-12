@@ -6,6 +6,7 @@
 
 mod apps;
 mod bar;
+mod cond;
 mod curve;
 mod dbus_presets;
 mod edit;

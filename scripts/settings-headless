@@ -10,6 +10,7 @@
 #   drag=X1,Y1,X2,Y2      press, move in 8 steps, release
 #   key=NAME       press a key (agent-browser key names: Delete, Control+z, ...)
 #   shot=FILE      screenshot now
+#   wheel=X,Y,DY   scroll what's under X,Y by DY pixels (positive = down)
 #   sleep=SECS
 #
 # Environment:
@@ -59,6 +60,9 @@ for step in "$@"; do
                 [ -s "${step#shot=}" ] || echo "settings-headless: no screenshot at ${step#shot=}" >&2 ;;
         key=*) a press "${step#key=}"; sleep 1.5 ;;
         sleep=*) sleep "${step#sleep=}" ;;
+        wheel=*)
+            IFS=, read -r x y dy <<<"${step#wheel=}"
+            a mouse move "$x" "$y"; a mouse wheel "$dy"; sleep 1 ;;
         drag=*)
             IFS=, read -r x1 y1 x2 y2 <<<"${step#drag=}"
             a mouse move "$x1" "$y1"; a mouse down

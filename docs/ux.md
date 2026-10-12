@@ -344,6 +344,13 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   Every drop is an ordinary edit with Undo, and a plain click still opens the inspector. It's
   one pointer gesture on the page, not toolkit DnD, so it behaves the same on every GDK backend,
   including Broadway for headless tests.
+- **Condition builder** (T109, `cond.rs`): rules' `when` and modules' "Show only when" are rows
+  of pickers: App (ids, plus a searchable "Add app…" over installed .desktop apps), on/off states
+  (locked, on battery, fullscreen, screen shared, DND, …), media status, battery below N %,
+  workspace, window title contains, and time of day, combined as all-of or any-of. A state that's
+  off is written `not = { key = true }` (fail-safe). Anything else (regex, nesting, other keys)
+  stays editable under Advanced as TOML and is never rewritten. Rule dialogs pick the layer and
+  layout from dropdowns.
 - **Testing headless** (never on the live session): `scripts/settings-headless OUT.png [STEP...]`.
   It runs the app on GTK's Broadway backend with a sandboxed `XDG_CONFIG_HOME`
   (`target/test-tmp/xdg-ui`), on a **private D-Bus**, and drives it through agent-browser: clicks
