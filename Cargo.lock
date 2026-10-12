@@ -1614,6 +1614,7 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "sliver-config",
+ "sliver-proc",
  "toml",
 ]
 
@@ -1650,6 +1651,7 @@ name = "sliver-session"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "sliver-proc",
  "zbus",
 ]
 

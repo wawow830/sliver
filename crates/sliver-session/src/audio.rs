@@ -151,13 +151,14 @@ impl Handle {
             .spawn(move || {
                 let mut backoff = Duration::from_millis(500);
                 loop {
-                    let Ok(mut child) = Command::new(&tools.pactl)
-                        .arg("subscribe")
+                    // Tied to this process (T47): `pactl subscribe` never runs on as an orphan
+                    // after the agent (or a test binary) exits, however it exits.
+                    let mut cmd = Command::new(&tools.pactl);
+                    cmd.arg("subscribe")
                         .stdin(Stdio::null())
                         .stdout(Stdio::piped())
-                        .stderr(Stdio::null())
-                        .spawn()
-                    else {
+                        .stderr(Stdio::null());
+                    let Ok(mut child) = sliver_proc::spawn_tied(cmd) else {
                         if !tools.pactl.exists() && tools.pactl.is_absolute() {
                             return;
                         }

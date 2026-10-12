@@ -12,5 +12,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+sliver-proc.workspace = true
 serde = { version = "1", features = ["derive"] }
 zbus = "5"

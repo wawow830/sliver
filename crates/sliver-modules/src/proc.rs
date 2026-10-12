@@ -1,5 +1,6 @@
 //! Spawning module commands: `sh -c`, own process group (so a timeout kills the whole tree),
-//! no stdin, `no_new_privs`, bounded output. Never as root.
+//! no stdin, `no_new_privs`, bounded output, SIGTERM when the agent dies (`sliver_proc`, T47).
+//! Never as root.
 
 use crate::Context;
 use crate::spec::Spec;
@@ -49,7 +50,7 @@ pub(crate) fn command(spec: &Spec, ctx: &Context, script: &str, pipe_stderr: boo
 
 /// Spawn a long-running module command (stdout piped, stderr discarded).
 pub(crate) fn spawn_stream(spec: &Spec, ctx: &Context, script: &str) -> io::Result<Child> {
-    command(spec, ctx, script, false).spawn()
+    sliver_proc::spawn_tied(command(spec, ctx, script, false))
 }
 
 /// SIGKILL the command and everything it started (its process group).
@@ -107,7 +108,7 @@ impl Capture {
 
 /// Run `script` to completion or `spec.timeout`, whichever is first.
 pub(crate) fn run_once(spec: &Spec, ctx: &Context, script: &str) -> io::Result<RunResult> {
-    let mut child = command(spec, ctx, script, true).spawn()?;
+    let mut child = sliver_proc::spawn_tied(command(spec, ctx, script, true))?;
     let pid = child.id();
     let out = capture(child.stdout.take().expect("piped"), MAX_STDOUT);
     let err = capture(child.stderr.take().expect("piped"), MAX_STDERR);
