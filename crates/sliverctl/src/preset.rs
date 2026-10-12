@@ -6,13 +6,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use sliver_config::preset::{Bundle, CONFIG, EXTENSION, Run, export};
+use sliver_config::profile;
 
 pub const USAGE: &str = "\
 Presets (offline: .sliver files hold a config, its includes, stylesheet and icons)
   preset export FILE [--name NAME] [--config PATH]   bundle your config (env tables are left out)
   preset show FILE                                   files, everything it runs, and whether it loads
-  preset import FILE [--yes] [--no-commands] [--dir DIR]
-                                  replace your config with it; replaced files go to backups/
+  preset import FILE [--yes] [--no-commands] [--profile NAME] [--dir DIR]
+                                  replace your config with it (or install it as profile NAME and
+                                  switch to it); replaced files go to backups/
 ";
 
 pub fn run(args: &[String]) -> ExitCode {
@@ -30,6 +32,7 @@ struct Opts {
     name: Option<String>,
     config: Option<PathBuf>,
     dir: Option<PathBuf>,
+    profile: Option<String>,
     yes: bool,
     no_commands: bool,
 }
@@ -40,6 +43,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         name: None,
         config: None,
         dir: None,
+        profile: None,
         yes: false,
         no_commands: false,
     };
@@ -54,6 +58,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--name" => o.name = Some(val("a NAME")?),
             "--config" => o.config = Some(val("a PATH")?.into()),
             "--dir" => o.dir = Some(val("a DIR")?.into()),
+            "--profile" => o.profile = Some(val("a NAME")?),
             "--yes" | "-y" => o.yes = true,
             "--no-commands" => o.no_commands = true,
             s if s.starts_with('-') && s != "-" => return Err(format!("unknown option {s}")),
@@ -110,6 +115,9 @@ fn do_export(o: &Opts) -> Result<ExitCode, String> {
         None => sliver_config::find_config()
             .ok_or("nothing to export: you're on the built-in defaults (no config.toml)")?,
     };
+    if o.config.is_none() && profile::active() != profile::DEFAULT {
+        eprintln!("exporting profile {:?}", profile::active());
+    }
     let ex = export(&config, o.name.as_deref())?;
     for n in &ex.notes {
         eprintln!("note: {n}");
@@ -215,6 +223,10 @@ fn do_import(o: &Opts) -> Result<ExitCode, String> {
         Some(d) => d.clone(),
         None => user_dir()?,
     };
+    let as_profile = o.profile.as_deref().filter(|p| *p != profile::DEFAULT);
+    if let Some(p) = as_profile {
+        profile::valid_name(p)?;
+    }
     let runs = b.runs();
     let choice = if o.no_commands {
         Choice::NoCommands
@@ -223,10 +235,13 @@ fn do_import(o: &Opts) -> Result<ExitCode, String> {
     } else {
         print_summary(&b, &runs);
         let q = if runs.is_empty() {
-            format!(
-                "Replace your config in {}? (a backup is kept) [y/N] ",
-                dir.display()
-            )
+            match as_profile {
+                Some(p) => format!("Install it as profile {p:?} and switch to it? [y/N] "),
+                None => format!(
+                    "Replace your config in {}? (a backup is kept) [y/N] ",
+                    dir.display()
+                ),
+            }
         } else {
             format!(
                 "It runs {} command(s) as you. Type 'yes' to import it as is, 'no-commands' to \
@@ -250,15 +265,38 @@ fn do_import(o: &Opts) -> Result<ExitCode, String> {
             clean
         }
     };
-    let inst = b.install(&dir)?;
+    let inst = match as_profile {
+        // profiles/NAME.toml, with the preset's other files in profiles/NAME/.
+        Some(p) => {
+            let profiles = dir.join("profiles");
+            b.install_at(&profiles.join(format!("{p}.toml")), &profiles.join(p), &dir)?
+        }
+        None => b.install(&dir)?,
+    };
     if let Some(bk) = &inst.backup {
         eprintln!("backed up the files it replaced to {}", bk.display());
     }
+    let shown = inst.written.last().map_or(dir.clone(), Clone::clone);
     eprintln!(
-        "imported {} file(s) into {}; the agent reloads {CONFIG} by itself",
+        "imported {} file(s); the config is {}",
         inst.written.len(),
-        dir.display()
+        shown.display()
     );
+    // Profiles switch by file (`active-profile`); only for the real config dir.
+    if o.dir.is_none() {
+        match as_profile {
+            Some(p) => {
+                profile::set_active(p)?;
+                eprintln!("switched to profile {p:?} (`sliverctl profile default` switches back)");
+            }
+            None if profile::active() != profile::DEFAULT => eprintln!(
+                "note: profile {:?} is active, so the bar shows it, not {CONFIG}; \
+                 `sliverctl profile default` switches",
+                profile::active()
+            ),
+            None => eprintln!("the agent reloads {CONFIG} by itself"),
+        }
+    }
     Ok(ExitCode::SUCCESS)
 }
 

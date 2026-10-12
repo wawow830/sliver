@@ -32,7 +32,8 @@ Config (offline: edits ~/.config/sliver/config.toml, keeps comments; `sliverctl 
 Presets (offline: a .sliver file holds a config, its includes, stylesheet and icons)
   preset export FILE [--name NAME] [--config PATH]   share your setup (env tables are left out)
   preset show FILE                list its files and everything it runs; check that it loads
-  preset import FILE [--yes] [--no-commands] [--dir DIR]   use it (replaced files are backed up)
+  preset import FILE [--yes] [--no-commands] [--profile NAME] [--dir DIR]
+                                  use it (replaced files are backed up), or install it as a profile
 
 Publish (stays connected; prints `ITEM KIND [KEY=VALUE...]` per event)
   publish [--scope app|status|target] [--provider ID] [--title T] [--target-app APP_ID]

@@ -251,18 +251,21 @@ impl Bundle {
     /// `config_dir/backups/<unix time>/` first. Refuses (and changes nothing) if the config
     /// wouldn't load.
     pub fn install(&self, config_dir: &Path) -> Result<Installed, String> {
-        std::fs::create_dir_all(config_dir)
-            .map_err(|e| format!("{}: {e}", config_dir.display()))?;
-        let staging = scratch_dir(config_dir)?;
-        let result = self.install_from(&staging, config_dir);
-        let _ = std::fs::remove_dir_all(&staging);
-        result
+        self.install_at(&config_dir.join(CONFIG), config_dir, config_dir)
     }
 
-    fn install_from(&self, staging: &Path, config_dir: &Path) -> Result<Installed, String> {
-        let anchored = self.anchored(config_dir);
-        anchored.write_to(staging)?;
-        let d = load_file(&staging.join(CONFIG)).diagnostics;
+    /// Like [`Bundle::install`], but `config.toml` goes to `config` (a profile's
+    /// `profiles/<name>.toml`) and the other files under `files_dir`. References from the config
+    /// to bundled files become absolute (a profile's own paths resolve from `profiles/`), and
+    /// a bundled `style.css` is named explicitly. Backups go to `backup_root/backups/<time>/`.
+    pub fn install_at(
+        &self,
+        config: &Path,
+        files_dir: &Path,
+        backup_root: &Path,
+    ) -> Result<Installed, String> {
+        std::fs::create_dir_all(files_dir).map_err(|e| format!("{}: {e}", files_dir.display()))?;
+        let d = self.check(files_dir)?;
         if !d.ok() {
             let errors: Vec<String> = d.errors.iter().map(|e| e.to_string()).collect();
             return Err(format!(
@@ -270,14 +273,16 @@ impl Bundle {
                 errors.join("\n  ")
             ));
         }
+        let moved = config.parent() != Some(files_dir);
+        let b = self.anchored(files_dir, moved);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        let backup_dir = config_dir.join("backups").join(stamp.to_string());
+        let backup_dir = backup_root.join("backups").join(stamp.to_string());
         let mut backup = None;
         let mut written = Vec::new();
         // config.toml last: the reloader then sees includes and the stylesheet already there.
-        let order = self
+        let order = b
             .files
             .keys()
             .filter(|n| *n != CONFIG)
@@ -285,25 +290,42 @@ impl Bundle {
             .cloned()
             .collect::<Vec<_>>();
         for name in order {
-            let dest = config_dir.join(&name);
+            let dest = if name == CONFIG {
+                config.to_path_buf()
+            } else {
+                files_dir.join(&name)
+            };
             if dest.symlink_metadata().is_ok() {
-                let to = backup_dir.join(&name);
+                let shown = dest.strip_prefix(backup_root).unwrap_or(Path::new(&name));
+                let to = backup_dir.join(shown);
                 mkdir_parent(&to)?;
                 std::fs::copy(&dest, &to).map_err(|e| format!("backing up {name}: {e}"))?;
                 backup = Some(backup_dir.clone());
             }
             mkdir_parent(&dest)?;
-            std::fs::rename(staging.join(&name), &dest)
-                .map_err(|e| format!("{}: {e}", dest.display()))?;
+            // Write beside, then rename: a watcher never sees half a file.
+            let tmp = dest.with_file_name(format!(
+                ".{}.preset-{}",
+                dest.file_name().unwrap_or_default().to_string_lossy(),
+                std::process::id()
+            ));
+            std::fs::write(&tmp, &b.files[&name]).map_err(|e| format!("{}: {e}", tmp.display()))?;
+            std::fs::rename(&tmp, &dest).map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("{}: {e}", dest.display())
+            })?;
             written.push(dest);
         }
+        // Only the config: don't leave an empty files dir behind (fails harmlessly otherwise).
+        let _ = std::fs::remove_dir(files_dir);
         Ok(Installed { written, backup })
     }
 
     /// Icons and images are looked up by absolute path (or icon name), not relative to the config,
-    /// so `icon`/`path` references to bundled files become absolute paths in `config_dir`.
-    /// (`include` and `stylesheet` already resolve relative to the config.)
-    fn anchored(&self, config_dir: &Path) -> Bundle {
+    /// so `icon`/`path` references to bundled files become absolute paths in `files_dir`. When
+    /// the config itself lives elsewhere (`config_moved`), its `include` and `stylesheet` do too,
+    /// and an implicit `style.css` is made explicit.
+    fn anchored(&self, files_dir: &Path, config_moved: bool) -> Bundle {
         let mut b = self.clone();
         let names: Vec<String> = self.files.keys().cloned().collect();
         for (name, data) in &mut b.files {
@@ -324,9 +346,15 @@ impl Bundle {
                 let target = normalize(from_dir, s)?;
                 names
                     .contains(&target)
-                    .then(|| config_dir.join(&target).to_string_lossy().into_owned())
+                    .then(|| files_dir.join(&target).to_string_lossy().into_owned())
             };
-            anchor_table(doc.as_table_mut(), &mut fix);
+            let all = config_moved && name == CONFIG;
+            let keys: &[&str] = if all { PATH_KEYS } else { &["icon", "path"] };
+            anchor_table(doc.as_table_mut(), keys, &mut fix);
+            if all && !doc.contains_key("stylesheet") && names.iter().any(|n| n == "style.css") {
+                doc["stylesheet"] =
+                    toml_edit::value(files_dir.join("style.css").to_string_lossy().into_owned());
+            }
             *data = doc.to_string().into_bytes();
         }
         b
@@ -358,22 +386,31 @@ fn normalize(dir: &str, rel: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
-fn anchor_table(t: &mut dyn toml_edit::TableLike, fix: &mut dyn FnMut(&str) -> Option<String>) {
+fn anchor_table(
+    t: &mut dyn toml_edit::TableLike,
+    keys: &[&str],
+    fix: &mut dyn FnMut(&str) -> Option<String>,
+) {
     for (k, item) in t.iter_mut() {
-        let is_ref = k.get() == "icon" || k.get() == "path";
-        anchor_item(item, is_ref, fix);
+        let is_ref = keys.contains(&k.get());
+        anchor_item(item, is_ref, keys, fix);
     }
 }
 
-fn anchor_item(i: &mut toml_edit::Item, is_ref: bool, fix: &mut dyn FnMut(&str) -> Option<String>) {
+fn anchor_item(
+    i: &mut toml_edit::Item,
+    is_ref: bool,
+    keys: &[&str],
+    fix: &mut dyn FnMut(&str) -> Option<String>,
+) {
     match i {
-        toml_edit::Item::Table(t) => anchor_table(t, fix),
+        toml_edit::Item::Table(t) => anchor_table(t, keys, fix),
         toml_edit::Item::ArrayOfTables(a) => {
             for t in a.iter_mut() {
-                anchor_table(t, fix);
+                anchor_table(t, keys, fix);
             }
         }
-        toml_edit::Item::Value(v) => anchor_value(v, is_ref, fix),
+        toml_edit::Item::Value(v) => anchor_value(v, is_ref, keys, fix),
         toml_edit::Item::None => {}
     }
 }
@@ -381,13 +418,14 @@ fn anchor_item(i: &mut toml_edit::Item, is_ref: bool, fix: &mut dyn FnMut(&str) 
 fn anchor_value(
     v: &mut toml_edit::Value,
     is_ref: bool,
+    keys: &[&str],
     fix: &mut dyn FnMut(&str) -> Option<String>,
 ) {
     match v {
-        toml_edit::Value::InlineTable(t) => anchor_table(t, fix),
+        toml_edit::Value::InlineTable(t) => anchor_table(t, keys, fix),
         toml_edit::Value::Array(a) => {
             for x in a.iter_mut() {
-                anchor_value(x, is_ref, fix);
+                anchor_value(x, is_ref, keys, fix);
             }
         }
         toml_edit::Value::String(s) if is_ref => {
@@ -1148,6 +1186,94 @@ on-tap = { key = "F1" }
             .collect();
         assert!(leftovers.is_empty());
         for d in [home, scratch, dest] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn export_from_a_profile_and_install_as_one() {
+        // A profile (profiles/work.toml) overlays the main config, like `profile::create` makes.
+        let home = tmp("prof");
+        let cfg = home.join("sliver");
+        std::fs::create_dir_all(cfg.join("profiles")).unwrap();
+        std::fs::write(cfg.join("logo.svg"), "<svg/>").unwrap();
+        std::fs::write(cfg.join("style.css"), "#clock { color: red; }\n").unwrap();
+        std::fs::write(
+            cfg.join(CONFIG),
+            "version = 1\n[modules.\"custom/a\"]\nformat = \"a\"\nicon = \"logo.svg\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            cfg.join("profiles/work.toml"),
+            "version = 1\ninclude = [\"../config.toml\"]\nstylesheet = \"../style.css\"\n\
+             [modules.\"custom/w\"]\nformat = \"w\"\n",
+        )
+        .unwrap();
+        let ex = export(&cfg.join("profiles/work.toml"), None).unwrap();
+        let names: Vec<&str> = ex.bundle.files.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "assets/logo.svg",
+                "assets/style.css",
+                CONFIG,
+                "include/config.toml"
+            ],
+            "{:?}",
+            ex.notes
+        );
+        let main = String::from_utf8(ex.bundle.files[CONFIG].clone()).unwrap();
+        assert!(
+            main.contains("include = [\"include/config.toml\"]"),
+            "{main}"
+        );
+        assert!(main.contains("stylesheet = \"assets/style.css\""), "{main}");
+        let inc = String::from_utf8(ex.bundle.files["include/config.toml"].clone()).unwrap();
+        assert!(inc.contains("icon = \"../assets/logo.svg\""), "{inc}");
+
+        // Installed as profile "shared" elsewhere: profiles/shared.toml + profiles/shared/….
+        let dest = tmp("prof-dest");
+        let prof = dest.join("profiles/shared.toml");
+        let files = dest.join("profiles/shared");
+        let inst = ex.bundle.install_at(&prof, &files, &dest).unwrap();
+        assert!(inst.backup.is_none());
+        assert_eq!(inst.written.last().unwrap(), &prof);
+        let text = std::fs::read_to_string(&prof).unwrap();
+        let abs = |n: &str| files.join(n).display().to_string();
+        assert!(text.contains(&abs("include/config.toml")), "{text}");
+        assert!(text.contains(&abs("assets/style.css")), "{text}");
+        let loaded = load_file(&prof);
+        assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
+        let ids: Vec<String> = loaded
+            .config
+            .modules
+            .keys()
+            .map(|k| k.to_string())
+            .collect();
+        assert!(ids.contains(&"custom/a".into()) && ids.contains(&"custom/w".into()));
+        // An implicit style.css is named explicitly when the config moves.
+        let b = Bundle {
+            name: None,
+            files: BTreeMap::from([
+                (CONFIG.to_owned(), b"version = 1\n".to_vec()),
+                ("style.css".to_owned(), b"x {}".to_vec()),
+            ]),
+        };
+        b.install_at(
+            &dest.join("profiles/plain.toml"),
+            &dest.join("profiles/plain"),
+            &dest,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(dest.join("profiles/plain.toml")).unwrap();
+        assert!(
+            text.contains(&format!(
+                "stylesheet = \"{}\"",
+                dest.join("profiles/plain/style.css").display()
+            )),
+            "{text}"
+        );
+        for d in [home, dest] {
             let _ = std::fs::remove_dir_all(d);
         }
     }

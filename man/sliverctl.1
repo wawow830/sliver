@@ -332,7 +332,7 @@ and the commands, D\-Bus calls, files and URLs opened by its gestures and menus.
 Then check that it loads.
 The exit status is 1 if it doesn't.
 .TP
-.BR "preset import" " \fIfile\fP [" \-\-yes "] [" \-\-no\-commands "] [" \-\-dir " \fIdir\fP]"
+.BR "preset import" " \fIfile\fP [" \-\-yes "] [" \-\-no\-commands "] [" \-\-profile " \fIname\fP] [" \-\-dir " \fIdir\fP]"
 Replace your configuration with the preset.
 It shows what
 .B preset show
@@ -352,9 +352,25 @@ Files it replaces are copied to
 in the configuration directory first, and
 .B config.toml
 is written last, so the agent reloads a complete setup.
+.B \-\-profile
+installs it as profile
+.I name
+instead
+.RB ( profiles/\fIname\fP.toml ,
+with its other files in
+.BR profiles/\fIname\fP/ )
+and switches to it.
+Without it, the preset replaces
+.BR config.toml ,
+which the bar only shows while the
+.B default
+profile is active.
+.B preset export
+bundles the active profile.
 .B \-\-dir
 installs somewhere other than
-.BR ~/.config/sliver .
+.B ~/.config/sliver
+(and doesn't switch profiles).
 .SH VALUES
 In
 .IR key = value
