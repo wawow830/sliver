@@ -481,6 +481,63 @@ fn now_us() -> u64 {
     t.tv_sec as u64 * 1_000_000 + t.tv_nsec as u64 / 1_000
 }
 
+/// The `systemd-run` prefix that puts a command in its own transient scope, so it outlives
+/// the agent: under `sliver-agent.service` (KillMode=control-group) children in our cgroup die
+/// with every agent restart. Desktop launchers do the same.
+fn scope_prefix(argv: &[String], seq: u64) -> Vec<String> {
+    let name: String = argv
+        .first()
+        .map(|p| p.rsplit('/').next().unwrap_or(p))
+        .unwrap_or("cmd")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(32)
+        .collect();
+    vec![
+        "systemd-run".into(),
+        "--user".into(),
+        "--scope".into(),
+        "--collect".into(),
+        "--quiet".into(),
+        format!(
+            "--unit=app-sliver-{name}-{}-{seq}.scope",
+            std::process::id()
+        ),
+        "--".into(),
+    ]
+}
+
+/// Starts a user command: in its own systemd scope when we run as a systemd service (falling
+/// back to a plain spawn), always in its own process group with stdin closed.
+fn spawn_detached(argv: &[String]) -> std::io::Result<Child> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let plain = |argv: &[String]| {
+        let (prog, args) = argv
+            .split_first()
+            .ok_or_else(|| std::io::Error::other("empty command"))?;
+        Command::new(prog)
+            .args(args)
+            .stdin(Stdio::null())
+            .process_group(0)
+            .spawn()
+    };
+    if std::env::var_os("INVOCATION_ID").is_some() {
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut full = scope_prefix(argv, seq);
+        full.extend(argv.iter().cloned());
+        if let Ok(child) = plain(&full) {
+            return Ok(child);
+        }
+    }
+    plain(argv)
+}
+
 /// Carries out the agent's effects. Returns whether a redraw is needed.
 fn apply(
     effects: Vec<Effect>,
@@ -541,21 +598,13 @@ fn apply(
             Effect::Redraw => redraw = true,
             Effect::EmitKeys(keys, mode) => link.emit_keys(&keys, mode)?,
             Effect::Log(msg) => eprintln!("sliver-agent: {msg}"),
-            Effect::Spawn(argv) => {
-                let Some((prog, args)) = argv.split_first() else {
-                    continue;
-                };
-                // Own process group, so a signal to the agent doesn't take user commands down.
-                match Command::new(prog)
-                    .args(args)
-                    .stdin(Stdio::null())
-                    .process_group(0)
-                    .spawn()
-                {
-                    Ok(child) => children.push(child),
-                    Err(e) => eprintln!("sliver-agent: {prog}: {e}"),
-                }
-            }
+            Effect::Spawn(argv) => match spawn_detached(&argv) {
+                Ok(child) => children.push(child),
+                Err(e) => eprintln!(
+                    "sliver-agent: {}: {e}",
+                    argv.first().map_or("", |s| s.as_str())
+                ),
+            },
         }
     }
     // Reap whatever finished, so no zombies pile up.
@@ -903,5 +952,24 @@ fn run(
             };
             dirty |= apply(fx, &link, &mut children, live)?;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_unit_names_are_safe() {
+        let p = scope_prefix(&["/usr/bin/fire fox".into(), "x".into()], 3);
+        assert_eq!(
+            &p[..5],
+            ["systemd-run", "--user", "--scope", "--collect", "--quiet"]
+        );
+        assert_eq!(
+            p[5],
+            format!("--unit=app-sliver-fire_fox-{}-3.scope", std::process::id())
+        );
+        assert_eq!(p[6], "--");
     }
 }

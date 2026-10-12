@@ -45,7 +45,10 @@ agent (sliverd only draws key regions'). Region ids of the `fn` frame start at 1
 
 Actions (`agent.rs` → `Effect`s run by main.rs):
 - `key`/keys: sent to sliverd as `emit_keys`.
-- shell/exec: `{value}` substituted; started in their own process group and reaped.
+- shell/exec: `{value}` substituted; started in their own process group and reaped. Under
+  systemd (`INVOCATION_ID` set) they run in their own transient scope
+  (`systemd-run --user --scope`, unit `app-sliver-<prog>-…`), so restarting
+  `sliver-agent.service` doesn't kill apps opened from the bar. Plain spawn otherwise.
 - `open`: `gtk-launch`. `url`: `xdg-open`. D-Bus without args: `busctl call`.
 - `layer`: toggle/oneshot/hold. Hold layers close when that finger lifts, oneshot layers after the
   next action taken in them. `close-layer`.
