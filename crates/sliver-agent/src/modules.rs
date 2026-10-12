@@ -1703,11 +1703,7 @@ fn cell(
         mic: m.config.get("node").and_then(|v| v.as_str()) == Some("source"),
         css_id: m.css_id.clone(),
         classes,
-        width: match c.width {
-            sliver_config::Width::Auto => Width::Auto,
-            sliver_config::Width::Fixed(px) => Width::Fixed(px as f32),
-            sliver_config::Width::Fill(n) => Width::Fill(n),
-        },
+        width: width(c.width),
         content,
         touch,
         on,
@@ -2255,6 +2251,34 @@ mod tests {
     }
 
     #[test]
+    fn placeholders_take_the_module_width() {
+        let l = load_str(
+            "[modules.status-items]\nwidth = 332\n",
+            std::path::Path::new("."),
+        );
+        assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
+        let ctx = Context::new().with("physical_esc", true);
+        let r = l.config.resolve("base", &ctx).unwrap();
+        let w = World::sample(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
+        let mut out = Vec::new();
+        let mut icons = Icons::builtin_only();
+        for z in &r.zones {
+            cells(
+                &z.modules,
+                &w,
+                &mut icons,
+                36,
+                &|_| UiState::default(),
+                &mut out,
+            );
+        }
+        let status = out.iter().find(|c| c.kind == "status-items").unwrap();
+        assert_eq!(status.width, Width::Fixed(332.0));
+        let app = out.iter().find(|c| c.kind == "app-controls").unwrap();
+        assert_eq!(app.width, Width::Auto, "unset stays auto");
+    }
+
+    #[test]
     fn closed_drawer_shows_its_handle() {
         let cells = build("", "base");
         // group/fkeys (F1-F12 until an app publishes) comes first; it's not a drawer.
@@ -2278,7 +2302,17 @@ mod tests {
     }
 }
 
-/// An empty App controls / Status items placeholder, drawn only in previews.
+/// A module's configured `width` for the renderer.
+fn width(w: sliver_config::Width) -> Width {
+    match w {
+        sliver_config::Width::Auto => Width::Auto,
+        sliver_config::Width::Fixed(px) => Width::Fixed(px as f32),
+        sliver_config::Width::Fill(n) => Width::Fill(n),
+    }
+}
+
+/// An empty App controls / Status items placeholder, drawn only in previews. It takes the
+/// module's `width`, so the settings editor's resize handle shows what it does.
 fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell {
     Cell {
         key: key.to_owned(),
@@ -2287,7 +2321,7 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
         mic: false,
         css_id: m.css_id.clone(),
         classes: vec!["placeholder".into(), class.into()],
-        width: Width::Auto,
+        width: width(m.common.width),
         content: Content::Text(label.into()),
         touch: Touch::None,
         on: Vec::new(),
