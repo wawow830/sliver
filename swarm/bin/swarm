@@ -717,6 +717,35 @@ def nudge_for(name, p, s):
     return None
 
 
+GAP_REVIEW_EVERY = 1800  # seconds between stall-breaking gap reviews
+
+
+def stall_breaker(s, lives):
+    """Everyone resting with nothing new on the board is a stall, not "done": GOAL.md decides done.
+    Resting peers only wake for new tasks or messages, so somebody has to go find the next work.
+    Wake one resting peer (whoever explored longest ago) for a gap review."""
+    peers = {n: p for n, p in s["peers"].items() if p.get("status") != "gone" and n in lives}
+    if not peers or any(lives[n] not in ("idle", "done") for n in peers):
+        return None
+    if any(p.get("status", "active") == "active" for p in peers.values()):
+        return None  # an active idle peer gets the normal explore nudge instead
+    resting = [n for n, p in peers.items() if p.get("status") == "resting"]
+    if not resting or now() - s["swarm"].get("last_gap_review", 0) < GAP_REVIEW_EVERY:
+        return None
+    name = min(resting, key=lambda n: (peers[n].get("last_explore", 0), n))
+    p = peers[name]
+    p.update(status="active", last_explore=now(), last_nudge=now())
+    s["swarm"]["last_gap_review"] = now()
+    left = sorted(t["id"] for t in claimable(s))
+    msg = ("[swarm] Every peer is resting, but sliver isn't finished: GOAL.md's 'What complete means' and the Status "
+           "column in docs/features.md still have partial and not-started rows. You're picked for a gap review. "
+           "Find the most valuable missing pieces, add them as tasks small enough to land (`swarm task add`), "
+           "`swarm say` a one-line summary so the peers who know those areas pick them up, and claim one yourself."
+           + (f" Also decide whether open {', '.join(left)} should be taken or dropped." if left else "")
+           + " If you truly find nothing worth doing, `swarm rest \"why\"`.")
+    return ("gap", name, msg)
+
+
 def free_gb():
     return shutil.disk_usage(str(main_checkout())).free / 1e9
 
@@ -961,11 +990,11 @@ def cmd_pulse(a):
                     print(time.strftime("%H:%M:%S"), "paused"); peers = {}
                 else:
                     peers = s["peers"]
-                actions = []
+                actions, lives = [], {}
                 for name, p in peers.items():
                     if p.get("status") == "gone":
                         continue
-                    live = agent_status(name)
+                    live = lives[name] = agent_status(name)
                     if live is None:
                         if now() - revive_at.get(name, 0) > 600:
                             revive_at[name] = now(); actions.append(("revive", name, None))
@@ -982,9 +1011,16 @@ def cmd_pulse(a):
                     msg = nudge_for(name, p, s)
                     if msg:
                         p["last_nudge"] = now(); actions.append(("nudge", name, msg))
+                if not actions:
+                    stall = stall_breaker(s, lives)
+                    if stall:
+                        actions.append(stall)
                 open_h = [h["id"] for h in s["humans"].values() if h["status"] == "open"]
             for kind, name, msg in actions:
                 if kind == "nudge":
+                    prompt_peer(name, msg)
+                elif kind == "gap":
+                    channel("system", f"everyone is resting; woke {name} for a gap review against GOAL.md", by="pulse")
                     prompt_peer(name, msg)
                 elif kind == "blocked":
                     notify(f"sliver: {name} is blocked", f"{name} is waiting at an approval/question UI. Look at its pane.")
