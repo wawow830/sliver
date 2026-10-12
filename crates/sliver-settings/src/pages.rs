@@ -186,11 +186,44 @@ pub(crate) fn status_page(state: &State) -> gtk::Widget {
 
     let svc = group(
         "Services",
-        Some("Live agent/daemon status needs the D-Bus client (next slice)."),
+        Some("From the session bus; the reload button at the top left refreshes it."),
     );
-    svc.add(&row("sliver-agent", "not checked yet"));
-    svc.add(&row("sliverd", "not checked yet"));
+    let agent_row = row("sliver-agent", "checking…");
+    let daemon_row = row("sliverd", "checking…");
+    svc.add(&agent_row);
+    svc.add(&daemon_row);
     page.add(&svc);
+    crate::live::agent_status(move |a| match a {
+        crate::live::Agent::Running {
+            healthy,
+            layer,
+            display,
+            version,
+        } => {
+            agent_row.set_subtitle(&glib::markup_escape_text(&format!(
+                "running{} · {} · showing the {layer} layer",
+                if version.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({version})")
+                },
+                if healthy {
+                    "healthy"
+                } else {
+                    "problems (the last good config is live; see above)"
+                }
+            )));
+            daemon_row.set_subtitle(&glib::markup_escape_text(&format!(
+                "connected · display {display}"
+            )));
+        }
+        crate::live::Agent::Absent(why) => {
+            agent_row.set_subtitle(&glib::markup_escape_text(&format!(
+                "{why}. Start it with `systemctl --user start sliver-agent`; until then sliverd shows its safe layer."
+            )));
+            daemon_row.set_subtitle("unknown: the agent reports on sliverd");
+        }
+    });
     page.upcast()
 }
 

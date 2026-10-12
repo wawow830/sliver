@@ -288,8 +288,17 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   layout's whole effective zone list into the user's file, because arrays replace (ADR-0004 #6).
   An inherited zone becomes an override (Q5). If the active config is a system file, the new
   user file `include`s it. The logic lives in `src/edit.rs` and is unit-tested.
-- Next slices: drag and drop on the preview (the agent's `Frame.layout` rects give hit-testing),
-  a rules editor, live agent/daemon status over D-Bus, and Mirror to Touch Bar.
+- **Slice 3 (T49):**
+  - **Layouts & Rules** is editable: layer defaults, plus rules that can be added (at the top),
+    moved, removed, and edited (name, when, layer, layout). Comments on untouched rules survive.
+  - **Clicking a module on the preview** opens its inspector. The agent's frame rects map the
+    click to the module, and group children map to their group by key prefix.
+  - **Status** shows live agent state from the session bus (running/healthy/layer, sliverd display
+    state).
+  - The window **refreshes when the config changes on disk** from outside (an editor, `sliverctl
+    config set`). GIO directory monitors catch rename-saves, and the app's own saves are skipped.
+- Next: drag and drop on the preview, Mirror to Touch Bar, and the Gestures/Appearance/Apps/
+  Profiles pages.
 - **Testing headless** (never on the live session): `gtk4-broadwayd :7 &` then
   `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`
   (a sandboxed config dir, so edits never touch yours), and open

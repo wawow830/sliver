@@ -6,6 +6,7 @@
 
 mod bar;
 mod edit;
+mod live;
 mod pages;
 mod preview;
 mod rules;
@@ -81,6 +82,12 @@ pub(crate) struct Ui {
     pub locked: Cell<bool>,
     /// Earlier contents of the user's file (`None` = it didn't exist), newest last.
     undo: RefCell<Vec<(Option<String>, String)>>,
+    /// Watch the config's directories so hand edits (or `sliverctl config set`) refresh the window.
+    monitors: RefCell<Vec<gtk::gio::FileMonitor>>,
+    /// A refresh is already scheduled (debounce).
+    refresh_pending: Cell<bool>,
+    /// The user file's text as we last loaded or wrote it, to tell our own saves from others'.
+    last_text: RefCell<Option<String>>,
 }
 
 impl Ui {
@@ -122,6 +129,9 @@ fn main() -> glib::ExitCode {
             app: RefCell::default(),
             locked: Cell::new(false),
             undo: RefCell::default(),
+            monitors: RefCell::default(),
+            refresh_pending: Cell::new(false),
+            last_text: RefCell::default(),
         });
         rebuild(&ui);
         win.present();
@@ -195,6 +205,8 @@ fn undo(ui: &Rc<Ui>) {
 pub(crate) fn rebuild(ui: &Rc<Ui>) {
     let state = Rc::new(State::load());
     *ui.state.borrow_mut() = state.clone();
+    *ui.last_text.borrow_mut() = std::fs::read_to_string(state.edit_target().0).ok();
+    watch_config(ui, &state);
     let pages: Vec<(&str, &str, &str, gtk::Widget)> = vec![
         ("bar", "Bar", "input-keyboard-symbolic", bar::page(ui)),
         (
@@ -316,6 +328,60 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     split.set_content(Some(&content_page));
     split.set_min_sidebar_width(220.0);
     ui.toasts.set_child(Some(&split));
+}
+
+/// Refreshes the window when the config changes on disk from outside the app (an editor,
+/// `sliverctl config set`). Directories are watched, so atomic rename-saves count. Our own saves
+/// are recognized (`last_text`) and skipped.
+fn watch_config(ui: &Rc<Ui>, state: &State) {
+    use gtk::gio::prelude::*;
+    let mut files: Vec<PathBuf> = state.loaded.files.clone();
+    files.extend(state.sheet.files().iter().cloned());
+    files.push(state.edit_target().0);
+    if let Some(p) = &state.path {
+        files.push(p.with_file_name("style.css"));
+    }
+    let names: std::collections::HashSet<std::ffi::OsString> = files
+        .iter()
+        .filter_map(|f| f.file_name().map(Into::into))
+        .collect();
+    let mut dirs: Vec<PathBuf> = files
+        .iter()
+        .filter_map(|f| f.parent().map(PathBuf::from))
+        .filter(|d| d.is_dir())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    let mut monitors = Vec::new();
+    for d in dirs {
+        let Ok(m) = gtk::gio::File::for_path(&d).monitor_directory(
+            gtk::gio::FileMonitorFlags::WATCH_MOVES,
+            gtk::gio::Cancellable::NONE,
+        ) else {
+            continue;
+        };
+        let (ui, names) = (ui.clone(), names.clone());
+        m.connect_changed(move |_, file, other, _| {
+            let hit = |f: Option<&gtk::gio::File>| {
+                f.and_then(|f| f.basename())
+                    .is_some_and(|n| names.contains(n.as_os_str()))
+            };
+            if !(hit(Some(file)) || hit(other)) || ui.refresh_pending.replace(true) {
+                return;
+            }
+            let ui = ui.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+                ui.refresh_pending.set(false);
+                let text = std::fs::read_to_string(ui.state().edit_target().0).ok();
+                if text != *ui.last_text.borrow() {
+                    rebuild(&ui);
+                    ui.toast("The config changed on disk; reloaded");
+                }
+            });
+        });
+        monitors.push(m);
+    }
+    *ui.monitors.borrow_mut() = monitors;
 }
 
 fn toolbar(content: &impl IsA<gtk::Widget>, start: Option<&gtk::Button>) -> adw::ToolbarView {

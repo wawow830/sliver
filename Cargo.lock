@@ -1671,6 +1671,7 @@ dependencies = [
  "sliver-ipc",
  "sliver-render",
  "toml",
+ "zbus",
 ]
 
 [[package]]
