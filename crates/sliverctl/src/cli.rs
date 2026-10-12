@@ -26,6 +26,9 @@ Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.
   var set NAME VALUE              user variable for rules
   render [--layout FILE] -o OUT.png
 
+Config (offline: edits ~/.config/sliver/config.toml, keeps comments; `sliverctl config help`)
+  config path|check|get|set|unset|resolve|import-tiny-dfr ...
+
 Publish (stays connected; prints `ITEM KIND [KEY=VALUE...]` per event)
   publish [--scope app|status|target] [--provider ID] [--title T] [--target-app APP_ID]
           [--modal] [--stdin] ITEM...
@@ -146,6 +149,8 @@ pub enum Cmd {
         out: String,
     },
     Publish(Publish),
+    /// `config …`: offline, handled by `config::run` (elm).
+    Config(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -188,6 +193,7 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         "status" => Ok(Cmd::Status),
         "modules" => Ok(Cmd::Modules),
         "contexts" => Ok(Cmd::Contexts),
+        "config" => Ok(Cmd::Config(rest.to_vec())),
         "reload" => c(Call::Reload),
         "validate" => {
             let path = one(rest, "FILE")?;

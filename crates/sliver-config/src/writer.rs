@@ -149,7 +149,13 @@ impl Editor {
         let (last, parents) = segs.split_last().expect("non-empty");
         let mut item = self.doc.as_item_mut();
         for (depth, s) in parents.iter().enumerate() {
-            item = step_mut(item, s, true)
+            let create = match segs.get(depth + 1) {
+                Some(Seg::Index(_)) => Create::Array {
+                    tables: depth + 2 == segs.len() && matches!(value, Value::Table(_)),
+                },
+                _ => Create::Table,
+            };
+            item = step_mut(item, s, create)
                 .ok_or_else(|| format!("can't descend into {}", show(&segs[..=depth])))?;
         }
         let new = to_item(value, item.is_table() || item.is_array_of_tables());
@@ -206,7 +212,7 @@ impl Editor {
         let (last, parents) = segs.split_last().expect("non-empty");
         let mut item = self.doc.as_item_mut();
         for s in parents {
-            match step_mut(item, s, false) {
+            match step_mut(item, s, Create::No) {
                 Some(i) => item = i,
                 None => return Ok(false),
             }
@@ -278,21 +284,35 @@ fn show(segs: &[Seg]) -> String {
     s
 }
 
-fn step_mut<'a>(item: &'a mut Item, s: &Seg, create: bool) -> Option<&'a mut Item> {
+/// What to create when a path step is missing.
+#[derive(Clone, Copy, PartialEq)]
+enum Create {
+    No,
+    Table,
+    /// The next segment is an index. `tables` = it will hold tables (`[[x]]` when possible).
+    Array {
+        tables: bool,
+    },
+}
+
+fn step_mut<'a>(item: &'a mut Item, s: &Seg, create: Create) -> Option<&'a mut Item> {
     match s {
         Seg::Key(k) => {
             let is_section = item.is_table();
             let tl = item.as_table_like_mut()?;
             if tl.get(k).is_none() {
-                if !create {
-                    return None;
-                }
-                let child = if is_section {
-                    let mut t = toml_edit::Table::new();
-                    t.set_implicit(true);
-                    Item::Table(t)
-                } else {
-                    Item::Value(toml_edit::Value::InlineTable(toml_edit::InlineTable::new()))
+                let child = match (create, is_section) {
+                    (Create::No, _) => return None,
+                    (Create::Table, true) => {
+                        let mut t = toml_edit::Table::new();
+                        t.set_implicit(true);
+                        Item::Table(t)
+                    }
+                    (Create::Table, false) => Item::Value(toml_edit::InlineTable::new().into()),
+                    (Create::Array { tables: true }, true) => {
+                        Item::ArrayOfTables(toml_edit::ArrayOfTables::new())
+                    }
+                    (Create::Array { .. }, _) => Item::Value(toml_edit::Array::new().into()),
                 };
                 tl.insert(k, child);
             }
@@ -502,6 +522,21 @@ layout = "fkeys"
             e.set("rules[5].layout", &Value::String("x".into()))
                 .is_err()
         );
+
+        let mut fresh = Editor::parse("version = 1\n").unwrap();
+        let rule: Value = r#"v = { layout = "fkeys", when = { app-id = "foot" } }"#
+            .parse::<toml::Table>()
+            .unwrap()["v"]
+            .clone();
+        fresh.set("rules[0]", &rule).unwrap();
+        fresh.set("bar.list[0]", &Value::Integer(1)).unwrap();
+        assert!(fresh.text().contains("[[rules]]"), "{}", fresh.text());
+        assert_eq!(
+            fresh.get("bar.list").unwrap(),
+            Some(Value::Array(vec![Value::Integer(1)]))
+        );
+        fresh.remove("bar.list").unwrap();
+        assert!(fresh.check(HERE).ok(), "{:#?}", fresh.check(HERE));
 
         assert!(e.remove("modules.clock.actions").unwrap());
         assert!(e.remove("rules[0]").unwrap());

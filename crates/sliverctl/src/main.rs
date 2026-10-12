@@ -1,6 +1,7 @@
 //! `sliverctl`: command-line client of the public sliver session D-Bus API (`docs/api.md`).
 
 mod cli;
+mod config;
 
 use cli::{Call, Cmd, ItemSpec, KeyVals, Publish, Val};
 use sliver_client::{Client, ContextOptions, Item};
@@ -142,11 +143,13 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
             println!("sliverctl {}", env!("CARGO_PKG_VERSION"));
             return Ok(ExitCode::SUCCESS);
         }
+        // Offline: never touches the session bus.
+        Cmd::Config(args) => return Ok(config::run(&args)),
         _ => {}
     }
     let conn = Connection::session().map_err(|e| format!("session bus: {e}"))?;
     match cmd {
-        Cmd::Help | Cmd::Version => unreachable!(),
+        Cmd::Help | Cmd::Version | Cmd::Config(_) => unreachable!(),
         Cmd::Status => {
             for (iface, name) in [
                 (IFACE_CONTROL, "Healthy"),

@@ -1136,7 +1136,9 @@ dependencies = [
  "serde",
  "sliver-api",
  "sliver-client",
+ "sliver-config",
  "sliver-ipc",
+ "toml",
  "zbus",
 ]
 
