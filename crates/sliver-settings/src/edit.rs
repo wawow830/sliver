@@ -405,7 +405,7 @@ mod tests {
             "esc/main/controls all still there:\n{}",
             ed.text()
         );
-        assert_eq!(ids[1], ["app-controls", "clock"]);
+        assert_eq!(ids[1], ["app-controls", "group/fkeys", "clock"]);
         assert!(ids[2].contains(&"mpris".to_owned()));
         assert!(ed.text().contains("# mine"));
         assert!(ed.check(HERE).ok());

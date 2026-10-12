@@ -399,8 +399,11 @@ mod tests {
 
     #[test]
     fn removing_fkeys_is_a_warning_not_an_error() {
+        // The default base layout shows F-keys too (group/fkeys), so use the media layer as base.
         let d = check(
             r#"
+            [layers]
+            base = "media"
             [[layouts.fkeys.zones]]
             name = "main"
             modules = ["clock"]

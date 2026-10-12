@@ -197,12 +197,21 @@ impl Config {
         }
         let mut children = Vec::new();
         if id.kind == "group" {
+            // `module-width` on a group is the default width of its children, like on a zone.
+            let child_width = config
+                .get("module-width")
+                .and_then(|v| Width::parse(v).ok());
             if stack.contains(id) || stack.len() >= MAX_DEPTH {
                 return None;
             }
             stack.push(id.clone());
             for child in group_members(&config) {
-                children.extend(self.instantiate(&ModuleRef::Named(child), None, ctx, stack));
+                children.extend(self.instantiate(
+                    &ModuleRef::Named(child),
+                    child_width,
+                    ctx,
+                    stack,
+                ));
             }
             stack.pop();
         }

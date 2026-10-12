@@ -17,7 +17,9 @@ modules = ["key/Esc#auto"]
 [[layouts.default.zones]]
 name = "main"
 width = "fill"
-modules = ["app-controls"]
+# Most Linux apps publish no controls, and 2008 px Macs have no F-key row: show F1-F12 until the
+# focused app fills App controls, then give it the space (birch's real-bar run, ash's proposal).
+modules = ["app-controls", "group/fkeys"]
 
 [[layouts.default.zones]]
 name = "controls"
@@ -68,6 +70,13 @@ when = { not = { physical-esc = true } }
 modules = ["custom/expand", "kbd-backlight/slider", "key/MicMute",
            "key/PreviousSong", "key/PlayPause", "key/NextSong"]
 drawer = { reveal = "tap", mode = "inline", collapse-after = "5s", transition-left-to-right = false }
+
+[modules."group/fkeys"]
+modules = ["key/F1", "key/F2", "key/F3", "key/F4", "key/F5", "key/F6",
+           "key/F7", "key/F8", "key/F9", "key/F10", "key/F11", "key/F12"]
+module-width = "fill"
+# "not true" rather than "= false": with the state unknown, show the F-keys (fail safe).
+when = { not = { app-controls = true } }
 
 [modules."custom/expand"]
 format = "‹"

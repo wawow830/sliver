@@ -521,7 +521,7 @@ pub(crate) fn check_type_keys(id: &ModuleId, rest: &Table, path: &str, d: &mut D
     let known: &[&str] = match id.kind.as_str() {
         "key" => &["key"],
         "spacer" | "app-controls" | "status-items" => &[],
-        "group" => &["modules", "orientation", "drawer"],
+        "group" => &["modules", "orientation", "drawer", "module-width"],
         "custom" => &[
             "exec",
             "exec-if",

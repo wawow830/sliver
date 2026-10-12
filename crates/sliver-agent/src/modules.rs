@@ -1669,7 +1669,17 @@ mod tests {
                 &mut out,
             );
         }
-        let kinds: Vec<&str> = out.iter().map(|c| c.kind.as_str()).collect();
+        // The default main zone shows F1-F12 until an app fills App controls (group/fkeys).
+        let fkeys = out
+            .iter()
+            .filter(|c| c.key.starts_with("group/fkeys/"))
+            .count();
+        assert_eq!(fkeys, 12);
+        let kinds: Vec<&str> = out
+            .iter()
+            .filter(|c| !c.key.starts_with("group/fkeys/"))
+            .map(|c| c.kind.as_str())
+            .collect();
         assert_eq!(
             kinds,
             [
@@ -1688,6 +1698,11 @@ mod tests {
     #[test]
     fn closed_drawer_shows_its_handle() {
         let cells = build("", "base");
+        // group/fkeys (F1-F12 until an app publishes) comes first; it's not a drawer.
+        let cells: Vec<Cell> = cells
+            .into_iter()
+            .filter(|c| !c.key.starts_with("group/fkeys/"))
+            .collect();
         let keys: Vec<&str> = cells.iter().map(|c| c.key.as_str()).collect();
         assert_eq!(keys, ["group/control-strip/custom/expand", "key/Mute"]);
         assert!(cells[0].classes.contains(&"drawer-child".to_string()));
