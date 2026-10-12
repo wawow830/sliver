@@ -23,8 +23,8 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Feature | Tier | Prior art | Notes |
 |---|---|---|---|
 | Built-in **safe layer** inside sliverd: F1–F12 (with Esc first on bars that have no physical Esc), plus media on Fn | P0 | dfr (it's the only layer) | Shown whenever the agent, config or a widget fails. It needs no config and no fonts beyond the built-in ones. |
-| Esc is always reachable: on the bar when there's **no physical Esc** (2170 px bars), optional otherwise | P0 | mac, dfr | dfr adds Esc only on bars ≥2170 px. This 2008 px Mac14,7 has a physical Esc (confirmed in H2). See ux.md §7. |
-| Fn held → F-key layer, from any state | P0 | mac, dfr | Works even with app modals and custom layers. |
+| Esc and F-keys always reachable via sliverd's **safe hatch** (double-press Fn and hold → built-in F-keys; H14), even though every layout including Fn is fully editable (H4 revised). Defaults put Esc first on 2170 px bars | P0 | mac, dfr | dfr adds Esc only on bars ≥2170 px. This 2008 px Mac14,7 has a physical Esc (confirmed in H2). See ux.md §7. |
+| Fn held → the user's Fn layer (fully editable). Fn-Fn-hold → built-in F-keys, from any state | P0 | mac, dfr | The hatch works even with app modals, custom layers, and a config with no F-keys. |
 | Per-app "show F-keys by default" | P1 | mac (Keyboard prefs) | For terminals, IDEs and games. Expressed as a rule (see §5). |
 | Render only on change, idle dim → off | P0 | dfr | Invariant 3. The bar is OLED, so this is also the main burn-in protection. Defaults: dim at 30 s, off at 60 s, like dfr. |
 | Wake on touch: the first touch on a dark bar only wakes it and doesn't fire an item | P0 | dfr | Avoids accidental presses on a bar you can't see. |
@@ -151,7 +151,7 @@ tiering only.
 
 - **Size:** 2008×60 px over 230×6 mm, so ~8.7 px/mm. dfr F-keys are ~152 px (17 mm) with 16 px
   gaps. **Minimum target is 80 px (~9 mm); 60 px is the hard floor.** The editor warns below 80
-  and refuses below 60. At 80 px, at most ~22 items fit, which matches dfr's "breaks around 24".
+  and warns more strongly below 60, but never refuses. At 80 px, at most ~22 items fit, which matches dfr's "breaks around 24".
 - **Touch:** multitouch slots and contact size/orientation are reported. There's no pressure, no
   hover, and vertical motion is meaningless. The slot count and coordinate resolution are still
   pending (they need a harness run).
