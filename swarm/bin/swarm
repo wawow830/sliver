@@ -8,7 +8,7 @@ it only wakes idle peers that have something to do.
 
 Peers may (and should) improve this tool. Keep the state format backward compatible.
 """
-import argparse, fcntl, json, os, re, shutil, subprocess, sys, textwrap, time, urllib.request
+import argparse, fcntl, json, os, re, shutil, subprocess, sys, textwrap, time, urllib.error, urllib.request
 from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
@@ -774,7 +774,7 @@ def when(t):
 
 
 def fetch_accounts(prev):
-    out, errors = {}, []
+    out, errors, missing = {}, [], []
     for f in sorted(AUTH_DIR.glob("claude-*.json")):
         try:
             d = json.loads(f.read_text())
@@ -798,11 +798,17 @@ def fetch_accounts(prev):
                     x = u.get(w) or {}
                     out[email][w] = {"left": round(100 - float(x.get("utilization") or 0), 1), "resets": epoch(x.get("resets_at"))}
                 continue
+            except urllib.error.HTTPError as e:
+                errors.append(f"{email}: couldn't refresh just now (HTTP {e.code}{', rate-limited' if e.code == 429 else ''})")
             except Exception as e:
                 errors.append(f"{email}: {e}")
         if email in prev and now() - prev[email].get("at", 0) < 6 * 3600:  # fall back to the last reading
             out[email] = prev[email]
-    return out, errors
+            errors[-1] += f", using the reading from {ago(prev[email]['at'])} ago"
+        else:
+            missing.append(email)
+            errors[-1] += ", and there's no earlier reading, so auto-pause/resume waits for it"
+    return out, errors, missing
 
 
 def acct_left(a, w):
@@ -844,16 +850,17 @@ def quota_summary(s):
     return per[w], w, per
 
 
-def quota_tick(force=False):
-    """Refresh the usage reading when due, then auto-pause or auto-resume. Returns a word for the pulse line."""
+def quota_tick(max_age=None):
+    """Refresh the usage reading when it's older than max_age (default: the check interval), then
+    auto-pause or auto-resume. Returns a word for the pulse line."""
     with state(write=False) as s:
         cfg, q = quota_cfg(s), s.get("quota", {})
     if not cfg["enabled"]:
         return "off"
-    if force or now() - q.get("at", 0) >= cfg["every"]:
-        accounts, errors = fetch_accounts(q.get("accounts", {}))
+    if now() - q.get("at", 0) >= (cfg["every"] if max_age is None else max_age):
+        accounts, errors, missing = fetch_accounts(q.get("accounts", {}))
         with state() as s:
-            s["quota"] = {"at": now(), "accounts": accounts, "errors": errors}
+            s["quota"] = {"at": now(), "accounts": accounts, "errors": errors, "missing": missing}
     action = None
     with state() as s:
         summ = quota_summary(s)
@@ -861,6 +868,8 @@ def quota_tick(force=False):
             return "unknown"
         left, w, _ = summ
         sw = s["swarm"]
+        if s["quota"].get("missing"):
+            return f"partial({left:.0f}%)"  # a login couldn't be read: don't act on half the picture
         if sw.get("quota_override") and left >= cfg["resume_at"]:
             sw.pop("quota_override")  # recovered, so the human's override has done its job
         if not s["paused"] and not sw.get("quota_override") and left <= cfg["pause_below"]:
@@ -906,7 +915,7 @@ def cmd_quota(a):
         cfg = quota_cfg(s)
         if cfg["resume_at"] <= cfg["pause_below"]:
             sys.exit("--resume-at must be above --pause-below, or it would flap")
-    quota_tick(force=True)
+    quota_tick(max_age=60)  # the usage endpoint rate-limits hard, so reuse a fresh reading
     with state(write=False) as s:
         q, sw, paused = s.get("quota", {}), s["swarm"], s["paused"]
         summ = quota_summary(s)
