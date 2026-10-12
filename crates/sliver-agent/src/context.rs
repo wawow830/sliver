@@ -14,9 +14,16 @@ pub fn media_status(s: PlaybackStatus) -> &'static str {
     }
 }
 
-/// `base` (from the feeds) plus the agent's own keys.
-pub fn build(mut base: Context, now: DateTime<Local>, physical_esc: bool, layer: &str) -> Context {
+/// `base` (from the feeds) plus the agent's own keys. `app_controls`: an app fills App controls.
+pub fn build(
+    mut base: Context,
+    now: DateTime<Local>,
+    physical_esc: bool,
+    layer: &str,
+    app_controls: bool,
+) -> Context {
     base.set("physical_esc", physical_esc);
+    base.set("app_controls", app_controls);
     base.set("layer", layer);
     base.set("time", now.format("%H:%M").to_string());
     base.set("weekday", now.format("%a").to_string().to_ascii_lowercase());
@@ -78,7 +85,13 @@ mod tests {
     #[test]
     fn agent_keys_on_top_of_feeds() {
         let now = Local.with_ymd_and_hms(2026, 10, 12, 23, 30, 0).unwrap();
-        let ctx = build(Context::new().with("app_id", "kitty"), now, true, "base");
+        let ctx = build(
+            Context::new().with("app_id", "kitty"),
+            now,
+            true,
+            "base",
+            false,
+        );
         let cfg = load_str(
             r#"
             [[rules]]
@@ -90,6 +103,30 @@ mod tests {
         .config;
         assert_eq!(cfg.resolve("base", &ctx).unwrap().layout, "fkeys");
         assert!(matches!(ctx.get("weekday"), Some(CtxValue::Str(s)) if s == "mon"));
+    }
+
+    #[test]
+    fn app_controls_key_lets_layouts_fill_the_gap() {
+        let now = Local.with_ymd_and_hms(2026, 10, 12, 9, 0, 0).unwrap();
+        let cfg = load_str(
+            r#"
+            [[layouts.default.zones]]
+            name = "main"
+            modules = ["app-controls", "key/F1"]
+            [modules."key/F1"]
+            when = { app-controls = false }
+            "#,
+            std::path::Path::new("."),
+        );
+        assert!(cfg.diagnostics.warnings.is_empty(), "{:?}", cfg.diagnostics);
+        let n = |app: bool| {
+            let r = cfg
+                .config
+                .resolve("base", &build(Context::new(), now, true, "base", app))
+                .unwrap();
+            r.zones[0].modules.len()
+        };
+        assert_eq!((n(false), n(true)), (2, 1));
     }
 
     #[test]

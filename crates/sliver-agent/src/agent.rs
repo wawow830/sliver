@@ -191,6 +191,7 @@ impl Agent {
                 world.now,
                 self.physical_esc,
                 self.base_layer(),
+                world.published.app.is_some(),
             ),
         };
         for (k, v) in &self.ctx_overrides {
