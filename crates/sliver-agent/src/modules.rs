@@ -20,6 +20,37 @@ use sliver_session::{BatteryState, SessionState};
 
 use crate::icons::Icons;
 
+/// The emoji picker's recents, shared by the world (drawing) and the agent (picking).
+#[derive(Clone, Default)]
+pub struct EmojiHandle(std::sync::Arc<std::sync::Mutex<sliver_emoji::Recents>>);
+
+impl std::fmt::Debug for EmojiHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EmojiHandle")
+    }
+}
+
+impl EmojiHandle {
+    /// Recents saved under `$XDG_STATE_HOME/sliver/emoji-recents`.
+    pub fn persistent() -> EmojiHandle {
+        let path = sliver_emoji::Recents::default_path(|k| std::env::var(k).ok());
+        let r = path.map_or_else(sliver_emoji::Recents::new, sliver_emoji::Recents::at);
+        EmojiHandle(std::sync::Arc::new(std::sync::Mutex::new(r)))
+    }
+
+    pub fn items(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .items()
+            .to_vec()
+    }
+
+    pub fn push(&self, text: &str) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(text);
+    }
+}
+
 /// Shared system-statistics sampler (CPU usage needs the previous sample, so one instance lives
 /// as long as the agent). Cheap to clone; reads files only when a stats module asks.
 #[derive(Clone, Default)]
@@ -63,6 +94,8 @@ pub struct World {
     pub preview: bool,
     /// cpu, memory, load, temperature, disk.
     pub stats: Stats,
+    /// Recently used emoji (the picker's first tab).
+    pub emoji: EmojiHandle,
     /// Installed applications, for taskbar icons.
     pub apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
 }
@@ -80,6 +113,7 @@ impl World {
             preview: false,
             stats: Stats::default(),
             apps: Default::default(),
+            emoji: Default::default(),
         }
     }
 
@@ -130,6 +164,15 @@ pub struct UiState {
     pub expanded: bool,
     /// `timer` modules: the countdown.
     pub timer: Option<TimerState>,
+    /// `emoji` strips: which tab and how far scrolled.
+    pub emoji: EmojiUi,
+}
+
+/// Where an emoji strip is: tab 0 = recents, 1..=9 = the Unicode groups.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EmojiUi {
+    pub tab: usize,
+    pub offset: usize,
 }
 
 /// A countdown that survives re-resolution (it lives in [`UiState`], keyed by the cell).
@@ -329,6 +372,10 @@ fn cells_in(
             }
             continue;
         }
+        if m.id.kind == "emoji" && m.config.get("mode").and_then(|v| v.as_str()) == Some("strip") {
+            emoji_strip(m, &key, world, &ui(&key).emoji, out);
+            continue;
+        }
         if m.id.kind == "workspaces" || m.id.kind == "taskbar" {
             for i in listed(m, world) {
                 let id = match m.id.kind.as_str() {
@@ -348,6 +395,101 @@ fn cells_in(
             out.push(c);
         }
     }
+}
+
+/// The emoji picker as a row of cells: group tabs, one page of emoji, a close button.
+/// Tap an emoji to type it, tap a tab to switch group, swipe to page, ✕ to close the layer.
+fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: &mut Vec<Cell>) {
+    use sliver_emoji::Group;
+    let cols = m
+        .config
+        .get("columns")
+        .and_then(|v| v.as_integer())
+        .map_or(14, |n| n.clamp(4, 40) as usize);
+    let insert = m
+        .config
+        .get("insert")
+        .and_then(|v| v.as_str())
+        .unwrap_or("auto");
+    let recents = world.emoji.items();
+    // An empty recents tab shows the first group rather than a blank bar.
+    let tab = if ui.tab == 0 && recents.is_empty() {
+        1
+    } else {
+        ui.tab.min(Group::ALL.len())
+    };
+    let items: Vec<(String, String)> = if tab == 0 {
+        recents.iter().map(|t| (t.clone(), t.clone())).collect()
+    } else {
+        sliver_emoji::in_group(Group::ALL[tab - 1])
+            .map(|e| (e.text.to_string(), e.name.to_string()))
+            .collect()
+    };
+    let offset = ui.offset.min(items.len().saturating_sub(cols));
+    let bare = |k: String, text: &str, w: f32, classes: &[&str], on: Vec<(Gesture, Action)>| Cell {
+        key: k,
+        id: m.id.to_string(),
+        kind: "emoji".into(),
+        mic: false,
+        css_id: m.css_id.clone(),
+        classes: classes
+            .iter()
+            .map(|c| c.to_string())
+            .chain(m.classes.iter().cloned())
+            .collect(),
+        width: Width::Fixed(w),
+        content: Content::Markup(sliver_render::markup::escape(text)),
+        touch: Touch::Agent,
+        on,
+        next_change: None,
+        pressed: false,
+        checked: false,
+        drawer: None,
+        disabled: false,
+        foreground: None,
+        background: None,
+        published: None,
+        pass_through: false,
+        target: None,
+        timer_total: None,
+    };
+    let act = |name: String| Action::ModuleAction(name);
+    for t in 0..=Group::ALL.len() {
+        let icon = if t == 0 {
+            "🕘"
+        } else {
+            Group::ALL[t - 1].icon()
+        };
+        let mut c = bare(
+            format!("{key}/tab{t}"),
+            icon,
+            52.0,
+            &["emoji-tab"],
+            vec![(Gesture::Tap, act(format!("tab:{t}")))],
+        );
+        c.checked = t == tab;
+        out.push(c);
+    }
+    for (i, (text, _name)) in items.iter().enumerate().skip(offset).take(cols) {
+        out.push(bare(
+            format!("{key}/e{i}"),
+            text,
+            76.0,
+            &["emoji"],
+            vec![
+                (Gesture::Tap, act(format!("pick:{insert}:{text}"))),
+                (Gesture::SwipeLeft, act(format!("page:{}", cols))),
+                (Gesture::SwipeRight, act(format!("page:-{}", cols))),
+            ],
+        ));
+    }
+    out.push(bare(
+        format!("{key}/close"),
+        "✕",
+        52.0,
+        &["emoji-close"],
+        vec![(Gesture::Tap, act("close".into()))],
+    ));
 }
 
 /// Which workspaces/windows a `workspaces` / `taskbar` module shows (indexes into the lists).
@@ -696,6 +838,23 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             let mut sp = Spec::new(v, default).icon(icon);
             sp.status = Some(status);
             sp.checked = status == "connected";
+            sp
+        }
+        // The picker's entry button: opens the `emoji` layer (the strip lives there).
+        "emoji" => {
+            let layer = m
+                .config
+                .get("layer")
+                .and_then(|v| v.as_str())
+                .unwrap_or("emoji");
+            let mut sp = Spec::new(ValueMap::new(), "😀");
+            sp.defaults.push((
+                Gesture::Tap,
+                Action::Layer {
+                    name: layer.into(),
+                    mode: sliver_config::LayerMode::Toggle,
+                },
+            ));
             sp
         }
         "timer" => {

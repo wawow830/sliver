@@ -672,3 +672,85 @@ fn timer_counts_down_and_notifies() {
     assert_eq!(text(&a), "00:01");
     assert!(!a.frame(Layer::Base).unwrap().cells[0].checked);
 }
+
+/// The emoji picker: the `emoji` layer shows tabs, a page of emoji and ✕; tapping one types it
+/// (here via the clipboard method, which is deterministic), recents fill the first tab.
+#[test]
+fn emoji_picker_types_pages_and_closes() {
+    use sliver_agent::agent::Effect;
+    use sliver_config::{Action, LayerMode};
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent("[modules.\"emoji#strip\"]\ninsert = \"copy\"\ncolumns = 6\n");
+    let w = world(9, 41);
+    a.set_emoji(w.emoji.clone());
+    let mut fx = Vec::new();
+    a.run_action(
+        &Action::Layer {
+            name: "emoji".into(),
+            mode: LayerMode::Toggle,
+        },
+        0,
+        &mut fx,
+    );
+    a.render(&w);
+    let cells = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|c| match &c.content {
+                sliver_render::Content::Markup(t) => t.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = cells(&a);
+    // Esc may be on the layer; the strip is 10 tabs + 6 emoji + close
+    assert_eq!(before.iter().filter(|t| *t == "✕").count(), 1, "{before:?}");
+    assert!(
+        before.contains(&"😀".to_string()),
+        "first group when recents are empty: {before:?}"
+    );
+    let tap = |a: &mut Agent, key: &str, t: u64| {
+        let (id, x) = region(a, key);
+        let mut fx = a.touch(id, 0, TouchPhase::Down, x, t);
+        fx.extend(a.touch(id, 0, TouchPhase::Up, x, t + 40_000));
+        fx.extend(a.tick(t + 400_000));
+        fx
+    };
+    // tap the first emoji: the clipboard gets it
+    let fx = tap(&mut a, "emoji#strip/e0", 1_000);
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Spawn(argv) if argv[0] == "wl-copy" && argv.last().unwrap() == "😀")),
+        "{fx:?}"
+    );
+    // pick another one, then look at the recents tab: newest first
+    let picked = cells(&a)[10 + 3].clone();
+    tap(&mut a, "emoji#strip/e3", 1_500_000);
+    a.render(&w);
+    let fx = tap(&mut a, "emoji#strip/tab0", 2_000_000);
+    assert!(fx.contains(&Effect::Redraw));
+    a.render(&w);
+    let recents = cells(&a);
+    assert_eq!(
+        recents[10], picked,
+        "the last pick is first in recents: {recents:?}"
+    );
+    assert_eq!(recents[11], "😀");
+    let first_page = cells(&a);
+    // paging moves the window
+    let (id, x) = region(&a, "emoji#strip/tab2");
+    a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
+    a.touch(id, 0, TouchPhase::Up, x, 3_040_000);
+    a.tick(3_400_000);
+    a.render(&w);
+    assert_ne!(cells(&a), first_page, "another tab shows other emoji");
+    // ✕ closes the layer
+    let fx = tap(&mut a, "emoji#strip/close", 4_000_000);
+    assert!(fx.contains(&Effect::Redraw), "{fx:?}");
+    a.render(&w);
+    assert!(
+        !cells(&a).contains(&"✕".to_string()),
+        "back on the base layer"
+    );
+}

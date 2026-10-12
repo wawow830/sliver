@@ -1520,6 +1520,7 @@ dependencies = [
  "sliver-api",
  "sliver-config",
  "sliver-desktop",
+ "sliver-emoji",
  "sliver-feeds",
  "sliver-icons",
  "sliver-ipc",
@@ -1573,6 +1574,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "sliver-emoji"
+version = "0.1.0"
 
 [[package]]
 name = "sliver-feeds"

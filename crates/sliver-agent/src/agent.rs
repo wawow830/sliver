@@ -5,7 +5,9 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Local};
-use sliver_config::{Action, Config, Context, CtxValue, Gesture as CGesture, LayerMode, Resolved};
+use sliver_config::{
+    Action, Config, Context, CtxValue, Gesture as CGesture, Key, LayerMode, Resolved,
+};
 use sliver_ipc::proto::{DisplayState, KeyMode, Layer, TouchPhase};
 use sliver_render::{Renderer, Stylesheet};
 
@@ -101,6 +103,8 @@ pub struct Agent {
     pub_drag: HashMap<u32, f64>,
     /// Problems resolving layers, for logging/status. Cleared on each render.
     pub errors: Vec<String>,
+    /// The emoji picker's recents (shared with the worlds it draws).
+    emoji: modules::EmojiHandle,
     /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
     pub hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
@@ -169,6 +173,7 @@ impl Agent {
             layout_override: None,
             pushed: HashMap::new(),
             errors: Vec::new(),
+            emoji: Default::default(),
         }
     }
 
@@ -690,6 +695,11 @@ impl Agent {
 }
 
 impl Agent {
+    /// Share the emoji picker's recents with the worlds this agent draws (main does this once).
+    pub fn set_emoji(&mut self, handle: modules::EmojiHandle) {
+        self.emoji = handle;
+    }
+
     /// `Control1.SetLayout`: show `layout` on the current base layer until the next call (an
     /// empty name goes back to the rules).
     pub fn set_layout(&mut self, layout: &str) -> Result<(), String> {
@@ -927,6 +937,10 @@ impl Agent {
                 fx.push(Effect::Redraw);
                 return;
             }
+            ("emoji", n, _) => {
+                self.emoji_action(&cell.key, n, now, fx);
+                return;
+            }
             ("workspaces" | "taskbar", "focus", _) => {
                 if let Some(t) = &cell.target {
                     fx.push(Effect::Desktop(t.clone()));
@@ -957,6 +971,86 @@ impl Agent {
         };
         fx.push(Effect::Session(op));
     }
+}
+
+impl Agent {
+    /// The emoji strip's actions: `pick:<method>:<emoji>`, `tab:N`, `page:±N`, `close`.
+    fn emoji_action(&mut self, cell_key: &str, name: &str, now: u64, fx: &mut Vec<Effect>) {
+        // The strip's own key is the cell key without its `/tab…`, `/e…`, `/close` suffix.
+        let strip = cell_key
+            .rsplit_once('/')
+            .map_or(cell_key, |(k, _)| k)
+            .to_string();
+        if let Some(rest) = name.strip_prefix("pick:") {
+            let Some((method, text)) = rest.split_once(':') else {
+                return;
+            };
+            self.emoji.push(text);
+            self.type_text(method, text, now, fx);
+            fx.push(Effect::Redraw);
+        } else if let Some(t) = name
+            .strip_prefix("tab:")
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            let ui = self.ui(&strip);
+            ui.emoji.tab = t;
+            ui.emoji.offset = 0;
+            fx.push(Effect::Redraw);
+        } else if let Some(d) = name
+            .strip_prefix("page:")
+            .and_then(|n| n.parse::<i64>().ok())
+        {
+            let ui = self.ui(&strip);
+            ui.emoji.offset = (ui.emoji.offset as i64 + d).max(0) as usize;
+            fx.push(Effect::Redraw);
+        } else if name == "close" {
+            self.execute(&Action::CloseLayer, None, None, now, fx);
+        }
+    }
+
+    /// Type `text` into the focused app. `auto` = wtype if installed, else copy to the clipboard;
+    /// `wtype` types directly (virtual keyboard); `paste` copies and presses Ctrl+V through
+    /// sliverd (works anywhere on Wayland, replaces the clipboard); `copy` only copies.
+    fn type_text(&mut self, method: &str, text: &str, now: u64, fx: &mut Vec<Effect>) {
+        let method = match method {
+            "auto" if tool_exists("wtype") => "wtype",
+            "auto" => "copy",
+            m => m,
+        };
+        match method {
+            "wtype" => fx.push(Effect::Spawn(vec![
+                "wtype".into(),
+                "--".into(),
+                text.into(),
+            ])),
+            "paste" | "copy" => {
+                fx.push(Effect::Spawn(vec![
+                    "wl-copy".into(),
+                    "--".into(),
+                    text.into(),
+                ]));
+                if method == "paste" {
+                    // Give wl-copy a moment to own the selection before pasting.
+                    if let (Some(ctrl), Some(v)) = (Key::from_name("LeftCtrl"), Key::from_name("V"))
+                    {
+                        self.scheduled.push((
+                            now + 120_000,
+                            Scheduled::Action(Action::Keys(vec![ctrl, v])),
+                        ));
+                    }
+                }
+            }
+            other => fx.push(Effect::Log(format!(
+                "emoji: unknown insert method {other:?}"
+            ))),
+        }
+    }
+}
+
+/// Is `name` an executable on `$PATH`?
+fn tool_exists(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
 }
 
 /// What the recognizer should look for on this cell.

@@ -193,7 +193,7 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 | `systemd-failed-units` | same | P3 | |
 | `taskbar` | `wlr/taskbar` | P2 | Done. One icon per window of the active workspace (`all-workspaces = true` for all), icon from the app's `.desktop` entry (first letters if none); `.focused` / `.urgent`; `{title}` `{app_id}` for a custom `format`; tap focuses, hold closes the window. |
 | `notifications` | (none) | P2 | Done. A bell with the number of notifications the server has open (`{count}`, empty at zero), classes `.pending`/`.none` and `.dnd`. |
-| `emoji` | (none) | P2 | A scrolling strip that opens a layer. |
+| `emoji` | (none) | P2 | Done. As a button (default) it opens the built-in `emoji` layer; the layer is the same module in `mode = "strip"`: 10 tabs (recents + Unicode groups), one page of emoji (`columns`, default 14), swipe left/right to page, ✕ to close. Tapping an emoji types it (`insert` = `auto` (wtype if installed, else clipboard), `wtype`, `paste` (wl-copy then Ctrl+V; replaces the clipboard) or `copy`). Recents persist in `$XDG_STATE_HOME/sliver/emoji-recents`. Data: Unicode emoji up to 15.1 (`crates/sliver-emoji`). Open it from any button with `{ layer = "emoji", mode = "toggle" }`. |
 | `timer` | (none) | P2 | Done. Countdown (`duration`, default 25m; `{remaining}` `{minutes}` `{seconds}`, `percentage` for `states`); tap starts/pauses, hold resets; `notify-send` at zero. Status classes `.idle` `.running` `.paused` `.finished`. |
 | `image` | `image` | P1 | `path` or `exec` → path, `interval`/`signal`. |
 | `group/<name>` | `group/<name>` | P1 | §3.1. |

@@ -15,6 +15,7 @@ workspace = true
 sliver-api.workspace = true
 sliver-config.workspace = true
 sliver-desktop.workspace = true
+sliver-emoji.workspace = true
 sliver-feeds.workspace = true
 sliver-modules.workspace = true
 sliver-session.workspace = true

@@ -265,6 +265,8 @@ struct Live {
     stats: sliver_agent::modules::Stats,
     /// Installed applications (taskbar icons).
     apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
+    /// Emoji recents, shared with the agent.
+    emoji: sliver_agent::modules::EmojiHandle,
 }
 
 impl Live {
@@ -300,6 +302,7 @@ impl Live {
             api,
             published: Published::default(),
             stats: Default::default(),
+            emoji: sliver_agent::modules::EmojiHandle::persistent(),
             apps: std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::from_paths(
                 &sliver_icons::SearchPaths::from_env(|k| std::env::var(k).ok()),
             )),
@@ -365,6 +368,7 @@ impl Live {
             preview: false,
             stats: self.stats.clone(),
             apps: self.apps.clone(),
+            emoji: self.emoji.clone(),
         }
     }
 
@@ -457,7 +461,7 @@ fn main() {
         {
             Ok(link) => {
                 backoff = Duration::from_millis(250);
-                let agent = Agent::new(
+                let mut agent = Agent::new(
                     reloader.config.clone(),
                     reloader.sheet.clone(),
                     Renderer::new(Fonts::system()),
@@ -465,6 +469,7 @@ fn main() {
                     link.panel.width,
                     link.panel.height,
                 );
+                agent.set_emoji(live.emoji.clone());
                 eprintln!(
                     "sliver-agent: connected to sliverd ({}, {}x{}, {:?})",
                     link.panel.model, link.panel.width, link.panel.height, link.role

@@ -55,7 +55,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Notifications: count plus latest, tap to open | P2 | partial | (none, our own) | tap, swipe = dismiss | freedesktop notifications (needs a monitor; check per DE) | Open-notification count and DND display done. Missing: latest text, tap to open, swipe to dismiss. |
 | Timer / pomodoro | P2 | done | MTMR pomodoro | tap start/pause, long-press reset |  |  |
 | System stats: CPU/RAM/temp/net, sparkline | P2 | partial | MTMR cpu/network | tap → system monitor | /proc, hwmon | cpu, memory, load, temperature, disk and network done. Missing: sparkline graph and rates. |
-| Emoji picker: scrolling strip, recents, category tabs | P2 | todo | mac | tap = type, swipe = scroll | uinput or text input (keymap issue: see T7) | Rendering is ready (COLRv1); the module and the insertion method are open (T51). |
+| Emoji picker: scrolling strip, recents, category tabs | P2 | partial | mac | tap = type, swipe = scroll | uinput or text input (keymap issue: see T7) | Rendering is ready (COLRv1); the module and the insertion method are open (T51). **Now:** Done: tabs, paging, recents, typing via wtype or the clipboard (`sliver-emoji`). Missing: search and skin-tone selection. |
 | App switcher / dock: running and pinned apps | P2 | partial | Pock, MTMR dock | tap = focus, long-press = close | compositor plus icon lookup | The `taskbar` module is done (focus and close). Pinned apps are missing. |
 | Scrubber / candidate strip for apps (text suggestions, tabs) | P2 | todo | mac (NSScrubber) | swipe, tap | public API |  |
 | Weather, currency, calendar "up next" | P3 | todo | MTMR |  | Only as presets built on the script widget. Not core. | Possible today as `custom/*` scripts. |

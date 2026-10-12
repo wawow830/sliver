@@ -7,6 +7,7 @@ version = 1
 base = "default"
 fn = "fkeys"
 media = "media"
+emoji = "emoji"           # the emoji picker; open it with { layer = "emoji", mode = "toggle" }
 
 # --- default (base) ----------------------------------------------------------------------------
 [[layouts.default.zones]]
@@ -47,6 +48,16 @@ modules = ["key/BrightnessDown", "key/BrightnessUp", "key/MicMute", "key/Search"
            "key/IllumDown", "key/IllumUp", "key/PreviousSong", "key/PlayPause",
            "key/NextSong", "key/Mute", "key/VolumeDown", "key/VolumeUp"]
 
+# --- emoji: the picker strip (tabs, one page of emoji, close) --------------------------------------
+[[layouts.emoji.zones]]
+name = "esc"
+modules = ["key/Esc#auto"]
+
+[[layouts.emoji.zones]]
+name = "main"
+width = "fill"
+modules = ["emoji#strip"]
+
 # --- modules ------------------------------------------------------------------------------------
 # Esc on the bar only where the Mac has no physical Esc key (2170 px bars), as tiny-dfr does.
 # Written as "not physical" so that an unknown answer fails safe and shows Esc.
@@ -71,3 +82,6 @@ collapsed = true
 format = "{status_icon} {title}"
 max-length = 24
 hide-empty-text = true
+
+[modules."emoji#strip"]
+mode = "strip"
