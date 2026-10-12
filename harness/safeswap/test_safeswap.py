@@ -39,7 +39,9 @@ class Props(unittest.TestCase):
         )
 
     def test_restores_tiny_dfr(self):
-        self.assertEqual(self.props["Conflicts"], ["tiny-dfr.service", "sliverd.service"])
+        # sliverd.socket too: the user's agent reconnecting would socket-activate sliverd, whose
+        # Conflicts= would end the run.
+        self.assertEqual(self.props["Conflicts"], ["tiny-dfr.service", "sliverd.service", "sliverd.socket"])
         self.assertEqual(self.props["After"], ["tiny-dfr.service", "sliverd.service"])
         (post,) = self.props["ExecStopPost"]
         self.assertTrue(post.startswith("+"), "restore must run as root")
@@ -51,6 +53,33 @@ class Props(unittest.TestCase):
         props = props_dict(ss.run_unit_props(m, 5, 1000, Path("/o"), None, None))
         self.assertTrue(props["ExecStopPost"][0].endswith("--restore-to sliverd.service"))
         self.assertEqual(ss.restore_timer_cmd(m, 5)[-2:], ["--restore-to", "sliverd.service"])
+
+    def test_restoring_sliverd_restarts_its_socket(self):
+        self.assertEqual(ss.restore_units(ss.Mode(user=False)), ["tiny-dfr.service"])
+        m = ss.Mode(user=False, target="sliverd.service")
+        self.assertEqual(ss.restore_units(m), ["sliverd.service", "sliverd.socket"])
+        calls = []
+        orig = ss.sh
+        ss.sh = lambda cmd, check=True, capture=False: calls.append(cmd) or ss.subprocess.CompletedProcess(cmd, 0, "", "")
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(ss.cmd_restore(m, "stop-post"), 0)
+        finally:
+            ss.sh = orig
+        self.assertIn(["systemctl", "start", "--no-block", "sliverd.service", "sliverd.socket"], calls)
+
+    def test_live_socket_means_sliverd_owns_the_bar(self):
+        states = {"sliverd.socket": "active"}
+        orig = ss.unit_state
+        ss.unit_state = lambda mode, u: {"ActiveState": states.get(u, "inactive")}
+        try:
+            self.assertEqual(ss.pick_owner(ss.Mode(user=False)), "sliverd.service")
+            states["tiny-dfr.service"] = "active"
+            self.assertEqual(ss.pick_owner(ss.Mode(user=False)), "tiny-dfr.service")
+            states.clear()
+            self.assertEqual(ss.pick_owner(ss.Mode(user=False)), "tiny-dfr.service")
+        finally:
+            ss.unit_state = orig
 
     def test_restore_to_validated(self):
         err = io.StringIO()

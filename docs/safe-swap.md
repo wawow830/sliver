@@ -34,6 +34,7 @@ job, not the job of a process that might die:
 | sliverd exits / crashes / fails to exec | `ExecStopPost=+sliver-safeswap restore` (runs as root after *any* end) |
 | sliverd hangs or ignores the deadline | `RuntimeMaxSec=N`, then SIGTERM, `TimeoutStopSec=5`, SIGKILL of the whole cgroup, then ExecStopPost |
 | anything starts tiny-dfr mid-run (udev event, admin) | `Conflicts=tiny-dfr.service`: systemd stops our run first (stop is ordered before start), then tiny-dfr starts |
+| sliverd is installed and owns the bar | the run also conflicts with `sliverd.socket`, so the user's sliver-agent reconnecting can't socket-activate sliverd and end the run; restore starts `sliverd.service` *and* `sliverd.socket` (a live socket alone counts as sliverd owning the bar) |
 | the peer that started the run dies (`--wait`, which `bar` always uses) | PDEATHSIG/SIGHUP/SIGINT in the helper → `systemctl stop` → ExecStopPost |
 | ExecStopPost somehow fails | dead-man timer `sliver-swap-restore.timer`, armed **before** the run starts, fires at N+25 s |
 | reboot / power loss | nothing persistent was changed (no mask, no enable, no config edits), so tiny-dfr starts at boot via its udev rule as usual |

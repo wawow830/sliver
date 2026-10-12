@@ -62,11 +62,20 @@ class Mode:
     # Every unit that can own the bar. A run conflicts with all of them and restores whichever
     # was active when it started (tiny-dfr if none). Restore targets are validated against this.
     owners: list[str] = field(default_factory=lambda: ["tiny-dfr.service", "sliverd.service"])
+    # Units that can start an owner behind our back. sliverd is socket-activated: during a run the
+    # user's sliver-agent reconnects to /run/sliver/sliverd.sock, which would start sliverd.service,
+    # whose Conflicts= with the run would end it. So a run conflicts with these too, and restoring
+    # an owner brings its activators back.
+    activators: dict[str, list[str]] = field(default_factory=lambda: {"sliverd.service": ["sliverd.socket"]})
     run_unit: str = "sliver-swap.service"
     timer_name: str = "sliver-swap-restore"
     state_dir: Path = Path("/run/sliver-safeswap")
     helper: str = field(default_factory=lambda: os.path.realpath(__file__))
     allow_script: bool = False  # user mode only: payload may be a #! script
+
+    def blockers(self) -> list[str]:
+        """Everything a run must stop and keep stopped: the owners and their activators."""
+        return [*self.owners, *(a for o in self.owners for a in self.activators.get(o, []))]
 
     def systemctl(self) -> list[str]:
         return ["systemctl", "--user"] if self.user else ["systemctl"]
@@ -178,7 +187,7 @@ def run_unit_props(
         f"Description=sliver safe-swap run ({seconds}s, restores {mode.target})",
         # Conflicts with every bar owner; After= so the owner fully stops (releasing DRM master)
         # before we start.
-        *[f"Conflicts={u}" for u in mode.owners],
+        *[f"Conflicts={u}" for u in mode.blockers()],
         *[f"After={u}" for u in mode.owners],
         f"RuntimeMaxSec={seconds}",
         f"TimeoutStopSec={STOP_TIMEOUT}",
@@ -275,14 +284,20 @@ def cmd_restore(mode: Mode, reason: str) -> int:
     if reason != "stop-post":
         sh(sc + ["stop", "--no-block", mode.run_unit], check=False, capture=True)
     sh(sc + ["stop", "--no-block", f"{mode.timer_name}.timer"], check=False, capture=True)
-    sh(sc + ["reset-failed", mode.target], check=False, capture=True)
+    units = restore_units(mode)
+    sh(sc + ["reset-failed", *units], check=False, capture=True)
     # --no-block: we may be running inside the run unit's ExecStopPost. The start job is
     # ordered after the run unit's stop finishes (systemd orders stop before start).
-    r = sh(sc + ["start", "--no-block", mode.target], check=False, capture=True)
+    r = sh(sc + ["start", "--no-block", *units], check=False, capture=True)
     if r.returncode != 0:
-        log(f"FAILED to start {mode.target}: {r.stderr.strip()}")
+        log(f"FAILED to start {' '.join(units)}: {r.stderr.strip()}")
         return 1
     return 0
+
+
+def restore_units(mode: Mode) -> list[str]:
+    """The target plus its activators (sliverd.service -> also sliverd.socket)."""
+    return [mode.target, *mode.activators.get(mode.target, [])]
 
 
 def cmd_stop(mode: Mode) -> int:
@@ -291,9 +306,10 @@ def cmd_stop(mode: Mode) -> int:
 
 
 def pick_owner(mode: Mode) -> str:
-    """The bar owner to restore after a run: whichever is active now, else the first (tiny-dfr)."""
+    """The bar owner to restore after a run: whichever is active now (a live activator counts,
+    e.g. sliverd.socket waiting for its first agent), else the first (tiny-dfr)."""
     for u in mode.owners:
-        if is_live(unit_state(mode, u)):
+        if any(is_live(unit_state(mode, x)) for x in (u, *mode.activators.get(u, []))):
             return u
     return mode.owners[0]
 
@@ -543,6 +559,7 @@ def build_mode(ns: argparse.Namespace) -> Mode:
     m = Mode(user=True, allow_script=ns.allow_script)
     m.target = ns.target or "sliver-fake-tinydfr.service"
     m.owners = [m.target, ns.alt_target or "sliver-fake-sliverd.service"]
+    m.activators = {}  # the fake owners have no sockets
     m.state_dir = Path(ns.state_dir or f"/run/user/{os.getuid()}/sliver-safeswap-test")
     m.run_unit = "sliver-swap-test.service"
     m.timer_name = "sliver-swap-test-restore"
