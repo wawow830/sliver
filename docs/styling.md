@@ -58,7 +58,7 @@ Precedence is standard CSS: `!important`, then specificity, then later rules win
 | `min-width` | length | no | Floor for `auto`-width modules. On `trough`: its natural length. On `slider`: knob width |
 | `min-height` | length | no | On `trough`: thickness (default 6 px). On `slider`: knob height |
 | `gap` | length | no | On `bar`: between zones. On `zone`: between modules. On `module`: icon to label |
-| `transition` | any | no | Accepted, not animated yet |
+| `transition` | `none` or a comma list of `[property] <time> [timing] [delay]` | no | Animates `color`, `background-color` (`background`), `border-color` and `opacity` when a module's style changes (pressed, state classes, `:checked`...). Timing: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(a,b,c,d)`. `all` means those four. Other properties (`min-width`, `transform`...) parse and are ignored, since they would need a re-layout. Frames are drawn at ~30 fps only while something moves; an idle bar costs nothing. The pressed overlay sliverd shows never animates. |
 
 Lengths: `px`, `pt`, `em` (relative to the element's font size), or bare numbers (px).
 `inherit`, `initial` and `unset` work everywhere.

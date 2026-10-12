@@ -127,7 +127,13 @@ struct ItemAnim {
 #[derive(Default)]
 pub(crate) struct Animator {
     items: HashMap<String, ItemAnim>,
-    next: Option<Instant>,
+    /// Next frame due, per scene (the agent renders several layers with one renderer).
+    next: HashMap<String, Instant>,
+}
+
+/// Item keys are `<scene>|<zone>/<item>`.
+fn in_scene(key: &str, scene: &str) -> bool {
+    key.strip_prefix(scene).is_some_and(|r| r.starts_with('|'))
 }
 
 /// The last matching entry wins, as in CSS; `all` matches every property.
@@ -141,15 +147,24 @@ fn spec(style: &Style, prop: TransitionProp) -> Option<(Duration, Duration, Timi
 }
 
 impl Animator {
-    pub fn begin_frame(&mut self) {
-        for a in self.items.values_mut() {
-            a.seen = false;
+    /// Start drawing `scene` (an id such as its classes): its items are "unseen" until applied.
+    pub fn begin_frame(&mut self, scene: &str) {
+        for (k, a) in self.items.iter_mut() {
+            if in_scene(k, scene) {
+                a.seen = false;
+            }
         }
-        self.next = None;
+        self.next.remove(scene);
     }
 
     /// The style to draw for `key` right now, given its computed (target) `style`.
-    pub fn apply(&mut self, key: &str, style: &Arc<Style>, now: Instant) -> Arc<Style> {
+    pub fn apply(
+        &mut self,
+        scene: &str,
+        key: &str,
+        style: &Arc<Style>,
+        now: Instant,
+    ) -> Arc<Style> {
         let target = (
             style.color,
             style.background,
@@ -182,10 +197,8 @@ impl Animator {
         if !moving {
             return style.clone();
         }
-        self.next = Some(match self.next {
-            Some(n) => n.min(now + FRAME),
-            None => now + FRAME,
-        });
+        let due = self.next.entry(scene.to_string()).or_insert(now + FRAME);
+        *due = (*due).min(now + FRAME);
         let mut s = (**style).clone();
         s.color = a.color.value(now);
         s.background = a.background.value(now);
@@ -194,14 +207,14 @@ impl Animator {
         Arc::new(s)
     }
 
-    /// Forget items that are no longer on the bar.
-    pub fn end_frame(&mut self) {
-        self.items.retain(|_, a| a.seen);
+    /// Forget the items of `scene` that were not drawn this frame.
+    pub fn end_frame(&mut self, scene: &str) {
+        self.items.retain(|k, a| a.seen || !in_scene(k, scene));
     }
 
     /// When the next animation frame is due; `None` when everything is at rest.
     pub fn deadline(&self) -> Option<Instant> {
-        self.next
+        self.next.values().min().copied()
     }
 }
 
@@ -238,26 +251,26 @@ mod tests {
         let t0 = Instant::now();
         let mut an = Animator::default();
         let tr = [fade(TransitionProp::Background, 200)];
-        an.begin_frame();
-        assert_eq!(an.apply("a", &style(RED, &tr), t0).background, RED);
+        an.begin_frame("s");
+        assert_eq!(an.apply("s", "s|a", &style(RED, &tr), t0).background, RED);
         assert!(an.deadline().is_none(), "nothing moving");
-        an.end_frame();
+        an.end_frame("s");
 
-        an.begin_frame();
-        let mid = an.apply("a", &style(BLUE, &tr), t0 + ms(1000));
+        an.begin_frame("s");
+        let mid = an.apply("s", "s|a", &style(BLUE, &tr), t0 + ms(1000));
         assert_eq!(mid.background, RED, "starts where it was");
         assert!(an.deadline().is_some());
-        an.end_frame();
-        an.begin_frame();
-        let mid = an.apply("a", &style(BLUE, &tr), t0 + ms(1100));
+        an.end_frame("s");
+        an.begin_frame("s");
+        let mid = an.apply("s", "s|a", &style(BLUE, &tr), t0 + ms(1100));
         assert_eq!(
             mid.background,
             Color::rgb(128, 0, 128),
             "halfway after 100 of 200 ms"
         );
-        an.end_frame();
-        an.begin_frame();
-        let end = an.apply("a", &style(BLUE, &tr), t0 + ms(1300));
+        an.end_frame("s");
+        an.begin_frame("s");
+        let end = an.apply("s", "s|a", &style(BLUE, &tr), t0 + ms(1300));
         assert_eq!(end.background, BLUE);
         assert!(an.deadline().is_none(), "settled: no more frames needed");
     }
@@ -266,33 +279,38 @@ mod tests {
     fn no_transition_jumps_and_retarget_midflight_starts_from_current() {
         let t0 = Instant::now();
         let mut an = Animator::default();
-        an.begin_frame();
-        an.apply("a", &style(RED, &[]), t0);
-        an.end_frame();
-        an.begin_frame();
+        an.begin_frame("s");
+        an.apply("s", "s|a", &style(RED, &[]), t0);
+        an.end_frame("s");
+        an.begin_frame("s");
         assert_eq!(
-            an.apply("a", &style(BLUE, &[]), t0 + ms(10)).background,
+            an.apply("s", "s|a", &style(BLUE, &[]), t0 + ms(10))
+                .background,
             BLUE,
             "no transition: instant"
         );
-        an.end_frame();
+        an.end_frame("s");
 
         let tr = [fade(TransitionProp::All, 100)];
-        an.begin_frame();
-        an.apply("b", &style(RED, &tr), t0);
-        an.end_frame();
-        an.begin_frame();
-        an.apply("b", &style(BLUE, &tr), t0 + ms(100));
-        an.end_frame();
-        an.begin_frame();
-        let half = an.apply("b", &style(BLUE, &tr), t0 + ms(150)).background;
+        an.begin_frame("s");
+        an.apply("s", "s|b", &style(RED, &tr), t0);
+        an.end_frame("s");
+        an.begin_frame("s");
+        an.apply("s", "s|b", &style(BLUE, &tr), t0 + ms(100));
+        an.end_frame("s");
+        an.begin_frame("s");
+        let half = an
+            .apply("s", "s|b", &style(BLUE, &tr), t0 + ms(150))
+            .background;
         assert_eq!(half, Color::rgb(128, 0, 128));
-        an.end_frame();
+        an.end_frame("s");
         // reverse at the halfway point: it eases back from purple, not from blue
-        an.begin_frame();
-        let turn = an.apply("b", &style(RED, &tr), t0 + ms(150)).background;
+        an.begin_frame("s");
+        let turn = an
+            .apply("s", "s|b", &style(RED, &tr), t0 + ms(150))
+            .background;
         assert_eq!(turn, Color::rgb(128, 0, 128));
-        an.end_frame();
+        an.end_frame("s");
     }
 
     #[test]
@@ -305,21 +323,21 @@ mod tests {
         let on = Arc::new(s.clone());
         s.opacity = 0.0;
         let off = Arc::new(s);
-        an.begin_frame();
-        an.apply("x", &on, t0);
-        an.end_frame();
-        an.begin_frame();
-        an.apply("x", &off, t0 + ms(10));
-        an.end_frame();
-        an.begin_frame();
-        let o = an.apply("x", &off, t0 + ms(60)).opacity;
+        an.begin_frame("s");
+        an.apply("s", "s|x", &on, t0);
+        an.end_frame("s");
+        an.begin_frame("s");
+        an.apply("s", "s|x", &off, t0 + ms(10));
+        an.end_frame("s");
+        an.begin_frame("s");
+        let o = an.apply("s", "s|x", &off, t0 + ms(60)).opacity;
         assert!((o - 0.5).abs() < 0.02, "{o}");
-        an.end_frame();
-        an.begin_frame(); // x not drawn this frame
-        an.end_frame();
-        an.begin_frame();
+        an.end_frame("s");
+        an.begin_frame("s"); // x not drawn this frame
+        an.end_frame("s");
+        an.begin_frame("s");
         assert_eq!(
-            an.apply("x", &off, t0 + ms(70)).opacity,
+            an.apply("s", "s|x", &off, t0 + ms(70)).opacity,
             0.0,
             "came back as a new item: no animation"
         );
@@ -335,15 +353,16 @@ mod tests {
             delay: ms(100),
             timing: Timing::Linear,
         }];
-        an.begin_frame();
-        an.apply("a", &style(RED, &tr), t0);
-        an.end_frame();
-        an.begin_frame();
-        an.apply("a", &style(BLUE, &tr), t0 + ms(10));
-        an.end_frame();
-        an.begin_frame();
+        an.begin_frame("s");
+        an.apply("s", "s|a", &style(RED, &tr), t0);
+        an.end_frame("s");
+        an.begin_frame("s");
+        an.apply("s", "s|a", &style(BLUE, &tr), t0 + ms(10));
+        an.end_frame("s");
+        an.begin_frame("s");
         assert_eq!(
-            an.apply("a", &style(BLUE, &tr), t0 + ms(80)).background,
+            an.apply("s", "s|a", &style(BLUE, &tr), t0 + ms(80))
+                .background,
             RED,
             "still waiting"
         );

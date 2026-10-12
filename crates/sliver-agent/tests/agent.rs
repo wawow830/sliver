@@ -470,3 +470,49 @@ fn preview_of_the_default_bar() {
     ));
     check("preview-default", &a.frame(Layer::Base).unwrap().image);
 }
+
+/// A `transition` in the stylesheet animates a press: the agent asks to be woken for the next
+/// frame while it runs, and not at all once it has settled (no busy loop).
+#[test]
+fn transitions_wake_the_loop_only_while_animating() {
+    use sliver_ipc::proto::TouchPhase;
+    use std::time::Duration;
+    let loaded = load_str(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"custom/b\"]\n[modules.\"custom/b\"]\nformat = \"B\"\non-tap = \"true\"\n",
+        std::path::Path::new("."),
+    );
+    assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
+    let mut sheet = Stylesheet::sliver();
+    let mut diags = Vec::new();
+    sheet.add_str(
+        "t.css",
+        "module { transition: background-color 150ms linear }",
+        None,
+        &mut diags,
+    );
+    assert!(diags.is_empty(), "{diags:?}");
+    let mut a = Agent::new(
+        loaded.config,
+        sheet,
+        Renderer::new(Fonts::embedded()),
+        Icons::builtin_only(),
+        2008,
+        60,
+    );
+    let w = world(9, 41);
+    a.render(&w);
+    assert!(
+        a.animation_deadline().is_none(),
+        "first frame never animates"
+    );
+    let (id, x) = region(&a, "custom/b");
+    a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    a.render(&w);
+    assert!(a.animation_deadline().is_some(), "the press fades in");
+    std::thread::sleep(Duration::from_millis(250));
+    a.render(&w);
+    assert!(
+        a.animation_deadline().is_none(),
+        "settled: the loop can sleep"
+    );
+}

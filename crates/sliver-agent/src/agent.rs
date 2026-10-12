@@ -260,6 +260,15 @@ impl Agent {
 
     /// The next monotonic time (µs) [`Agent::tick`] has work: holds, double taps, macro steps,
     /// drawer closings.
+    /// When a running style transition needs its next frame (`None`: at rest, or the display is
+    /// off, so nothing wakes the loop).
+    pub fn animation_deadline(&self) -> Option<std::time::Instant> {
+        if self.display == DisplayState::Off {
+            return None;
+        }
+        self.renderer.animation_deadline()
+    }
+
     pub fn next_deadline(&self) -> Option<u64> {
         let drag = self
             .drag

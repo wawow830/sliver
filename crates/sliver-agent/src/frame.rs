@@ -95,7 +95,8 @@ pub fn render(
     let mut all_pressed = scene.clone();
     all_pressed.items_mut().for_each(|i| i.pressed = true);
     let mut pressed = Pixmap::new(w, h).expect("non-zero panel");
-    renderer.render(&all_pressed, sheet, &mut pressed);
+    // The pressed overlay must not animate (sliverd swaps it in instantly).
+    renderer.render_still(&all_pressed, sheet, &mut pressed);
     let regions = regions(&layout, &cells, w, h, id_base);
     Frame {
         image,

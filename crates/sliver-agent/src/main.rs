@@ -557,15 +557,20 @@ fn run(mut agent: Agent, mut link: Link, live: &mut Live) -> std::io::Result<()>
         let deadline_ms = agent
             .next_deadline()
             .map(|t| (t.saturating_sub(now_us()) / 1000) as i64 + 1);
-        let timeout =
-            change_ms
-                .into_iter()
-                .chain(deadline_ms)
-                .min()
-                .map(|ms| rustix::event::Timespec {
-                    tv_sec: ms / 1000,
-                    tv_nsec: (ms % 1000) * 1_000_000,
-                });
+        let animation_ms = agent.animation_deadline().map(|t| {
+            t.saturating_duration_since(std::time::Instant::now())
+                .as_millis() as i64
+                + 1
+        });
+        let timeout = change_ms
+            .into_iter()
+            .chain(deadline_ms)
+            .chain(animation_ms)
+            .min()
+            .map(|ms| rustix::event::Timespec {
+                tv_sec: ms / 1000,
+                tv_nsec: (ms % 1000) * 1_000_000,
+            });
         let (readable, world_changed, api_woke) = {
             let (fd, wake) = (link.fd(), live.feeds.as_fd());
             let api_fd = live.api.as_ref().map(|a| a.fd());
@@ -610,6 +615,10 @@ fn run(mut agent: Agent, mut link: Link, live: &mut Live) -> std::io::Result<()>
             dirty |= agent
                 .next_change()
                 .is_some_and(|t| t <= Local::now() + chrono::Duration::milliseconds(5));
+            // A transition is mid-flight: draw its next frame.
+            dirty |= agent.animation_deadline().is_some_and(|t| {
+                t <= std::time::Instant::now() + std::time::Duration::from_millis(5)
+            });
             continue;
         }
         for ev in link.poll()? {

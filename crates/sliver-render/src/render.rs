@@ -389,7 +389,8 @@ impl Renderer {
         now: std::time::Instant,
     ) -> Layout {
         let st = self.compute_styles(scene, sheet);
-        self.anim.begin_frame();
+        let scene_id = scene.classes.join(".");
+        self.anim.begin_frame(&scene_id);
         let layout = self.layout_styled(scene, &st, pixmap.width(), pixmap.height());
         // The panel has no alpha: whatever's transparent shows black.
         pixmap.fill(tiny_skia::Color::BLACK);
@@ -412,7 +413,7 @@ impl Renderer {
                     zone.name.as_deref().unwrap_or(""),
                     item.id.clone().unwrap_or_else(|| ii.to_string())
                 );
-                let animated = self.anim.apply(&key, s, now);
+                let animated = self.anim.apply(&scene_id, &key, s, now);
                 let s = &animated;
                 let opacity = zone_opacity * s.opacity;
                 self.draw_item(item, *rect, s, opacity, pixmap);
@@ -423,7 +424,7 @@ impl Renderer {
                 }
             }
         }
-        self.anim.end_frame();
+        self.anim.end_frame(&scene_id);
         layout
     }
 
