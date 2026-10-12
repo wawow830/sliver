@@ -302,7 +302,14 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   closes, or the switch is turned off. If the app is killed, the agent should drop the override
   when its caller leaves the bus (asked ash).
 - Next: drag and drop on the preview, and the Gestures/Appearance/Apps/Profiles pages.
-- **Testing headless** (never on the live session): `gtk4-broadwayd :7 &` then
-  `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`
-  (a sandboxed config dir, so edits never touch yours), and open
-  `http://127.0.0.1:8087` in a browser (agent-browser can screenshot it).
+- **Testing headless** (never on the live session):
+  - Run `gtk4-broadwayd :7 &`, then
+    `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_DEBUG=no-portals GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`.
+    The sandboxed config dir keeps edits away from yours. Open `http://127.0.0.1:8087` in a
+    browser (agent-browser can screenshot it).
+  - For a live agent, use a **private bus with no service activation**:
+    `dbus-daemon --config-file=integration/kwin/session.conf --nofork --address=unix:path=…`.
+    Then run `sliverd --fake-hardware --socket … --frame-png …` and `sliver-agent --socket …` on it.
+    A plain `--session` bus lets GTK activate real desktop services (xdg-desktop-portal-kde),
+    and they outlive the test as orphans. Kill everything by PID in a `trap`, never with
+    `pkill -f` (it matches your own shell).
