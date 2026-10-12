@@ -214,6 +214,16 @@ While the session is **locked**, App controls and Status items are empty whateve
 Status zone: all visible `status` contexts, ordered by user prefs, then provider id. Overflow drops the
 lowest `priority` items; the user can hide any provider.
 
+### User preferences (config, T53)
+The user steers all of this from `config.toml` (schema owned by elm, docs/customization.md):
+- `[apps."<app-id>"]` (case-insensitive, with `[apps."*"]` as the default) sets `controls` (may
+  fill App controls), `whole-bar` (modal allowed) and `pin` (only this provider fills App controls).
+- `[providers."<provider-id>"]` sets `show` (false hides it everywhere), `allow` (lets a sandboxed
+  provider into Status items) and `order` (Status items order).
+- `[api] target` turns `target` contexts on or off globally.
+
+These map onto `sliver_api::registry::Policy`, which the agent rebuilds on every config load.
+
 ### Client tiers
 
 | | unsandboxed (same uid) | sandboxed (Flatpak/Snap) |

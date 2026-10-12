@@ -272,13 +272,31 @@ impl Default for AppPolicy {
 pub struct Policy {
     pub allow_app: bool,
     pub allow_target: bool,
-    /// Keyed by window class / app id.
+    /// Keyed by window class / app id, matched case-insensitively. `"*"` sets the default for
+    /// apps without their own entry (config `[apps."*"]`).
     pub per_app: HashMap<String, AppPolicy>,
     pub hidden_providers: HashSet<String>,
     /// Status providers in the user's order. Unlisted ones follow, sorted by id.
     pub status_order: Vec<String>,
     /// Sandboxed app ids allowed to publish `status` contexts.
     pub sandbox_status_allowed: HashSet<String>,
+}
+
+impl Policy {
+    /// The policy for a focused app: its own entry (case-insensitive), else `"*"`, else defaults.
+    pub fn for_app(&self, class: &str) -> AppPolicy {
+        self.per_app
+            .get(class)
+            .or_else(|| {
+                self.per_app
+                    .iter()
+                    .find(|(k, _)| k.as_str() != "*" && k.eq_ignore_ascii_case(class))
+                    .map(|(_, v)| v)
+            })
+            .or_else(|| self.per_app.get("*"))
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 impl Default for Policy {
@@ -601,7 +619,7 @@ impl Registry {
                 status,
             };
         };
-        let app_policy = policy.per_app.get(&win.class).cloned().unwrap_or_default();
+        let app_policy = policy.for_app(&win.class);
         if !policy.allow_app || app_policy.source == AppSource::Disabled {
             return Resolved {
                 app: None,
@@ -991,6 +1009,25 @@ mod tests {
         let mut locked = f.clone();
         locked.locked = true;
         assert_eq!(w.resolve(&locked, &Policy::default()), Resolved::default());
+    }
+
+    #[test]
+    fn app_policy_lookup_is_case_insensitive_with_default() {
+        let mut p = Policy::default();
+        let off = AppPolicy {
+            source: AppSource::Disabled,
+            allow_modal: true,
+        };
+        let no_modal = AppPolicy {
+            source: AppSource::Auto,
+            allow_modal: false,
+        };
+        p.per_app.insert("*".into(), no_modal.clone());
+        p.per_app.insert("Firefox".into(), off.clone());
+        assert_eq!(p.for_app("firefox"), off);
+        assert_eq!(p.for_app("FIREFOX"), off);
+        assert_eq!(p.for_app("foot"), no_modal);
+        assert_eq!(Policy::default().for_app("foot"), AppPolicy::default());
     }
 
     #[test]
