@@ -110,5 +110,8 @@ Tests: `tests/api.rs` runs the agent with the API on a private `dbus-daemon` and
 Works: everything above, plus `--render` and the real sliverd loop. Verified end to end with
 `sliverd --fake-hardware` + `sliverctl publish/status/modules/layer`.
 
+Previews: `World::sample(now)` (sample battery, volume, brightness, now playing, window) with
+`preview = true` draws empty App controls / Status items as outlined `.placeholder` cells.
+
 Not yet: modal app contexts covering the bar, `workspaces`/`taskbar`/`notifications`/`cpu`…
-modules, the `layout` action, hot reload (T26), preview sample values for the settings app.
+modules, the `layout` action, hot reload (T26).

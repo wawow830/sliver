@@ -461,3 +461,12 @@ fn session_modules() {
         "{fx:?}"
     );
 }
+
+#[test]
+fn preview_of_the_default_bar() {
+    let mut a = agent("");
+    a.render(&World::sample(
+        Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 5).unwrap(),
+    ));
+    check("preview-default", &a.frame(Layer::Base).unwrap().image);
+}

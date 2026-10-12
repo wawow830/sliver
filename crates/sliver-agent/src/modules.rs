@@ -32,6 +32,8 @@ pub struct World {
     pub outputs: HashMap<String, Output>,
     /// What apps publish for the App controls / Status items placeholders.
     pub published: crate::published::Published,
+    /// The settings app's editor: show empty placeholders as outlined `.placeholder` cells.
+    pub preview: bool,
 }
 
 impl World {
@@ -44,7 +46,45 @@ impl World {
             context: Context::new(),
             outputs: HashMap::new(),
             published: Default::default(),
+            preview: false,
         }
+    }
+
+    /// Plausible sample data for previews (the settings editor), so data modules show
+    /// something instead of hiding: battery, volume, brightness, now playing, focused window.
+    pub fn sample(now: DateTime<Local>) -> World {
+        use sliver_session::{Media, PlaybackStatus};
+        let mut w = World::at(now);
+        w.preview = true;
+        let s = &mut w.session;
+        s.power.on_battery = Some(true);
+        s.power.battery_pct = Some(76);
+        s.power.battery_state = BatteryState::Discharging;
+        s.power.profile = Some("balanced".into());
+        s.audio.volume_pct = Some(40);
+        s.audio.muted = Some(false);
+        s.audio.mic_volume_pct = Some(80);
+        s.audio.mic_muted = Some(false);
+        s.brightness.screen_pct = Some(70);
+        s.brightness.keyboard_pct = Some(30);
+        s.media = Some(Media {
+            player: "org.mpris.MediaPlayer2.preview".into(),
+            identity: "Music".into(),
+            status: PlaybackStatus::Playing,
+            title: "Song Title".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            ..Media::default()
+        });
+        let d = &mut w.desktop;
+        d.connected = true;
+        d.keyboard_layout = Some("English (US)".into());
+        d.window = Some(sliver_desktop::Window {
+            class: "firefox".into(),
+            title: "Mozilla Firefox".into(),
+            ..Default::default()
+        });
+        w
     }
 }
 
@@ -187,6 +227,14 @@ fn cells_in(
                 for ctx in &p.status {
                     crate::published::cells(ctx, "status", false, icons, icon_size, out);
                 }
+            }
+            if out.len() == start && world.preview {
+                let (label, class) = if m.id.kind == "app-controls" {
+                    ("App controls", "app")
+                } else {
+                    ("Status items", "status")
+                };
+                out.push(placeholder(m, &key, label, class));
             }
             // The placeholder's own classes and user bindings apply to every item in it
             // (a user `on-*` replaces the app's event unless `pass-through`, api.md §5).
@@ -699,6 +747,40 @@ mod tests {
     }
 
     #[test]
+    fn preview_shows_samples_and_placeholders() {
+        let l = load_str("", std::path::Path::new("."));
+        let ctx = Context::new().with("physical_esc", true);
+        let r = l.config.resolve("base", &ctx).unwrap();
+        let w = World::sample(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
+        let mut out = Vec::new();
+        let mut icons = Icons::builtin_only();
+        for z in &r.zones {
+            cells(
+                &z.modules,
+                &w,
+                &mut icons,
+                36,
+                &|_| UiState::default(),
+                &mut out,
+            );
+        }
+        let kinds: Vec<&str> = out.iter().map(|c| c.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "app-controls",
+                "status-items",
+                "mpris",
+                "custom",
+                "backlight/slider",
+                "audio/slider",
+                "key"
+            ],
+        );
+        assert!(out[0].classes.contains(&"placeholder".to_string()));
+    }
+
+    #[test]
     fn closed_drawer_shows_its_handle() {
         let cells = build("", "base");
         let keys: Vec<&str> = cells.iter().map(|c| c.key.as_str()).collect();
@@ -714,6 +796,31 @@ mod tests {
         );
         assert_eq!(cells[0].touch, Touch::Agent, "the handle opens the drawer");
         assert!(matches!(cells[1].content, Content::Icon(_)));
+    }
+}
+
+/// An empty App controls / Status items placeholder, drawn only in previews.
+fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell {
+    Cell {
+        key: key.to_owned(),
+        id: m.id.to_string(),
+        kind: m.id.kind.clone(),
+        mic: false,
+        css_id: m.css_id.clone(),
+        classes: vec!["placeholder".into(), class.into()],
+        width: Width::Auto,
+        content: Content::Text(label.into()),
+        touch: Touch::None,
+        on: Vec::new(),
+        next_change: None,
+        pressed: false,
+        checked: false,
+        drawer: None,
+        disabled: false,
+        foreground: None,
+        background: None,
+        published: None,
+        pass_through: false,
     }
 }
 

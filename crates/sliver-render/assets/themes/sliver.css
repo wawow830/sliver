@@ -59,3 +59,11 @@ module:active slider { background-color: #e0e0e0; }
 .critical, .urgent { background-color: #c01c28; }
 #battery.charging { color: #57e389; }
 .error { color: #ff7b63; }
+
+/* Empty App controls / Status items, shown only in the settings editor's preview. */
+module.placeholder {
+  background-color: transparent;
+  border: 2px solid alpha(white, 0.3);
+  color: alpha(white, 0.5);
+  font-weight: normal;
+}

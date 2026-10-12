@@ -234,6 +234,7 @@ impl Live {
             context,
             outputs: self.outputs.clone(),
             published: self.published.clone(),
+            preview: false,
         }
     }
 
