@@ -1,6 +1,6 @@
 [package]
 name = "sliver-ipc"
-description = "Narrow, versioned IPC protocol between sliverd and sliver-agent"
+description = "Sliver wire contracts: sliverd<->agent IPC messages + validation, public D-Bus names"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true

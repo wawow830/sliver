@@ -240,11 +240,14 @@ and decides what they mean. sliverd **does** know:
 ### Transport
 - `AF_UNIX`, `SOCK_SEQPACKET` at `/run/sliver/sliverd.sock` (`RuntimeDirectory=sliver`, mode 0666).
   One packet = one message, ≤ 64 KiB, UTF-8 JSON object tagged by `"t"`. Unknown fields are ignored;
-  unknown `t` gets `Error{code:"unknown-message"}` and is otherwise ignored.
+  unknown `t` gets `Error{code:"unknown_message"}` and is otherwise ignored.
 - Authorisation: `SO_PEERCRED` uid must own the **active session on seat0** (logind). Connections from
   other uids are kept in `standby` and promoted on session switch. If a second connection from the
   active uid says `Hello`, it takes over and the old one gets `Revoked`.
 - Pixels travel in sealed memfds, never in packets.
+
+Types, codec and every check below are implemented in `crates/sliver-ipc` (`proto`, `validate`,
+`keys`). Error codes on the wire are the snake_case `ErrorCode` variants.
 
 ### Handshake
 ```
@@ -294,7 +297,7 @@ highlight if absent.
   for a cleared one) contains key regions for `KEY_ESC` and `KEY_F1`–`KEY_F12`, each ≥ 32 px wide and
   fully on screen. (If H2 confirms a physical Esc, the floor becomes system config with Esc optional.
   The UX still keeps Esc on the bar.) Otherwise sliverd replaces the `fn` layer with its built-in one and sends
-  `error{code:"escape-floor"}`. User config can't remove Escape; the settings app warns first.
+  `error{code:"escape_floor"}`. User config can't remove Escape; the settings app warns first.
 - **Validation:** geometry in bounds, ≤ 128 regions, no overlapping key regions, keycodes in range.
   **`KEY_SYSRQ` is refused** in regions and `emit_keys` (a same-uid process must not get kernel SysRq).
 - **No trust in the buffer:** sealed memfds only, copied before use, mmap failures and short sizes → reject.
