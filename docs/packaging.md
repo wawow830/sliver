@@ -49,6 +49,9 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full rel
   running agents are restarted too (`%systemd_user_postun_with_restart`, in every user manager).
   `%postun` runs from the *old* package, so this works for upgrades away from .263 (737ff05) on.
   The .261 → .263 upgrade still kept the old agent, which reconnected fine.
+  **Verified on .263 → .290 (T115):** the running agent restarted by itself (new PID), sliverd
+  had 0 restarts, and there were no AVCs. Idle cost with the display off (lid closed): sliverd 0
+  wakeups/s, agent 1.45/s (within `scripts/idle-wakeups`' 3/s budget).
   Before that fix, the old agent kept running against the new sliverd until the next login.
 - The RPM's own sliverd is the only real-hardware code the swarm may restart without the harness.
   If it fails, the fallback hands the bar to tiny-dfr. That happened on the .256 upgrade: the
