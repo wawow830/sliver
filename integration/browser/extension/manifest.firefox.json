@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Sliver Touch Bar",
+  "version": "0.1.0",
+  "description": "Tabs, back, forward and reload on the Touch Bar of Linux Macs running Sliver.",
+  "permissions": ["tabs", "nativeMessaging"],
+  "background": { "scripts": ["background.js"] },
+  "browser_specific_settings": {
+    "gecko": { "id": "sliver-touchbar@sliver.wawow830.github.io", "strict_min_version": "115.0" }
+  }
+}

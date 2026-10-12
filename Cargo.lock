@@ -1580,6 +1580,7 @@ name = "sliver-client"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "sliver-api",
  "sliver-bus",
  "sliver-ipc",

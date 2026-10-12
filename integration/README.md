@@ -9,7 +9,10 @@ Hyprland, sway and niri need none of this: the agent reads their IPC (`crates/sl
 | KDE Plasma 6 | KWin script `kwin/sliver-focus` | `/usr/share/kwin/scripts/sliver-focus/` | yes: nested `kwin_wayland --virtual`, `kwin/test.sh` |
 | GNOME Shell 45+ | extension `gnome-shell/sliver-focus@sliver.wawow830.github.io` | `/usr/share/gnome-shell/extensions/<uuid>/` | syntax only (`node --check`); no GNOME Shell on the dev machine |
 
-Both enable per user (KDE: System Settings → Window Management → KWin Scripts; GNOME:
+Apps can integrate too: `browser/` is a Firefox/Chromium extension plus a native-messaging host
+that puts the focused window's tabs and back/forward/reload on the bar (see `browser/README.md`).
+
+Both desktop integrations enable per user (KDE: System Settings → Window Management → KWin Scripts; GNOME:
 `gnome-extensions enable sliver-focus@sliver.wawow830.github.io`, then log out and in on Wayland).
 Packages must not enable them by default.
 

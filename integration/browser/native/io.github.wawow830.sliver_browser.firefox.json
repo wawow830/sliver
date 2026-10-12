@@ -1,0 +1,7 @@
+{
+  "name": "io.github.wawow830.sliver_browser",
+  "description": "Sliver Touch Bar browser integration",
+  "path": "/usr/libexec/sliver-browser-host",
+  "type": "stdio",
+  "allowed_extensions": ["sliver-touchbar@sliver.wawow830.github.io"]
+}

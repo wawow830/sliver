@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Native-messaging host for the Sliver browser extension (integration/browser).
+
+The browser starts it when the extension connects (`runtime.connectNative`). It reads the
+extension's messages on stdin (native messaging: a 4-byte native-endian length, then UTF-8 JSON)
+and publishes an `app` context on the Touch Bar for the browser:
+
+    ◀  ▶  ⟳  [ tab │ tab │ tab ›]  +
+
+The tabs are a `scrubber` (swipe to scroll, tap to switch). Taps go back to the extension as
+`{"cmd": "..."}` messages on stdout. The context uses `include-children`, so it shows while the
+browser (our parent process) is focused, and it is published again if sliver-agent restarts
+(docs/api.md §7). It exits when the browser closes the pipe.
+
+Plain D-Bus through Gio, no sliver libraries (like examples/python/pomodoro.py).
+"""
+
+import json
+import struct
+import sys
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+BUS = "io.github.wawow830.Sliver"
+ROOT = "/io/github/wawow830/Sliver"
+TOUCHBAR = BUS + ".TouchBar1"
+CONTEXT = BUS + ".Context1"
+PROVIDER = "io.github.wawow830.Sliver.Browser"
+MAX_TABS = 256
+MAX_MESSAGE = 1 << 20
+
+
+def frame(obj):
+    data = json.dumps(obj, separators=(",", ":")).encode()
+    return struct.pack("=I", len(data)) + data
+
+
+class Host:
+    def __init__(self, stdin, stdout, loop):
+        self.stdin = stdin
+        self.stdout = stdout
+        self.loop = loop
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+        self.path = None
+        self.buf = b""
+        self.tabs = []  # [{"id": int, "title": str, "active": bool}]
+        self.can_back = True
+        self.can_forward = True
+        Gio.bus_watch_name_on_connection(
+            self.bus, BUS, Gio.BusNameWatcherFlags.NONE, self.on_agent, self.on_agent_gone
+        )
+        # Event signals are unicast to us: this only ever sees our own context's events.
+        self.bus.signal_subscribe(
+            BUS, CONTEXT, "Event", None, None, Gio.DBusSignalFlags.NONE, self.on_event
+        )
+        GLib.unix_fd_add_full(
+            GLib.PRIORITY_DEFAULT, stdin.fileno(), GLib.IOCondition.IN | GLib.IOCondition.HUP,
+            self.on_stdin,
+        )
+
+    # ---- native messaging ----
+
+    def on_stdin(self, fd, cond):
+        try:
+            chunk = self.stdin.read1(65536) if hasattr(self.stdin, "read1") else self.stdin.read(65536)
+        except OSError:
+            chunk = b""
+        if not chunk:
+            self.loop.quit()  # the browser closed the port
+            return GLib.SOURCE_REMOVE
+        self.buf += chunk
+        while len(self.buf) >= 4:
+            (n,) = struct.unpack("=I", self.buf[:4])
+            if n > MAX_MESSAGE:
+                self.loop.quit()
+                return GLib.SOURCE_REMOVE
+            if len(self.buf) < 4 + n:
+                break
+            raw, self.buf = self.buf[4 : 4 + n], self.buf[4 + n :]
+            try:
+                self.on_message(json.loads(raw))
+            except (ValueError, TypeError, KeyError) as e:
+                print(f"sliver-browser-host: bad message: {e}", file=sys.stderr)
+        return GLib.SOURCE_CONTINUE
+
+    def on_message(self, msg):
+        if msg.get("type") != "tabs":
+            return
+        tabs = []
+        for t in msg.get("tabs", [])[:MAX_TABS]:
+            tabs.append({
+                "id": int(t["id"]),
+                "title": str(t.get("title") or t.get("url") or "…"),
+                "active": bool(t.get("active")),
+            })
+        self.tabs = tabs
+        self.can_back = bool(msg.get("canGoBack", True))
+        self.can_forward = bool(msg.get("canGoForward", True))
+        self.publish()
+
+    def send(self, obj):
+        self.stdout.write(frame(obj))
+        self.stdout.flush()
+
+    # ---- D-Bus ----
+
+    def call(self, path, iface, method, args, reply="()"):
+        return self.bus.call_sync(
+            BUS, path, iface, method, args, GLib.VariantType(reply),
+            Gio.DBusCallFlags.NONE, -1, None,
+        ).unpack()
+
+    def items(self):
+        v = GLib.Variant
+
+        def button(id_, icon, label, enabled=True):
+            return {
+                "id": v("s", id_),
+                "type": v("s", "button"),
+                "icon": v("s", icon),
+                "a11y-label": v("s", label),
+                "enabled": v("b", enabled),
+                "priority": v("i", 10),
+            }
+
+        selected = next((i for i, t in enumerate(self.tabs) if t["active"]), -1)
+        # Keep the active tab in view: start the strip at its page.
+        visible = 5
+        offset = max(0, min(selected - visible // 2, len(self.tabs) - visible)) if selected >= 0 else 0
+        return [
+            button("back", "go-previous-symbolic", "Back", self.can_back),
+            button("forward", "go-next-symbolic", "Forward", self.can_forward),
+            button("reload", "view-refresh-symbolic", "Reload"),
+            {
+                "id": v("s", "tabs"),
+                "type": v("s", "scrubber"),
+                "candidates": v("aa{sv}", [{"label": v("s", t["title"])} for t in self.tabs]),
+                "selected": v("i", selected),
+                "offset": v("i", offset),
+                "visible-count": v("i", visible),
+            },
+            button("new-tab", "tab-new-symbolic", "New tab"),
+        ]
+
+    def publish(self):
+        if not self.path:
+            return
+        try:
+            self.call(self.path, CONTEXT, "SetItems",
+                      GLib.Variant("(aa{sv})", (self.items(),)), "(as)")
+        except GLib.Error as e:
+            print(f"sliver-browser-host: SetItems: {e.message}", file=sys.stderr)
+
+    def on_agent(self, _bus, _name, _owner):
+        v = GLib.Variant
+        opts = {
+            "provider": v("s", PROVIDER),
+            "title": v("s", "Browser tabs"),
+            "scope": v("s", "app"),
+            # We're the browser's child: show while the browser is focused.
+            "include-children": v("b", True),
+        }
+        try:
+            (self.path,) = self.call(ROOT, TOUCHBAR, "CreateContext",
+                                     GLib.Variant("(a{sv})", (opts,)), "(o)")
+        except GLib.Error as e:
+            print(f"sliver-browser-host: CreateContext: {e.message}", file=sys.stderr)
+            return
+        self.publish()
+
+    def on_agent_gone(self, _bus, _name):
+        self.path = None
+
+    def on_event(self, _bus, _sender, path, _iface, _signal, params):
+        if path != self.path:
+            return
+        item, kind, data = params.unpack()
+        if kind == "tap" and item in ("back", "forward", "reload", "new-tab"):
+            self.send({"cmd": item})
+        elif kind == "selected" and item == "tabs":
+            i = data.get("index", -1)
+            if 0 <= i < len(self.tabs):
+                self.send({"cmd": "activate", "tab": self.tabs[i]["id"]})
+
+
+def main():
+    loop = GLib.MainLoop()
+    Host(sys.stdin.buffer, sys.stdout.buffer, loop)
+    loop.run()
+
+
+if __name__ == "__main__":
+    main()
