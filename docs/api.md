@@ -289,13 +289,24 @@ highlight if absent.
 | `display` | `state` (`on`/`dimmed`/`off`) | agent stops rendering and widget timers while `off` |
 | `role` | `role` (`active`/`standby`/`revoked`) | session switches; non-active agents' presents are dropped |
 | `ping` | `nonce` | |
-| `error` | `code`, `msg`, `serial`? | rejected message; never fatal by itself |
+| `error` | `code`, `msg`, `serial`? | rejected message (see the error policy below) |
 
 ### Safety rules sliverd enforces (invariant 1)
 - **Liveness:** an agent crash is a socket hangup, detected at once. Hangs are checked only when they
   matter, with no idle timers (invariant 3): sliverd sends `ping` when the display wakes, and on an
-  agent-region touch if it hasn't pinged in the last 5 s. No `pong` within 2 s, a disconnect, `bye`, or a
-  malformed frame → built-in safe layer at once. Key regions of the last good frame keep working until then.
+  agent-region touch if it hasn't pinged in the last 5 s. No `pong` within 2 s, a disconnect, or `bye`
+  → built-in safe layer at once. Key regions of the last good frame keep working until then.
+- **Error policy:**
+
+  | what | reply | then |
+  |---|---|---|
+  | unknown `t` | `error{unknown_message}` | carry on (forward compatibility) |
+  | malformed/oversized packet, wrong fd count, anything before `hello` | `error{malformed}` | close → safe layer |
+  | major version mismatch | `error{proto}` | close → safe layer |
+  | invalid buffer/frame/keys | `error{invalid_buffer/invalid_frame/forbidden_key}` | previous frame stays |
+  | escape floor not met | `error{escape_floor}` | frame shown, `fn` := built-in |
+
+  Every switch to the safe layer releases held keys first.
 - **Escape floor:** a frame is accepted only if `base ∪ fn` (with the built-in fn layer standing in
   for a cleared one) contains single-key regions for `KEY_F1`–`KEY_F12`, plus `KEY_ESC` on machines
   without a physical Esc. Each must be ≥ 32 px wide and fully on screen. Physical Esc follows tiny-dfr's

@@ -241,13 +241,26 @@ impl FakeDaemon {
         let Packet { msg, mut fds } = p;
         let msg = match msg {
             Ok(m) => m,
-            Err(e) => return self.error(e.code(), e.to_string(), None),
+            // Unknown types are forward compatibility: report and carry on.
+            Err(e @ CodecError::UnknownMessage(_)) => {
+                return self.error(e.code(), e.to_string(), None);
+            }
+            // Garbage means a broken agent: report, hang up, safe layer.
+            Err(e) => {
+                self.error(e.code(), e.to_string(), None)?;
+                self.safe_mode();
+                return Ok(());
+            }
         };
         if msg.carries_fd() != (fds.len() == 1) || fds.len() > 1 {
-            return self.error(ErrorCode::Malformed, "wrong number of fds", None);
+            self.error(ErrorCode::Malformed, "wrong number of fds", None)?;
+            self.safe_mode();
+            return Ok(());
         }
         if self.hello.is_none() && !matches!(msg, AgentMsg::Hello { .. }) {
-            return self.error(ErrorCode::Malformed, "hello first", None);
+            self.error(ErrorCode::Malformed, "hello first", None)?;
+            self.safe_mode();
+            return Ok(());
         }
         match msg {
             AgentMsg::Hello { proto, agent } => match PROTO.negotiate(proto) {
@@ -648,7 +661,6 @@ mod tests {
     #[test]
     fn version_mismatch_and_hello_first() {
         let (mut d, a) = FakeDaemon::new(FakeDaemon::mac14_7()).unwrap();
-        a.send(&AgentMsg::Wake).unwrap();
         a.send(&AgentMsg::Hello {
             proto: ProtoVersion(2, 0),
             agent: "future".into(),
@@ -657,9 +669,33 @@ mod tests {
         d.pump().unwrap();
         assert_eq!(
             d.errors.iter().map(|e| e.0).collect::<Vec<_>>(),
-            vec![ErrorCode::Malformed, ErrorCode::Proto]
+            vec![ErrorCode::Proto]
         );
         assert!(d.closed && d.hello.is_none());
+
+        let (mut d, a) = FakeDaemon::new(FakeDaemon::mac14_7()).unwrap();
+        a.send(&AgentMsg::Wake).unwrap();
+        d.pump().unwrap();
+        assert_eq!(d.errors[0].0, ErrorCode::Malformed);
+        assert!(d.closed);
+    }
+
+    #[test]
+    fn unknown_types_continue_garbage_closes() {
+        let (mut d, a, _buf) = connect();
+        rustix::net::send(
+            &a,
+            br#"{"t":"from_the_future"}"#,
+            rustix::net::SendFlags::empty(),
+        )
+        .unwrap();
+        d.pump().unwrap();
+        assert!(!d.closed);
+        rustix::net::send(&a, b"garbage", rustix::net::SendFlags::empty()).unwrap();
+        d.pump().unwrap();
+        let codes: Vec<ErrorCode> = d.errors.iter().map(|e| e.0).collect();
+        assert_eq!(codes, vec![ErrorCode::UnknownMessage, ErrorCode::Malformed]);
+        assert!(d.closed && d.safe_layer_active());
     }
 
     #[test]
