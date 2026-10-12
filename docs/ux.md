@@ -344,14 +344,20 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   Every drop is an ordinary edit with Undo, and a plain click still opens the inspector. It's
   one pointer gesture on the page, not toolkit DnD, so it behaves the same on every GDK backend,
   including Broadway for headless tests.
-- **Testing headless** (never on the live session):
-  - Run `gtk4-broadwayd :7 &`, then
-    `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_DEBUG=no-portals GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`.
-    The sandboxed config dir keeps edits away from yours. Open `http://127.0.0.1:8087` in a
-    browser (agent-browser can screenshot it).
-  - For a live agent, use a **private bus with no service activation**:
-    `dbus-daemon --config-file=integration/kwin/session.conf --nofork --address=unix:path=…`.
-    Then run `sliverd --fake-hardware --socket … --frame-png …` and `sliver-agent --socket …` on it.
-    A plain `--session` bus lets GTK activate real desktop services (xdg-desktop-portal-kde),
-    and they outlive the test as orphans. Kill everything by PID in a `trap`, never with
-    `pkill -f` (it matches your own shell).
+- **Testing headless** (never on the live session): `scripts/settings-headless OUT.png [STEP...]`.
+  It runs the app on GTK's Broadway backend with a sandboxed `XDG_CONFIG_HOME`
+  (`target/test-tmp/xdg-ui`), on a **private D-Bus**, and drives it through agent-browser: clicks
+  `X,Y`, `drag=…`, `key=…`, `shot=FILE`, `sleep=N`. See the script's header.
+  - **Always use a private bus.** On this machine an installed `sliver-agent` runs on the session
+    bus. The settings app talks to it (live status, Active now, Apps), and **Mirror is on by
+    default**, so a test window on the real bus asks the real bar to show its layout. Before the
+    script existed, some test runs here did exactly that (briefly, with the built-in `default`
+    layout).
+  - For a live agent in a test, start `sliverd --fake-hardware --socket … --frame-png …` and
+    `sliver-agent --socket …` with `DBUS_SESSION_BUS_ADDRESS` set to the same private bus. A
+    plain `--session` bus lets GTK activate real desktop services (xdg-desktop-portal-kde) that
+    outlive the test as orphans. Kill everything by PID in a `trap`, never with `pkill -f` (it
+    matches your own shell).
+  - Broadway gotchas: there's no implicit pointer grab, so a drag that leaves its widget is lost
+    unless a common ancestor handles it. Screenshots are sometimes stale, so take a delayed second
+    one before believing a bug. Typing needs one `key=` per character.
