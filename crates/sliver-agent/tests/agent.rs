@@ -1,5 +1,5 @@
-//! End-to-end: the agent core + link against the in-process FakeDaemon (real socket, real
-//! memfds, sliverd's validation and touch routing). PNG snapshots in `tests/snapshots/`;
+//! End-to-end: the agent core + link against sliverd's real core in-process (`TestDaemon`: real
+//! socket, real memfds, sliverd's validation, touch routing and pressed feedback). PNG snapshots in `tests/snapshots/`;
 //! bless with `SLIVER_BLESS=1`.
 
 use std::path::PathBuf;
@@ -11,9 +11,9 @@ use sliver_agent::link::Link;
 use sliver_agent::modules::World;
 use sliver_agent::{Agent, icons::Icons};
 use sliver_config::load_str;
-use sliver_ipc::fake::FakeDaemon;
 use sliver_ipc::proto::{Layer, RegionKind};
 use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};
+use sliverd::testing::TestDaemon as FakeDaemon;
 
 fn world(h: u32, m: u32) -> World {
     World::at(Local.with_ymd_and_hms(2026, 10, 12, h, m, 5).unwrap())

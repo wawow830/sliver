@@ -1522,6 +1522,7 @@ dependencies = [
  "sliver-ipc",
  "sliver-render",
  "sliver-session",
+ "sliverd",
  "zbus",
 ]
 

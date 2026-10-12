@@ -22,4 +22,4 @@ zbus = "5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
-sliver-ipc = { workspace = true, features = ["fake"] }
+sliverd = { path = "../sliverd", features = ["testing"] }
