@@ -24,14 +24,22 @@ pub struct Theme {
     /// Draw idle buttons with a fill. When false, only pressed buttons show a fill.
     pub outlines: bool,
     pub radius: f32,
-    /// Horizontal gap between slots, in pixels.
+    /// Horizontal gap between items, in pixels.
     pub spacing: f32,
+    /// Gap between zones (Esc | Main | Controls).
+    pub zone_gap: f32,
+    /// `Auto` items are at least this wide: a comfortable touch target (~9 mm, ux.md §4).
+    pub comfortable_width: f32,
+    /// Overflowing items shrink to this before anything else gives (ux.md §4).
+    pub min_width: f32,
+    /// Padding on each side of an `Auto` item's content.
+    pub auto_padding_x: f32,
     /// Gap between items and the top/bottom edge of the bar, in pixels.
     pub margin_y: f32,
     pub icon_size: f32,
     /// Gap between an icon and its label.
     pub icon_gap: f32,
-    /// Minimum horizontal padding inside a button before labels shrink.
+    /// Minimum horizontal padding inside a button before labels shrink or ellipsize.
     pub padding_x: f32,
     pub font: FontSpec,
 }
@@ -48,6 +56,10 @@ impl Theme {
             outlines: true,
             radius: 8.0,
             spacing: 16.0,
+            zone_gap: 16.0,
+            comfortable_width: 80.0,
+            min_width: 60.0,
+            auto_padding_x: 24.0,
             margin_y: 1.0,
             icon_size: 48.0,
             icon_gap: 8.0,

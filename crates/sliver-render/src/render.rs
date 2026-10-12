@@ -5,7 +5,7 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Transform};
 
 use crate::icon::Image;
 use crate::text::{self, Label};
-use crate::{Color, Content, Fonts, Icon, Item, Rect, Scene, Theme, layout_row};
+use crate::{Color, Content, Fonts, Icon, Item, Rect, Scene, Sizing, Spacing, Theme, Width, solve};
 
 /// Draws scenes. Holds font and glyph caches, so keep one around rather than making one per frame.
 pub struct Renderer {
@@ -17,22 +17,56 @@ impl Renderer {
         Renderer { fonts }
     }
 
-    /// Item rectangles for `scene` on a `width` x `height` bar. Same geometry as [`Self::render`].
-    pub fn layout(&self, scene: &Scene, theme: &Theme, width: u32, height: u32) -> Vec<Rect> {
-        layout_row(
-            width,
-            height,
-            &scene.stretches(),
-            theme.spacing,
-            theme.margin_y,
-        )
+    /// Item rectangles for `scene` on a `width` x `height` bar, in [`Scene::items`] order. Same
+    /// geometry as [`Self::render`]. Takes `&mut self` because `Auto` widths measure text.
+    pub fn layout(&mut self, scene: &Scene, theme: &Theme, width: u32, height: u32) -> Vec<Rect> {
+        let zones: Vec<(bool, Vec<Sizing>)> = scene
+            .zones
+            .iter()
+            .map(|z| {
+                let sizes = z
+                    .items
+                    .iter()
+                    .map(|item| Sizing {
+                        width: item.width,
+                        natural: match item.width {
+                            Width::Auto => self.natural_width(&item.content, theme),
+                            _ => 0.0,
+                        },
+                    })
+                    .collect();
+                (z.grow, sizes)
+            })
+            .collect();
+        let spacing = Spacing {
+            item: theme.spacing,
+            zone: theme.zone_gap,
+            margin_y: theme.margin_y,
+            comfortable: theme.comfortable_width,
+            min: theme.min_width,
+        };
+        solve(&zones, width, height, spacing)
+    }
+
+    /// Content width plus `Auto` padding, at the theme's preferred sizes.
+    fn natural_width(&mut self, content: &Content, theme: &Theme) -> f32 {
+        let f = &theme.font;
+        let mut label =
+            |t: &str| text::shape(&mut self.fonts, t, &f.family, f.weight, f.size).width;
+        let inner = match content {
+            Content::Spacer | Content::Blank => 0.0,
+            Content::Text(t) => label(t),
+            Content::Icon(_) => theme.icon_size,
+            Content::IconText(_, t) => theme.icon_size + theme.icon_gap + label(t),
+        };
+        inner.ceil() + 2.0 * theme.auto_padding_x
     }
 
     /// Draws the whole scene into `pixmap`, a landscape bar (e.g. 2008x60).
     pub fn render(&mut self, scene: &Scene, theme: &Theme, pixmap: &mut Pixmap) {
         pixmap.fill(theme.background.to_skia());
         let rects = self.layout(scene, theme, pixmap.width(), pixmap.height());
-        for (item, rect) in scene.items.iter().zip(rects) {
+        for (item, rect) in scene.items().zip(rects) {
             self.draw_item(item, rect, theme, pixmap);
         }
     }

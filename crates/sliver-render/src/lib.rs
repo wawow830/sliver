@@ -5,8 +5,9 @@
 //! always renders (GOAL invariant 1).
 //!
 //! The pipeline:
-//! 1. [`layout_row`] turns a list of stretches into item rectangles. The daemon uses the same
-//!    function for hit-testing ([`hit_test`]), so what you see is what you touch.
+//! 1. [`Renderer::layout`] measures content and [`solve`]s zones of `Auto`/`Fixed`/`Fill` items
+//!    into rectangles. Use the same rects for touch regions ([`hit_test`]), so what you see is what
+//!    you touch.
 //! 2. [`Renderer::render`] draws a [`Scene`] with a [`Theme`] into a landscape [`Pixmap`]
 //!    (e.g. 2008x60). Headless callers write it out with [`Pixmap::encode_png`].
 //! 3. [`panel::damage`] finds what changed since the last frame, and [`panel::blit`] rotates it into
@@ -22,10 +23,10 @@ mod text;
 mod theme;
 
 pub use color::Color;
-pub use geometry::{Rect, hit_test, layout_row};
+pub use geometry::{Rect, Sizing, Spacing, Width, hit_test, solve};
 pub use icon::{BUILTIN_ICONS, Icon, IconError};
 pub use render::Renderer;
-pub use scene::{Content, Item, Scene};
+pub use scene::{Content, Item, Scene, Zone};
 pub use text::{EMBEDDED_FONT_FAMILY, Fonts};
 pub use theme::{FontSpec, Theme};
 pub use tiny_skia::Pixmap;

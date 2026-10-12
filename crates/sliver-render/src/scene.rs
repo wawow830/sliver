@@ -1,9 +1,9 @@
-use crate::{Color, Icon};
+use crate::{Color, Icon, Width};
 
 /// What one item shows.
 #[derive(Clone, Debug, Default)]
 pub enum Content {
-    /// Empty space that takes up slots but draws nothing (tiny-dfr's spacer).
+    /// Empty space that draws nothing (tiny-dfr's spacer).
     #[default]
     Spacer,
     /// A button with no content.
@@ -18,20 +18,20 @@ pub enum Content {
 #[derive(Clone, Debug)]
 pub struct Item {
     pub content: Content,
-    /// How many slots the item spans (tiny-dfr's `Stretch`). 0 is treated as 1.
-    pub stretch: u32,
+    pub width: Width,
     pub pressed: bool,
     /// Overrides the theme's button fill (e.g. a charging battery turns green).
     pub background: Option<Color>,
-    /// Overrides the theme's label color.
+    /// Overrides the theme's label and symbolic icon color.
     pub foreground: Option<Color>,
 }
 
 impl Item {
+    /// A new item, `Auto` width.
     pub fn new(content: Content) -> Item {
         Item {
             content,
-            stretch: 1,
+            width: Width::Auto,
             pressed: false,
             background: None,
             foreground: None,
@@ -46,13 +46,18 @@ impl Item {
         Item::new(Content::Icon(icon))
     }
 
-    pub fn spacer(stretch: u32) -> Item {
-        Item::new(Content::Spacer).stretch(stretch)
+    pub fn spacer() -> Item {
+        Item::new(Content::Spacer)
     }
 
-    pub fn stretch(mut self, stretch: u32) -> Item {
-        self.stretch = stretch;
+    pub fn width(mut self, width: Width) -> Item {
+        self.width = width;
         self
+    }
+
+    /// Shorthand for `width(Width::Fill(n))`: tiny-dfr's `Stretch`.
+    pub fn fill(self, n: u32) -> Item {
+        self.width(Width::Fill(n))
     }
 
     pub fn pressed(mut self, pressed: bool) -> Item {
@@ -71,18 +76,54 @@ impl Item {
     }
 }
 
-/// A full row of items: one frame of the bar.
+/// A run of items laid out together. Zones are separated by the theme's zone gap.
+#[derive(Clone, Debug, Default)]
+pub struct Zone {
+    pub items: Vec<Item>,
+    /// Takes the leftover space (at its end) when no item is `Fill`.
+    pub grow: bool,
+}
+
+/// One frame of the bar: zones from left to right.
 #[derive(Clone, Debug, Default)]
 pub struct Scene {
-    pub items: Vec<Item>,
+    pub zones: Vec<Zone>,
 }
 
 impl Scene {
+    /// A single growing zone.
     pub fn new(items: Vec<Item>) -> Scene {
-        Scene { items }
+        Scene {
+            zones: vec![Zone { items, grow: true }],
+        }
     }
 
-    pub fn stretches(&self) -> Vec<u32> {
-        self.items.iter().map(|i| i.stretch).collect()
+    /// The standard layout (ux.md §2): Esc (left), Main (grows), Controls (pushed right).
+    pub fn zoned(esc: Vec<Item>, main: Vec<Item>, controls: Vec<Item>) -> Scene {
+        Scene {
+            zones: vec![
+                Zone {
+                    items: esc,
+                    grow: false,
+                },
+                Zone {
+                    items: main,
+                    grow: true,
+                },
+                Zone {
+                    items: controls,
+                    grow: false,
+                },
+            ],
+        }
+    }
+
+    /// All items, in layout order. [`crate::Renderer::layout`] returns rects in this order.
+    pub fn items(&self) -> impl Iterator<Item = &Item> {
+        self.zones.iter().flat_map(|z| z.items.iter())
+    }
+
+    pub fn items_mut(&mut self) -> impl Iterator<Item = &mut Item> {
+        self.zones.iter_mut().flat_map(|z| z.items.iter_mut())
     }
 }

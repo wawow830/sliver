@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use sliver_render::{Color, Content, Fonts, Icon, Item, Pixmap, Renderer, Scene, Theme};
+use sliver_render::{Color, Content, Fonts, Icon, Item, Pixmap, Renderer, Scene, Theme, Width};
 
 const W: u32 = 2008;
 const H: u32 = 60;
@@ -16,8 +16,8 @@ fn icon(name: &str) -> Icon {
 }
 
 fn fkeys() -> Vec<Item> {
-    let mut items = vec![Item::text("esc")];
-    items.extend((1..=12).map(|n| Item::text(format!("F{n}"))));
+    let mut items = vec![Item::text("esc").fill(1)];
+    items.extend((1..=12).map(|n| Item::text(format!("F{n}")).fill(1)));
     items
 }
 
@@ -71,7 +71,7 @@ fn primary_layer_pressed_no_outlines() {
 
 #[test]
 fn media_layer() {
-    let mut items = vec![Item::text("esc")];
+    let mut items = vec![Item::text("esc").fill(1)];
     items.extend(
         [
             "brightness_low",
@@ -87,7 +87,7 @@ fn media_layer() {
             "volume_down",
             "volume_up",
         ]
-        .map(|n| Item::icon(icon(n))),
+        .map(|n| Item::icon(icon(n)).fill(1)),
     );
     items[8].pressed = true;
     check("media", &Scene::new(items), &Theme::tiny_dfr());
@@ -96,16 +96,61 @@ fn media_layer() {
 #[test]
 fn mixed_stretch_widgets_and_fitting() {
     let items = vec![
-        Item::text("esc"),
-        Item::spacer(1),
+        Item::text("esc").fill(1),
+        Item::spacer().fill(1),
         Item::new(Content::IconText(icon("battery_charging_80"), "83%".into()))
-            .stretch(2)
+            .fill(2)
             .background(Color::rgb(0, 102, 0)),
-        Item::text("12:34 Mon 12 Oct").stretch(3),
-        Item::text("A label far too long for one slot"),
-        Item::new(Content::Blank),
-        Item::text("Ünïcødé €…").stretch(3),
-        Item::icon(icon("volume_up")).foreground(Color::rgb(255, 200, 0)),
+        Item::text("12:34 Mon 12 Oct").fill(3),
+        Item::text("A label far too long for one slot").fill(1),
+        Item::new(Content::Blank).fill(1),
+        Item::text("Ünïcødé €…").fill(3),
+        Item::icon(icon("volume_up"))
+            .fill(1)
+            .foreground(Color::rgb(255, 200, 0)),
     ];
     check("mixed", &Scene::new(items), &Theme::tiny_dfr());
+}
+
+#[test]
+fn zones_with_auto_and_fixed_widths() {
+    let scene = Scene::zoned(
+        vec![Item::text("esc")],
+        vec![
+            Item::icon(icon("fast_rewind")),
+            Item::icon(icon("play_pause")),
+            Item::icon(icon("fast_forward")),
+            Item::text("Now Playing - Artist").width(Width::Fixed(400.0)),
+        ],
+        vec![
+            Item::icon(icon("brightness_high")),
+            Item::icon(icon("volume_down")),
+            Item::icon(icon("volume_up")),
+            Item::text("12:34"),
+        ],
+    );
+    check("zones", &scene, &Theme::tiny_dfr());
+}
+
+#[test]
+fn overflow_shrinks_and_ellipsizes() {
+    let words = [
+        "Terminal",
+        "Files",
+        "Firefox",
+        "Settings",
+        "Calendar",
+        "Music",
+        "Photos",
+        "Mail",
+        "Calculator",
+        "Weather",
+        "Notes",
+        "Maps",
+        "Clock",
+        "Software",
+    ];
+    let mut items: Vec<Item> = words.iter().map(|w| Item::text(*w)).collect();
+    items.push(Item::text("Fill").fill(1));
+    check("overflow", &Scene::new(items), &Theme::tiny_dfr());
 }

@@ -23,12 +23,17 @@ The emoji gap is a contained follow-up (paint COLRv1 via `skrifa`'s `ColorPainte
 or bundle a CBDT/SVG emoji set). Everything else favors pure Rust, especially invariants 1 and 4.
 
 ## Shape of `sliver-render`
-- `layout_row(width, height, stretches, spacing, margin_y) -> Vec<Rect>`: tiny-dfr-compatible
-  geometry. **`hit_test` uses the same rects**, so sliverd's touch handling can't drift from what's
-  drawn. Gaps between buttons are split down the middle and the full bar height is touchable.
-- `Scene { items: Vec<Item> }`, `Item { content: Spacer|Blank|Text|Icon|IconText, stretch, pressed,
-  background, foreground }`. This is a *resolved frame*, not config. `sliver-config` (and the IPC)
-  produce it.
+- `Renderer::layout(scene, theme, w, h) -> Vec<Rect>` measures `Auto` content and calls the pure
+  `solve()`: zones (Esc | Main grows | Controls) of items with `Width::Auto | Fixed(px) | Fill(n)`
+  (H6). `Fill(n)` spans n slots plus the gaps between them, so all-`Fill` rows reproduce tiny-dfr's
+  `Stretch` geometry. Leftover space goes to `Fill`, otherwise to the end of growing zones. On
+  overflow (ux.md §4), `Fill` compresses to `min_width`, then the widest items are capped at a
+  common width like a tab strip, and labels shrink and then ellipsize. Use the **same rects** for IPC
+  key/agent regions so touch can't drift from what's drawn (`hit_test` splits gaps down the middle).
+- `Scene { zones: Vec<Zone{items, grow}> }`, `Item { content: Spacer|Blank|Text|Icon|IconText,
+  width, pressed, background, foreground }`. This is a *resolved frame*, not config. The agent
+  builds it from sliver-config's resolved layout plus live widget state. The IPC's `pressed`
+  image is the same scene with every item `pressed`.
 - `Theme`: colors, radius, spacing, margins, icon size, font. `Theme::tiny_dfr()` is the default and
   matches tiny-dfr 0.3.7's look. A sliver default theme is a taste question for later.
 - `Renderer` keeps font, glyph and shaped-label caches. Full 2008x60 frame: ~1.3 ms cold, ~0.4 ms

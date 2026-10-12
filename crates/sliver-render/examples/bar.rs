@@ -2,21 +2,26 @@
 //!
 //! ```text
 //! cargo run -p sliver-render --example bar -- out.png esc F1 F2 icon:play_pause x3:Hello! - _
+//! cargo run -p sliver-render --example bar -- out.png esc '|' icon:play_pause 'Song' '|' 12:34
 //! ```
 //! Each item is a label, `icon:NAME` (built-in) or `icon:/path/to.svg`, `-` (spacer) or `_` (blank
-//! button). Prefix `xN:` to stretch, `!` suffix to show pressed. `--system-fonts` uses installed
-//! fonts (with fallback) instead of only the embedded one. `--size WxH` changes the bar size.
+//! button). Items are `Auto` width; prefix `xN:` for `Fill(N)` or `pN:` for `Fixed(N px)`. A `!`
+//! suffix shows it pressed. `|` splits Esc | Main | Controls zones. `--system-fonts` uses
+//! installed fonts (with fallback) instead of only the embedded one. `--size WxH` sets the bar size.
 
 use std::time::Instant;
 
-use sliver_render::{Content, Fonts, Icon, Item, Renderer, Scene, Theme};
+use sliver_render::{Content, Fonts, Icon, Item, Renderer, Scene, Theme, Width};
 
 fn parse_item(arg: &str) -> Item {
-    let (stretch, rest) = match arg.split_once(':') {
+    let (width, rest) = match arg.split_once(':') {
         Some((n, rest)) if n.starts_with('x') && n[1..].parse::<u32>().is_ok() => {
-            (n[1..].parse().unwrap(), rest)
+            (Width::Fill(n[1..].parse().unwrap()), rest)
         }
-        _ => (1, arg),
+        Some((n, rest)) if n.starts_with('p') && n[1..].parse::<f32>().is_ok() => {
+            (Width::Fixed(n[1..].parse().unwrap()), rest)
+        }
+        _ => (Width::Auto, arg),
     };
     let (pressed, rest) = match rest.strip_suffix('!') {
         Some(r) if !r.is_empty() => (true, r),
@@ -38,7 +43,7 @@ fn parse_item(arg: &str) -> Item {
             None => Content::Text(rest.to_string()),
         },
     };
-    Item::new(content).stretch(stretch).pressed(pressed)
+    Item::new(content).width(width).pressed(pressed)
 }
 
 fn main() {
@@ -56,7 +61,15 @@ fn main() {
         eprintln!("usage: bar OUT.png [--system-fonts] [--size WxH] ITEM...");
         std::process::exit(2);
     };
-    let scene = Scene::new(items.iter().map(|a| parse_item(a)).collect());
+    let zones: Vec<Vec<Item>> = items
+        .split(|a| a == "|")
+        .map(|z| z.iter().map(|a| parse_item(a)).collect())
+        .collect();
+    let scene = match <[_; 3]>::try_from(zones) {
+        Ok([esc, main, controls]) => Scene::zoned(esc, main, controls),
+        Err(zones) if zones.len() == 1 => Scene::new(zones.into_iter().next().unwrap()),
+        Err(_) => panic!("use 0 or 2 '|' separators (Esc | Main | Controls)"),
+    };
     let fonts = if system {
         Fonts::system()
     } else {
