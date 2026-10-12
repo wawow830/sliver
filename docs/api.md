@@ -56,6 +56,12 @@ Rules, layers and layout resolution all happen in the agent. sliverd only knows 
   The agent always draws a ✕ on it. Modal ends on ✕, on focus loss, or when the app hides the context.
 - **Items** are declarative (button, toggle, slider, …). The agent renders them, does hit-testing and
   gesture recognition, and sends **events** back to the owner. Apps never draw pixels.
+- **Published items are modules** (GOAL.md design principle, waybar model). Each item is a module
+  instance `dbus/<provider>/<item-id>`, and a whole context is the group module `dbus/<provider>`.
+  The user treats them **exactly like built-ins**: place them in any zone of any layout (not just
+  the placeholders), style them from the stylesheet, bind any gesture to their own actions, and
+  reshape them with `format`. The placeholders are just the zero-config default. They hold
+  whatever the user hasn't placed elsewhere. Details in §3.1.
 - Contexts live exactly as long as the owner's bus connection. Persistent customization belongs in
   config (via `Control1` or the settings app), not in long-lived D-Bus objects.
 - If the agent is gone, sliverd shows its built-in safe layer (Esc, F1–F12, brightness/media).
@@ -117,8 +123,9 @@ Event(s item, s kind, a{sv} data)
 |---|---|---|
 | `tap` | `{}` | button/toggle activated (touch up inside, no other gesture recognised) |
 | `toggled` | `state` b | toggle changed (the agent flips it immediately, optimistic) |
-| `long-press` | `{}` | only if the item lists `long-press` in `gestures` |
-| `swipe` | `direction` s (`left`/`right`) | only if the item lists `swipe` in `gestures` |
+| `hold` | `{}` | long-press; only if the item lists `hold` in `gestures` |
+| `swipe-left` / `swipe-right` | `{}` | only if listed in `gestures` |
+| `double-tap` | `{}` | only if listed in `gestures` (otherwise taps aren't delayed) |
 | `value` | `value` d, `phase` s (`begin`/`change`/`end`) | slider dragged (agent moves it immediately; changes coalesced to ≤ 60/s) |
 | `selected` | `index` i | segmented control |
 | `popover` | `open` b | popover opened/closed |
@@ -136,7 +143,9 @@ Each item is an `a{sv}` with required `id` (s, unique in the context) and `type`
 
 Common props: `label` s · `icon` s (XDG icon name; `-symbolic` icons are recoloured) ·
 `icon-data` ay (PNG or SVG bytes, ≤ 256 KiB) · `enabled` b · `visible` b ·
-`fg` / `bg` s (`#rrggbb[aa]`, may be overridden by the theme) · `width` a{sv} (`min`, `max` in
+`classes` as (stylesheet classes, like waybar's `class` output: `["connected"]`) ·
+`values` a{sv} (named values for the user's `format` string, see §3.1) ·
+`fg` / `bg` s (`#rrggbb[aa]`, **hints** that the user's stylesheet overrides) · `width` a{sv} (`min`, `max` in
 logical px; default: fit content) · `priority` i (higher survives overflow; NSTouchBar
 visibilityPriority) · `gestures` as · `a11y-label` s · `customizable` b (user may hide/reorder it;
 default true).
@@ -157,6 +166,22 @@ Reserved for later minors: `scrubber`, `color-picker`, `image`. Unknown types ar
 
 Labels are plain text (no markup), control characters stripped, truncated to 64 chars.
 Emoji are just text.
+
+### 3.1 Published items are first-class modules
+Everything a config-defined module can do, a published item can do too. The vocabulary is shared
+with the config schema (T11/T20/T21/T22, owned by elm and the config peers). This is the D-Bus side of it.
+
+| waybar-style feature | for a published item |
+|---|---|
+| module id | `dbus/<provider>/<item-id>` (the group module `dbus/<provider>` is the whole context). Configure it under that id like any module. |
+| placement | the user can put the id in any zone or layer. Placed items leave the placeholders. Not placed → App controls / Status items. |
+| `format`, `format-icons`, `states` | applied to the item's `values`. The defaults are `text` (= `label`), `icon`, `percentage` (0–100), `alt`, `tooltip`, and any app-defined key. With no user `format`, `label`/`icon` render as published. |
+| stylesheet | selectors match the module id, the type class (`.button`, `.slider`, …), `.dbus`, `.app`/`.status`, the item's `classes`, and states `:active` (pressed), `:checked` (toggle on), `:disabled`, `:focused-app`. |
+| gesture bindings (`on-tap`, `on-hold`, `on-swipe-left/right`, `on-drag`, …) | a user binding **replaces** the app's `Event` for that gesture. With `pass-through = true` the event is also sent. Unbound gestures behave as published. |
+| show/hide, signal | `Control1.Show/Hide/Toggle` work on these ids. `Signal(n)` sends `Event("", "signal", {n: u})` to every context whose user config sets `signal = n`. |
+
+So `values` is how apps let the user restyle *content*: a VPN client publishing
+`values = {state: "connected", percentage: 80}` gets `format = "{state} {percentage}%"` for free.
 
 ## 4. Focus, priority and permissions
 
@@ -213,6 +238,16 @@ Preview(s layout_toml, u timeout_ms)       show on the real bar, auto-revert (se
 RenderPreview(s layout_toml, a{sv} options) -> (ay png)   same renderer, for on-screen WYSIWYG
 SetVariable(s name, v value)        user variables usable in context conditions ("per state" layouts)
 ListContexts() -> (aa{sv})          provider, title, scope, on-screen; for the settings app
+
+# Modules (waybar parity: `pkill -RTMIN+N waybar` and friends). `module` = any module id, built-in,
+# config-defined (`custom/vpn`, `clock#2`) or published (`dbus/<provider>/<item>`).
+Signal(u n)                         like RTMIN+n: re-run every module with `signal = n`
+Refresh(s module)                   re-run/re-read one module now
+Show(s module)  Hide(s module)  Toggle(s module)    runtime visibility, not persisted; ResetVisibility()
+Trigger(s module, s gesture)        fire the module's binding for `tap`/`hold`/… as if touched
+Update(s module, a{sv} output)      push output to an exec-less custom module: same keys as script JSON
+                                    output (text, icon, class, percentage, alt, tooltip)
+ListModules() -> (aa{sv})           id, type, source (builtin/config/dbus), visible, on-screen, zone, layer
 ```
 Properties: `ActiveLayer` s, `Layers` as, `ActiveProfile` s, `Profiles` as, `Variables` a{sv}, `Healthy` b
 (agent connected to sliverd and driving the bar).
@@ -346,10 +381,16 @@ busctl --user call io.github.wawow830.Sliver "$ctx" io.github.wawow830.Sliver.Co
 # prints one event per line) or the Python example.
 ```
 
-`sliverctl` (planned):
+`sliverctl` (planned, T14). Every `Control1` method is one subcommand:
 ```sh
 sliverctl publish --scope status --provider org.example.Hello button:hi:Hello |
   while read -r item kind _; do notify-send "$item $kind"; done
+sliverctl signal 8                       # waybar: pkill -RTMIN+8 waybar
+sliverctl refresh custom/vpn
+sliverctl toggle dbus/org.example.Hello/hi
+sliverctl trigger clock tap
+sliverctl update custom/status text='build ✓' class=ok
+sliverctl layer media | reload | var set focus_mode true | modules
 ```
 
 ## 9. Prior art and what we took

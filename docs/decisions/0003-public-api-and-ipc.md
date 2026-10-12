@@ -33,6 +33,12 @@ because these are the only interfaces other people's code will depend on.
    (F1–F12, plus Esc if there's no physical Esc, must exist as key regions in base ∪ fn, else the built-in fn layer is substituted);
    strict validation; `KEY_SYSRQ` refused; only the active seat0 session's uid can drive the bar.
 
+7. **Published items are first-class modules** (GOAL.md design principle, added after the human's
+   waybar direction). Each one has a module id `dbus/<provider>/<item-id>`, is placeable anywhere,
+   and is styled by the user's stylesheet (`classes`, states). Its content is reshaped by user `format`
+   over app-supplied `values`, and user gesture bindings replace app events. `Control1` carries the
+   waybar-style controls (`Signal`, `Refresh`, `Show`/`Hide`/`Toggle`, `Trigger`, `Update`).
+
 ## Consequences
 - The agent needs a renderer (ADR-0002) able to produce `xrgb8888` frames and a "pressed" variant.
   sliverd needs one too, for the safe layer only.
