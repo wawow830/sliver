@@ -164,8 +164,12 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 ```
 
 - The condition builder has the pickers **App** (from running windows and .desktop files),
-  **Window title** (contains/regex), **Workspace**, **Monitor**, and **State** (media playing,
-  locked, on battery, battery < N%, fullscreen, DND, external display connected, time range).
+  **Window title** (contains/regex), **Workspace** (incl. special/scratchpad), **Monitor**, **Mode** (compositor submap,
+  e.g. Hyprland resize mode), **Keyboard layout**, and **State** (media playing/paused, locked,
+  idle, on battery, battery < N%, power profile, fullscreen, floating, screen sharing, DND,
+  caffeine, mic muted, external display connected, time range). These map 1:1 onto the agent's
+  flat context keys (docs/integration.md §1). The UI never shows a condition the current
+  backend can't report: it greys it out with "not available on ‹DE›".
   Conditions combine with *all of* / *any of*. One level only, with no nested boolean trees in
   the UI. Hand-written TOML can do more.
 - "Active now" marks the winning rule. Clicking it explains why: "Firefox matched; Terminals
@@ -175,6 +179,9 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 - **Locked screen** layout: the default contents are brightness, volume and media controls, plus Esc on bars with no physical Esc.
   App controls, script widgets and notification text are **never** shown while locked, whatever
   the layout says (privacy).
+- **Screen sharing** (`screencast`): notification text is hidden while a screencast is active.
+  This is a default rule that users can remove, because a shared screen doesn't show the bar
+  but a camera or a person sitting next to you can.
 
 ## 6. Apps (published items)
 
