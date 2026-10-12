@@ -211,7 +211,16 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 - The collapsible control strip in the default config is just `group/control-strip`. Nothing
   about it is hard-coded.
 
-## 4. User modules (`custom/*`): the runtime contract (T21 implements)
+## 4. User modules (`custom/*`): the runtime contract (`crates/sliver-modules`)
+
+Runtime behavior: `Runtime::start(specs)` gives one thread per module with an `exec`, asleep on a
+channel until its deadline, a trigger (`update MODULE`, `exec-on-event`) or a signal
+(`forward_realtime_signals`). Updates are sent only when the output changed. `set_active(false)`
+(display off, screen locked) arms no timers at all and `set_active(true)` re-runs everything
+once. Commands run as `sh -c` in their own process group (a timeout kills the whole tree), never
+as root, with `no_new_privs`, no stdin and at most 64 KiB of output. A failed run shows `!` with
+the `error` class and the last stderr line as the detail. Continuous scripts restart after
+`restart-interval` (min 1 s), doubling up to 60 s while they keep dying quickly.
 
 | Key | waybar | Meaning |
 |---|---|---|
