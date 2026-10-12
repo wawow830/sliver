@@ -279,8 +279,18 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
 - The preview runs the agent's own pipeline (`sliver_agent::Agent`, offline) for the chosen layer
   and simulated context, so it's pixel-identical to the bar. Sample values for data-backed
   modules and dashed empty placeholders depend on ash's `World.preview` (asked).
-- Next slices: editing via `sliver_config::Editor` (instant apply + undo, Q3), drag and drop
-  from a Library, the inspector, live agent/daemon status over D-Bus, and Mirror to Touch Bar.
+- **Slice 2 (T39), editing:** each zone has a **+** Library popover (or type any module reference).
+  Modules can be moved, removed, and opened in an **inspector** (format, icon, width, on-tap,
+  on-hold, when; each field applies on its own). **Customize for app…** creates
+  `layouts.<app>` extending the shown layout, plus a rule at the top. Every edit is instant: the
+  app validates it, writes the file atomically, shows a toast with **Undo**, and the agent
+  hot-reloads. Editing a zone that comes from the built-ins or an include first copies the
+  layout's whole effective zone list into the user's file, because arrays replace (ADR-0004 #6).
+  An inherited zone becomes an override (Q5). If the active config is a system file, the new
+  user file `include`s it. The logic lives in `src/edit.rs` and is unit-tested.
+- Next slices: drag and drop on the preview (the agent's `Frame.layout` rects give hit-testing),
+  a rules editor, live agent/daemon status over D-Bus, and Mirror to Touch Bar.
 - **Testing headless** (never on the live session): `gtk4-broadwayd :7 &` then
-  `GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`, and open
+  `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`
+  (a sandboxed config dir, so edits never touch yours), and open
   `http://127.0.0.1:8087` in a browser (agent-browser can screenshot it).

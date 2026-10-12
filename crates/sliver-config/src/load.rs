@@ -21,6 +21,9 @@ pub struct Loaded {
     pub diagnostics: Diagnostics,
     /// Every file that went into this config, to watch for hot reload.
     pub files: Vec<PathBuf>,
+    /// The merged raw table (built-ins + includes + file) that `config` was parsed from. Editors
+    /// use it to copy effective values (e.g. a built-in layout's zones) into the user's file.
+    pub merged: Table,
 }
 
 /// The config search path, first found wins: `$XDG_CONFIG_HOME/sliver`, `~/.config/sliver`,
@@ -83,6 +86,7 @@ fn finish(tree: Table, mut d: Diagnostics, files: Vec<PathBuf>) -> Loaded {
         config,
         diagnostics: d,
         files,
+        merged,
     }
 }
 

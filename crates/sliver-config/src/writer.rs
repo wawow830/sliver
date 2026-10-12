@@ -206,6 +206,33 @@ impl Editor {
         Ok(())
     }
 
+    /// Sets `path` to an array of tables written as `[[path]]` sections (zones, rules), not an
+    /// inline array. The parent must be a section table.
+    pub fn set_tables(&mut self, path: &str, tables: &[toml::Table]) -> Result<(), String> {
+        // Write a placeholder through `set` (which creates parents), then swap in the sections.
+        self.set(path, &Value::Array(Vec::new()))?;
+        let segs = parse_path(path)?;
+        let mut item = self.doc.as_item_mut();
+        for s in &segs[..segs.len() - 1] {
+            item = step_mut(item, s, Create::No).ok_or("parent vanished")?;
+        }
+        let Some(Seg::Key(k)) = segs.last() else {
+            return Err("set_tables needs a key path".into());
+        };
+        let parent = item.as_table_mut().ok_or_else(|| {
+            format!("{path}: [[sections]] need a section parent, not an inline table")
+        })?;
+        let mut aot = toml_edit::ArrayOfTables::new();
+        for t in tables {
+            let Item::Table(section) = to_item(&Value::Table(t.clone()), true) else {
+                return Err("tables only".into());
+            };
+            aot.push(section);
+        }
+        parent.insert(k, Item::ArrayOfTables(aot));
+        Ok(())
+    }
+
     /// Removes `path`. Returns whether something was there.
     pub fn remove(&mut self, path: &str) -> Result<bool, String> {
         let segs = parse_path(path)?;
@@ -335,12 +362,17 @@ fn to_item(v: &Value, section_ok: bool) -> Item {
     }
 }
 
-/// A value as inline TOML.
-pub(crate) fn inline(v: &Value) -> String {
+/// A value as inline TOML (`{ key = "F5" }`, `[1, 2]`, `"text"`), e.g. to show it in a text field.
+pub fn inline(v: &Value) -> String {
     match v {
         Value::Table(t) => {
-            let parts: Vec<String> = t
+            // `name` and `type` first: zones and inline modules read better that way.
+            let first = ["name", "type"];
+            let ordered = first
                 .iter()
+                .filter_map(|k| t.get_key_value(*k))
+                .chain(t.iter().filter(|(k, _)| !first.contains(&k.as_str())));
+            let parts: Vec<String> = ordered
                 .map(|(k, v)| format!("{} = {}", key_str(k), inline(v)))
                 .collect();
             if parts.is_empty() {
@@ -546,6 +578,35 @@ layout = "fkeys"
             Some(Value::String("media".into()))
         );
         assert!(e.text().contains("# clock tweaks"));
+    }
+
+    #[test]
+    fn arrays_of_tables() {
+        let mut e = Editor::parse("version = 1\n# keep me\n").unwrap();
+        let zone = |name: &str| {
+            let mut t = toml::Table::new();
+            t.insert("name".into(), name.into());
+            t.insert("modules".into(), Value::Array(vec!["clock".into()]));
+            t
+        };
+        e.set_tables("layouts.slim.zones", &[zone("main"), zone("right")])
+            .unwrap();
+        let t = e.text();
+        assert!(
+            t.contains("[[layouts.slim.zones]]\nname = \"main\"\nmodules = [\"clock\"]"),
+            "{t}"
+        );
+        assert!(t.contains("# keep me"));
+        assert_eq!(
+            e.get("layouts.slim.zones[1].name").unwrap(),
+            Some(Value::String("right".into()))
+        );
+        e.set_tables("layouts.slim.zones", &[zone("only")]).unwrap();
+        assert_eq!(
+            e.get("layouts.slim.zones[1]").unwrap(),
+            None,
+            "replaced, not appended"
+        );
     }
 
     #[test]
