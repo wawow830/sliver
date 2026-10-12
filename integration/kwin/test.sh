@@ -4,4 +4,4 @@
 # Needs: kwin_wayland (Plasma 6), dbus-run-session, python3-gobject, kitty (any Wayland client).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-exec dbus-run-session -- bash "$here/test-inner.sh" "$here"
+exec dbus-run-session --config-file="$here/session.conf" -- bash "$here/test-inner.sh" "$here"
