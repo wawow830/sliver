@@ -22,7 +22,9 @@ done
 
 name=sliver
 version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
-snapshot="$(date -u +%Y%m%d)git$(git rev-parse --short HEAD)"
+# date.commitcount.githash: the count keeps same-day builds increasing for `dnf upgrade` (the hash
+# alone compares alphabetically).
+snapshot="$(date -u +%Y%m%d).$(git rev-list --count HEAD).git$(git rev-parse --short HEAD)"
 top="$PWD/target/rpmbuild"
 mkdir -p "$top"/{SOURCES,SPECS,SRPMS,RPMS,BUILD}
 
