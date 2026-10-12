@@ -71,6 +71,17 @@ if command -v node >/dev/null; then
   done
 fi
 
+# The Chromium extension's id comes from the public "key" in its manifest. The system
+# native-messaging manifest must allow exactly that id (T108), or the packaged host won't connect.
+python3 - <<'PY'
+import base64, hashlib, json
+key = json.load(open("integration/browser/extension/manifest.chromium.json"))["key"]
+h = hashlib.sha256(base64.b64decode(key)).hexdigest()[:32]
+ext_id = "".join(chr(ord("a") + int(c, 16)) for c in h)
+allowed = json.load(open("integration/browser/native/io.github.wawow830.sliver_browser.chromium.json"))["allowed_origins"]
+assert f"chrome-extension://{ext_id}/" in allowed, f"chromium native manifest must allow {ext_id}"
+PY
+
 # Nothing the checks started may outlive them: orphaned test daemons and helpers pile up on the
 # human's machine (T47). Lists and kills leftovers, then fails.
 echo "== no orphaned processes"

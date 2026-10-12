@@ -83,6 +83,21 @@ Requires:       sliver-agent = %{version}-%{release}
 %description -n sliver-settings
 GTK4/libadwaita settings app with a live WYSIWYG editor for Touch Bar layouts.
 
+# Not noarch: Firefox's system manifest directory is %%{_libdir}/mozilla/native-messaging-hosts.
+%package -n sliver-browser
+Summary:        Touch Bar tabs and navigation for Firefox and Chromium (Sliver)
+License:        %{sliver_license}
+Requires:       sliver-agent = %{version}-%{release}
+Requires:       python3
+Requires:       python3-gobject-base
+Requires:       mozilla-filesystem
+
+%description -n sliver-browser
+The native-messaging host and browser extension that give the focused Firefox or Chromium window
+Touch Bar controls: back, forward, reload, new tab, and its tabs as a scrollable strip. The host
+publishes them through Sliver's public D-Bus API. Load the extension from
+%{_datadir}/sliver/browser (see the README there).
+
 %prep
 %autosetup -n %{name}-%{version} -p1 -a1
 %cargo_prep -v vendor
@@ -98,6 +113,23 @@ install -Dpm0755 target/rpm/sliverd %{buildroot}%{_libexecdir}/sliverd
 install -Dpm0755 target/rpm/sliver-agent %{buildroot}%{_bindir}/sliver-agent
 install -Dpm0755 target/rpm/sliverctl %{buildroot}%{_bindir}/sliverctl
 install -Dpm0755 target/rpm/sliver-settings %{buildroot}%{_bindir}/sliver-settings
+# Browser integration (T106/T108): host, per-browser native-messaging manifests, and ready-to-load
+# extension folders (what integration/browser/install.sh builds for a checkout).
+install -Dpm0755 integration/browser/host/sliver-browser-host %{buildroot}%{_libexecdir}/sliver-browser-host
+nm=io.github.wawow830.sliver_browser
+install -Dpm0644 integration/browser/native/$nm.firefox.json \
+    %{buildroot}%{_libdir}/mozilla/native-messaging-hosts/$nm.json
+for d in %{_sysconfdir}/chromium %{_sysconfdir}/opt/chrome; do
+    install -Dpm0644 integration/browser/native/$nm.chromium.json \
+        %{buildroot}$d/native-messaging-hosts/$nm.json
+done
+for b in firefox chromium; do
+    install -Dpm0644 integration/browser/extension/background.js \
+        %{buildroot}%{_datadir}/sliver/browser/$b/background.js
+    install -Dpm0644 integration/browser/extension/manifest.$b.json \
+        %{buildroot}%{_datadir}/sliver/browser/$b/manifest.json
+done
+install -Dpm0644 integration/browser/README.md %{buildroot}%{_datadir}/sliver/browser/README.md
 
 install -Dpm0644 packaging/systemd/sliverd.service %{buildroot}%{_unitdir}/sliverd.service
 install -Dpm0644 packaging/systemd/sliverd.socket %{buildroot}%{_unitdir}/sliverd.socket
@@ -224,6 +256,20 @@ fi
 %{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
 # Opens .sliver presets (shared-mime-info's file trigger updates the MIME cache).
 %{_datadir}/mime/packages/io.github.wawow830.Sliver.xml
+
+%files -n sliver-browser
+%license LICENSE-MIT LICENSE-APACHE
+%{_libexecdir}/sliver-browser-host
+%{_libdir}/mozilla/native-messaging-hosts/io.github.wawow830.sliver_browser.json
+# Shared directory ownership, like gnome-browser-connector and other native-messaging hosts.
+%dir %{_sysconfdir}/chromium
+%dir %{_sysconfdir}/chromium/native-messaging-hosts
+%{_sysconfdir}/chromium/native-messaging-hosts/io.github.wawow830.sliver_browser.json
+%dir %{_sysconfdir}/opt/chrome
+%dir %{_sysconfdir}/opt/chrome/native-messaging-hosts
+%{_sysconfdir}/opt/chrome/native-messaging-hosts/io.github.wawow830.sliver_browser.json
+%dir %{_datadir}/sliver
+%{_datadir}/sliver/browser
 
 %changelog
 * Mon Oct 12 2026 hazel <hazel@sliver.invalid> - 0.1.0-0.1

@@ -3,12 +3,13 @@
 #
 #   integration/browser/install.sh [CHROMIUM_EXTENSION_ID]
 #
-# - registers the native-messaging host for Firefox and (if an extension id is given) for
-#   Chromium, Chrome and Brave, pointing at integration/browser/host/sliver-browser-host;
+# - registers the native-messaging host for Firefox, Chromium, Chrome and Brave, pointing at
+#   integration/browser/host/sliver-browser-host. The Chromium extension's id is pinned by the
+#   "key" in manifest.chromium.json; pass another id to allow a differently signed build;
 # - writes ready-to-load extension folders to integration/browser/build/{firefox,chromium}.
 # Then load the extension: Firefox: about:debugging → This Firefox → Load Temporary Add-on →
 # build/firefox/manifest.json. Chromium: chrome://extensions → Developer mode → Load unpacked →
-# build/chromium (copy the id it shows and run this script again with it).
+# build/chromium.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 host="$here/host/sliver-browser-host"
@@ -26,11 +27,11 @@ sed "s|/usr/libexec/sliver-browser-host|$host|" "$here/native/$name.firefox.json
 	>"$HOME/.mozilla/native-messaging-hosts/$name.json"
 echo "Firefox: host registered"
 
-if [ $# -ge 1 ]; then
-	for d in chromium google-chrome BraveSoftware/Brave-Browser; do
-		mkdir -p "$cfg/$d/NativeMessagingHosts"
-		sed -e "s|/usr/libexec/sliver-browser-host|$host|" -e "s|EXTENSION_ID|$1|" \
-			"$here/native/$name.chromium.json" >"$cfg/$d/NativeMessagingHosts/$name.json"
-	done
-	echo "Chromium, Chrome, Brave: host registered for extension $1"
-fi
+pinned=hpboafjdkdmpjgbibkheonlggchjhcgm # from the "key" in extension/manifest.chromium.json
+id=${1:-$pinned}
+for d in chromium google-chrome BraveSoftware/Brave-Browser; do
+	mkdir -p "$cfg/$d/NativeMessagingHosts"
+	sed -e "s|/usr/libexec/sliver-browser-host|$host|" -e "s|$pinned|$id|" \
+		"$here/native/$name.chromium.json" >"$cfg/$d/NativeMessagingHosts/$name.json"
+done
+echo "Chromium, Chrome, Brave: host registered for extension $id"

@@ -3,7 +3,13 @@
   "name": "Sliver Touch Bar",
   "version": "0.1.0",
   "description": "Tabs, back, forward and reload on the Touch Bar of Linux Macs running Sliver.",
-  "permissions": ["tabs", "nativeMessaging"],
-  "background": { "service_worker": "background.js" },
-  "minimum_chrome_version": "105"
+  "permissions": [
+    "tabs",
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "minimum_chrome_version": "105",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuJ3zZL4TgK+TyFWGni1OfDPXedrwqmOK+sELGygrtHspmIvqFQoQxboH9veo3QSaJsdyDLeO1RUXOaUsnAMRjxoUr4VzUVzIQXbhdJkz3gXfg3w8aJ1HONlCuTDKzrUcomb7nfnr5CY8cj0T+UzR+Z89xrQL1Ilewu5KpU1Hux0OR01T7IXuvYmIlwfdunbN9+7kDdOHtaBeSkBm5MElGMvhCA5xTNx1SGeAs9zUWqb/yBtcwQXl9JRruNdgwXRWc9JxPv7JQjdUQpc8Xdwe4OvrunwHaxKZodKwYUvP76xlXeRCCWyPgbOboJwRErVvwJoh7HPb09wMsOk36MaCpQIDAQAB"
 }

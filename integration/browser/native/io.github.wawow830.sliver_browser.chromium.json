@@ -3,5 +3,7 @@
   "description": "Sliver Touch Bar browser integration",
   "path": "/usr/libexec/sliver-browser-host",
   "type": "stdio",
-  "allowed_origins": ["chrome-extension://EXTENSION_ID/"]
+  "allowed_origins": [
+    "chrome-extension://hpboafjdkdmpjgbibkheonlggchjhcgm/"
+  ]
 }
