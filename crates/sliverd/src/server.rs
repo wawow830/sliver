@@ -207,9 +207,21 @@ impl Server {
         let mut queue = vec![input];
         while let Some(input) = queue.pop() {
             let now = self.now();
-            for out in self.daemon.handle(now, input) {
+            let before = crate::log::enabled().then(|| self.snapshot());
+            if crate::log::enabled() {
+                log_input(&input);
+            }
+            let outs = self.daemon.handle(now, input);
+            if let Some(before) = before {
+                let after = self.snapshot();
+                if after != before {
+                    crate::debug!("state {after}");
+                }
+            }
+            for out in outs {
                 match out {
                     Out::Send(client, msg) => {
+                        crate::debug!("-> {} {}", client.0, describe_daemon(&msg));
                         let Some(conn) = self.conns.get(&client) else {
                             continue;
                         };
@@ -220,11 +232,82 @@ impl Server {
                         }
                     }
                     Out::Close(client) => {
+                        crate::debug!("close {}", client.0);
                         self.conns.remove(&client);
                     }
                 }
             }
         }
+    }
+}
+
+impl Server {
+    /// One line of the state worth logging when it changes.
+    fn snapshot(&self) -> String {
+        let d = &self.daemon;
+        format!(
+            "view={:?} display={:?} hatch={} agent={:?} drives={}",
+            d.shown_view(),
+            d.display_state(),
+            d.hatch_active(),
+            d.active_client().map(|c| c.0),
+            d.agent_drives()
+        )
+    }
+}
+
+fn log_input(input: &Input) {
+    match input {
+        Input::Connected { client, uid } => crate::debug!("connect {} uid {uid}", client.0),
+        Input::Packet { client, msg, fd } => {
+            let what = match msg {
+                Ok(m) => describe_agent(m),
+                Err(e) => format!("bad packet: {e}"),
+            };
+            let fd = match fd {
+                Attachment::None => "",
+                Attachment::Buffer(_) => " +fd",
+                Attachment::Rejected(_) => " +bad fd",
+                Attachment::WrongCount => " +wrong fd count",
+            };
+            crate::debug!("<- {} {what}{fd}", client.0);
+        }
+        Input::Disconnected { client } => crate::debug!("hangup {}", client.0),
+        Input::Touch(t) => crate::debug!(
+            "touch slot {} {:?} x {:.1} y {:.1}",
+            t.slot,
+            t.phase,
+            t.x,
+            t.y
+        ),
+        Input::FnKey { held } => crate::debug!("fn {}", if *held { "down" } else { "up" }),
+        Input::Activity => {}
+        Input::Lid { closed } => crate::debug!("lid {}", if *closed { "closed" } else { "open" }),
+        Input::SessionChanged { active_uid } => crate::debug!("seat0 active uid {active_uid:?}"),
+        Input::Tick => crate::debug!("tick"),
+    }
+}
+
+fn describe_agent(m: &AgentMsg) -> String {
+    match m {
+        AgentMsg::Present(p) => format!(
+            "present #{} {:?} image {} pressed {:?} {} regions",
+            p.serial,
+            p.layer,
+            p.image,
+            p.pressed,
+            p.regions.len()
+        ),
+        AgentMsg::EmitKeys { keys, mode } => format!("emit_keys {keys:?} {mode:?}"),
+        m => format!("{m:?}"),
+    }
+}
+
+fn describe_daemon(m: &sliver_ipc::DaemonMsg) -> String {
+    use sliver_ipc::DaemonMsg as D;
+    match m {
+        D::Welcome { role, proto, .. } => format!("welcome {role:?} {proto:?}"),
+        m => format!("{m:?}"),
     }
 }
 

@@ -24,10 +24,12 @@ pub mod fake;
 pub mod idle;
 pub mod ipc;
 pub mod keystate;
+pub mod log;
 pub mod profile;
 pub mod real;
 pub mod server;
 pub mod session;
+#[cfg(feature = "testing")]
 pub mod testing;
 
 pub use daemon::{ClientId, Config, Daemon, Input, Out, View};

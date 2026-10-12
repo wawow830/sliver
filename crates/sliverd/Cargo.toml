@@ -17,3 +17,11 @@ sliver-render.workspace = true
 rustix.workspace = true
 serde.workspace = true
 toml.workspace = true
+
+[features]
+# sliverd::testing::TestDaemon for other crates' tests (the agent's). The daemon binary never needs it.
+testing = []
+
+[dev-dependencies]
+# This crate's own tests use the testing module.
+sliverd = { path = ".", features = ["testing"] }

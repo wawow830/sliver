@@ -1672,6 +1672,7 @@ dependencies = [
  "sliver-hw",
  "sliver-ipc",
  "sliver-render",
+ "sliverd",
  "toml",
 ]
 

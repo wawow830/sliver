@@ -30,6 +30,9 @@ conn per wakeup. A conn whose socket won't take a reply is dropped. Received fds
   `SLIVER_SAFESWAP=1` the socket defaults to `$SLIVER_OUT_DIR/sliverd.sock`, and sliverd exits on its
   own 2 s before `SLIVER_SAFESWAP_SECONDS`. `--exit-after S` does the same anywhere. The backlight fd
   comes from `OpenFile=` (name `backlight`), so production sliverd needs no root for it either.
+- **Debug log**: `-v` or `SLIVER_LOG=debug` logs every input (touch phase/slot/x/y, Fn, lid, seat0 uid),
+  agent traffic both ways, state changes (view, display, hatch, driving agent), key emits, flushes (spans
+  and ms) and backlight writes, with timestamps. Harness runs check themselves from `sliverd.log`.
 - **Dev mode**: `sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH]` serves the real
   IPC with fake hardware. Point an agent at it, and `--frame-png` is rewritten on every panel flush.
 
@@ -85,7 +88,7 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
   keys (a known edge: a finger and the agent both holding Ctrl).
 
 ## TestDaemon (`testing.rs`)
-`sliverd::testing::TestDaemon` is the real core in-process on fake hardware, over a real socket pair.
+`sliverd::testing::TestDaemon` (feature `testing`, so the daemon binary doesn't link it) is the real core in-process on fake hardware, over a real socket pair.
 It's API-compatible with `sliver_ipc::fake::FakeDaemon` (cedar's suite runs unchanged in
 `tests/testing.rs`, and so do the agent's e2e tests with an alias import). Extras: `frame()` (the bar
 as a pixmap, incl. pressed feedback and hatch), `advance(ms)` (simulated time), `daemon()`, and

@@ -8,7 +8,8 @@
 //!     Serve the real IPC socket with fake hardware: develop and test the agent without a bar.
 //!     The active uid defaults to your own. --frame-png rewrites a PNG on every panel flush.
 //! PANEL: [--width 2008] [--model Mac14,7] [--max-brightness 255]
-//! --backend real|fake (= --fake-hardware), --exit-after SECONDS.
+//! --backend real|fake (= --fake-hardware), --exit-after SECONDS, -v (or SLIVER_LOG=debug): log
+//! touches, keys, Fn/lid, layer/display/hatch changes, flushes, backlight and agent traffic.
 //! Under the safe-swap harness (SLIVER_SAFESWAP=1) the socket defaults to $SLIVER_OUT_DIR/sliverd.sock
 //! and sliverd exits 2 s before SLIVER_SAFESWAP_SECONDS.
 //! ```
@@ -63,6 +64,9 @@ fn main() {
     if args.flag("--version") || args.flag("-V") {
         println!("sliverd {}", env!("CARGO_PKG_VERSION"));
         return;
+    }
+    if args.flag("-v") || args.flag("--verbose") || sliverd::log::from_env() {
+        sliverd::log::enable();
     }
     let width = args.parse("--width", 2008u32);
     let max_brightness = args.parse("--max-brightness", 255u32);
@@ -135,7 +139,7 @@ fn main() {
     let mut server = if fake {
         let hw = FakeHardware::new(panel.width, panel.height);
         hw.display.set_png_output(frame_png);
-        let daemon = Daemon::new(hw.backends(), panel, &config, None, 0);
+        let daemon = Daemon::new(backends(hw.backends()), panel, &config, None, 0);
         let session = FixedSession::new(Some(uid)).unwrap_or_else(|e| die(&e.to_string()));
         eprintln!("sliverd: serving with fake hardware, active uid {uid}");
         Server::new(daemon, listener, Vec::new(), Box::new(session), clock)
@@ -153,7 +157,7 @@ fn main() {
             "sliverd: {}x{} panel, model {}",
             panel.width, panel.height, panel.model
         );
-        let daemon = Daemon::new(hw.backends, panel, &config, None, 0);
+        let daemon = Daemon::new(backends(hw.backends), panel, &config, None, 0);
         let session = SeatWatch::new(LOGIND_SEATS, "seat0")
             .unwrap_or_else(|e| die(&format!("watching {LOGIND_SEATS}: {e}")));
         Server::new(
@@ -179,6 +183,15 @@ fn main() {
     };
     if let Err(e) = res {
         die(&format!("event loop: {e}"));
+    }
+}
+
+/// With `-v`/`SLIVER_LOG=debug`, every flush, key and backlight write is logged.
+fn backends(b: sliverd::backend::Backends) -> sliverd::backend::Backends {
+    if sliverd::log::enabled() {
+        sliverd::log::wrap(b)
+    } else {
+        b
     }
 }
 
