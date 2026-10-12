@@ -54,6 +54,20 @@ pub struct Cell {
     pub on: Vec<(Gesture, Action)>,
     /// When this cell's content changes next on its own (clock ticks), if ever.
     pub next_change: Option<DateTime<Local>>,
+    /// Being touched (agent regions; sliverd draws key regions' feedback itself).
+    pub pressed: bool,
+    /// A toggle that is on (`:checked`).
+    pub checked: bool,
+    /// This cell is the handle of a drawer group: tapping it opens/closes the group.
+    pub drawer: Option<Drawer>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Drawer {
+    /// The group's key (for [`UiState::expanded`]).
+    pub group: String,
+    /// Close again this long after opening (`drawer.collapse-after`).
+    pub collapse_after: Option<std::time::Duration>,
 }
 
 /// Builds the cells for one zone's modules. Hidden modules produce nothing; groups flatten.
@@ -95,6 +109,21 @@ fn cells_in(
                 ui,
                 out,
             );
+            if drawer && let Some(handle) = out.get_mut(start) {
+                let collapse_after = m
+                    .config
+                    .get("drawer")
+                    .and_then(|d| d.get("collapse-after"))
+                    .and_then(|v| sliver_config::parse_duration(v).ok());
+                handle.drawer = Some(Drawer {
+                    group: key.clone(),
+                    collapse_after,
+                });
+                handle.checked = open;
+                if handle.touch == Touch::None {
+                    handle.touch = Touch::Agent;
+                }
+            }
             for c in &mut out[start..] {
                 c.classes
                     .push(format!("group-{}", m.id.name.as_deref().unwrap_or("")));
@@ -169,6 +198,9 @@ fn cell(
         touch,
         on,
         next_change,
+        pressed: false,
+        checked: false,
+        drawer: None,
     })
 }
 
@@ -305,6 +337,15 @@ mod tests {
         let keys: Vec<&str> = cells.iter().map(|c| c.key.as_str()).collect();
         assert_eq!(keys, ["group/control-strip/custom/expand", "key/Mute"]);
         assert!(cells[0].classes.contains(&"drawer-child".to_string()));
+        let d = cells[0].drawer.as_ref().unwrap();
+        assert_eq!(
+            (d.group.as_str(), d.collapse_after),
+            (
+                "group/control-strip",
+                Some(std::time::Duration::from_secs(5))
+            )
+        );
+        assert_eq!(cells[0].touch, Touch::Agent, "the handle opens the drawer");
         assert!(matches!(cells[1].content, Content::Icon(_)));
     }
 }

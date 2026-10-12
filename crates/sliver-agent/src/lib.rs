@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod frame;
+pub mod gesture;
 pub mod icons;
 pub mod link;
 pub mod modules;

@@ -18,14 +18,17 @@ pub struct Frame {
     /// The same frame with every item drawn pressed (`:active`); sliverd blits from it.
     pub pressed: Pixmap,
     pub regions: Vec<Region>,
-    /// Cells in item order. Region `id` is the cell index + 1.
+    /// Cells in item order. Region `id` is `id_base` + cell index + 1.
     pub cells: Vec<Cell>,
     pub layout: Layout,
+    pub id_base: u32,
 }
 
 impl Frame {
-    pub fn cell_for_region(&self, id: u32) -> Option<&Cell> {
-        self.cells.get((id as usize).checked_sub(1)?)
+    /// The cell index for a region id of this frame.
+    pub fn cell_index(&self, id: u32) -> Option<usize> {
+        let i = id.checked_sub(self.id_base + 1)? as usize;
+        (i < self.cells.len()).then_some(i)
     }
 }
 
@@ -62,7 +65,9 @@ pub fn scene(zones: &[ResolvedZone], cells: &[Vec<Cell>], bar_classes: Vec<Strin
                     .map(|c| {
                         let mut item = Item::new(c.content.clone())
                             .width(c.width)
-                            .id(c.css_id.clone());
+                            .id(c.css_id.clone())
+                            .pressed(c.pressed)
+                            .checked(c.checked);
                         item.classes = c.classes.clone();
                         item
                     })
@@ -80,6 +85,7 @@ pub fn render(
     cells: Vec<Cell>,
     w: u32,
     h: u32,
+    id_base: u32,
 ) -> Frame {
     let mut image = Pixmap::new(w, h).expect("non-zero panel");
     let layout = renderer.render(scene, sheet, &mut image);
@@ -87,19 +93,20 @@ pub fn render(
     all_pressed.items_mut().for_each(|i| i.pressed = true);
     let mut pressed = Pixmap::new(w, h).expect("non-zero panel");
     renderer.render(&all_pressed, sheet, &mut pressed);
-    let regions = regions(&layout, &cells, w, h);
+    let regions = regions(&layout, &cells, w, h, id_base);
     Frame {
         image,
         pressed,
         regions,
         cells,
         layout,
+        id_base,
     }
 }
 
 /// Full-height regions for touchable cells, widened into neighbouring gaps (split in the
 /// middle, at most [`REGION_SLOP`]) so they never overlap.
-fn regions(layout: &Layout, cells: &[Cell], w: u32, h: u32) -> Vec<Region> {
+fn regions(layout: &Layout, cells: &[Cell], w: u32, h: u32, id_base: u32) -> Vec<Region> {
     let rects = &layout.items;
     let mut out = Vec::new();
     for (i, (r, c)) in rects.iter().zip(cells).enumerate() {
@@ -127,7 +134,7 @@ fn regions(layout: &Layout, cells: &[Cell], w: u32, h: u32) -> Vec<Region> {
             continue;
         }
         out.push(Region {
-            id: i as u32 + 1,
+            id: id_base + i as u32 + 1,
             rect: IpcRect {
                 x: x0,
                 y: 0,

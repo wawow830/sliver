@@ -8,12 +8,15 @@
 //!   --size WxH      bar size for --render (default 2008x60)
 //! ```
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use chrono::Local;
 use rustix::event::{PollFd, PollFlags, poll};
 use sliver_agent::Agent;
+use sliver_agent::agent::Effect;
 use sliver_agent::icons::Icons;
 use sliver_agent::link::{Event, Link};
 use sliver_agent::modules::World;
@@ -188,9 +191,46 @@ fn main() {
     }
 }
 
+/// Monotonic clock in µs: the same clock sliverd stamps touches with (evdev, CLOCK_MONOTONIC).
+fn now_us() -> u64 {
+    let t = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    t.tv_sec as u64 * 1_000_000 + t.tv_nsec as u64 / 1_000
+}
+
+/// Carries out the agent's effects. Returns whether a redraw is needed.
+fn apply(effects: Vec<Effect>, link: &Link, children: &mut Vec<Child>) -> std::io::Result<bool> {
+    let mut redraw = false;
+    for e in effects {
+        match e {
+            Effect::Redraw => redraw = true,
+            Effect::EmitKeys(keys, mode) => link.emit_keys(&keys, mode)?,
+            Effect::Log(msg) => eprintln!("sliver-agent: {msg}"),
+            Effect::Spawn(argv) => {
+                let Some((prog, args)) = argv.split_first() else {
+                    continue;
+                };
+                // Own process group, so a signal to the agent doesn't take user commands down.
+                match Command::new(prog)
+                    .args(args)
+                    .stdin(Stdio::null())
+                    .process_group(0)
+                    .spawn()
+                {
+                    Ok(child) => children.push(child),
+                    Err(e) => eprintln!("sliver-agent: {prog}: {e}"),
+                }
+            }
+        }
+    }
+    // Reap whatever finished, so no zombies pile up.
+    children.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+    Ok(redraw)
+}
+
 /// Drives one sliverd connection until it closes.
 fn run(mut agent: Agent, mut link: Link) -> std::io::Result<()> {
     let mut dirty = true;
+    let mut children = Vec::new();
     loop {
         if dirty && agent.display != DisplayState::Off {
             for layer in agent.render(&world()) {
@@ -203,14 +243,23 @@ fn run(mut agent: Agent, mut link: Link) -> std::io::Result<()> {
                 .for_each(|e| eprintln!("sliver-agent: {e}"));
             dirty = false;
         }
-        // Sleep until sliverd says something or a module's content changes on its own.
-        let timeout = agent.next_change().map(|t| {
-            let ms = (t - Local::now()).num_milliseconds().max(0) + 1;
-            rustix::event::Timespec {
-                tv_sec: ms / 1000,
-                tv_nsec: (ms % 1000) * 1_000_000,
-            }
-        });
+        // Sleep until sliverd says something, a gesture/macro deadline, or a module's content
+        // changes on its own. Nothing else wakes us (invariant 3).
+        let change_ms = agent
+            .next_change()
+            .map(|t| (t - Local::now()).num_milliseconds().max(0) + 1);
+        let deadline_ms = agent
+            .next_deadline()
+            .map(|t| (t.saturating_sub(now_us()) / 1000) as i64 + 1);
+        let timeout =
+            change_ms
+                .into_iter()
+                .chain(deadline_ms)
+                .min()
+                .map(|ms| rustix::event::Timespec {
+                    tv_sec: ms / 1000,
+                    tv_nsec: (ms % 1000) * 1_000_000,
+                });
         let readable = {
             let fd = link.fd();
             let mut fds = [PollFd::new(&fd, PollFlags::IN)];
@@ -220,25 +269,59 @@ fn run(mut agent: Agent, mut link: Link) -> std::io::Result<()> {
             }
             !fds[0].revents().is_empty()
         };
+        let fx = agent.tick(now_us());
+        dirty |= apply(fx, &link, &mut children)?;
         if !readable {
-            // Timed out: a module's content is due to change (an early wakeup just re-renders
-            // the same pixels, which the link then drops).
-            dirty = true;
+            // A module's content may be due to change. An early wakeup just re-renders the same
+            // pixels, which the link then drops.
+            dirty |= agent
+                .next_change()
+                .is_some_and(|t| t <= Local::now() + chrono::Duration::milliseconds(5));
             continue;
         }
         for ev in link.poll()? {
-            match ev {
+            let fx = match ev {
                 Event::Closed => return Ok(()),
+                Event::Touch {
+                    region,
+                    slot,
+                    phase,
+                    x,
+                    time_us,
+                    ..
+                } => agent.touch(region, slot, phase, x, time_us),
                 Event::Display(state) => {
                     let was_off = agent.display == DisplayState::Off;
                     agent.display = state;
                     dirty |= was_off && state != DisplayState::Off;
+                    if state == DisplayState::Off {
+                        agent.cancel_touches()
+                    } else {
+                        Vec::new()
+                    }
                 }
-                Event::Hatch(active) => agent.hatch = active,
-                Event::Role(_) => dirty = true,
-                Event::Error { code, msg } => eprintln!("sliver-agent: sliverd: {code:?}: {msg}"),
-                Event::Fn(_) | Event::Touch { .. } => {}
-            }
+                Event::Hatch(active) => {
+                    agent.hatch = active;
+                    if active {
+                        agent.cancel_touches()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                Event::Fn(held) => {
+                    agent.fn_held = held;
+                    Vec::new()
+                }
+                Event::Role(_) => {
+                    dirty = true;
+                    Vec::new()
+                }
+                Event::Error { code, msg } => {
+                    eprintln!("sliver-agent: sliverd: {code:?}: {msg}");
+                    Vec::new()
+                }
+            };
+            dirty |= apply(fx, &link, &mut children)?;
         }
     }
 }
