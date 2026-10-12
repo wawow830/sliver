@@ -45,6 +45,12 @@ fn find_prop<T: ResourceHandle>(card: &Card, h: T, name: &str) -> io::Result<pro
     Err(other(format!("DRM property {name} not found")))
 }
 
+/// Buffer width for a scanout `w` px wide: rounded up to a multiple of 64 px, so the row stride
+/// (4 bytes/px) is always a multiple of 256 bytes, like tiny-dfr's 64x2008 buffer.
+pub const fn padded_width(w: u16) -> u16 {
+    w.div_ceil(64) * 64
+}
+
 /// Landscape column spans `(x, w)` -> framebuffer clip rects.
 pub fn clips_for(spans: &[(u32, u32)], rotated: bool, fb_w: u16, fb_h: u16) -> Vec<ClipRect> {
     spans
@@ -105,7 +111,13 @@ impl DrmPanel {
         let plane = primary_plane(&card, &res, crtc)?;
 
         let (w, h) = mode.size();
-        let mut db = card.create_dumb_buffer((w.into(), h.into()), DrmFourcc::Xrgb8888, 32)?;
+        // Pad the buffer width to a multiple of 64 px (tiny-dfr allocates 64x2008 for the 60 px
+        // wide panel). Found on hardware: with a 60 px (240-byte pitch) buffer the adp scanout
+        // garbled fine detail (text striped) while a CPU readback looked perfect, consistent with
+        // the hardware wanting a 64-byte-aligned stride. Only the mode width is scanned out
+        // (SRC_W/CRTC_W below).
+        let mut db =
+            card.create_dumb_buffer((padded_width(w).into(), h.into()), DrmFourcc::Xrgb8888, 32)?;
         let stride = db.pitch() as usize;
         card.map_dumb_buffer(&mut db)?.as_mut().fill(0);
         let fb = card.add_framebuffer(&db, 24, 32)?;
@@ -291,6 +303,14 @@ mod tests {
 
     fn rect(c: ClipRect) -> (u16, u16, u16, u16) {
         (c.x1(), c.y1(), c.x2(), c.y2())
+    }
+
+    #[test]
+    fn buffer_width_padded_like_tiny_dfr() {
+        assert_eq!(padded_width(60), 64);
+        assert_eq!(padded_width(64), 64);
+        assert_eq!(padded_width(65), 128);
+        assert_eq!(padded_width(2170), 2176);
     }
 
     #[test]

@@ -295,11 +295,19 @@ fn draw_pattern(
 ) -> std::io::Result<()> {
     let (w, h) = mode.size(); // portrait: 60 x 2008
     println!("== draw: test pattern for {secs}s on {w}x{h}");
-    let mut db: DumbBuffer =
-        card.create_dumb_buffer((w.into(), h.into()), drm::buffer::DrmFourcc::Xrgb8888, 32)?;
+    let mut db: DumbBuffer = card.create_dumb_buffer(
+        (sliver_hw::panel::padded_width(w).into(), h.into()),
+        drm::buffer::DrmFourcc::Xrgb8888,
+        32,
+    )?;
     let fb: framebuffer::Handle = card.add_framebuffer(&db, 24, 32)?;
     let result = (|| -> std::io::Result<()> {
         let pitch = drm::buffer::Buffer::pitch(&db) as usize;
+        println!(
+            "dumb buffer: {}x{} pitch {pitch}",
+            drm::buffer::Buffer::size(&db).0,
+            drm::buffer::Buffer::size(&db).1
+        );
         {
             let mut map = card.map_dumb_buffer(&mut db)?;
             let len = u32::from(h);
