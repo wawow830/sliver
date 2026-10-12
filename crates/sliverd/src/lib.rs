@@ -21,5 +21,6 @@ pub mod idle;
 pub mod ipc;
 pub mod keystate;
 pub mod profile;
+pub mod real;
 
 pub use daemon::{ClientId, Config, Daemon, Input, Out, View};

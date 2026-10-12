@@ -1121,6 +1121,7 @@ dependencies = [
 name = "sliverd"
 version = "0.1.0"
 dependencies = [
+ "sliver-hw",
  "sliver-ipc",
  "sliver-render",
 ]

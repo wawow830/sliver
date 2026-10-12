@@ -4,9 +4,14 @@
 //! opens devices must call [`require_harness`] first. Discovery only reads sysfs and is always safe.
 //! Hardware facts and per-model quirks: docs/hardware.md.
 
+pub mod backlight;
 pub mod discover;
 pub mod evdev;
 pub mod geom;
+pub mod input;
+pub mod mt;
+pub mod panel;
+pub mod uinput;
 
 use std::fmt;
 

@@ -38,6 +38,7 @@ struct Opts {
     draw: Option<u64>,
     touch: Option<u64>,
     backlight: Option<u32>,
+    touchviz: Option<u64>,
 }
 
 fn parse_args() -> Result<Opts, String> {
@@ -54,9 +55,10 @@ fn parse_args() -> Result<Opts, String> {
             "--draw" => o.draw = Some(num("--draw")?.min(120)),
             "--touch" => o.touch = Some(num("--touch")?.min(120)),
             "--backlight" => o.backlight = Some(num("--backlight")? as u32),
+            "--touchviz" => o.touchviz = Some(num("--touchviz")?.min(120)),
             "-h" | "--help" => {
                 println!(
-                    "usage: sliver-hwprobe [--sysfs-only] [--draw S] [--touch S] [--backlight N]"
+                    "usage: sliver-hwprobe [--sysfs-only] [--draw S] [--touch S] [--backlight N] [--touchviz S]"
                 );
                 std::process::exit(0);
             }
@@ -106,6 +108,19 @@ fn main() {
         sliver_hw::listen_fd("backlight")
     );
 
+    if let Some(secs) = opts.touchviz {
+        // Exercises the real sliver-hw panel + input types together (what sliverd uses).
+        let r = match (&card, &touch) {
+            (Some(c), Some((t, _))) => touchviz(c, t, secs),
+            _ => Err(std::io::Error::other("no card or touch device")),
+        };
+        if let Err(e) = r {
+            println!("touchviz: ERROR {e}");
+            std::process::exit(1);
+        }
+        println!("== done");
+        return;
+    }
     let mut failed = false;
     // Touch first, in a thread, so touches made while the test pattern is up get logged too.
     let touch_thread = touch.clone().map(|(dev, _)| {
@@ -405,5 +420,93 @@ fn set_backlight(n: u32, max: Option<u32>) -> std::io::Result<()> {
     let mut f = unsafe { File::from_raw_fd(fd) };
     f.write_all(format!("{n}\n").as_bytes())?;
     println!("backlight: wrote {n}");
+    Ok(())
+}
+
+/// Draws a white band under every finger (and a gray ruler every 100 px) using
+/// `sliver_hw::panel::DrmPanel` + `sliver_hw::input::HwInput`, and logs Fn/lid/activity.
+fn touchviz(card: &Path, touch: &Path, secs: u64) -> std::io::Result<()> {
+    use sliver_hw::input::{HwEvent, HwInput};
+    use sliver_hw::mt::Phase;
+    use sliver_hw::panel::DrmPanel;
+    let mut panel = DrmPanel::open(card)?;
+    let (len, thick) = panel.logical_size();
+    let mut input = HwInput::open(touch, len, thick)?;
+    println!(
+        "== touchviz {secs}s on {len}x{thick}, devices: {:?}",
+        input.device_names()
+    );
+    let mut fingers: std::collections::HashMap<u8, f32> = std::collections::HashMap::new();
+    let draw = |panel: &mut DrmPanel,
+                fingers: &std::collections::HashMap<u8, f32>|
+     -> std::io::Result<()> {
+        let (len, thick) = panel.logical_size();
+        let rotated = panel.rotated();
+        panel.with_buffer(|buf, stride| {
+            for lx in 0..len {
+                let lit = fingers.values().any(|&x| (lx as f32 - x).abs() < 12.0);
+                for ly in 0..thick {
+                    let c: u32 = if lit {
+                        0xffffff
+                    } else if lx % 100 == 0 && ly > thick / 3 {
+                        0x404040
+                    } else {
+                        0
+                    };
+                    let (x, y) = if rotated {
+                        geom::landscape_to_fb(lx, ly, thick)
+                    } else {
+                        (lx, ly)
+                    };
+                    let o = y as usize * stride + x as usize * 4;
+                    buf[o..o + 4].copy_from_slice(&c.to_le_bytes());
+                }
+            }
+        })?;
+        panel.dirty(&[(0, len)]);
+        Ok(())
+    };
+    draw(&mut panel, &fingers)?;
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < deadline {
+        let left = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as i32;
+        let mut pfd = libc::pollfd {
+            fd: input.as_fd().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd.
+        if unsafe { libc::poll(&mut pfd, 1, left) } <= 0 {
+            continue;
+        }
+        let mut changed = false;
+        for ev in input.drain() {
+            match ev {
+                HwEvent::Touch(c) => {
+                    println!(
+                        "touch slot={} {:?} x={:.1} y={:.1}",
+                        c.slot, c.phase, c.x, c.y
+                    );
+                    match c.phase {
+                        Phase::Down | Phase::Move => {
+                            fingers.insert(c.slot, c.x);
+                        }
+                        Phase::Up | Phase::Cancel => {
+                            fingers.remove(&c.slot);
+                        }
+                    }
+                    changed = true;
+                }
+                other => println!("{other:?}"),
+            }
+        }
+        if changed {
+            let t = Instant::now();
+            draw(&mut panel, &fingers)?;
+            println!("frame in {:?}", t.elapsed());
+        }
+    }
     Ok(())
 }
