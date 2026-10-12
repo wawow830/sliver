@@ -333,12 +333,18 @@ expect roughly 30 fps max for full-bar animations through DIRTYFB. The orientati
 showed up correctly *in the snap* (white top-left, green bottom-right; `sliver_hw::geom` mapping
 confirmed). That run used the unpadded buffer, and nobody checked it by eye; see the stride note below.
 
-**Buffer stride (tentative, pending H25):** with a 60x2008 dumb buffer (240-byte pitch) the first
+**Buffer stride (confirmed by eye, H28):** with a 60x2008 dumb buffer (240-byte pitch) the first
 sliverd run looked **static but garbled** on the real panel: boxes right, labels striped. A CPU
 readback (`snap`) of the same buffer was perfect. tiny-dfr allocates **64x2008** and scans out 60,
-so `sliver_hw::panel` now pads the width to a multiple of 64 px (pitch 256). The working theory is
-that adp needs a 64-byte-aligned stride. **Lesson: `snap` shows what's in the buffer, not what
+so `sliver_hw::panel` now pads the width to a multiple of 64 px (pitch 256). After that the human
+saw sharp labels on the panel, so adp needs a 64-byte-aligned stride (or at least 256-byte rows). **Lesson: `snap` shows what's in the buffer, not what
 the panel shows.** Confirm visuals by eye or photo.
+
+**First real sliverd runs** (2026-10-12, `sliverd -v` via the harness): safe layer rendered (full
+flush 10–11 ms), taps → keys 59/63/88 down/up (50–70 ms holds), Fn → media row, double-press-hold
+Fn → F-key hatch, 24 contacts, clean exit before the deadline, tiny-dfr restored every time. If a
+harness run's log shows no input at all, check whether anyone touched the bar during the window:
+the keyboard counters will be 0 too.
 
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
