@@ -32,6 +32,33 @@ impl Hardware {
         }
     }
 
+    /// Reads the bar length from the Touch Bar's DSI connector (`/sys/class/drm/*DSI*/modes`, e.g.
+    /// "60x2008"). Unknown hardware assumes no physical Esc, which fails safe: more warnings, not fewer.
+    pub fn detect() -> Self {
+        let width = std::fs::read_dir("/sys/class/drm")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains("DSI"))
+            .filter_map(|e| std::fs::read_to_string(e.path().join("modes")).ok())
+            .filter_map(|m| {
+                let (a, b) = m.lines().next()?.split_once('x')?;
+                Some(
+                    a.trim()
+                        .parse::<u32>()
+                        .ok()?
+                        .max(b.trim().parse::<u32>().ok()?),
+                )
+            })
+            .next();
+        width.map_or(
+            Hardware {
+                physical_esc: false,
+            },
+            Hardware::from_bar_width,
+        )
+    }
+
     /// The part of the context that only depends on hardware, for static checks.
     pub fn context(self) -> Context {
         Context::new().with("physical_esc", self.physical_esc)

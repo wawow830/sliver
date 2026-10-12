@@ -32,31 +32,8 @@ fn active_config() -> Option<PathBuf> {
     search_path().into_iter().find(|p| p.is_file())
 }
 
-/// Bar length from the DSI connector's modes ("60x2008" or "2008x60"). Unknown means no
-/// physical Esc assumed, which fails safe (more warnings, not fewer).
 fn hardware() -> Hardware {
-    let width = std::fs::read_dir("/sys/class/drm")
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.file_name().to_string_lossy().contains("DSI"))
-        .filter_map(|e| std::fs::read_to_string(e.path().join("modes")).ok())
-        .filter_map(|m| {
-            let (a, b) = m.lines().next()?.split_once('x')?;
-            Some(
-                a.trim()
-                    .parse::<u32>()
-                    .ok()?
-                    .max(b.trim().parse::<u32>().ok()?),
-            )
-        })
-        .next();
-    match width {
-        Some(w) => Hardware::from_bar_width(w),
-        None => Hardware {
-            physical_esc: false,
-        },
-    }
+    Hardware::detect()
 }
 
 fn print_diagnostics(d: &Diagnostics) {

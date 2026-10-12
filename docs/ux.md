@@ -267,3 +267,19 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 
 Decided: the human chose the recommended pick on Q3–Q10, revised Q2 to C, and delegated Q1 to elm, who chose B.
 Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
+
+## 12. Implementation status (crates/sliver-settings)
+
+- **Slice 1 (T34):** the sidebar has every §3 page. **Bar** shows a read-only preview drawn by
+  sliver-render at half scale, with the layer picker, "Preview as" app-id and Locked, "why this
+  layout", and the zones/modules list. **Layouts & Rules** shows layers, rules in match order,
+  and layouts with inheritance. **Display & Power** is read-only. **Status** shows config
+  validity, every problem with its key path, the hardware/Esc situation, and the safe hatch.
+  Reload re-reads the config. The other pages say what will go there.
+- Module content in the preview is a placeholder until the agent's ResolvedZone→Scene mapping
+  (T24) is a shared function. With a running agent the preview should come from its render.
+- Next slices: editing via `sliver_config::Editor` (instant apply + undo, Q3), drag and drop
+  from a Library, the inspector, live agent/daemon status over D-Bus, and Mirror to Touch Bar.
+- **Testing headless** (never on the live session): `gtk4-broadwayd :7 &` then
+  `GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`, and open
+  `http://127.0.0.1:8087` in a browser (agent-browser can screenshot it).

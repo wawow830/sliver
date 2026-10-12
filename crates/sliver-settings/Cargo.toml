@@ -3,7 +3,8 @@ name = "sliver-settings"
 description = "Sliver settings app and WYSIWYG Touch Bar editor (GTK4 + libadwaita)"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# gtk-rs 0.11 needs 1.92 (the toolchain here is 1.96). Only this crate needs it.
+rust-version = "1.92"
 repository.workspace = true
 publish.workspace = true
 
@@ -11,3 +12,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+sliver-config.workspace = true
+sliver-render.workspace = true
+sliver-icons.workspace = true
+gtk = { package = "gtk4", version = "0.11", features = ["v4_22"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_8"] }
