@@ -25,6 +25,8 @@ are the invariants in §9.
   file, plus `~` and globs. Includes are **deep-merged** tables. As in waybar, the **including file
   wins** over included files, and earlier includes win over later ones. Arrays are replaced, not
   concatenated. Nested includes are allowed, but cycles and more than 8 levels are errors.
+  Relative file paths in an included file (`icon`, `stylesheet`, an `image` module's `path`)
+  are relative to **that** file, so a shared theme directory can carry its own icons.
 - **Hot reload:** the agent watches the config, every include and the stylesheet with inotify,
   with no polling. `sliverctl reload` and `SIGUSR2` to `sliver-agent` force a reload. An invalid
   config is **never applied**: the last good config stays live, and the error shows up in the
@@ -158,7 +160,7 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
 | `format-<state>` / `format-<status>` / `format-<status>-<state>` | string | same | E.g. `format-charging`, `format-critical`. |
 | `format-icons` | array / table / string | same | An array is indexed by `percentage` from low to high. A table is keyed by `alt` or state and can contain nested arrays. **Sliver extension:** an entry can be text (a glyph) or `{ icon = "name-or-path" }` for a themed/SVG/PNG image. |
 | `states` | table name → number | same | Thresholds on `percentage`. They add a class and select `format-<state>`. |
-| `icon` | string | ≈ `image-name`/`image-path` | XDG icon name, file path, or `tiny-dfr:<name>` (the dfr icon dirs). Paths can be absolute, `~/…`, or relative to the main config file's directory (`icons/x.png`, or a bare `logo.svg`: a name ending in `.png`/`.svg`/`.svgz` is a file). Note: in an `include`d file a relative icon path still starts from the main config's directory, not the include's; use `~/` or absolute paths there. |
+| `icon` | string | ≈ `image-name`/`image-path` | XDG icon name, file path, or `tiny-dfr:<name>` (the dfr icon dirs). Paths can be absolute, `~/…`, or relative to the main config file's directory (`icons/x.png`, or a bare `logo.svg`: a name ending in `.png`/`.svg`/`.svgz` is a file). In an `include`d file, relative paths start from that file's directory. |
 | `icon-theme` | string | (none) | Overrides the theme for this module. |
 | `icon-size` | int | same | px |
 | `width` | `"auto"` \| px int \| `"fill"` \| `{ fill = N }` | ≈ `expand` | Q4/H6. `expand = true` is accepted as `"fill"`. |

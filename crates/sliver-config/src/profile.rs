@@ -153,26 +153,12 @@ fn overlay_text(name: &str) -> String {
     if main.is_file() {
         t.push_str("include = [\"../config.toml\"]\n");
     }
-    // The stylesheet is looked up beside the config in use, which is now profiles/: point back at
-    // the main config's one.
-    let configured = crate::load::load_file(&main).config.stylesheet;
-    let sheet = match configured {
-        Some(s) if main.is_file() => Some(PathBuf::from(s)),
-        _ => dir
-            .join("style.css")
-            .is_file()
-            .then(|| PathBuf::from("style.css")),
-    };
-    if let Some(s) = sheet {
-        let rel = if s.is_absolute() {
-            s
-        } else {
-            Path::new("..").join(s)
-        };
-        t.push_str(&format!(
-            "stylesheet = {}\n",
-            toml::Value::String(rel.display().to_string())
-        ));
+    // An implicit style.css is looked up beside the config in use, which is now profiles/: name
+    // the main one. (A `stylesheet = …` in config.toml comes along with the include, anchored
+    // to config.toml's directory by the loader.)
+    let explicit = main.is_file() && crate::load::load_file(&main).config.stylesheet.is_some();
+    if !explicit && dir.join("style.css").is_file() {
+        t.push_str("stylesheet = \"../style.css\"\n");
     }
     t
 }

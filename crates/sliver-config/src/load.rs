@@ -137,11 +137,72 @@ fn read_tree(
             return Table::new();
         }
     };
-    stack.push(canonical);
     let dir = path.parent().unwrap_or(Path::new("."));
+    let mut table = table;
+    // An included file's relative paths are relative to it, not to the main config (which is
+    // what they'd be resolved against after merging). The main file is left as written.
+    if !stack.is_empty() {
+        anchor_paths(&mut table, dir);
+    }
+    stack.push(canonical);
     let t = merge_includes(table, dir, &shown, stack, files, d);
     stack.pop();
     t
+}
+
+/// A relative file reference (not `/…`, `~/…`, `tiny-dfr:…` or a theme icon name).
+fn relative_file(s: &str, image_ext_counts: bool) -> bool {
+    if s.is_empty() || s.starts_with('/') || s.starts_with('~') || s.contains(':') {
+        return false;
+    }
+    let lower = s.to_ascii_lowercase();
+    // The agent's rule for icons: a `/`, or a bare name with an image extension, is a file.
+    s.contains('/')
+        || !image_ext_counts
+        || [".png", ".svg", ".svgz"].iter().any(|e| lower.ends_with(e))
+}
+
+/// Makes an included file's relative `icon` values (at any depth), `stylesheet` and `image`
+/// modules' `path` absolute against `dir`, the file's own directory.
+fn anchor_paths(t: &mut Table, dir: &Path) {
+    let abs = |s: &str| Value::String(dir.join(s).display().to_string());
+    let fix = |v: &mut Value| {
+        if let Value::String(s) = v {
+            if relative_file(s, false) {
+                *v = abs(s);
+            }
+        }
+    };
+    if let Some(v) = t.get_mut("stylesheet") {
+        fix(v);
+    }
+    if let Some(Value::Table(mods)) = t.get_mut("modules") {
+        for (id, m) in mods.iter_mut() {
+            if id != "image" && !id.starts_with("image#") {
+                continue;
+            }
+            if let Some(v) = m.as_table_mut().and_then(|m| m.get_mut("path")) {
+                fix(v);
+            }
+        }
+    }
+    fn icons(v: &mut Value, abs: &dyn Fn(&str) -> Value) {
+        match v {
+            Value::Table(t) => {
+                for (k, v) in t.iter_mut() {
+                    match v {
+                        Value::String(s) if k == "icon" && relative_file(s, true) => *v = abs(s),
+                        other => icons(other, abs),
+                    }
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(|v| icons(v, abs)),
+            _ => {}
+        }
+    }
+    for (_, v) in t.iter_mut() {
+        icons(v, &abs);
+    }
 }
 
 fn merge_includes(
@@ -322,6 +383,62 @@ mod tests {
         let l = load_file(&bad);
         assert!(!l.diagnostics.ok());
         assert!(l.diagnostics.errors[0].message.starts_with("TOML syntax"));
+    }
+
+    #[test]
+    fn included_relative_paths_are_relative_to_the_include() {
+        let dir = TempDir::new("anchor");
+        dir.write(
+            "theme/bits.toml",
+            r#"stylesheet = "bits.css"
+[modules."custom/a"]
+icon = "icons/a.svg"
+[modules."custom/b"]
+icon = "b.png"
+format-icons = { on = { icon = "on.svg" }, off = "x" }
+[modules."custom/c"]
+icon = "audio-volume-high"
+[modules."custom/d"]
+icon = "~/d.svg"
+[modules."image#logo"]
+path = "logo.png"
+"#,
+        );
+        let main = dir.write(
+            "config.toml",
+            "include = [\"theme/bits.toml\"]\n[modules.\"custom/e\"]\nicon = \"mine.svg\"\n",
+        );
+        let l = load_file(&main);
+        assert!(l.diagnostics.ok(), "{:#?}", l.diagnostics);
+        let t = dir.0.join("theme").display().to_string();
+        let m = |id: &str, k: &str| {
+            l.merged["modules"][id][k]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        };
+        assert_eq!(
+            l.merged["stylesheet"].as_str(),
+            Some(&*format!("{t}/bits.css"))
+        );
+        assert_eq!(m("custom/a", "icon"), format!("{t}/icons/a.svg"));
+        assert_eq!(m("custom/b", "icon"), format!("{t}/b.png"));
+        assert_eq!(
+            l.merged["modules"]["custom/b"]["format-icons"]["on"]["icon"].as_str(),
+            Some(&*format!("{t}/on.svg"))
+        );
+        assert_eq!(
+            m("custom/c", "icon"),
+            "audio-volume-high",
+            "theme names stay"
+        );
+        assert_eq!(m("custom/d", "icon"), "~/d.svg");
+        assert_eq!(m("image#logo", "path"), format!("{t}/logo.png"));
+        assert_eq!(
+            m("custom/e", "icon"),
+            "mine.svg",
+            "the main file is left as written"
+        );
     }
 
     #[test]

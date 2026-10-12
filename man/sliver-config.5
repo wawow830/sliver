@@ -70,6 +70,14 @@ Paths are relative to the including file, and
 .B ~
 and globs work.
 Tables are merged deeply, the including file wins, and earlier includes win over later ones.
+Relative paths in an included file
+.RB ( icon ,
+.BR stylesheet ,
+an
+.B image
+module's
+.BR path )
+are relative to that file.
 Arrays are replaced, not concatenated.
 .TP
 .BR stylesheet " = " \fIpath\fP
