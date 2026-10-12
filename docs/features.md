@@ -103,7 +103,7 @@ we want, if the hardware allows them.
 | Window title regex, per workspace, per monitor | P2 | BTT | |
 | State contexts: media playing, screen locked, on battery, low battery, fullscreen, DND, external display, time of day | P2 | BTT conditional groups | Locked screen gets a privacy-safe layout (ux.md). |
 | Inheritance: a layout extends a parent and overrides zones | P2 | (none) | ux.md §Inheritance. |
-| Rule priority: most specific wins, then user order | P1 | (none) | Evaluated in the agent (api.md). |
+| Rule priority: first match in user order (settings inserts by specificity) | P1 | (none) | Evaluated in the agent (api.md). |
 | App-published items and contexts (NSTouchBar-like), via App controls + Status items placeholders | P1 (API v1) / P2 (modal) | mac | Per-app allow/deny (ux.md §6, api.md §2). |
 
 ## 6. Appearance

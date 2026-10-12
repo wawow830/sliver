@@ -7,8 +7,8 @@ feature tiers are in [features.md](features.md). The app is GTK4 + libadwaita (A
 
 1. **The bar is the preview.** The on-screen preview is pixels from the same renderer as sliverd.
    It's never a GTK approximation. "Mirror to Touch Bar" puts the edit on the real bar live.
-2. **Never strand the user.** On a machine with no physical Esc, no edit can remove Esc from the Base or Fn layer. On any machine, no edit can remove F1–F12 from the
-   Fn layer (§7). Every destructive action can be undone.
+2. **Never strand the user.** On a machine with no physical Esc, no edit can remove Esc from the Base or Fn layer. On any machine, no edit can remove F1–F12 from
+   Base ∪ Fn (§7). Every destructive action can be undone.
 3. **The 90% path is one click.** For example, "Customize for Firefox…" lives in the editor.
    Rules, inheritance and priorities exist but stay out of the way.
 4. **Config is the truth.** The settings app writes the same TOML a human would and keeps comments.
@@ -33,11 +33,14 @@ feature tiers are in [features.md](features.md). The app is GTK4 + libadwaita (A
 | **Profile** | A complete config: layouts, rules, appearance. One is active. |
 | **Preset** | A shareable export of a layout or profile. |
 
-Resolution (what the bar shows): the agent takes the current layer and finds the matching rules.
-The **most specific** match wins (an app+title rule beats an app rule, which beats a state rule).
-Ties go to the rule higher in the user's list. The Default rule always matches. The agent then
-resolves inheritance and fills App controls. The daemon's safe layer bypasses all of this
-The resolver runs in the agent. sliverd only sees finished base/fn frames, plus its own safe
+Resolution (what the bar shows): for the current layer, the agent walks the rule list **top to
+bottom, and the first match wins**. If nothing matches, the layer's default layout is used. The
+agent then resolves inheritance and fills the placeholders. Picking the "most specific" rule
+was considered and rejected, because it lets an `app = firefox` rule beat `screen locked`, and
+"rule 3 matched first" is easier to explain. To keep the default order sensible, the settings
+app *inserts* new rules by specificity: locked/presenting state rules go first, then app+title,
+then app, then workspace, then other state. Users can drag rules to reorder. The resolver runs
+in the agent. sliverd only sees finished base/fn frames, plus its own safe
 layer and an "escape floor" check (api.md).
 
 ### Inheritance
