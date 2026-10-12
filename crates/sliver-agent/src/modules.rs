@@ -188,6 +188,8 @@ pub struct EmojiUi {
     pub offset: usize,
     /// Choosing a skin tone for this emoji (its plain text): the page shows its variants.
     pub tones: Option<String>,
+    /// Searching: the letters typed so far (`Some("")` = search is open and empty).
+    pub search: Option<String>,
 }
 
 /// A countdown that survives re-resolution (it lives in [`UiState`], keyed by the cell).
@@ -577,6 +579,10 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         slot: None,
     };
     let act = |name: String| Action::ModuleAction(name);
+    if let Some(query) = ui.search.as_ref().filter(|_| ui.tones.is_none()) {
+        search_strip(m, key, world, ui, query, insert, &bare, out);
+        return;
+    }
     for t in 0..=Group::ALL.len() {
         let icon = if t == 0 {
             "🕘"
@@ -593,6 +599,13 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         c.checked = t == tab;
         out.push(c);
     }
+    out.push(bare(
+        format!("{key}/search"),
+        "🔍",
+        52.0,
+        &["emoji-tab", "emoji-search"],
+        vec![(Gesture::Tap, act("search".into()))],
+    ));
     let tones = ui
         .tones
         .as_deref()
@@ -634,6 +647,92 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         52.0,
         &["emoji-close"],
         vec![(Gesture::Tap, act("close".into()))],
+    ));
+}
+
+/// How many results fit next to the keys.
+const SEARCH_RESULTS: usize = 6;
+
+type Bare<'a> = dyn Fn(String, &str, f32, &[&str], Vec<(Gesture, Action)>) -> Cell + 'a;
+
+/// Emoji search: no keyboard is grabbed. A row of letters (and a space) builds the query on the
+/// bar itself; the matches (names, word prefixes) sit at the right, swipe to page. ⌫ erases,
+/// tapping the query clears it, ✕ goes back to the groups.
+#[allow(clippy::too_many_arguments)]
+fn search_strip(
+    m: &ModuleInstance,
+    key: &str,
+    world: &World,
+    ui: &EmojiUi,
+    query: &str,
+    insert: &str,
+    bare: &Bare<'_>,
+    out: &mut Vec<Cell>,
+) {
+    let act = |name: String| Action::ModuleAction(name);
+    let shown = if query.is_empty() {
+        "🔍".to_string()
+    } else {
+        format!("🔍 {query}")
+    };
+    out.push(bare(
+        format!("{key}/query"),
+        &shown,
+        150.0,
+        &["emoji-query"],
+        vec![(Gesture::Tap, act("s-clear".into()))],
+    ));
+    for c in "abcdefghijklmnopqrstuvwxyz ".chars() {
+        let label = if c == ' ' {
+            "␣".to_string()
+        } else {
+            c.to_string()
+        };
+        out.push(bare(
+            format!("{key}/k{}", if c == ' ' { '_' } else { c }),
+            &label,
+            36.0,
+            &["emoji-key"],
+            vec![(Gesture::Tap, act(format!("s:{c}")))],
+        ));
+    }
+    out.push(bare(
+        format!("{key}/back"),
+        "⌫",
+        52.0,
+        &["emoji-key", "emoji-back"],
+        vec![(Gesture::Tap, act("s-back".into()))],
+    ));
+    let hits = sliver_emoji::search(query, 120);
+    let offset = ui.offset.min(hits.len().saturating_sub(SEARCH_RESULTS));
+    for (i, e) in hits.iter().enumerate().skip(offset).take(SEARCH_RESULTS) {
+        let text = world.emoji.preferred(e);
+        let mut on = vec![
+            (Gesture::Tap, act(format!("pick:{insert}:{text}"))),
+            (Gesture::SwipeLeft, act(format!("page:{SEARCH_RESULTS}"))),
+            (Gesture::SwipeRight, act(format!("page:-{SEARCH_RESULTS}"))),
+        ];
+        if e.tones.is_some() {
+            on.push((Gesture::Hold, act(format!("tones:{}", e.text))));
+        }
+        out.push(bare(format!("{key}/e{i}"), &text, 64.0, &["emoji"], on));
+    }
+    if !query.is_empty() && hits.is_empty() {
+        out.push(bare(
+            format!("{key}/none"),
+            "no match",
+            140.0,
+            &["emoji-none"],
+            Vec::new(),
+        ));
+    }
+    let _ = m;
+    out.push(bare(
+        format!("{key}/close"),
+        "✕",
+        52.0,
+        &["emoji-close"],
+        vec![(Gesture::Tap, act("s-close".into()))],
     ));
 }
 

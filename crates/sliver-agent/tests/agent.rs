@@ -962,7 +962,7 @@ fn emoji_picker_types_pages_and_closes() {
             .collect::<Vec<_>>()
     };
     let before = cells(&a);
-    // Esc may be on the layer; the strip is 10 tabs + 6 emoji + close
+    // Esc may be on the layer; the strip is 10 tabs + search + 6 emoji + close
     assert_eq!(before.iter().filter(|t| *t == "✕").count(), 1, "{before:?}");
     assert!(
         before.contains(&"😀".to_string()),
@@ -982,7 +982,7 @@ fn emoji_picker_types_pages_and_closes() {
         "{fx:?}"
     );
     // pick another one, then look at the recents tab: newest first
-    let picked = cells(&a)[10 + 3].clone();
+    let picked = cells(&a)[11 + 3].clone();
     tap(&mut a, "emoji#strip/e3", 1_500_000);
     a.render(&w);
     let fx = tap(&mut a, "emoji#strip/tab0", 2_000_000);
@@ -990,10 +990,10 @@ fn emoji_picker_types_pages_and_closes() {
     a.render(&w);
     let recents = cells(&a);
     assert_eq!(
-        recents[10], picked,
+        recents[11], picked,
         "the last pick is first in recents: {recents:?}"
     );
-    assert_eq!(recents[11], "😀");
+    assert_eq!(recents[12], "😀");
     let first_page = cells(&a);
     // paging moves the window
     let (id, x) = region(&a, "emoji#strip/tab2");
@@ -1010,6 +1010,88 @@ fn emoji_picker_types_pages_and_closes() {
         !cells(&a).contains(&"✕".to_string()),
         "back on the base layer"
     );
+}
+
+/// Emoji search: 🔍 opens a letter row; letters build the query and the matches show next to
+/// them; ⌫ erases; ✕ returns to the groups. No keyboard is grabbed.
+#[test]
+fn emoji_search_on_the_bar() {
+    use sliver_agent::agent::Effect;
+    use sliver_config::{Action, LayerMode};
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent("[modules.\"emoji#strip\"]\ninsert = \"copy\"\n");
+    let w = world(9, 41);
+    a.set_emoji(w.emoji.clone());
+    let mut fx = Vec::new();
+    a.run_action(
+        &Action::Layer {
+            name: "emoji".into(),
+            mode: LayerMode::Toggle,
+        },
+        0,
+        &mut fx,
+    );
+    a.render(&w);
+    let keys = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|c| c.key.clone())
+            .collect::<Vec<_>>()
+    };
+    let text = |a: &Agent, key: &str| {
+        let f = a.frame(Layer::Base).unwrap();
+        match &f.cells.iter().find(|c| c.key == key).unwrap().content {
+            sliver_render::Content::Markup(t) => t.clone(),
+            other => format!("{other:?}"),
+        }
+    };
+    let mut t = 1_000u64;
+    let mut tap = |a: &mut Agent, key: &str| {
+        t += 1_000_000;
+        let (id, x) = region(a, key);
+        let mut fx = a.touch(id, 0, TouchPhase::Down, x, t);
+        fx.extend(a.touch(id, 0, TouchPhase::Up, x, t + 40_000));
+        fx.extend(a.tick(t + 400_000));
+        a.render(&w);
+        fx
+    };
+    tap(&mut a, "emoji#strip/search");
+    let k = keys(&a);
+    assert!(
+        k.contains(&"emoji#strip/kq".to_string()) && k.contains(&"emoji#strip/k_".to_string()),
+        "{k:?}"
+    );
+    assert!(
+        !k.contains(&"emoji#strip/tab1".to_string()),
+        "the groups are replaced"
+    );
+    assert_eq!(text(&a, "emoji#strip/query"), "🔍");
+    for c in "pizz".chars() {
+        tap(&mut a, &format!("emoji#strip/k{c}"));
+    }
+    assert_eq!(text(&a, "emoji#strip/query"), "🔍 pizz");
+    assert_eq!(text(&a, "emoji#strip/e0"), "🍕", "pizza matches by name");
+    // pick it: typed, recents updated
+    let fx = tap(&mut a, "emoji#strip/e0");
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Spawn(argv) if argv[0] == "wl-copy" && argv.last().unwrap() == "🍕")),
+        "{fx:?}"
+    );
+    // erase one, then clear
+    tap(&mut a, "emoji#strip/back");
+    assert_eq!(text(&a, "emoji#strip/query"), "🔍 piz");
+    tap(&mut a, "emoji#strip/query");
+    assert_eq!(text(&a, "emoji#strip/query"), "🔍");
+    // no match
+    for c in "qqq".chars() {
+        tap(&mut a, &format!("emoji#strip/k{c}"));
+    }
+    assert!(keys(&a).contains(&"emoji#strip/none".to_string()));
+    // ✕ goes back to the groups, and the strip's ✕ then closes the layer as before
+    tap(&mut a, "emoji#strip/close");
+    assert!(keys(&a).contains(&"emoji#strip/tab1".to_string()));
 }
 
 /// Hold an emoji with skin tones: its variants replace the page; the pick is typed, goes to
@@ -1054,7 +1136,7 @@ fn emoji_skin_tones() {
     // People & Body starts with 👋, which has tones; a hold opens them.
     touch(&mut a, "emoji#strip/tab2", 1_000_000, false);
     a.render(&w);
-    assert_eq!(texts(&a)[10], "👋");
+    assert_eq!(texts(&a)[11], "👋");
     let fx = touch(&mut a, "emoji#strip/e0", 3_000_000, true);
     assert!(
         !fx.iter().any(|e| matches!(e, Effect::Spawn(_))),
@@ -1063,7 +1145,7 @@ fn emoji_skin_tones() {
     a.render(&w);
     let t = texts(&a);
     assert_eq!(
-        &t[10..17],
+        &t[11..18],
         ["‹", "👋", "👋🏻", "👋🏼", "👋🏽", "👋🏾", "👋🏿"],
         "{t:?}"
     );
@@ -1077,7 +1159,7 @@ fn emoji_skin_tones() {
     );
     a.render(&w);
     let t = texts(&a);
-    assert_eq!(t[10], "👋🏽", "{t:?}");
+    assert_eq!(t[11], "👋🏽", "{t:?}");
     assert_eq!(w.emoji.items()[0], "👋🏽", "remembered in recents");
     // Tapping it again types the tone; ‹ from a tones view goes back without typing.
     let fx = touch(&mut a, "emoji#strip/e0", 7_000_000, false);
@@ -1090,7 +1172,7 @@ fn emoji_skin_tones() {
     let fx = touch(&mut a, "emoji#strip/back", 11_000_000, false);
     assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn(_))));
     a.render(&w);
-    assert_eq!(texts(&a)[10], "👋🏽");
+    assert_eq!(texts(&a)[11], "👋🏽");
 }
 
 /// `drawer = { mode = "bar" }`: tapping the leader opens the rest of the group as a sub-bar

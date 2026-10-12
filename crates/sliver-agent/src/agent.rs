@@ -1515,6 +1515,39 @@ impl Agent {
         } else if name == "tones-close" {
             self.ui(&strip).emoji.tones = None;
             fx.push(Effect::Redraw);
+        } else if name == "search" {
+            let ui = self.ui(&strip);
+            ui.emoji.search = Some(String::new());
+            ui.emoji.offset = 0;
+            ui.emoji.tones = None;
+            fx.push(Effect::Redraw);
+        } else if let Some(c) = name.strip_prefix("s:").and_then(|c| c.chars().next()) {
+            let ui = self.ui(&strip);
+            let q = ui.emoji.search.get_or_insert_with(String::new);
+            // Letters and single spaces only; the query stays short enough to mean something.
+            if (c.is_ascii_lowercase() || (c == ' ' && !q.is_empty() && !q.ends_with(' ')))
+                && q.len() < 24
+            {
+                q.push(c);
+            }
+            ui.emoji.offset = 0;
+            fx.push(Effect::Redraw);
+        } else if name == "s-back" || name == "s-clear" {
+            let ui = self.ui(&strip);
+            if let Some(q) = ui.emoji.search.as_mut() {
+                if name == "s-clear" {
+                    q.clear();
+                } else {
+                    q.pop();
+                }
+            }
+            ui.emoji.offset = 0;
+            fx.push(Effect::Redraw);
+        } else if name == "s-close" {
+            let ui = self.ui(&strip);
+            ui.emoji.search = None;
+            ui.emoji.offset = 0;
+            fx.push(Effect::Redraw);
         } else if let Some(t) = name
             .strip_prefix("tab:")
             .and_then(|n| n.parse::<usize>().ok())
