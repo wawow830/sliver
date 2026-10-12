@@ -42,12 +42,43 @@ fn resolve_session(conn: &Connection) -> Option<String> {
 
 /// Initial read. Always returns a `Watch`; fields stay default if logind is absent.
 pub fn read_into(conn: &Connection, state: &mut SessionState) -> Watch {
+    apply_manager_props(conn, state);
     let session_path = resolve_session(conn);
     let path = session_path
         .as_deref()
         .unwrap_or("/org/freedesktop/login1/session/auto");
     apply_session_props(conn, path, state);
     Watch { session_path }
+}
+
+fn apply_manager_props(conn: &Connection, state: &mut SessionState) {
+    if let Some(p) = props::get_all(conn, DEST, MANAGER, "org.freedesktop.login1.Manager") {
+        if let Some(b) = props::string(&p, "BlockInhibited") {
+            state.idle_inhibited = blocks_idle(&b);
+        }
+    }
+}
+
+/// `BlockInhibited` is a colon list such as `idle:sleep`.
+fn blocks_idle(s: &str) -> bool {
+    s.split(':').any(|w| w == "idle")
+}
+
+/// Take a logind `idle` block inhibitor. Closing (dropping) the returned fd releases it.
+pub fn inhibit_idle(
+    conn: &Connection,
+    who: &str,
+    why: &str,
+) -> zbus::Result<zbus::zvariant::OwnedFd> {
+    conn.call_method(
+        Some(DEST),
+        MANAGER,
+        Some("org.freedesktop.login1.Manager"),
+        "Inhibit",
+        &("idle", who, why, "block"),
+    )?
+    .body()
+    .deserialize()
 }
 
 fn apply_session_props(conn: &Connection, path: &str, state: &mut SessionState) {
@@ -81,6 +112,11 @@ impl Watch {
             },
             "Lock" if self.ours(path) => hub.update(|s| s.locked = true),
             "Unlock" if self.ours(path) => hub.update(|s| s.locked = false),
+            "PropertiesChanged" if path == MANAGER => {
+                let mut cur = hub.snapshot();
+                apply_manager_props(conn, &mut cur);
+                hub.update(|s| s.idle_inhibited = cur.idle_inhibited)
+            }
             "PropertiesChanged" if self.ours(path) => {
                 let mut cur = hub.snapshot();
                 apply_session_props(conn, path, &mut cur);
@@ -91,5 +127,16 @@ impl Watch {
             }
             _ => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parses_block_inhibited() {
+        assert!(super::blocks_idle("idle:sleep"));
+        assert!(super::blocks_idle("idle"));
+        assert!(!super::blocks_idle(""));
+        assert!(!super::blocks_idle("shutdown:sleep"));
     }
 }

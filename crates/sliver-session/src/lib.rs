@@ -9,6 +9,7 @@
 //! Testing: [`fake::ScriptedSession`] replays states; the real sources are tested against mock
 //! services on a private `dbus-daemon` (see `tests/`).
 
+pub mod brightness;
 pub mod fake;
 pub mod logind;
 pub mod mpris;
@@ -100,6 +101,11 @@ pub struct SessionState {
     pub idle: bool,
     /// Between `PrepareForSleep(true)` and `PrepareForSleep(false)`.
     pub sleeping: bool,
+    /// Anyone (including us) holds a logind `idle` block inhibitor.
+    pub idle_inhibited: bool,
+    /// We hold the "caffeine" inhibitor (see [`Handle::set_caffeine`]).
+    pub caffeine: bool,
+    pub brightness: brightness::Levels,
     pub power: Power,
     pub media: Option<Media>,
 }
@@ -152,6 +158,45 @@ impl Hub {
 pub struct Session {
     first: Option<SessionState>,
     rx: Receiver<SessionState>,
+    handle: Handle,
+}
+
+/// Cloneable control/feeding side of a [`Session`]: sources without a signal to wait on push
+/// their readings through it, and actions that change session state live here.
+#[derive(Clone)]
+pub struct Handle {
+    hub: Hub,
+    system: zbus::blocking::Connection,
+    caffeine: Arc<Mutex<Option<zbus::zvariant::OwnedFd>>>,
+}
+
+impl Handle {
+    /// Re-read backlight levels from sysfs. Sysfs brightness has no reliable change event, so
+    /// call this on our own writes, on wake, and on a slow timer only while a slider is shown.
+    /// `false` = the receiving side is gone.
+    pub fn refresh_brightness(&self, sysfs: &brightness::Sysfs) -> bool {
+        let levels = sysfs.levels();
+        self.hub.update(|s| s.brightness = levels)
+    }
+
+    /// Hold (or release) a logind `idle` inhibitor, which idle daemons such as hypridle honour.
+    /// The inhibitor dies with our connection, so a crashed agent can't leave the screen awake.
+    pub fn set_caffeine(&self, on: bool) -> zbus::Result<()> {
+        let mut held = self.caffeine.lock().unwrap_or_else(|e| e.into_inner());
+        if on && held.is_none() {
+            *held = Some(logind::inhibit_idle(
+                &self.system,
+                "Sliver",
+                "Caffeine toggle",
+            )?);
+        } else if !on {
+            *held = None; // dropping the fd releases the inhibitor
+        }
+        let now = held.is_some();
+        drop(held);
+        self.hub.update(|s| s.caffeine = now);
+        Ok(())
+    }
 }
 
 impl Session {
@@ -167,6 +212,11 @@ impl Session {
         power::read_into(&system, &mut initial.power);
         let mpris_watch = mpris::Tracker::new(&session, &mut initial);
         let (hub, rx) = Hub::new(initial.clone());
+        let handle = Handle {
+            hub: hub.clone(),
+            system: system.clone(),
+            caffeine: Arc::default(),
+        };
         let h = hub.clone();
         std::thread::Builder::new()
             .name("sliver-session-system".into())
@@ -179,7 +229,12 @@ impl Session {
         Self {
             first: Some(initial),
             rx,
+            handle,
         }
+    }
+
+    pub fn handle(&self) -> Handle {
+        self.handle.clone()
     }
 }
 

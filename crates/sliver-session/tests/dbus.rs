@@ -74,9 +74,11 @@ fn props_changed(conn: &Connection, path: &str, iface: &str) {
 struct Login {
     locked: bool,
     idle: bool,
+    block: &'static str,
+    inhibits: u32,
 }
 struct LoginSession(Arc<Mutex<Login>>);
-struct LoginManager;
+struct LoginManager(Arc<Mutex<Login>>);
 
 #[zbus::interface(name = "org.freedesktop.login1.Session")]
 impl LoginSession {
@@ -92,6 +94,15 @@ impl LoginSession {
 
 #[zbus::interface(name = "org.freedesktop.login1.Manager")]
 impl LoginManager {
+    #[zbus(property)]
+    fn block_inhibited(&self) -> String {
+        self.0.lock().unwrap().block.into()
+    }
+    fn inhibit(&self, what: &str, _who: &str, _why: &str, mode: &str) -> zbus::zvariant::OwnedFd {
+        assert_eq!((what, mode), ("idle", "block"));
+        self.0.lock().unwrap().inhibits += 1;
+        std::os::fd::OwnedFd::from(std::fs::File::open("/dev/null").unwrap()).into()
+    }
     fn get_session(&self, _id: &str) -> zbus::zvariant::OwnedObjectPath {
         zbus::zvariant::ObjectPath::try_from("/org/freedesktop/login1/session/_31")
             .unwrap()
@@ -226,7 +237,7 @@ fn live_sources_against_mock_services() {
     let logind = bus.service("org.freedesktop.login1");
     logind
         .object_server()
-        .at("/org/freedesktop/login1", LoginManager)
+        .at("/org/freedesktop/login1", LoginManager(login.clone()))
         .unwrap();
     logind
         .object_server()
@@ -277,7 +288,9 @@ fn live_sources_against_mock_services() {
         .unwrap();
 
     let client = bus.connect();
-    let rx = spawn_states(Session::start(client.clone(), client.clone()));
+    let session = Session::start(client.clone(), client.clone());
+    let handle = session.handle();
+    let rx = spawn_states(session);
 
     // initial snapshot
     let s = next(&rx);
@@ -295,6 +308,33 @@ fn live_sources_against_mock_services() {
     assert_eq!(m.length_us, Some(215_000_000));
     assert_eq!(m.position_us, Some(42));
     assert!(m.can_next && m.can_play_pause && !m.can_seek);
+
+    // idle inhibitors held by others show up; caffeine holds ours
+    login.lock().unwrap().block = "idle:sleep";
+    props_changed(
+        &logind,
+        "/org/freedesktop/login1",
+        "org.freedesktop.login1.Manager",
+    );
+    assert!(next(&rx).idle_inhibited);
+    handle.set_caffeine(true).unwrap();
+    assert!(next(&rx).caffeine);
+    assert_eq!(login.lock().unwrap().inhibits, 1);
+    handle.set_caffeine(true).unwrap(); // idempotent: no second inhibitor
+    assert_eq!(login.lock().unwrap().inhibits, 1);
+    handle.set_caffeine(false).unwrap();
+    assert!(!next(&rx).caffeine);
+
+    // brightness is pushed through the handle (sysfs has no signal)
+    let root = std::env::temp_dir().join(format!("sliver-sysfs-dbus-{}", std::process::id()));
+    let bl = root.join("backlight/apple-panel-bl");
+    std::fs::create_dir_all(&bl).unwrap();
+    std::fs::write(bl.join("max_brightness"), "200\n").unwrap();
+    std::fs::write(bl.join("brightness"), "100\n").unwrap();
+    let sysfs = sliver_session::brightness::Sysfs::new(&root);
+    assert!(handle.refresh_brightness(&sysfs));
+    assert_eq!(next(&rx).brightness.screen_pct, Some(50));
+    std::fs::remove_dir_all(&root).unwrap();
 
     // lock via hint + PropertiesChanged
     login.lock().unwrap().locked = true;
