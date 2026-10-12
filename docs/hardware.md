@@ -349,6 +349,12 @@ Fn → F-key hatch, 24 contacts, clean exit before the deadline, tiny-dfr restor
 harness run's log shows no input at all, check whether anyone touched the bar during the window:
 the keyboard counters will be 0 too.
 
+**Full stack on the real bar** (sliverd -v + sliver-agent over `$SLIVER_OUT_DIR/sliverd.sock`,
+human tapping): agent frame on the panel 0.4 s after connect; every touch forwarded to the agent as
+`Touch { region, phase }`; liveness ping/pong <10 ms; agent-driven keys out through uinput; killing
+the agent → safe layer in 5–8 ms. Recipe: start `bar run target/debug/sliverd --seconds 60 -- -v`,
+then run `target/debug/sliver-agent --socket /run/sliver-safeswap/out/sliverd.sock` as the user.
+
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
 
