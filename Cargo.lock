@@ -1528,6 +1528,7 @@ dependencies = [
  "sliver-render",
  "sliver-session",
  "sliver-stats",
+ "sliver-testbus",
  "sliverd",
  "zbus",
 ]
@@ -1541,6 +1542,7 @@ dependencies = [
  "serde",
  "sliver-desktop",
  "sliver-ipc",
+ "sliver-testbus",
  "zbus",
 ]
 
@@ -1551,6 +1553,7 @@ dependencies = [
  "serde",
  "sliver-api",
  "sliver-ipc",
+ "sliver-testbus",
  "zbus",
 ]
 
@@ -1652,6 +1655,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "sliver-proc",
+ "sliver-testbus",
  "zbus",
 ]
 
@@ -1677,6 +1681,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sliver-testbus"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "sliver-waybar"
 version = "0.1.0"
 dependencies = [
@@ -1695,6 +1706,7 @@ dependencies = [
  "sliver-client",
  "sliver-config",
  "sliver-ipc",
+ "sliver-testbus",
  "sliver-waybar",
  "toml",
  "zbus",

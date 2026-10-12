@@ -6,37 +6,21 @@ use sliver_api::item::{Gesture, Prop};
 use sliver_api::registry::Interaction;
 use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 struct Bus {
-    child: Child,
+    _tb: sliver_testbus::TestBus,
     addr: String,
 }
 
 impl Bus {
     fn start() -> Option<Bus> {
-        let mut child = Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .ok()?;
-        let mut addr = String::new();
-        BufReader::new(child.stdout.take()?)
-            .read_line(&mut addr)
-            .ok()?;
-        Some(Bus {
-            child,
-            addr: addr.trim().to_owned(),
-        })
-    }
-}
-
-impl Drop for Bus {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Isolated: no service dirs (nothing real gets D-Bus-activated) and dies with the test.
+        let tb = sliver_testbus::TestBus::start()?;
+        let addr = tb.address().to_owned();
+        Some(Bus { _tb: tb, addr })
     }
 }
 
@@ -64,6 +48,7 @@ impl Host for Rec {
 fn sliverctl(bus: &Bus) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_sliverctl"));
     c.env("DBUS_SESSION_BUS_ADDRESS", &bus.addr);
+    sliver_testbus::die_with_parent(&mut c);
     c
 }
 

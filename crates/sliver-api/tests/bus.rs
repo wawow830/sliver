@@ -10,8 +10,6 @@ use sliver_ipc::dbus::{
     BUS_NAME, IFACE_CONTEXT, IFACE_CONTROL, IFACE_DESKTOP, IFACE_TOUCHBAR, ROOT_PATH, error,
 };
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
@@ -22,25 +20,16 @@ use zbus::message::Type as MessageType;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 struct Bus {
-    child: Child,
+    _tb: sliver_testbus::TestBus,
     addr: String,
 }
 
 impl Bus {
     fn start() -> Option<Bus> {
-        let mut child = Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .ok()?;
-        let mut addr = String::new();
-        BufReader::new(child.stdout.take()?)
-            .read_line(&mut addr)
-            .ok()?;
-        Some(Bus {
-            child,
-            addr: addr.trim().to_owned(),
-        })
+        // Isolated: no service dirs (nothing real gets D-Bus-activated) and dies with the test.
+        let tb = sliver_testbus::TestBus::start()?;
+        let addr = tb.address().to_owned();
+        Some(Bus { _tb: tb, addr })
     }
 
     fn client(&self) -> Connection {
@@ -48,13 +37,6 @@ impl Bus {
             .unwrap()
             .build()
             .unwrap()
-    }
-}
-
-impl Drop for Bus {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 

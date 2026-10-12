@@ -7,8 +7,6 @@ use sliver_api::identity::RealProc;
 use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};
 use sliver_ipc::dbus::{BUS_NAME, IFACE_TOUCHBAR, ROOT_PATH};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
@@ -59,19 +57,10 @@ fn ours(xml: &str) -> Vec<String> {
 
 #[test]
 fn interfaces_match_docs() {
-    let Ok(mut daemon) = Command::new("dbus-daemon")
-        .args(["--session", "--nofork", "--print-address=1"])
-        .stdout(Stdio::piped())
-        .spawn()
-    else {
-        eprintln!("dbus-daemon not installed; skipping");
+    let Some(bus) = sliver_testbus::TestBus::start() else {
         return;
     };
-    let mut addr = String::new();
-    BufReader::new(daemon.stdout.take().unwrap())
-        .read_line(&mut addr)
-        .unwrap();
-    let addr = addr.trim().to_owned();
+    let addr = bus.address().to_owned();
     let _api = zbus::block_on(async {
         let conn = zbus::connection::Builder::address(addr.as_str())
             .unwrap()
@@ -112,8 +101,6 @@ fn interfaces_match_docs() {
     blocks.extend(ours(&introspect(ctx.as_str())));
     blocks.sort();
     blocks.dedup();
-    let _ = daemon.kill();
-    let _ = daemon.wait();
 
     let generated = format!(
         "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n \

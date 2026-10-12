@@ -18,3 +18,4 @@ serde.workspace = true
 
 [dev-dependencies]
 sliver-api.workspace = true
+sliver-testbus.workspace = true

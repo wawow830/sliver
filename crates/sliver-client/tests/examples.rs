@@ -5,8 +5,7 @@ use sliver_api::identity::RealProc;
 use sliver_api::item::Gesture;
 use sliver_api::registry::Interaction;
 use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,20 +42,10 @@ fn python_pomodoro() {
         eprintln!("python3-gobject not available; skipping");
         return;
     }
-    let Ok(mut daemon) = Command::new("dbus-daemon")
-        .args(["--session", "--nofork", "--print-address=1"])
-        .stdout(Stdio::piped())
-        .spawn()
-    else {
-        eprintln!("dbus-daemon not installed; skipping");
+    let Some(bus) = sliver_testbus::TestBus::start() else {
         return;
     };
-    let mut addr = String::new();
-    BufReader::new(daemon.stdout.take().unwrap())
-        .read_line(&mut addr)
-        .unwrap();
-    let _daemon = Kill(daemon);
-    let addr = addr.trim().to_owned();
+    let addr = bus.address().to_owned();
     let api = zbus::block_on(async {
         let conn = zbus::connection::Builder::address(addr.as_str())
             .unwrap()
@@ -71,13 +60,7 @@ fn python_pomodoro() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../examples/python/pomodoro.py"
     );
-    let _py = Kill(
-        Command::new("python3")
-            .arg(script)
-            .env("DBUS_SESSION_BUS_ADDRESS", &addr)
-            .spawn()
-            .unwrap(),
-    );
+    let _py = Kill(bus.command("python3").arg(script).spawn().unwrap());
 
     let wait = |f: &dyn Fn() -> bool| {
         let end = Instant::now() + Duration::from_secs(10);

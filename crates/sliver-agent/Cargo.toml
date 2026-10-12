@@ -29,4 +29,5 @@ sliver-reload.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
+sliver-testbus.workspace = true
 sliverd = { path = "../sliverd", features = ["testing"] }

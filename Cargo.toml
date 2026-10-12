@@ -26,6 +26,7 @@ sliver-ipc = { path = "crates/sliver-ipc" }
 sliver-proc = { path = "crates/sliver-proc" }
 sliver-api = { path = "crates/sliver-api" }
 sliver-client = { path = "crates/sliver-client" }
+sliver-testbus = { path = "crates/sliver-testbus" }
 sliver-hw = { path = "crates/sliver-hw" }
 sliver-render = { path = "crates/sliver-render" }
 # External crates shared by several members.

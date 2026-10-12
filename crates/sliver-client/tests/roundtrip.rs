@@ -6,38 +6,20 @@ use sliver_api::item::{Gesture, ItemKind};
 use sliver_api::registry::Interaction;
 use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};
 use sliver_client::{Client, ContextOptions, Item};
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 struct Bus {
-    child: Child,
+    _tb: sliver_testbus::TestBus,
     addr: String,
 }
 
 impl Bus {
     fn start() -> Option<Bus> {
-        let mut child = Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .ok()?;
-        let mut addr = String::new();
-        BufReader::new(child.stdout.take()?)
-            .read_line(&mut addr)
-            .ok()?;
-        Some(Bus {
-            child,
-            addr: addr.trim().to_owned(),
-        })
-    }
-}
-
-impl Drop for Bus {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Isolated: no service dirs (nothing real gets D-Bus-activated) and dies with the test.
+        let tb = sliver_testbus::TestBus::start()?;
+        let addr = tb.address().to_owned();
+        Some(Bus { _tb: tb, addr })
     }
 }
 

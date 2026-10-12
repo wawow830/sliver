@@ -20,3 +20,4 @@ futures-lite = "2"
 
 [dev-dependencies]
 serde.workspace = true
+sliver-testbus.workspace = true

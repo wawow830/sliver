@@ -1,30 +1,19 @@
 //! Shared test helper: a private `dbus-daemon`.
 #![allow(dead_code)]
 
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
 use zbus::blocking::{Connection, connection::Builder};
 
 pub struct Bus {
-    child: Child,
-    addr: String,
+    _tb: sliver_testbus::TestBus,
+    pub addr: String,
 }
 
 impl Bus {
     pub fn start() -> Option<Bus> {
-        let mut child = Command::new("dbus-daemon")
-            .args(["--session", "--nofork", "--print-address=1"])
-            .stdout(Stdio::piped())
-            .spawn()
-            .ok()?;
-        let mut addr = String::new();
-        BufReader::new(child.stdout.take()?)
-            .read_line(&mut addr)
-            .ok()?;
-        Some(Bus {
-            child,
-            addr: addr.trim().to_string(),
-        })
+        // Isolated: no service dirs (nothing real gets D-Bus-activated) and dies with the test.
+        let tb = sliver_testbus::TestBus::start()?;
+        let addr = tb.address().to_owned();
+        Some(Bus { _tb: tb, addr })
     }
 
     pub fn connect(&self) -> Connection {
@@ -41,12 +30,5 @@ impl Bus {
             .unwrap()
             .build()
             .unwrap()
-    }
-}
-
-impl Drop for Bus {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }

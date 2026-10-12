@@ -15,3 +15,6 @@ workspace = true
 sliver-proc.workspace = true
 serde = { version = "1", features = ["derive"] }
 zbus = "5"
+
+[dev-dependencies]
+sliver-testbus.workspace = true
