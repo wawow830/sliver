@@ -235,6 +235,12 @@ fn publish_resolve_and_unicast_events() {
         .unwrap();
     assert_eq!(list.len(), 1);
     assert!(!bool::try_from(&list[0]["sandboxed"]).unwrap());
+    let strs = |k: &str| -> Vec<String> {
+        <Vec<String>>::try_from(list[0][k].try_clone().unwrap()).unwrap()
+    };
+    // The unknown "hologram" item was skipped; "go" can be placed as app/org.example.Test#go.
+    assert_eq!(strs("item-ids"), ["go"]);
+    assert_eq!(strs("item-labels"), ["Hi"]);
     assert_eq!(
         String::try_from(list[0]["provider"].try_clone().unwrap()).unwrap(),
         "org.example.Test"

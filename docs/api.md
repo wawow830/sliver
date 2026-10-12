@@ -28,7 +28,7 @@ Additive changes bump the `Version` property (minor).
 | minor | added |
 |---|---|
 | 0 | the first published interface |
-| 1 | `Control1.HoldLayout`, `ActiveLayout`/`ActiveLayoutSource`/`ActiveRule`/`ActiveRuleName`; item types `scrubber` (events `scrolled`) and working `popover`s; `ListContexts` `sandboxed`; `Desktop1.SetWindows`/`SetWindowsV` |
+| 1 | `Control1.HoldLayout`, `ActiveLayout`/`ActiveLayoutSource`/`ActiveRule`/`ActiveRuleName`; item types `scrubber` (events `scrolled`) and working `popover`s; `ListContexts` `sandboxed`, `item-ids`, `item-labels`; `Desktop1.SetWindows`/`SetWindowsV` |
 
 ---
 
@@ -271,7 +271,8 @@ Preview(s layout_toml, u timeout_ms)       show on the real bar, auto-revert (se
 RenderPreview(s layout_toml, a{sv} options) -> (ay png)   same renderer, for on-screen WYSIWYG
 SetVariable(s name, v value)        user variables usable in context conditions ("per state" layouts)
 ListContexts() -> (aa{sv})          path, provider, title, scope, visible, on-screen, items, sandboxed,
-                                    target-app-id; for the settings app
+                                    target-app-id, item-ids as + item-labels as (what
+                                    `app/<provider>#<id>` can place, with names); for the settings app
 
 # Modules (waybar parity: `pkill -RTMIN+N waybar` and friends). `module` = any module id, built-in,
 # config-defined (`custom/vpn`, `clock#2`) or published (`app/<provider>#<item>`).

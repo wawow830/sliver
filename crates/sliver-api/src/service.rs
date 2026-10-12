@@ -768,6 +768,34 @@ impl ControlIface {
                 p.insert("visible".into(), Prop::Bool(ctx.visible));
                 p.insert("on-screen".into(), Prop::Bool(ctx.on_screen));
                 p.insert("items".into(), Prop::Int(ctx.items.len() as i64));
+                // What `app/<provider>#<id>` can place (top-level items; spacers aren't worth it),
+                // with a name for pickers: the label, else the a11y label, else the id.
+                let placeable: Vec<&crate::item::Item> = ctx
+                    .items
+                    .iter()
+                    .filter(|i| !matches!(i.kind, crate::item::ItemKind::Spacer { .. }))
+                    .collect();
+                p.insert(
+                    "item-ids".into(),
+                    Prop::List(placeable.iter().map(|i| Prop::Str(i.id.clone())).collect()),
+                );
+                p.insert(
+                    "item-labels".into(),
+                    Prop::List(
+                        placeable
+                            .iter()
+                            .map(|i| {
+                                Prop::Str(
+                                    i.label
+                                        .clone()
+                                        .filter(|l| !l.is_empty())
+                                        .or_else(|| i.a11y_label.clone())
+                                        .unwrap_or_else(|| i.id.clone()),
+                                )
+                            })
+                            .collect(),
+                    ),
+                );
                 let sandboxed = s
                     .reg
                     .client(&ctx.owner)
