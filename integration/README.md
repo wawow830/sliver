@@ -30,3 +30,13 @@ variants); GNOME's GJS can send `aa{sv}` to `SetWorkspaces` natively.
 Written from the GNOME Shell 45+ extension API (ESM). Uses `NO_AUTO_START` so it never starts the
 agent, ignores every error, and sends an empty `SetFocus` on disable so the agent can fall back.
 Please run it on a real GNOME session before relying on it.
+
+## Switching workspaces (the agent calling back)
+
+* KDE: the agent calls KWin's own `org.kde.KWin /KWin setCurrentDesktop(i)` (1-based, the same
+  number the script reports as the workspace id). `integration/kwin/test.sh` checks it in the
+  nested KWin.
+* GNOME: the extension owns `io.github.wawow830.Sliver.Shell` while enabled and exports
+  `io.github.wawow830.Sliver.Shell1.FocusWorkspace(i)` (1-based). Not yet run on a real shell.
+
+Both calls use `NoAutoStart`: with no script or extension running, tapping does nothing but log.

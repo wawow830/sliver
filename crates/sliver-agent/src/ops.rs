@@ -142,3 +142,30 @@ fn open_notification(ses: &Connection, id: u32) -> Result<(), String> {
     }
     sliver_session::notifications::close(ses, id)
 }
+
+/// Make a GNOME/KDE desktop-control call on the session bus. It never starts the destination
+/// (no extension, no effect) and gives up after a few seconds.
+pub fn bus_call(call: &sliver_desktop::control::BusCall) -> Result<(), String> {
+    let conn = Connection::session().map_err(|e| e.to_string())?;
+    let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(&conn)
+        .destination(call.dest)
+        .and_then(|b| b.path(call.path))
+        .and_then(|b| b.interface(call.iface))
+        .and_then(|b| b.cache_properties(zbus::proxy::CacheProperties::No).build())
+        .map_err(|e| e.to_string())?;
+    let flags = zbus::proxy::MethodFlags::NoAutoStart.into();
+    let r = match call.arg {
+        Some(n) => proxy
+            .call_with_flags::<_, _, zbus::zvariant::OwnedValue>(call.method, flags, &(n,))
+            .map(|_| ()),
+        None => proxy
+            .call_with_flags::<_, _, zbus::zvariant::OwnedValue>(call.method, flags, &())
+            .map(|_| ()),
+    };
+    r.map_err(|e| {
+        format!(
+            "{}: {e} (is the Sliver extension/script running?)",
+            call.dest
+        )
+    })
+}

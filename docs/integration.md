@@ -73,7 +73,7 @@ is in `sliver_desktop::Backend::detect` (env: `HYPRLAND_INSTANCE_SIGNATURE`, `NI
 | niri | JSON IPC over `$NIRI_SOCKET`, `"EventStream"` request | yes | small | **done** (`sliver_desktop::niri`; fake-server tests, not run on a real niri) |
 | wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | yes | medium | todo, fallback |
 | KDE Plasma 6 | KWin script (JS) calling our D-Bus service | yes | medium | **done** (`integration/kwin`; tested in nested `kwin_wayland --virtual`) |
-| GNOME Shell | extension calling our D-Bus service | yes | medium-large | **written, untested** (`integration/gnome-shell`; see integration/README.md) |
+| GNOME Shell | extension calling our D-Bus service | yes | medium-large | **written, untested** (`integration/gnome-shell`; see integration/README.md); also switches workspaces for the agent |
 | X11 | `_NET_ACTIVE_WINDOW` on the root window | yes | small | todo, last |
 
 ### Hyprland (done)

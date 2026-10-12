@@ -19,6 +19,14 @@ const NAME = 'io.github.wawow830.Sliver';
 const PATH = '/io/github/wawow830/Sliver';
 const IFACE = `${NAME}.Desktop1`;
 
+// What the agent calls back (workspace switching); the agent never starts us, we own the name
+// only while enabled.
+const SHELL_NAME = `${NAME}.Shell`;
+const SHELL_PATH = `${PATH}/Shell`;
+const SHELL_XML = `<node><interface name="${NAME}.Shell1">
+  <method name="FocusWorkspace"><arg type="i" direction="in" name="number"/></method>
+</interface></node>`;
+
 function str(v) {
     return GLib.Variant.new_string(String(v ?? ''));
 }
@@ -90,9 +98,24 @@ export default class SliverFocus extends Extension {
             s => this._wm.connect(s, () => this._pushWorkspaces()));
         this._focusChanged();
         this._pushWorkspaces();
+        // The agent's "switch to workspace N" (1-based, as reported in SetWorkspaces).
+        this._exported = Gio.DBusExportedObject.wrapJSObject(SHELL_XML, this);
+        this._exported.export(Gio.DBus.session, SHELL_PATH);
+        this._ownerId = Gio.bus_own_name_on_connection(
+            Gio.DBus.session, SHELL_NAME, Gio.BusNameOwnerFlags.NONE, null, null);
+    }
+
+    FocusWorkspace(number) {
+        const ws = this._wm?.get_workspace_by_index(number - 1);
+        ws?.activate(global.get_current_time());
     }
 
     disable() {
+        if (this._ownerId)
+            Gio.bus_unown_name(this._ownerId);
+        this._exported?.unexport();
+        this._ownerId = 0;
+        this._exported = null;
         this._unwatchWindow();
         this._display?.disconnect(this._displayId);
         this._wm?.disconnect(this._wsId);

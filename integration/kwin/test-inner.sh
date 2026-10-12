@@ -48,3 +48,14 @@ cat "$log"
 grep -q '"app-id"' "$log" && grep -q 'sliver-test-app' "$log" || { echo "FAIL: no SetFocus for the test window"; cat "$work/kwin.log" | tail -20; exit 1; }
 grep -q '"method": "SetWorkspacesV"' "$log" || { echo "FAIL: no SetWorkspacesV"; exit 1; }
 echo "ok: kwin script reported the focused window and the desktops"
+
+# The write side: the agent switches desktops with KWin's own setCurrentDesktop (control::bus_call).
+busctl --user call org.kde.KWin /VirtualDesktopManager org.kde.KWin.VirtualDesktopManager createDesktop us 1 "Two" >/dev/null
+sleep 0.5
+first=$(busctl --user get-property org.kde.KWin /VirtualDesktopManager org.kde.KWin.VirtualDesktopManager current)
+[ "$(busctl --user call org.kde.KWin /KWin org.kde.KWin setCurrentDesktop i 2)" = "b true" ] || { echo "FAIL: setCurrentDesktop 2"; exit 1; }
+sleep 0.5
+second=$(busctl --user get-property org.kde.KWin /VirtualDesktopManager org.kde.KWin.VirtualDesktopManager current)
+[ "$first" != "$second" ] || { echo "FAIL: the current desktop did not change ($first)"; exit 1; }
+grep -q '"Two"' "$log" || { echo "FAIL: the script did not report the new desktop"; exit 1; }
+echo "ok: setCurrentDesktop switched desktops and the script reported them"
