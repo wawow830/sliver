@@ -35,6 +35,8 @@ pub struct Item {
     pub pressed: bool,
     /// Matches `:disabled` (e.g. a control with nothing to control).
     pub disabled: bool,
+    /// Matches `:checked`: a toggle that is on.
+    pub checked: bool,
     /// Inline override of the computed `background-color` (like a `style` attribute).
     pub background: Option<Color>,
     /// Inline override of the computed `color` (labels and symbolic icons).
@@ -51,6 +53,7 @@ impl Item {
             width: Width::Auto,
             pressed: false,
             disabled: false,
+            checked: false,
             background: None,
             foreground: None,
         }
@@ -95,6 +98,11 @@ impl Item {
 
     pub fn disabled(mut self, disabled: bool) -> Item {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn checked(mut self, checked: bool) -> Item {
+        self.checked = checked;
         self
     }
 

@@ -85,6 +85,7 @@ impl Renderer {
             classes: &scene.classes,
             active: false,
             disabled: false,
+            checked: false,
             first: true,
             last: true,
         };
@@ -106,6 +107,7 @@ impl Renderer {
                 classes: &zclasses,
                 active: false,
                 disabled: false,
+                checked: false,
                 first: zi == 0,
                 last: zi + 1 == nz,
             };
@@ -128,17 +130,19 @@ impl Renderer {
                     classes: &classes,
                     active: item.pressed,
                     disabled: item.disabled,
+                    checked: item.checked,
                     first: ii == 0,
                     last: ii + 1 == ni,
                 };
                 key.clear();
                 key.push_str(&zone_key);
                 key.push_str(&format!(
-                    ">module#{}.{}:{}{}{}{}",
+                    ">module#{}.{}:{}{}{}{}{}",
                     item.id.as_deref().unwrap_or(""),
                     classes.join("."),
                     el.active as u8,
                     el.disabled as u8,
+                    el.checked as u8,
                     el.first as u8,
                     el.last as u8
                 ));
@@ -150,6 +154,7 @@ impl Renderer {
                         classes: &[],
                         active: item.pressed,
                         disabled: item.disabled,
+                        checked: item.checked,
                         first: true,
                         last: tag != "highlight",
                     };

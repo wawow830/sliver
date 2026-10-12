@@ -29,8 +29,10 @@ module:active { background-color: #636366; }
 module:disabled { opacity: 0.4; }
 
 /* Toggles that are on: caffeine, DND, mic, idle inhibitor… */
-module.on, module.activated { background-color: @accent; }
-module.on:active, module.activated:active { background-color: shade(@accent, 1.25); }
+module:checked, module.on, module.activated { background-color: @accent; }
+module:checked:active, module.on:active, module.activated:active {
+  background-color: shade(@accent, 1.25);
+}
 
 /* Sliders (backlight/slider, audio/slider, custom sliders): trough, filled part, knob. */
 trough {

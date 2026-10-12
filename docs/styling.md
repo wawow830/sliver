@@ -33,7 +33,7 @@ bar   classes: layer-<name>, layout-<name>, <bar name>, locked, dimmed (set by t
 `#id` only ever matches modules.
 
 ## Selectors
-`*`, `bar`/`zone`/`module`, `#id`, `.class`, `:active` (pressed; toggles that are on use `.on`),
+`*`, `bar`/`zone`/`module`, `#id`, `.class`, `:active` (pressed), `:checked` (a toggle that is on; the `.on` class is equivalent in the built-in themes),
 `:disabled`, `:first-child`, `:last-child`, `:not(simple)`, descendant (`a b`) and child
 (`a > b`) combinators, and comma lists. `:hover`/`:focus` are accepted but never match on a touch
 strip. Sibling combinators (`+`, `~`) aren't supported.

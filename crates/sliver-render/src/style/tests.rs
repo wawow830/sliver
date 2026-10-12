@@ -24,6 +24,7 @@ fn styles(sheet: &Stylesheet, t: &Tree, module_id: &str, active: bool) -> [Style
         classes: &t.bar,
         active: false,
         disabled: false,
+        checked: false,
         first: true,
         last: true,
     };
@@ -207,6 +208,7 @@ fn predefined_colors_and_disabled() {
         classes: &[],
         active: false,
         disabled: false,
+        checked: false,
         first: true,
         last: true,
     };

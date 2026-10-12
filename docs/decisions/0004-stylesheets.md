@@ -21,7 +21,7 @@ CSS engine isn't available.
   - Bar: classes from the agent (`layer-fn`, `layout-x`, `locked`…).
 
   This follows docs/customization.md §7.
-- **Selectors:** type, `*`, `#id`, `.class`, `:active` (pressed), `:disabled`,
+- **Selectors:** type, `*`, `#id`, `.class`, `:active` (pressed), `:checked` (toggle on), `:disabled`,
   `:first-child`, `:last-child`, `:not(compound)`, descendant and `>` combinators, and lists.
   `:hover`/`:focus`/… parse but never match (with a note). `+`/`~` are rejected for that selector
   only. Cascade is standard: `!important`, then specificity, then source order.
@@ -47,7 +47,8 @@ CSS engine isn't available.
   `add_file()`.
 - **Sliders** are styled through GTK/waybar child nodes `module > trough > {highlight, slider}`, so
   waybar slider CSS carries over. `Layout::tracks` gives the trough rect for touch → value.
-  `:checked` is rejected with a hint to use `.on`, so toggled-on state has one spelling. The tiny-dfr importer turns `ShowButtonOutlines=false` into
+  Toggles that are on match `:checked` (api.md §3); built-in themes also style `.on`.
+- The tiny-dfr importer turns `ShowButtonOutlines=false` into
   `module { background: transparent }`.
 - **Hot reload:** the agent's watcher (inotify) watches `Stylesheet::files()`, imports included,
   re-loads, and logs diagnostics. `Renderer` caches computed styles by `Stylesheet::generation()`,

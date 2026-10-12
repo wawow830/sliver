@@ -9,6 +9,8 @@ pub struct Element<'a> {
     /// Pressed (`:active`).
     pub active: bool,
     pub disabled: bool,
+    /// A toggle that is on (`:checked`).
+    pub checked: bool,
     pub first: bool,
     pub last: bool,
 }
@@ -17,6 +19,7 @@ pub struct Element<'a> {
 enum Pseudo {
     Active,
     Disabled,
+    Checked,
     FirstChild,
     LastChild,
     Not(Box<Compound>),
@@ -86,12 +89,7 @@ fn compound<'a>(mut s: &'a str, notes: &mut Vec<String>) -> Result<(Compound, &'
                 s = rest;
                 let pseudo = match name.to_ascii_lowercase().as_str() {
                     "active" => Pseudo::Active,
-                    "checked" => {
-                        return Err(
-                            "':checked' isn't supported; toggles that are on have the class '.on'"
-                                .into(),
-                        );
-                    }
+                    "checked" => Pseudo::Checked,
                     "disabled" => Pseudo::Disabled,
                     "first-child" => Pseudo::FirstChild,
                     "last-child" => Pseudo::LastChild,
@@ -212,6 +210,7 @@ fn compound_matches(c: &Compound, el: &Element<'_>) -> bool {
         && c.pseudos.iter().all(|p| match p {
             Pseudo::Active => el.active,
             Pseudo::Disabled => el.disabled,
+            Pseudo::Checked => el.checked,
             Pseudo::FirstChild => el.first,
             Pseudo::LastChild => el.last,
             Pseudo::Not(inner) => !compound_matches(inner, el),
@@ -230,6 +229,7 @@ mod tests {
             classes,
             active: false,
             disabled: false,
+            checked: false,
             first: false,
             last: false,
         }
@@ -258,8 +258,11 @@ mod tests {
         assert!(!sel("#battery.warning").matches(&path));
         assert!(sel("#battery:not(.warning)").matches(&path));
         assert!(!sel("module:active").matches(&path));
+        assert!(!sel("module:checked").matches(&path));
         module.active = true;
         module.last = true;
+        module.checked = true;
+        assert!(sel("module:checked").matches(&[bar, zone, module]));
         assert!(sel("module:active:last-child").matches(&[bar, zone, module]));
 
         assert_eq!(
