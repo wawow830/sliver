@@ -993,6 +993,10 @@ impl Agent {
                 self.emoji_action(&cell.key, n, now, fx);
                 return;
             }
+            ("language", "next", _) => {
+                fx.push(Effect::Desktop(sliver_desktop::control::Action::NextLayout));
+                return;
+            }
             ("workspaces" | "taskbar", "focus", _) => {
                 if let Some(t) = &cell.target {
                     fx.push(Effect::Desktop(t.clone()));

@@ -804,7 +804,10 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
         }
         "language" => {
             let l = world.desktop.keyboard_layout.as_deref()?;
-            Spec::new(ValueMap::new().with("", esc(l)).with("long", esc(l)), "{}")
+            let mut sp = Spec::new(ValueMap::new().with("", esc(l)).with("long", esc(l)), "{}")
+                .on(Gesture::Tap, "next");
+            sp.target = Some(sliver_desktop::control::Action::NextLayout);
+            sp
         }
         "window" => {
             let w = world.desktop.window.as_ref()?;

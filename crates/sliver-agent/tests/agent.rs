@@ -806,3 +806,23 @@ fn menu_sub_bar_opens_runs_and_closes() {
     a.render(&w);
     assert!(!keys(&a).contains(&"menu/close".to_string()));
 }
+
+/// Tapping the keyboard layout indicator cycles the layout on the compositor.
+#[test]
+fn language_tap_switches_layout() {
+    use sliver_agent::agent::Effect;
+    use sliver_desktop::control::Action as Desk;
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"language\"]\n",
+    );
+    let mut w = world(9, 41);
+    w.desktop.connected = true;
+    w.desktop.keyboard_layout = Some("English (US)".into());
+    a.render(&w);
+    let (id, x) = region(&a, "language");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 40_000));
+    fx.extend(a.tick(400_000));
+    assert!(fx.contains(&Effect::Desktop(Desk::NextLayout)), "{fx:?}");
+}

@@ -16,8 +16,14 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     FocusWorkspace(WorkspaceInfo),
-    FocusWindow { address: String },
-    CloseWindow { address: String },
+    FocusWindow {
+        address: String,
+    },
+    CloseWindow {
+        address: String,
+    },
+    /// Cycle the keyboard layout (the `language` module's tap).
+    NextLayout,
 }
 
 /// Hyprland dispatcher command (`socket1`, without the `/dispatch` prefix hyprctl adds).
@@ -29,6 +35,7 @@ pub fn hyprland_command(a: &Action) -> String {
         Action::FocusWorkspace(w) => format!("dispatch workspace name:{}", w.name),
         Action::FocusWindow { address } => format!("dispatch focuswindow address:0x{address}"),
         Action::CloseWindow { address } => format!("dispatch closewindow address:0x{address}"),
+        Action::NextLayout => "dispatch switchxkblayout all next".into(),
     }
 }
 
@@ -42,6 +49,7 @@ pub fn sway_command(a: &Action) -> String {
         Action::FocusWorkspace(w) => format!("workspace {}", q(&w.name)),
         Action::FocusWindow { address } => format!("[con_id={address}] focus"),
         Action::CloseWindow { address } => format!("[con_id={address}] kill"),
+        Action::NextLayout => "input type:keyboard xkb_switch_layout next".into(),
     }
 }
 
@@ -57,6 +65,7 @@ pub fn niri_request(a: &Action) -> Option<serde_json::Value> {
         Action::CloseWindow { address } => {
             json!({"Action": {"CloseWindow": {"id": address.parse::<u64>().ok()?}}})
         }
+        Action::NextLayout => json!({"Action": {"SwitchLayout": {"layout": "Next"}}}),
     })
 }
 
@@ -167,6 +176,18 @@ mod tests {
         assert_eq!(sway_command(&num), "workspace number 3");
         assert_eq!(sway_command(&named), "workspace \"we\\\"b\"");
         assert_eq!(sway_command(&close), "[con_id=12] kill");
+        assert_eq!(
+            hyprland_command(&Action::NextLayout),
+            "dispatch switchxkblayout all next"
+        );
+        assert_eq!(
+            sway_command(&Action::NextLayout),
+            "input type:keyboard xkb_switch_layout next"
+        );
+        assert_eq!(
+            niri_request(&Action::NextLayout).unwrap()["Action"]["SwitchLayout"]["layout"],
+            "Next"
+        );
         assert_eq!(niri_request(&win), None, "niri ids are numbers");
         assert_eq!(
             niri_request(&close).unwrap()["Action"]["CloseWindow"]["id"],

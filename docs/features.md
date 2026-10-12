@@ -51,7 +51,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | **Script widget**: command output → text/icon/color, refresh interval or on-signal | P1 | done | MTMR shellScriptTitledButton, BTT | any | agent runs it sandboxed with a timeout | `custom/*` runtime: exec, interval, continuous, signal, JSON. |
 | **App controls placeholder**: where focused-app items go | P1 | done | mac app region | from the app | public API (cedar) |  |
 | Group / folder: opens a sub-bar with an auto close button | P1 | partial | MTMR group, BTT folders | tap opens, Esc or close exits |  | Inline drawers and groups done; the sub-bar mode with an automatic close button is not verified. |
-| Keyboard layout indicator and switcher | P2 | partial | MTMR inputsource | tap = next, long-press = list | compositor | The indicator (`language`) is done; tap-to-switch and the layout list are not. |
+| Keyboard layout indicator and switcher | P2 | partial | MTMR inputsource | tap = next, long-press = list | compositor | The indicator and tap-to-cycle (Hyprland, sway, niri) are done; the long-press layout list is not. |
 | Notifications: count plus latest, tap to open | P2 | partial | (none, our own) | tap, swipe = dismiss | freedesktop notifications (needs a monitor; check per DE) | Open-notification count and DND display done. Missing: latest text, tap to open, swipe to dismiss. |
 | Timer / pomodoro | P2 | done | MTMR pomodoro | tap start/pause, long-press reset |  |  |
 | System stats: CPU/RAM/temp/net, sparkline | P2 | partial | MTMR cpu/network | tap → system monitor | /proc, hwmon | cpu, memory, load, temperature, disk and network done. Missing: sparkline graph and rates. |
