@@ -609,6 +609,15 @@ fn apply(
                         },
                         None => continue,
                     },
+                    SessionOp::OpenNotification | SessionOp::DismissNotification => {
+                        match live.agg.session.notifications.latest.as_ref().map(|l| l.id) {
+                            Some(id) if op == SessionOp::OpenNotification => {
+                                Op::OpenNotification(id)
+                            }
+                            Some(id) => Op::CloseNotification(id),
+                            None => continue,
+                        }
+                    }
                     SessionOp::ToggleDnd => {
                         Op::Dnd(!live.agg.session.notifications.dnd.unwrap_or(false))
                     }

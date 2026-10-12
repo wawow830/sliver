@@ -82,6 +82,10 @@ pub enum SessionOp {
     ToggleWifi,
     ToggleBluetooth,
     ToggleDnd,
+    /// Invoke the latest notification's default action (where the daemon has a tool for it).
+    OpenNotification,
+    /// Close the latest notification.
+    DismissNotification,
 }
 
 pub struct Agent {
@@ -987,6 +991,8 @@ impl Agent {
             ("network", "toggle", _) => SessionOp::ToggleWifi,
             ("bluetooth", "toggle", _) => SessionOp::ToggleBluetooth,
             ("dnd", "toggle", _) => SessionOp::ToggleDnd,
+            ("notifications", "open", _) => SessionOp::OpenNotification,
+            ("notifications", "dismiss", _) => SessionOp::DismissNotification,
             ("timer", "toggle", _) => {
                 let total = cell
                     .timer_total

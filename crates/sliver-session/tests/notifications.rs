@@ -38,6 +38,7 @@ impl Mock {
         s.next_id += 1;
         s.next_id
     }
+    fn close_notification(&self, _id: u32) {}
     #[zbus(property)]
     fn inhibited(&self) -> bool {
         self.0.lock().unwrap().inhibited
@@ -106,8 +107,20 @@ fn counts_notifications_and_reads_dnd() {
     let a = notify(&client, 0);
     assert_eq!(next(&rx).notifications.count, 1);
     let b = notify(&client, 0);
-    assert_eq!(next(&rx).notifications.count, 2);
+    let s = next(&rx);
+    assert_eq!(s.notifications.count, 2);
+    let l = s.notifications.latest.expect("latest notification");
+    assert_eq!(
+        (l.id, l.app.as_str(), l.summary.as_str()),
+        (b, "test", "private summary")
+    );
     assert_eq!(notify(&client, a), a, "replace keeps the count");
+    // the replaced one is the newest again (an update, same count)
+    let s = next(&rx);
+    assert_eq!(
+        (s.notifications.count, s.notifications.latest.unwrap().id),
+        (2, a)
+    );
     server
         .emit_signal(
             None::<&str>,
@@ -117,7 +130,11 @@ fn counts_notifications_and_reads_dnd() {
             &(b, 1u32),
         )
         .unwrap();
-    assert_eq!(next(&rx).notifications.count, 1);
+    let s = next(&rx);
+    assert_eq!(s.notifications.count, 1);
+
+    // dismissing goes through CloseNotification (the mock server only records it)
+    assert!(sliver_session::notifications::close(&client, a).is_ok());
 
     // KDE-style DND: the server's Inhibited property
     state.lock().unwrap().inhibited = true;

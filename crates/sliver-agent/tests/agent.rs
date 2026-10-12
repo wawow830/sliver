@@ -962,3 +962,44 @@ fn now_playing_art_player_picker_and_scrub() {
         "{fx:?}"
     );
 }
+
+/// The notifications module shows the latest summary; tap opens it, a swipe dismisses it.
+#[test]
+fn notifications_show_latest_open_and_dismiss() {
+    use sliver_agent::agent::{Effect, SessionOp};
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"notifications\"]\n",
+    );
+    let mut w = world(9, 41);
+    w.session.notifications.count = 2;
+    w.session.notifications.latest = Some(sliver_session::notifications::Latest {
+        id: 7,
+        app: "chat".into(),
+        summary: "Lunch at 12? <b>".into(),
+    });
+    a.render(&w);
+    let text = match &a.frame(Layer::Base).unwrap().cells[0].content {
+        sliver_render::Content::Markup(t) | sliver_render::Content::IconMarkup(_, t) => t.clone(),
+        other => format!("{other:?}"),
+    };
+    assert_eq!(text, "Lunch at 12? &lt;b&gt;", "the summary, escaped");
+    let (id, x) = region(&a, "notifications");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 40_000));
+    fx.extend(a.tick(400_000));
+    assert!(
+        fx.contains(&Effect::Session(SessionOp::OpenNotification)),
+        "{fx:?}"
+    );
+    // swipe left
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x + 150.0, 1_000_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Move, x + 40.0, 1_050_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Move, x - 100.0, 1_100_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x - 100.0, 1_150_000));
+    fx.extend(a.tick(1_500_000));
+    assert!(
+        fx.contains(&Effect::Session(SessionOp::DismissNotification)),
+        "{fx:?}"
+    );
+}

@@ -15,24 +15,40 @@
 
 use crate::{Handle, props};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use zbus::blocking::Connection;
 use zbus::message::Type;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notifications {
     /// Notifications currently open in the server.
     pub count: u32,
     /// `None` = unknown (no supported daemon).
     pub dnd: Option<bool>,
+    /// The most recent open notification: its app and summary only, never the body.
+    pub latest: Option<Latest>,
 }
+
+/// What the bar may show of a notification. The body is never read, so it can't leak onto a bar
+/// that stays visible while the screen is locked or shared.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Latest {
+    pub id: u32,
+    pub app: String,
+    pub summary: String,
+}
+
+/// Summaries are cut to this many characters: a long one is no use on a 60 px bar.
+const MAX_SUMMARY: usize = 120;
 
 /// Pure bookkeeping, separate from D-Bus so it is exhaustively testable.
 #[derive(Debug, Default)]
 pub struct Counter {
     /// `Notify` calls awaiting their reply, keyed by (caller unique name, call serial).
-    pending: HashMap<(String, u32), u32>,
-    open: HashSet<u32>,
+    pending: HashMap<(String, u32), (u32, String, String)>,
+    open: HashMap<u32, (String, String)>,
+    /// Open ids, oldest first.
+    order: Vec<u32>,
 }
 
 impl Counter {
@@ -40,35 +56,62 @@ impl Counter {
         self.open.len() as u32
     }
 
-    /// A client called `Notify(.., replaces_id, ..)`.
-    pub fn notify_called(&mut self, caller: &str, serial: u32, replaces_id: u32) {
+    /// The newest open notification.
+    pub fn latest(&self) -> Option<Latest> {
+        let id = *self.order.last()?;
+        let (app, summary) = self.open.get(&id)?;
+        Some(Latest {
+            id,
+            app: app.clone(),
+            summary: summary.clone(),
+        })
+    }
+
+    /// A client called `Notify(app, replaces_id, .., summary, ..)`.
+    pub fn notify_called(
+        &mut self,
+        caller: &str,
+        serial: u32,
+        replaces_id: u32,
+        app: &str,
+        summary: &str,
+    ) {
         // Bound memory if replies never arrive (server gone mid-call).
         if self.pending.len() > 256 {
             self.pending.clear();
         }
-        self.pending
-            .insert((caller.to_string(), serial), replaces_id);
+        let summary: String = summary.chars().take(MAX_SUMMARY).collect();
+        self.pending.insert(
+            (caller.to_string(), serial),
+            (replaces_id, app.to_string(), summary),
+        );
     }
 
     /// The server replied to a call: `id` is the notification id. Ignores unrelated replies.
     pub fn notify_returned(&mut self, caller: &str, reply_serial: u32, id: u32) {
-        if let Some(replaces) = self.pending.remove(&(caller.to_string(), reply_serial)) {
+        if let Some((replaces, app, summary)) =
+            self.pending.remove(&(caller.to_string(), reply_serial))
+        {
             if replaces != 0 && replaces != id {
-                self.open.remove(&replaces);
+                self.closed(replaces);
             }
-            self.open.insert(id);
+            self.order.retain(|x| *x != id);
+            self.order.push(id);
+            self.open.insert(id, (app, summary));
         }
     }
 
     /// `NotificationClosed(id, reason)`.
     pub fn closed(&mut self, id: u32) {
         self.open.remove(&id);
+        self.order.retain(|x| *x != id);
     }
 
     /// The server went away or restarted: its notifications are gone.
     pub fn reset(&mut self) {
         self.pending.clear();
         self.open.clear();
+        self.order.clear();
     }
 }
 
@@ -117,6 +160,20 @@ pub fn set_dnd(conn: &Connection, on: bool) -> Result<(), String> {
     })
 }
 
+/// Dismiss notification `id` (`CloseNotification`; the server answers with `NotificationClosed`).
+/// Never starts a notification daemon.
+pub fn close(conn: &Connection, id: u32) -> Result<(), String> {
+    props::call_no_autostart::<_, ()>(
+        conn,
+        SERVER,
+        "/org/freedesktop/Notifications",
+        SERVER,
+        "CloseNotification",
+        &(id,),
+    )
+    .ok_or_else(|| "no notification server to close it".to_string())
+}
+
 impl Handle {
     /// Start tracking notifications.
     ///
@@ -147,11 +204,13 @@ impl Handle {
                     let mut dnd_changed = false;
                     match msg.message_type() {
                         Type::MethodCall if member.as_deref() == Some("Notify") => {
-                            let replaces = notify_replaces_id(&msg);
+                            let (replaces, app, summary) = notify_args(&msg);
                             counter.notify_called(
                                 &sender,
                                 h.primary().serial_num().get(),
                                 replaces,
+                                &app,
+                                &summary,
                             );
                         }
                         Type::MethodReturn => {
@@ -186,8 +245,10 @@ impl Handle {
                     }
                     let count = counter.count();
                     let dnd = dnd_changed.then(|| read_dnd(&query));
+                    let latest = counter.latest();
                     let alive = hub.update(|s| {
                         s.notifications.count = count;
+                        s.notifications.latest = latest;
                         if let Some(d) = dnd {
                             s.notifications.dnd = d;
                         }
@@ -202,8 +263,9 @@ impl Handle {
     }
 }
 
-/// `replaces_id` is the second argument of `Notify`; the rest is dropped unread.
-fn notify_replaces_id(msg: &zbus::Message) -> u32 {
+/// `(replaces_id, app_name, summary)` of a `Notify` call. The body, actions and hints are
+/// deserialized (the wire format needs them) and dropped at once.
+fn notify_args(msg: &zbus::Message) -> (u32, String, String) {
     type Args = (
         String,
         u32,
@@ -214,7 +276,10 @@ fn notify_replaces_id(msg: &zbus::Message) -> u32 {
         HashMap<String, zbus::zvariant::OwnedValue>,
         i32,
     );
-    msg.body().deserialize::<Args>().map(|a| a.1).unwrap_or(0)
+    msg.body()
+        .deserialize::<Args>()
+        .map(|a| (a.1, a.0, a.3))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -224,28 +289,43 @@ mod tests {
     #[test]
     fn counts_new_replaced_and_closed() {
         let mut c = Counter::default();
-        c.notify_called(":1.5", 10, 0);
+        c.notify_called(":1.5", 10, 0, "app", "sum");
         assert_eq!(c.count(), 0, "not counted until the server assigns an id");
         c.notify_returned(":1.5", 10, 1);
         assert_eq!(c.count(), 1);
-        c.notify_called(":1.6", 3, 0);
+        c.notify_called(":1.6", 3, 0, "chat", "New message");
         c.notify_returned(":1.6", 3, 2);
         assert_eq!(c.count(), 2);
+        let l = c.latest().unwrap();
+        assert_eq!(
+            (l.id, l.app.as_str(), l.summary.as_str()),
+            (2, "chat", "New message")
+        );
         // replacing id 1 in place (same id back) doesn't add one
-        c.notify_called(":1.5", 11, 1);
+        c.notify_called(":1.5", 11, 1, "app", "sum");
         c.notify_returned(":1.5", 11, 1);
         assert_eq!(c.count(), 2);
         // a server that issues a fresh id on replace: old one goes away
-        c.notify_called(":1.5", 12, 1);
+        c.notify_called(":1.5", 12, 1, "app", "sum");
         c.notify_returned(":1.5", 12, 7);
         assert_eq!(c.count(), 2);
         c.closed(7);
         c.closed(7);
+        assert_eq!(
+            c.latest().unwrap().id,
+            2,
+            "back to the newest one still open"
+        );
         assert_eq!(c.count(), 1);
         // unrelated method returns are ignored
         c.notify_returned(":1.9", 99, 55);
         assert_eq!(c.count(), 1);
         c.reset();
         assert_eq!(c.count(), 0);
+        assert!(c.latest().is_none());
+        // long summaries are cut
+        c.notify_called(":1.5", 1, 0, "a", &"x".repeat(500));
+        c.notify_returned(":1.5", 1, 9);
+        assert_eq!(c.latest().unwrap().summary.chars().count(), MAX_SUMMARY);
     }
 }

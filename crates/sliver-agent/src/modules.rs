@@ -1020,21 +1020,38 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             sp
         }
         "notifications" => {
-            let n = s.notifications;
+            let n = &s.notifications;
             let count = if n.count == 0 {
                 FmtValue::Text(String::new())
             } else {
                 FmtValue::Num(f64::from(n.count))
             };
-            let mut sp = Spec::new(
-                ValueMap::new().with("count", count.clone()).with("", count),
-                "{count}",
-            )
-            .icon(if n.dnd == Some(true) {
-                "notifications-disabled-symbolic"
+            let (summary, app) = n
+                .latest
+                .as_ref()
+                .map_or((String::new(), String::new()), |l| {
+                    (l.summary.clone(), l.app.clone())
+                });
+            let v = ValueMap::new()
+                .with("count", count.clone())
+                .with("summary", esc(&summary))
+                .with("app", esc(&app))
+                .with("", count);
+            // The latest summary when there is one (a bell with just the number otherwise).
+            let default = if n.latest.is_some() {
+                "{summary}"
             } else {
-                "notifications-symbolic"
-            });
+                "{count}"
+            };
+            let mut sp = Spec::new(v, default)
+                .icon(if n.dnd == Some(true) {
+                    "notifications-disabled-symbolic"
+                } else {
+                    "notifications-symbolic"
+                })
+                .on(Gesture::Tap, "open")
+                .on(Gesture::SwipeLeft, "dismiss")
+                .on(Gesture::SwipeRight, "dismiss");
             sp.status = Some(if n.count > 0 { "pending" } else { "none" });
             sp.extra_classes = n
                 .dnd

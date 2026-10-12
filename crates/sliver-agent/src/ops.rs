@@ -43,6 +43,9 @@ pub enum Op {
         on: bool,
     },
     Dnd(bool),
+    /// Open (invoke) or close notification `id`.
+    OpenNotification(u32),
+    CloseNotification(u32),
 }
 
 /// Starts the ops thread. `handle` comes from the session feed.
@@ -106,10 +109,34 @@ fn run_ops(
             Op::Bluetooth { adapter, on } => {
                 sliver_session::bluetooth::set_powered(&sys, &adapter, on)
             }
+            Op::CloseNotification(id) => sliver_session::notifications::close(&ses, id),
+            Op::OpenNotification(id) => open_notification(&ses, id),
             Op::Dnd(on) => sliver_session::notifications::set_dnd(&ses, on),
         };
         if let Err(e) = r {
             eprintln!("sliver-agent: {e}");
         }
     }
+}
+
+/// Invoke a notification's default action. The spec has no client call for it (actions are
+/// invoked by the server), so use the daemon's own tool; without one, just dismiss it.
+fn open_notification(ses: &Connection, id: u32) -> Result<(), String> {
+    let installed = |t: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(t).is_file()))
+    };
+    if installed("makoctl") {
+        let ok = std::process::Command::new("makoctl")
+            .args(["invoke", "-n", &id.to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok {
+            return Ok(());
+        }
+    }
+    sliver_session::notifications::close(ses, id)
 }

@@ -73,6 +73,7 @@ impl SessionOptions {
 
 /// One thing that happened.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Feed {
     Desktop(DesktopState),
     Session(SessionState),
