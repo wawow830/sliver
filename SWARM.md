@@ -38,7 +38,7 @@ Run this every time you're woken (by the pulse, a message, or the end of your ow
    share `origin/main`, so it may already be newer than your base, and the commit would silently
    revert peers' work. Squash with `git rebase -i $(git merge-base HEAD origin/main)`, and check
    `git show --stat` before landing: it should only list your files.
-6. **Record:** `swarm task note`, then `swarm task done T# "what/where"`. Durable knowledge goes into `docs/`.
+6. **Record:** `swarm task note`, then `swarm task done T# "what/where"`. Durable knowledge goes into `docs/`. If you finished or advanced a user-visible feature, update its row in `docs/features.md` in the same change (`Status`: `done` = shipped on main and working, `partial` = say what is missing in Notes, `todo`). The viz reads that column, so keep the header exactly `Status`.
 7. **Stop:** end your turn. The pulse wakes you when there's something for you. If you see
    nothing useful to do, run `swarm rest "why"` first.
 
