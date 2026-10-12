@@ -288,7 +288,7 @@ Compositor events win (§2). Input methods also change what the user is typing:
 | X11 | `x11rb` | |
 | PipeWire | `pipewire` | see §3 |
 | udev events | `udev` or `tokio-udev` | backlight/led change |
-| icons/desktop entries | `freedesktop-desktop-entry`, `freedesktop-icons` | owned by the render/layout side |
+| icons/desktop entries | **`sliver-icons`** (own crate, std only) | `IconLoader` (freedesktop theme spec: Inherits, hicolor, sizes/scales, `-symbolic`, dash fallback, pixmaps, cache), `DesktopEntries::find_by_app_id` (id, StartupWMClass, reverse-DNS tail, Exec); `cargo run -p sliver-icons --example icon-find -- kitty firefox 40` |
 | sway/i3 | none (hand-rolled) | tiny protocol |
 
 ## 5. Testing without hardware or a live session
