@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Invariant 3 end to end: how often sliverd + sliver-agent wake up when nothing happens (T101).
+
+Runs `sliverd --fake-hardware` and `sliver-agent` with the default config (plus shortened display
+timeouts) on private session and system buses, with no compositor or audio sockets, so nothing on
+the machine can wake them. It then counts voluntary context switches, i.e. sleeps after a wakeup,
+of every thread of both processes and every helper process the agent starts:
+
+  phase "on":  30 s idle with the bar on (the clock module may tick, nothing else should)
+  phase "off": 30 s with the bar off (sliverd must sleep; the agent only for its own feeds)
+
+and fails if either phase is over budget. ~80 s; not part of scripts/check (too slow).
+
+  scripts/idle-wakeups [--release] [--seconds N]
+
+Budgets (wakeups per second, for all the processes together) can be overridden with
+IDLE_WAKEUPS_ON / IDLE_WAKEUPS_OFF.
+"""
+
+import argparse
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+# Per second, everything together, with ~1.5x headroom. Measured on the Mac14,7 (T101): on 5.6-9.2,
+# off 3.8-4.1, of which 2.0 is zbus's idle `blocking` pool thread (a 500 ms park loop in the
+# `blocking` crate, docs/hardware.md) and most of the rest the audio feed retrying without a
+# PulseAudio server (backing off to 30 s). Before T101's fix that retry loop alone was ~50/s.
+BUDGET_ON = float(os.environ.get("IDLE_WAKEUPS_ON", "12"))
+BUDGET_OFF = float(os.environ.get("IDLE_WAKEUPS_OFF", "6"))
+SETTLE_S = 5
+# Display timeouts in the sandbox config: "on" is measured before dim, "off" after off.
+DIM_AFTER_S = 40
+OFF_AFTER_S = 45
+
+
+def children_map() -> dict[int, list[int]]:
+    kids: dict[int, list[int]] = {}
+    for p in Path("/proc").iterdir():
+        if not p.name.isdigit():
+            continue
+        try:
+            stat = (p / "stat").read_text()
+        except OSError:
+            continue
+        # pid (comm) state ppid ...: comm may contain spaces, so split after the last ')'.
+        ppid = int(stat.rsplit(")", 1)[1].split()[1])
+        kids.setdefault(ppid, []).append(int(p.name))
+    return kids
+
+
+def tree(roots: list[int]) -> list[int]:
+    kids = children_map()
+    out, todo = [], list(roots)
+    while todo:
+        pid = todo.pop()
+        out.append(pid)
+        todo.extend(kids.get(pid, []))
+    return out
+
+
+def switches(pid: int) -> int:
+    """Voluntary context switches of all threads of `pid` (0 if it's gone)."""
+    total = 0
+    try:
+        tasks = list((Path("/proc") / str(pid) / "task").iterdir())
+    except OSError:
+        return 0
+    for t in tasks:
+        try:
+            for line in (t / "status").read_text().splitlines():
+                if line.startswith("voluntary_ctxt_switches:"):
+                    total += int(line.split()[1])
+        except OSError:
+            pass
+    return total
+
+
+def comm(pid: int) -> str:
+    try:
+        return (Path("/proc") / str(pid) / "comm").read_text().strip()
+    except OSError:
+        return "?"
+
+
+def snapshot(roots: list[int]) -> dict[int, tuple[str, int]]:
+    return {p: (comm(p), switches(p)) for p in tree(roots)}
+
+
+def measure(roots: list[int], seconds: float) -> tuple[float, dict[str, int]]:
+    before = snapshot(roots)
+    time.sleep(seconds)
+    after = snapshot(roots)
+    per: dict[str, int] = {}
+    for pid, (name, n) in after.items():
+        # A helper started during the window counts from zero.
+        per[name] = per.get(name, 0) + n - before.get(pid, (name, 0))[1]
+    return sum(per.values()) / seconds, per
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--release", action="store_true", help="use target/release (default: debug)")
+    ap.add_argument("--seconds", type=float, default=30, help="length of each phase (default 30)")
+    a = ap.parse_args()
+    if a.seconds + SETTLE_S > DIM_AFTER_S:
+        ap.error(f"--seconds must be at most {DIM_AFTER_S - SETTLE_S}")
+
+    profile = "release" if a.release else "debug"
+    build = ["cargo", "build", "-q", "-p", "sliverd", "-p", "sliver-agent"]
+    subprocess.run(build + (["--release"] if a.release else []), cwd=ROOT, check=True)
+    bins = ROOT / "target" / profile
+
+    tmp = ROOT / "target" / "test-tmp" / f"idle-wakeups.{os.getpid()}"
+    shutil.rmtree(tmp, ignore_errors=True)
+    (tmp / "config" / "sliver").mkdir(parents=True)
+    (tmp / "run").mkdir(mode=0o700)
+    (tmp / "config" / "sliver" / "config.toml").write_text(
+        f'[display]\ndim-after = "{DIM_AFTER_S}s"\noff-after = "{OFF_AFTER_S}s"\n'
+    )
+    procs: list[subprocess.Popen] = []
+
+    def start(cmd: list[str], env: dict[str, str], log: str) -> subprocess.Popen:
+        p = subprocess.Popen(
+            cmd, env=env, stdout=open(tmp / log, "w"), stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, start_new_session=True,
+        )
+        procs.append(p)
+        return p
+
+    try:
+        # Private buses: no logind/UPower/MPRIS/portals signals from the real machine.
+        conf = str(ROOT / "integration" / "kwin" / "session.conf")
+        base = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/"), "LANG": "C.UTF-8"}
+        for bus in ("session", "system"):
+            start(["dbus-daemon", f"--config-file={conf}", "--nofork",
+                   f"--address=unix:path={tmp / bus}"], base, f"{bus}-bus.log")
+        sock = tmp / "sliverd.sock"
+        start([str(bins / "sliverd"), "--fake-hardware", "--socket", str(sock)], base, "sliverd.log")
+        for _ in range(100):
+            if sock.exists() and (tmp / "session").exists() and (tmp / "system").exists():
+                break
+            time.sleep(0.05)
+        env = base | {
+            # No WAYLAND_DISPLAY / HYPRLAND_INSTANCE_SIGNATURE / SWAYSOCK / NIRI_SOCKET: no
+            # compositor events. A private runtime dir: no PipeWire.
+            "XDG_CONFIG_HOME": str(tmp / "config"),
+            "XDG_RUNTIME_DIR": str(tmp / "run"),
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path={tmp / 'session'}",
+            "DBUS_SYSTEM_BUS_ADDRESS": f"unix:path={tmp / 'system'}",
+        }
+        agent = start([str(bins / "sliver-agent"), "--socket", str(sock)], env, "agent.log")
+        sliverd = procs[2]
+        roots = [sliverd.pid, agent.pid]
+
+        time.sleep(SETTLE_S)
+        for p in (sliverd, agent):
+            if p.poll() is not None:
+                print(f"idle-wakeups: {p.args[0]} exited early; see {tmp}", file=sys.stderr)
+                return 1
+        on, on_per = measure(roots, a.seconds)
+        time.sleep(max(0.0, OFF_AFTER_S + 2 - SETTLE_S - a.seconds))
+        off, off_per = measure(roots, a.seconds)
+
+        ok = True
+        for phase, rate, per, budget in (("on", on, on_per, BUDGET_ON),
+                                         ("off", off, off_per, BUDGET_OFF)):
+            detail = ", ".join(f"{k} {v}" for k, v in sorted(per.items(), key=lambda kv: -kv[1]))
+            verdict = "ok" if rate <= budget else "OVER BUDGET"
+            print(f"{phase:>3}: {rate:5.2f} wakeups/s (budget {budget}) {verdict}   [{detail}]")
+            ok &= rate <= budget
+        if not ok:
+            print(f"idle-wakeups: logs kept in {tmp}", file=sys.stderr)
+            return 1
+        return 0
+    finally:
+        for p in reversed(procs):
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        for p in procs:
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(p.pid, signal.SIGKILL)
+        if "ok" in locals() and ok:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

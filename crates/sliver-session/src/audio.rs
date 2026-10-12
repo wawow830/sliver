@@ -199,7 +199,10 @@ impl Handle {
                         backoff = (backoff * 2).min(Duration::from_secs(10));
                         continue;
                     };
-                    backoff = Duration::from_millis(500);
+                    // Only a pactl that stays up counts as recovered (below): without a PulseAudio
+                    // server it starts fine and exits at once, and resetting the backoff here made
+                    // that a ~1 Hz respawn loop of pactl + wpctl + threads (T101, invariant 3).
+                    let started = std::time::Instant::now();
                     // Missed events while it was down: resync once connected again.
                     if !hub.update(|s| s.audio = read(&tools)) {
                         let _ = child.kill();
@@ -237,6 +240,7 @@ impl Handle {
                         }
                     }
                     let _ = child.wait();
+                    backoff = next_backoff(backoff, started.elapsed());
                     std::thread::sleep(backoff);
                 }
             })
@@ -244,9 +248,37 @@ impl Handle {
     }
 }
 
+/// After `pactl subscribe` ran for `lived`: back to a quick retry if it had been up a while
+/// (pipewire-pulse restarted), else keep backing off (no server at all), up to 30 s.
+fn next_backoff(current: Duration, lived: Duration) -> Duration {
+    if lived >= Duration::from_secs(10) {
+        Duration::from_millis(500)
+    } else {
+        (current * 2).min(Duration::from_secs(30))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backoff_resets_only_after_a_real_run() {
+        let ms = Duration::from_millis;
+        // No server: pactl dies at once every time -> 1 s, 2 s, ... capped at 30 s.
+        let mut b = ms(500);
+        let mut seen = vec![];
+        for _ in 0..8 {
+            b = next_backoff(b, ms(5));
+            seen.push(b.as_millis());
+        }
+        assert_eq!(seen, [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+        // It had been up for a while (pipewire-pulse restarted): retry quickly.
+        assert_eq!(
+            next_backoff(Duration::from_secs(30), Duration::from_secs(60)),
+            ms(500)
+        );
+    }
 
     #[test]
     fn parses_wpctl_output() {

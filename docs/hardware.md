@@ -383,6 +383,16 @@ on the dark bar only wakes it, the next one fires (H45). Key repeat: `sliver-hwp
 bind) took the volume 0.22 → 0.00, i.e. ≥11 presses (H48). Repeat is the compositor's job: sliverd
 sends key-down on touch and key-up on release.
 
+**Idle wakeups (T101, `scripts/idle-wakeups`):** sliverd + sliver-agent with the default config on
+private buses, 30 s idle with the bar on and 30 s with it off. sliverd: **0** wakeups in both.
+The agent was at ~52/s because the audio feed respawned `pactl subscribe` about every 0.75 s
+when no PulseAudio server answered: a successful spawn reset the backoff even though pactl exited
+at once. Fixed: only a pactl that stays up 10 s resets it, otherwise it backs off to 30 s. Now
+on ≈ 6/s, off ≈ 3–4/s. The floor is **2/s from zbus's `blocking` pool thread**: zbus connects
+Unix sockets via `blocking::unblock`, and `blocking` 1.7 parks an idle pool thread in a 500 ms
+`wait_timeout` loop it never leaves below the pool limit. On the live session the installed agent
+measured ~8/s (real buses, compositor events). Budgets: on ≤ 12/s, off ≤ 6/s.
+
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
 
