@@ -766,6 +766,14 @@ def cmd_up(a):
         time.sleep(1)
         self_path = Path(__file__).resolve()
         herdr("pane", "run", root, f"{self_path} pulse")
+        v = herdr("pane", "split", root, "--direction", "down", "--ratio", "0.5", "--cwd", str(main_checkout()), "--no-focus")
+        if v:
+            vp = v["result"]["pane"]["pane_id"]
+            herdr("pane", "rename", vp, "viz")
+            time.sleep(1)
+            herdr("pane", "run", vp, f"{self_path} viz")
+            with state() as s:
+                s["swarm"]["viz_pane"] = vp
     for name in [x for x in (a.peers or "").split(",") if x]:
         ns = argparse.Namespace(name=name, model=a.model, thinking=None, knows=None, why="initial peer", brief=None, resume=False)
         cmd_spawn(ns)
@@ -792,6 +800,11 @@ def cmd_status(a):
     print("\n== needs human"); cmd_human(argparse.Namespace(sub="list", all=False, brief=True))
     print("\n== board"); cmd_task(argparse.Namespace(sub="list", all=False, mine=False))
     print("\n== channel"); cmd_log(argparse.Namespace(n=a.n))
+
+
+def cmd_viz(a):
+    viz = Path(__file__).resolve().parent.parent / "viz" / "serve.py"
+    os.execvp(sys.executable, [sys.executable, str(viz), "--port", str(a.port), "--host", a.host])
 
 
 # ---------------------------------------------------------------- cli
@@ -855,6 +868,8 @@ def main():
     x = sp.add_parser("up", help="(human) create swarm tab, start pulse, spawn peers")
     x.add_argument("--peers", default=""); x.add_argument("--model"); x.set_defaults(f=cmd_up)
     sp.add_parser("down", help="(human) interrupt peers, stop pulse").set_defaults(f=cmd_down)
+    x = sp.add_parser("viz", help="live visualizer on http://localhost:7777")
+    x.add_argument("--port", type=int, default=7777); x.add_argument("--host", default="127.0.0.1"); x.set_defaults(f=cmd_viz)
 
     a = ap.parse_args()
     a.f(a)

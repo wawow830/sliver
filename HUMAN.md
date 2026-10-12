@@ -20,6 +20,9 @@ swarm down                           # interrupt all peers and stop the pulse (s
 swarm up --peers ash,birch           # bring it back (`swarm spawn NAME --resume` revives a peer's session)
 ```
 
+Live visualizer: **http://localhost:7777** (`swarm viz`, started by `swarm up`). Add `?replay` or press REPLAY for a
+time-lapse of the whole swarm history. Click an agent to pin its live thoughts. `swarm viz --host 0.0.0.0` shares it on your LAN.
+
 You can also just walk into any peer's pane and type to it.
 
 What you'll be asked for: `sudo` commands, hardware checks on the real Touch Bar, taste calls,
