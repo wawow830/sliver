@@ -118,6 +118,48 @@ impl Preview {
             before: keys,
         })
     }
+
+    /// Where a drop at bar x-coordinate `x` goes: the zone index, and the cell just left of `x` in
+    /// that zone (insert after its module), or `None` to insert first.
+    pub fn drop_target(&self, x: f32) -> Option<(usize, Option<Hit>)> {
+        let f = self.agent.frame(self.slot)?;
+        let zone = f
+            .layout
+            .zones
+            .iter()
+            .position(|z| x >= z.x && x <= z.x + z.w)
+            .or_else(|| {
+                // Between zones: the nearest one.
+                f.layout
+                    .zones
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, a), (_, b)| {
+                        (a.x - x)
+                            .abs()
+                            .min((a.x + a.w - x).abs())
+                            .total_cmp(&(b.x - x).abs().min((b.x + b.w - x).abs()))
+                    })
+                    .map(|(i, _)| i)
+            })?;
+        let z = f.layout.zones[zone];
+        let left = f
+            .layout
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                let c = r.x + r.w / 2.0;
+                c >= z.x && c <= z.x + z.w && c < x
+            })
+            .map(|(i, _)| i)
+            .next_back();
+        let hit = left.and_then(|i| {
+            let r = f.layout.items[i];
+            self.hit(r.x + r.w / 2.0)
+        });
+        Some((zone, hit))
+    }
 }
 
 /// See [`Preview::hit`].

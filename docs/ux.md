@@ -314,7 +314,10 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
 - **Onboarding** (T58): on first launch (no user config), a welcome dialog explains the safe
   hatch and offers Import tiny-dfr setup or the default bar. Either choice writes the config, so it
   shows once.
-- Next: drag and drop on the preview.
+- **Drag and drop** (T59): drag a module along the preview to move it, also into another zone.
+  A blue caret marks the drop position, and it's undoable like every edit. A plain click still
+  opens the inspector.
+- Next: resize handles on the preview, and the Library dragged onto the bar.
 - **Testing headless** (never on the live session):
   - Run `gtk4-broadwayd :7 &`, then
     `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_DEBUG=no-portals GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`.

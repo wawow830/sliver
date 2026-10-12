@@ -168,6 +168,41 @@ pub fn move_module(
     ))
 }
 
+/// Moves the module at `from` in `from_zone` to position `to` in `to_zone` (drag and drop).
+/// `to` counts positions *before* the move, as the drop caret shows them.
+pub fn move_module_to(
+    ed: &mut Editor,
+    merged: &Table,
+    layout: &str,
+    from_zone: &str,
+    from: usize,
+    to_zone: &str,
+    to: usize,
+) -> Result<String, String> {
+    let fz = ensure_zone(ed, merged, layout, from_zone)?;
+    let tz = ensure_zone(ed, merged, layout, to_zone)?;
+    let mut src = modules(ed, layout, fz)?;
+    if from >= src.len() {
+        return Err("no such module".into());
+    }
+    let m = src.remove(from);
+    let label = describe(&m);
+    if fz == tz {
+        let to = if to > from { to - 1 } else { to }.min(src.len());
+        if to == from {
+            return Err("already there".into());
+        }
+        src.insert(to, m);
+        ed.set(&modules_path(layout, fz), &Value::Array(src))?;
+    } else {
+        let mut dst = modules(ed, layout, tz)?;
+        dst.insert(to.min(dst.len()), m);
+        ed.set(&modules_path(layout, fz), &Value::Array(src))?;
+        ed.set(&modules_path(layout, tz), &Value::Array(dst))?;
+    }
+    Ok(format!("Moved {label} to {to_zone}"))
+}
+
 fn describe(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -421,6 +456,25 @@ mod tests {
         assert_eq!(&ids[1][..3], ["key/F3", "key/F2", "key/F4"]);
         let merged = ed.load().merged;
         assert!(move_module(&mut ed, &merged, "fkeys", "main", 0, -1).is_err());
+    }
+
+    #[test]
+    fn drag_and_drop_moves() {
+        let (mut ed, merged) = fresh("version = 1\n");
+        // F1 dropped after F3 (caret position 3, counted before the move).
+        move_module_to(&mut ed, &merged, "fkeys", "main", 0, "main", 3).unwrap();
+        let ids = resolved_ids(&ed, "fn", &Context::new().with("physical_esc", true));
+        assert_eq!(&ids[1][..4], ["key/F2", "key/F3", "key/F1", "key/F4"]);
+        let merged = ed.load().merged;
+        assert!(
+            move_module_to(&mut ed, &merged, "fkeys", "main", 0, "main", 1).is_err(),
+            "no-op"
+        );
+        // Across zones: F12 into the esc zone, first.
+        move_module_to(&mut ed, &merged, "fkeys", "main", 11, "esc", 0).unwrap();
+        let ids = resolved_ids(&ed, "fn", &Context::new().with("physical_esc", false));
+        assert_eq!(ids[0], ["key/F12", "key/Esc#auto"]);
+        assert_eq!(ids[1].len(), 11);
     }
 
     #[test]

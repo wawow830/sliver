@@ -103,6 +103,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
 
     // Drawn at half scale (1004x30) so it stays legible; narrower windows scroll sideways.
     let frame: Rc<RefCell<Option<gtk::cairo::ImageSurface>>> = Rc::default();
+    let caret: Rc<std::cell::Cell<Option<f64>>> = Rc::default();
     let picture = gtk::DrawingArea::builder()
         .content_width(BAR.0 as i32 / 2)
         .content_height(BAR.1 as i32 / 2)
@@ -112,12 +113,21 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         .build();
     {
         let frame = frame.clone();
-        picture.set_draw_func(move |_, cr, _, _| {
+        let caret = caret.clone();
+        picture.set_draw_func(move |_, cr, _, h| {
             if let Some(s) = frame.borrow().as_ref() {
+                cr.save().ok();
                 cr.scale(0.5, 0.5);
                 let _ = cr.set_source_surface(s, 0.0, 0.0);
                 cr.source().set_filter(gtk::cairo::Filter::Best);
                 let _ = cr.paint();
+                cr.restore().ok();
+            }
+            // Drop position while dragging a module (widget coordinates).
+            if let Some(x) = caret.get() {
+                cr.set_source_rgb(0.21, 0.52, 0.89);
+                cr.rectangle(x - 1.5, 0.0, 3.0, h as f64);
+                let _ = cr.fill();
             }
         });
     }
@@ -239,7 +249,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     let click = gtk::GestureClick::new();
     {
         let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
-        click.connect_pressed(move |_, _, x, _| {
+        click.connect_released(move |_, _, x, _| {
             // The preview is drawn at half scale.
             let Some(hit) = preview.borrow().hit(x as f32 * 2.0) else {
                 return;
@@ -266,6 +276,76 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         });
     }
     picture.add_controller(click);
+    // Drag a module along the preview to move it, also into another zone (GOAL: WYSIWYG
+    // drag and drop). The click above is cancelled once the pointer moves past the threshold.
+    let drag = gtk::GestureDrag::new();
+    let start: Rc<std::cell::Cell<Option<(f64, f64)>>> = Rc::default();
+    {
+        let start = start.clone();
+        drag.connect_drag_begin(move |_, x, y| start.set(Some((x, y))));
+    }
+    {
+        let (start, caret, picture2) = (start.clone(), caret.clone(), picture.clone());
+        drag.connect_drag_update(move |_, dx, _| {
+            if let Some((x, _)) = start.get()
+                && dx.abs() > 8.0
+            {
+                caret.set(Some(x + dx));
+                picture2.queue_draw();
+            }
+        });
+    }
+    {
+        let (ui, preview, shown_layout, caret, picture2) = (
+            ui.clone(),
+            preview.clone(),
+            shown_layout.clone(),
+            caret.clone(),
+            picture.clone(),
+        );
+        drag.connect_drag_end(move |_, dx, _| {
+            caret.set(None);
+            picture2.queue_draw();
+            let Some((x0, _)) = start.take() else { return };
+            if dx.abs() <= 8.0 {
+                return;
+            }
+            // Bar coordinates: the preview is drawn at half scale.
+            let p = preview.borrow();
+            let (Some(from), Some((to_zone, left))) = (
+                p.hit(x0 as f32 * 2.0),
+                p.drop_target((x0 + dx) as f32 * 2.0),
+            ) else {
+                return;
+            };
+            drop(p);
+            let state = ui.state();
+            let layout = shown_layout.borrow().clone();
+            let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
+                return;
+            };
+            let ids = |z: usize| -> Vec<String> {
+                zones
+                    .get(z)
+                    .map(|z| z.modules.iter().map(|m| m.id().to_string()).collect())
+                    .unwrap_or_default()
+            };
+            let (Some(fz), Some(tz)) = (zones.get(from.zone), zones.get(to_zone)) else {
+                return;
+            };
+            let Some(fi) = from.module_index(&ids(from.zone)) else {
+                return;
+            };
+            let ti = left
+                .and_then(|h| h.module_index(&ids(to_zone)))
+                .map_or(0, |i| i + 1);
+            let (layout, fz, tz) = (layout.clone(), fz.name.clone(), tz.name.clone());
+            apply(&ui, move |ed, merged| {
+                edit::move_module_to(ed, merged, &layout, &fz, fi, &tz, ti)
+            });
+        });
+    }
+    picture.add_controller(drag);
     picture.set_cursor_from_name(Some("pointer"));
     {
         let (ui, shown_layout) = (ui.clone(), shown_layout.clone());
