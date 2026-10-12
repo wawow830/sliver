@@ -39,6 +39,7 @@ struct Opts {
     touch: Option<u64>,
     backlight: Option<u32>,
     touchviz: Option<u64>,
+    udev_listen: Option<u64>,
 }
 
 fn parse_args() -> Result<Opts, String> {
@@ -56,6 +57,7 @@ fn parse_args() -> Result<Opts, String> {
             "--touch" => o.touch = Some(num("--touch")?.min(120)),
             "--backlight" => o.backlight = Some(num("--backlight")? as u32),
             "--touchviz" => o.touchviz = Some(num("--touchviz")?.min(120)),
+            "--udev-listen" => o.udev_listen = Some(num("--udev-listen")?.min(600)),
             "-h" | "--help" => {
                 println!(
                     "usage: sliver-hwprobe [--sysfs-only] [--draw S] [--touch S] [--backlight N] [--touchviz S]"
@@ -94,6 +96,11 @@ fn main() {
     );
     let touch = discover::touch_device(Path::new("/sys/class/input"));
     println!("touch: {touch:?}");
+    if let Some(secs) = opts.udev_listen {
+        // Opens no devices: just udev's netlink monitor. Checks parse_udev_msg on real traffic.
+        udev_listen(secs);
+        return;
+    }
     if opts.sysfs_only {
         return;
     }
@@ -509,4 +516,55 @@ fn touchviz(card: &Path, touch: &Path, secs: u64) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn udev_listen(secs: u64) {
+    let m = match sliver_hw::input::udev_monitor() {
+        Ok(m) => m,
+        Err(e) => {
+            println!("udev monitor: ERROR {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("== udev monitor for {secs}s");
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    let mut buf = [0u8; 8192];
+    while Instant::now() < deadline {
+        let left = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as i32;
+        let mut pfd = libc::pollfd {
+            fd: m.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid pollfd.
+        if unsafe { libc::poll(&mut pfd, 1, left) } <= 0 {
+            continue;
+        }
+        // SAFETY: reading into our buffer from our socket.
+        let n = unsafe { libc::recv(m.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
+        if n <= 0 {
+            continue;
+        }
+        match sliver_hw::input::parse_udev_msg(&buf[..n as usize]) {
+            Some(p) => {
+                let get = |k: &str| {
+                    p.iter()
+                        .find(|(a, _)| a == k)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default()
+                };
+                println!(
+                    "udev {} {} {} input_change={:?} ({} props)",
+                    get("ACTION"),
+                    get("SUBSYSTEM"),
+                    get("DEVPATH"),
+                    sliver_hw::input::input_change(&p),
+                    p.len()
+                );
+            }
+            None => println!("unparsed message, {n} bytes"),
+        }
+    }
 }

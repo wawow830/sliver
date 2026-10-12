@@ -73,40 +73,43 @@ pub fn seat0_devices(sys_input: &Path, udev_data: &Path) -> Vec<Seat0Device> {
         .map(|rd| rd.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
     entries.sort();
-    let read = |p: PathBuf| fs::read_to_string(p).unwrap_or_default();
     entries
-        .into_iter()
-        .filter_map(|e| {
-            let ev = e.file_name()?.to_str()?.to_owned();
-            if !ev.starts_with("event") {
-                return None;
-            }
-            let name = read(e.join("device/name")).trim().to_owned();
-            if IGNORE_NAMES.iter().any(|n| name.contains(n)) {
-                return None;
-            }
-            if let Some(dev) = read(e.join("dev")).trim().split_once(':') {
-                let data = read(udev_data.join(format!("c{}:{}", dev.0, dev.1)));
-                if data
-                    .lines()
-                    .any(|l| l.starts_with("E:ID_SEAT=") && l != "E:ID_SEAT=seat0")
-                {
-                    return None;
-                }
-            }
-            let evs = Caps::parse(&read(e.join("device/capabilities/ev")));
-            let keys = Caps::parse(&read(e.join("device/capabilities/key")));
-            let sws = Caps::parse(&read(e.join("device/capabilities/sw")));
-            let d = Seat0Device {
-                node: PathBuf::from("/dev/input").join(&ev),
-                fn_key: keys.has(KEY_FN),
-                lid: evs.has(EV_SW) && sws.has(SW_LID),
-                activity: evs.has(EV_KEY) || evs.has(EV_REL) || evs.has(EV_ABS),
-                name,
-            };
-            (d.fn_key || d.lid || d.activity).then_some(d)
-        })
+        .iter()
+        .filter_map(|e| classify(e, udev_data))
         .collect()
+}
+
+/// Classifies one `/sys/class/input/eventN` entry. `None` = not ours to read.
+pub fn classify(e: &Path, udev_data: &Path) -> Option<Seat0Device> {
+    let read = |p: PathBuf| fs::read_to_string(p).unwrap_or_default();
+    let ev = e.file_name()?.to_str()?.to_owned();
+    if !ev.starts_with("event") {
+        return None;
+    }
+    let name = read(e.join("device/name")).trim().to_owned();
+    if IGNORE_NAMES.iter().any(|n| name.contains(n)) {
+        return None;
+    }
+    if let Some(dev) = read(e.join("dev")).trim().split_once(':') {
+        let data = read(udev_data.join(format!("c{}:{}", dev.0, dev.1)));
+        if data
+            .lines()
+            .any(|l| l.starts_with("E:ID_SEAT=") && l != "E:ID_SEAT=seat0")
+        {
+            return None;
+        }
+    }
+    let evs = Caps::parse(&read(e.join("device/capabilities/ev")));
+    let keys = Caps::parse(&read(e.join("device/capabilities/key")));
+    let sws = Caps::parse(&read(e.join("device/capabilities/sw")));
+    let d = Seat0Device {
+        node: PathBuf::from("/dev/input").join(&ev),
+        fn_key: keys.has(KEY_FN),
+        lid: evs.has(EV_SW) && sws.has(SW_LID),
+        activity: evs.has(EV_KEY) || evs.has(EV_REL) || evs.has(EV_ABS),
+        name,
+    };
+    (d.fn_key || d.lid || d.activity).then_some(d)
 }
 
 enum Kind {
@@ -118,12 +121,21 @@ struct Dev {
     file: File,
     kind: Kind,
     name: String,
+    node: PathBuf,
 }
+
+/// Token for the udev monitor socket in the epoll set (device tokens are their index).
+const MONITOR: u64 = u64::MAX;
+/// udev's netlink multicast group (processed events: permissions and ID_SEAT already applied).
+const UDEV_GROUP: u32 = 2;
 
 pub struct HwInput {
     epoll: OwnedFd,
     devs: Vec<Option<Dev>>,
     pending: Vec<HwEvent>,
+    monitor: Option<OwnedFd>,
+    touch_node: PathBuf,
+    size: (u32, u32),
 }
 
 fn ioctl_int(fd: RawFd, req: u64, v: libc::c_int) -> io::Result<()> {
@@ -153,9 +165,85 @@ fn open_evdev(node: &Path) -> io::Result<File> {
     Ok(f)
 }
 
+/// Parses one message from udev's netlink monitor (libudev wire format: a `libudev\0` header with
+/// magic 0xfeedcafe big-endian, then NUL-separated `KEY=VALUE` properties). Returns `None` for
+/// anything else (e.g. raw kernel uevents).
+pub fn parse_udev_msg(buf: &[u8]) -> Option<Vec<(String, String)>> {
+    if buf.len() < 40 || &buf[..8] != b"libudev\0" {
+        return None;
+    }
+    if u32::from_be_bytes(buf[8..12].try_into().ok()?) != 0xfeed_cafe {
+        return None;
+    }
+    let off = u32::from_ne_bytes(buf[16..20].try_into().ok()?) as usize;
+    let len = u32::from_ne_bytes(buf[20..24].try_into().ok()?) as usize;
+    let props = buf.get(off..off.checked_add(len)?)?;
+    Some(
+        props
+            .split(|&b| b == 0)
+            .filter_map(|kv| {
+                let s = std::str::from_utf8(kv).ok()?;
+                let (k, v) = s.split_once('=')?;
+                Some((k.to_owned(), v.to_owned()))
+            })
+            .collect(),
+    )
+}
+
+/// What a udev message means for us: `(add?, /dev/input/eventN)` for input event nodes only.
+pub fn input_change(props: &[(String, String)]) -> Option<(bool, PathBuf)> {
+    let get = |k: &str| {
+        props
+            .iter()
+            .find(|(pk, _)| pk == k)
+            .map(|(_, v)| v.as_str())
+    };
+    if get("SUBSYSTEM")? != "input" {
+        return None;
+    }
+    let node = get("DEVNAME")?;
+    let n = node.strip_prefix("/dev/input/event")?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    match get("ACTION")? {
+        "add" => Some((true, PathBuf::from(node))),
+        "remove" => Some((false, PathBuf::from(node))),
+        _ => None,
+    }
+}
+
+/// A non-blocking socket on udev's netlink monitor group. Opens no devices (safe anywhere).
+pub fn udev_monitor() -> io::Result<OwnedFd> {
+    // SAFETY: plain syscalls on a socket we own.
+    unsafe {
+        let fd = libc::socket(
+            libc::AF_NETLINK,
+            libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            libc::NETLINK_KOBJECT_UEVENT,
+        );
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = OwnedFd::from_raw_fd(fd);
+        let mut sa: libc::sockaddr_nl = std::mem::zeroed();
+        sa.nl_family = libc::AF_NETLINK as u16;
+        sa.nl_groups = UDEV_GROUP;
+        let r = libc::bind(
+            fd.as_raw_fd(),
+            &sa as *const libc::sockaddr_nl as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_nl>() as u32,
+        );
+        if r < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(fd)
+    }
+}
+
 impl HwInput {
-    /// Opens the bar digitizer at `touch_node` (mapped onto a `len` x `thickness` logical bar)
-    /// and every relevant seat0 device. Refuses outside the harness.
+    /// Opens the bar digitizer at `touch_node` (mapped onto a `len` x `thickness` logical bar),
+    /// every relevant seat0 device, and a udev monitor for hot-plug. Refuses outside the harness.
     pub fn open(touch_node: &Path, len: u32, thickness: u32) -> io::Result<HwInput> {
         crate::require_harness().map_err(io::Error::other)?;
         // SAFETY: plain syscall; we own the returned fd.
@@ -163,16 +251,33 @@ impl HwInput {
         if ep < 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: ep is a fresh fd we own.
         let mut me = HwInput {
+            // SAFETY: ep is a fresh fd we own.
             epoll: unsafe { OwnedFd::from_raw_fd(ep) },
             devs: vec![],
             pending: vec![],
+            monitor: None,
+            touch_node: touch_node.to_owned(),
+            size: (len, thickness),
         };
+        me.open_touch()?;
+        for d in seat0_devices(Path::new("/sys/class/input"), Path::new("/run/udev/data")) {
+            let _ = me.open_seat0(d);
+        }
+        // Hot-plug is best effort: without it we only miss devices added later.
+        if let Ok(m) = udev_monitor() {
+            if me.watch(m.as_raw_fd(), MONITOR).is_ok() {
+                me.monitor = Some(m);
+            }
+        }
+        Ok(me)
+    }
 
-        let touch = open_evdev(touch_node)?;
+    fn open_touch(&mut self) -> io::Result<()> {
+        let touch = open_evdev(&self.touch_node)?;
         let ax = evdev::abs_info(touch.as_raw_fd(), ABS_MT_POSITION_X)?;
         let ay = evdev::abs_info(touch.as_raw_fd(), ABS_MT_POSITION_Y)?;
+        let (len, thickness) = self.size;
         let map = Mapping {
             x_min: ax.minimum,
             x_max: ax.maximum,
@@ -181,61 +286,125 @@ impl HwInput {
             len,
             thickness,
         };
-        me.add(Dev {
+        self.add(Dev {
             file: touch,
             kind: Kind::Touch(Box::new(Decoder::new(map))),
-            name: touch_node.display().to_string(),
-        })?;
+            name: self.touch_node.display().to_string(),
+            node: self.touch_node.clone(),
+        })
+    }
 
-        for d in seat0_devices(Path::new("/sys/class/input"), Path::new("/run/udev/data")) {
-            let Ok(file) = open_evdev(&d.node) else {
-                continue;
-            };
-            if d.lid {
-                let mut sw = [0u8; 8];
-                // SAFETY: EVIOCGSW writes at most `len` bytes into the buffer.
-                let r = unsafe {
-                    libc::ioctl(file.as_raw_fd(), eviocgsw(sw.len()) as _, sw.as_mut_ptr())
-                };
-                if r >= 0 {
-                    me.pending.push(HwEvent::Lid {
-                        closed: sw[0] & 1 == 1,
-                    });
-                }
+    fn open_seat0(&mut self, d: Seat0Device) -> io::Result<()> {
+        let file = open_evdev(&d.node)?;
+        if d.lid {
+            let mut sw = [0u8; 8];
+            // SAFETY: EVIOCGSW writes at most `len` bytes into the buffer.
+            let r =
+                unsafe { libc::ioctl(file.as_raw_fd(), eviocgsw(sw.len()) as _, sw.as_mut_ptr()) };
+            if r >= 0 {
+                self.pending.push(HwEvent::Lid {
+                    closed: sw[0] & 1 == 1,
+                });
             }
-            me.add(Dev {
-                file,
-                kind: Kind::Seat0,
-                name: d.name,
-            })?;
         }
-        Ok(me)
+        self.add(Dev {
+            file,
+            kind: Kind::Seat0,
+            name: d.name,
+            node: d.node,
+        })
+    }
+
+    fn watch(&self, fd: RawFd, token: u64) -> io::Result<()> {
+        let mut ev = libc::epoll_event {
+            events: libc::EPOLLIN as u32,
+            u64: token,
+        };
+        // SAFETY: valid epoll fd, valid fd, valid event struct.
+        let r =
+            unsafe { libc::epoll_ctl(self.epoll.as_raw_fd(), libc::EPOLL_CTL_ADD, fd, &mut ev) };
+        if r < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 
     fn add(&mut self, dev: Dev) -> io::Result<()> {
-        let mut ev = libc::epoll_event {
-            events: libc::EPOLLIN as u32,
-            u64: self.devs.len() as u64,
-        };
-        // SAFETY: valid epoll fd, valid device fd, valid event struct.
-        let r = unsafe {
-            libc::epoll_ctl(
-                self.epoll.as_raw_fd(),
-                libc::EPOLL_CTL_ADD,
-                dev.file.as_raw_fd(),
-                &mut ev,
-            )
-        };
-        if r < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        self.watch(dev.file.as_raw_fd(), self.devs.len() as u64)?;
         self.devs.push(Some(dev));
         Ok(())
+    }
+
+    fn is_open(&self, node: &Path) -> bool {
+        self.devs.iter().flatten().any(|d| d.node == node)
+    }
+
+    /// Closes device `i`. A touch device's live contacts are cancelled.
+    fn remove(&mut self, i: usize, contacts: &mut Vec<Contact>) {
+        if let Some(mut dev) = self.devs.get_mut(i).and_then(Option::take) {
+            if let Kind::Touch(dec) = &mut dev.kind {
+                dec.cancel_all(0, contacts);
+            }
+            // SAFETY: removing an fd we added.
+            unsafe {
+                libc::epoll_ctl(
+                    self.epoll.as_raw_fd(),
+                    libc::EPOLL_CTL_DEL,
+                    dev.file.as_raw_fd(),
+                    std::ptr::null_mut(),
+                )
+            };
+        }
+    }
+
+    /// Whether hot-plug monitoring is active.
+    pub fn hotplug(&self) -> bool {
+        self.monitor.is_some()
     }
 
     /// Names of the devices being read (for logs).
     pub fn device_names(&self) -> Vec<String> {
         self.devs.iter().flatten().map(|d| d.name.clone()).collect()
+    }
+
+    fn handle_monitor(&mut self, contacts: &mut Vec<Contact>) {
+        let mut buf = [0u8; 8192];
+        loop {
+            let Some(m) = &self.monitor else { return };
+            // SAFETY: reading into our buffer from our socket.
+            let n = unsafe { libc::recv(m.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
+            if n <= 0 {
+                return; // EAGAIN (drained) or error
+            }
+            let Some((add, node)) = parse_udev_msg(&buf[..n as usize])
+                .as_deref()
+                .and_then(input_change)
+            else {
+                continue;
+            };
+            if add {
+                if self.is_open(&node) {
+                    continue;
+                }
+                if node == self.touch_node {
+                    let _ = self.open_touch();
+                    continue;
+                }
+                let ev = node
+                    .file_name()
+                    .map(|f| Path::new("/sys/class/input").join(f));
+                if let Some(d) = ev.and_then(|e| classify(&e, Path::new("/run/udev/data"))) {
+                    let _ = self.open_seat0(d);
+                }
+            } else if let Some(i) = self
+                .devs
+                .iter()
+                .position(|d| d.as_ref().is_some_and(|d| d.node == node))
+            {
+                self.remove(i, contacts);
+            }
+        }
     }
 
     /// Everything that happened since the last call. Never blocks.
@@ -254,36 +423,24 @@ impl HwInput {
         let mut activity = false;
         let mut contacts = Vec::new();
         for ev in ready.iter().take(n.max(0) as usize) {
+            if ev.u64 == MONITOR {
+                self.handle_monitor(&mut contacts);
+                continue;
+            }
             let i = ev.u64 as usize;
             let gone = match self.devs.get_mut(i).and_then(Option::as_mut) {
                 Some(dev) => read_dev(dev, &mut out, &mut contacts, &mut activity),
                 None => false,
             };
             if gone {
-                if let Some(Some(Dev {
-                    kind: Kind::Touch(dec),
-                    ..
-                })) = self.devs.get_mut(i)
-                {
-                    dec.cancel_all(0, &mut contacts);
-                }
-                if let Some(dev) = self.devs[i].take() {
-                    // SAFETY: removing an fd we added.
-                    unsafe {
-                        libc::epoll_ctl(
-                            self.epoll.as_raw_fd(),
-                            libc::EPOLL_CTL_DEL,
-                            dev.file.as_raw_fd(),
-                            std::ptr::null_mut(),
-                        )
-                    };
-                }
+                self.remove(i, &mut contacts);
             }
         }
         out.extend(contacts.into_iter().map(HwEvent::Touch));
         if activity {
             out.push(HwEvent::Activity);
         }
+        out.extend(std::mem::take(&mut self.pending)); // e.g. lid state of a hot-plugged switch
         out
     }
 }
@@ -422,6 +579,66 @@ mod tests {
             ]
         );
         fs::remove_dir_all(d).unwrap();
+    }
+
+    fn udev_msg(props: &[&str]) -> Vec<u8> {
+        let body: Vec<u8> = props.iter().flat_map(|p| p.bytes().chain([0])).collect();
+        let mut m = b"libudev\0".to_vec();
+        m.extend(0xfeed_cafe_u32.to_be_bytes());
+        m.extend(40u32.to_ne_bytes()); // header_size
+        m.extend(40u32.to_ne_bytes()); // properties_off
+        m.extend((body.len() as u32).to_ne_bytes());
+        m.extend([0u8; 16]); // filter hashes
+        m.extend(body);
+        m
+    }
+
+    #[test]
+    fn udev_monitor_messages() {
+        let m = udev_msg(&[
+            "ACTION=add",
+            "SUBSYSTEM=input",
+            "DEVNAME=/dev/input/event9",
+            "ID_SEAT=seat0",
+        ]);
+        let p = parse_udev_msg(&m).unwrap();
+        assert_eq!(
+            input_change(&p),
+            Some((true, PathBuf::from("/dev/input/event9")))
+        );
+        let m = udev_msg(&[
+            "ACTION=remove",
+            "SUBSYSTEM=input",
+            "DEVNAME=/dev/input/event9",
+        ]);
+        assert_eq!(
+            input_change(&parse_udev_msg(&m).unwrap()),
+            Some((false, PathBuf::from("/dev/input/event9")))
+        );
+        // not event nodes / not input / malformed
+        for props in [
+            &["ACTION=add", "SUBSYSTEM=input", "DEVNAME=/dev/input/mouse0"][..],
+            &["ACTION=add", "SUBSYSTEM=drm", "DEVNAME=/dev/dri/card1"][..],
+            &[
+                "ACTION=add",
+                "SUBSYSTEM=input",
+                "DEVNAME=/dev/input/event../../x",
+            ][..],
+            &[
+                "ACTION=change",
+                "SUBSYSTEM=input",
+                "DEVNAME=/dev/input/event3",
+            ][..],
+        ] {
+            assert_eq!(
+                input_change(&parse_udev_msg(&udev_msg(props)).unwrap()),
+                None
+            );
+        }
+        assert!(parse_udev_msg(b"add@/devices/foo\0ACTION=add\0").is_none()); // raw kernel uevent
+        let mut bad = udev_msg(&["ACTION=add"]);
+        bad[20..24].copy_from_slice(&9999u32.to_ne_bytes()); // properties_len past the end
+        assert!(parse_udev_msg(&bad).is_none());
     }
 
     #[test]
