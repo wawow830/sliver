@@ -231,7 +231,7 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 | Script fails / times out | "!" on that item | Status log entry, highlight in the editor |
 | App item misbehaves (flooding updates) | The agent rate-limits it and then freezes it | Apps page shows "throttled" |
 
-## 11. Taste questions (asked to the human, H#)
+## 11. Taste questions (asked to the human: Q1..Q10 = H3..H12)
 
 | # | Question | Options | Pick |
 |---|---|---|---|
