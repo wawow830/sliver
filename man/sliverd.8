@@ -194,6 +194,9 @@ The udev rule that starts
 .B sliverd
 for the Touch Bar devices in place of
 .BR tiny\-dfr .
+The package applies it to the existing bar card and backlight when it is installed, so no reboot
+is needed before the first
+.BR "systemctl start sliverd" .
 .SH ENVIRONMENT
 .TP
 .B SLIVER_LOG=debug
