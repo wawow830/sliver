@@ -367,6 +367,11 @@ via 99-z-sliverd.rules, agent connected, Hyprland lists `sliver-touch-bar-keys`,
 sliverd.socket stopped (the agent waited instead of re-activating sliverd), then restore brought back
 both and the agent reconnected.
 
+**Adaptive brightness is event-driven** (H44, bff78ed): every sysfs write to the main display's
+backlight (`apple-panel-bl`, max 509) makes the kernel send a backlight `change` uevent
+(`SOURCE=sysfs`); sliverd's udev monitor picks it up and re-applies the bar. Measured: screen
+56 → 228 → 56 moved the bar 43 → 87 → 43 (tiny-dfr's `sqrt(screen) * 128 + 1`) with no touch.
+
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
 
