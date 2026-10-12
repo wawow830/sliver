@@ -49,6 +49,14 @@ impl EmojiHandle {
     pub fn push(&self, text: &str) {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).push(text);
     }
+
+    /// `e` in the skin tone last picked for it (or plain).
+    pub fn preferred(&self, e: &sliver_emoji::Emoji) -> String {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .preferred(e)
+    }
 }
 
 /// Shared system-statistics sampler (CPU usage needs the previous sample, so one instance lives
@@ -178,6 +186,8 @@ pub struct UiState {
 pub struct EmojiUi {
     pub tab: usize,
     pub offset: usize,
+    /// Choosing a skin tone for this emoji (its plain text): the page shows its variants.
+    pub tones: Option<String>,
 }
 
 /// A countdown that survives re-resolution (it lives in [`UiState`], keyed by the cell).
@@ -474,6 +484,8 @@ fn cells_in(
 
 /// The emoji picker as a row of cells: group tabs, one page of emoji, a close button.
 /// Tap an emoji to type it, tap a tab to switch group, swipe to page, ✕ to close the layer.
+/// Hold an emoji that has skin tones to choose one: the page becomes ‹, the plain emoji and its
+/// five tones. Group pages show each emoji in the tone last picked for it (from recents).
 fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: &mut Vec<Cell>) {
     use sliver_emoji::Group;
     let cols = m
@@ -493,11 +505,21 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
     } else {
         ui.tab.min(Group::ALL.len())
     };
-    let items: Vec<(String, String)> = if tab == 0 {
-        recents.iter().map(|t| (t.clone(), t.clone())).collect()
+    // (text to show and type, the plain emoji when it has tones)
+    let items: Vec<(String, Option<&'static str>)> = if tab == 0 {
+        recents
+            .iter()
+            .map(|t| {
+                let fam = sliver_emoji::family(t).filter(|e| e.tones.is_some());
+                (t.clone(), fam.map(|e| e.text))
+            })
+            .collect()
     } else {
         sliver_emoji::in_group(Group::ALL[tab - 1])
-            .map(|e| (e.text.to_string(), e.name.to_string()))
+            .map(|e| {
+                let has = e.tones.is_some();
+                (world.emoji.preferred(e), has.then_some(e.text))
+            })
             .collect()
     };
     let offset = ui.offset.min(items.len().saturating_sub(cols));
@@ -546,18 +568,40 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         c.checked = t == tab;
         out.push(c);
     }
-    for (i, (text, _name)) in items.iter().enumerate().skip(offset).take(cols) {
+    let tones = ui
+        .tones
+        .as_deref()
+        .and_then(sliver_emoji::family)
+        .and_then(|e| Some((e.text, e.tones?)));
+    if let Some((plain, variants)) = tones {
         out.push(bare(
-            format!("{key}/e{i}"),
-            text,
-            76.0,
-            &["emoji"],
-            vec![
+            format!("{key}/back"),
+            "‹",
+            52.0,
+            &["emoji-back"],
+            vec![(Gesture::Tap, act("tones-close".into()))],
+        ));
+        for (i, text) in std::iter::once(plain).chain(variants).enumerate() {
+            out.push(bare(
+                format!("{key}/t{i}"),
+                text,
+                76.0,
+                &["emoji", "emoji-tone"],
+                vec![(Gesture::Tap, act(format!("pick:{insert}:{text}")))],
+            ));
+        }
+    } else {
+        for (i, (text, plain)) in items.iter().enumerate().skip(offset).take(cols) {
+            let mut on = vec![
                 (Gesture::Tap, act(format!("pick:{insert}:{text}"))),
                 (Gesture::SwipeLeft, act(format!("page:{}", cols))),
                 (Gesture::SwipeRight, act(format!("page:-{}", cols))),
-            ],
-        ));
+            ];
+            if let Some(p) = plain {
+                on.push((Gesture::Hold, act(format!("tones:{p}"))));
+            }
+            out.push(bare(format!("{key}/e{i}"), text, 76.0, &["emoji"], on));
+        }
     }
     out.push(bare(
         format!("{key}/close"),

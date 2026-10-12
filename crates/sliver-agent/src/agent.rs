@@ -1347,7 +1347,8 @@ impl Agent {
 }
 
 impl Agent {
-    /// The emoji strip's actions: `pick:<method>:<emoji>`, `tab:N`, `page:±N`, `close`.
+    /// The emoji strip's actions: `pick:<method>:<emoji>`, `tab:N`, `page:±N`, `close`, and
+    /// `tones:<emoji>` / `tones-close` for the skin-tone choice.
     fn emoji_action(&mut self, cell_key: &str, name: &str, now: u64, fx: &mut Vec<Effect>) {
         // The strip's own key is the cell key without its `/tab…`, `/e…`, `/close` suffix.
         let strip = cell_key
@@ -1360,6 +1361,13 @@ impl Agent {
             };
             self.emoji.push(text);
             self.type_text(method, text, now, fx);
+            self.ui(&strip).emoji.tones = None;
+            fx.push(Effect::Redraw);
+        } else if let Some(e) = name.strip_prefix("tones:") {
+            self.ui(&strip).emoji.tones = Some(e.to_string());
+            fx.push(Effect::Redraw);
+        } else if name == "tones-close" {
+            self.ui(&strip).emoji.tones = None;
             fx.push(Effect::Redraw);
         } else if let Some(t) = name
             .strip_prefix("tab:")
@@ -1368,6 +1376,7 @@ impl Agent {
             let ui = self.ui(&strip);
             ui.emoji.tab = t;
             ui.emoji.offset = 0;
+            ui.emoji.tones = None;
             fx.push(Effect::Redraw);
         } else if let Some(d) = name
             .strip_prefix("page:")

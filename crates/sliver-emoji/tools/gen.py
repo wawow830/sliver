@@ -6,8 +6,10 @@
 
 Keeps emoji up to Emoji 15.1 (MAX_VERSION): the newest additions are missing from most installed
 fonts and would draw as empty boxes. Raise it when Noto Color Emoji in the target distros catches up.
-Keeps fully-qualified emoji only, in CLDR order, without the skin-tone variants (a picker
-applies the tone itself) and without the "Component" group. Columns: emoji, name, group.
+Keeps fully-qualified emoji only, in CLDR order, without the "Component" group. Skin-tone
+variants aren't rows of their own: an emoji that has all five single-tone variants lists them in
+a fourth column (light to dark, space-separated) for the picker's tone choice. Mixed-tone
+combinations (couples with two tones) are left out. Columns: emoji, name, group[, tones].
 Unicode data: https://www.unicode.org/license.txt (permissive).
 """
 import re
@@ -15,6 +17,10 @@ import sys
 
 MAX_VERSION = (15, 1)
 
+TONES = ["light", "medium-light", "medium", "medium-dark", "dark"]
+
+rows = []
+by_name = {}
 group = None
 for line in open(sys.argv[1], encoding="utf-8"):
     line = line.rstrip("\n")
@@ -31,6 +37,19 @@ for line in open(sys.argv[1], encoding="utf-8"):
     ver = re.search(r"E(\d+)\.(\d+)", line)
     if ver and (int(ver.group(1)), int(ver.group(2))) > MAX_VERSION:
         continue
+    by_name[name] = emoji
     if "skin tone" in name:
         continue
-    print(f"{emoji}\t{name}\t{group}")
+    rows.append((emoji, name, group))
+
+
+def tone_name(name, tone):
+    """'thumbs up' -> 'thumbs up: light skin tone'; 'man: red hair' -> 'man: light skin tone, red hair'."""
+    head, sep, tail = name.partition(": ")
+    return f"{head}: {tone} skin tone" + (f", {tail}" if sep else "")
+
+
+for emoji, name, group in rows:
+    tones = [by_name.get(tone_name(name, t)) for t in TONES]
+    extra = "\t" + " ".join(tones) if all(tones) else ""
+    print(f"{emoji}\t{name}\t{group}{extra}")

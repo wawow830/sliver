@@ -909,6 +909,87 @@ fn emoji_picker_types_pages_and_closes() {
     );
 }
 
+/// Hold an emoji with skin tones: its variants replace the page; the pick is typed, goes to
+/// recents, and from then on the group page shows (and types) that tone.
+#[test]
+fn emoji_skin_tones() {
+    use sliver_agent::agent::Effect;
+    use sliver_config::{Action, LayerMode};
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent("[modules.\"emoji#strip\"]\ninsert = \"copy\"\ncolumns = 6\n");
+    let w = world(9, 41);
+    a.set_emoji(w.emoji.clone());
+    let mut fx = Vec::new();
+    let layer = Action::Layer {
+        name: "emoji".into(),
+        mode: LayerMode::Toggle,
+    };
+    a.run_action(&layer, 0, &mut fx);
+    a.render(&w);
+    let texts = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .filter(|c| c.key.starts_with("emoji#strip/"))
+            .map(|c| match &c.content {
+                sliver_render::Content::Markup(t) => t.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+    let touch = |a: &mut Agent, key: &str, t: u64, hold: bool| {
+        let (id, x) = region(a, key);
+        let mut fx = a.touch(id, 0, TouchPhase::Down, x, t);
+        if hold {
+            fx.extend(a.tick(t + 600_000));
+        }
+        fx.extend(a.touch(id, 0, TouchPhase::Up, x, t + 700_000));
+        fx.extend(a.tick(t + 1_200_000));
+        fx
+    };
+    // People & Body starts with 👋, which has tones; a hold opens them.
+    touch(&mut a, "emoji#strip/tab2", 1_000_000, false);
+    a.render(&w);
+    assert_eq!(texts(&a)[10], "👋");
+    let fx = touch(&mut a, "emoji#strip/e0", 3_000_000, true);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Spawn(_))),
+        "a hold doesn't type: {fx:?}"
+    );
+    a.render(&w);
+    let t = texts(&a);
+    assert_eq!(
+        &t[10..17],
+        ["‹", "👋", "👋🏻", "👋🏼", "👋🏽", "👋🏾", "👋🏿"],
+        "{t:?}"
+    );
+    // Pick medium: typed, and the page goes back with 👋🏽 in 👋's place.
+    let fx = touch(&mut a, "emoji#strip/t3", 5_000_000, false);
+    assert!(
+        fx.iter().any(
+            |e| matches!(e, Effect::Spawn(v) if v[0] == "wl-copy" && v.last().unwrap() == "👋🏽")
+        ),
+        "{fx:?}"
+    );
+    a.render(&w);
+    let t = texts(&a);
+    assert_eq!(t[10], "👋🏽", "{t:?}");
+    assert_eq!(w.emoji.items()[0], "👋🏽", "remembered in recents");
+    // Tapping it again types the tone; ‹ from a tones view goes back without typing.
+    let fx = touch(&mut a, "emoji#strip/e0", 7_000_000, false);
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Spawn(v) if v.last().unwrap() == "👋🏽"))
+    );
+    touch(&mut a, "emoji#strip/e0", 9_000_000, true);
+    a.render(&w);
+    let fx = touch(&mut a, "emoji#strip/back", 11_000_000, false);
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Spawn(_))));
+    a.render(&w);
+    assert_eq!(texts(&a)[10], "👋🏽");
+}
+
 /// `drawer = { mode = "bar" }`: tapping the leader opens the rest of the group as a sub-bar
 /// with a ✕, instead of expanding in place.
 #[test]
