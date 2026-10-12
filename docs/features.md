@@ -22,15 +22,15 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 
 | Feature | Tier | Status | Prior art | Notes |
 |---|---|---|---|---|
-| Built-in **safe layer** inside sliverd: F1–F12 (with Esc first on bars that have no physical Esc), plus media on Fn | P0 | partial | dfr (it's the only layer) | Shown whenever the agent, config or a widget fails. It needs no config and no fonts beyond the built-in ones. **Now:** Fallback and layout work and are tested headless. Real-bar runs showed garbled labels (stride fix landed, re-check pending). |
-| Esc and F-keys always reachable via sliverd's **safe hatch** (double-press Fn and hold → built-in F-keys; H14), even though every layout including Fn is fully editable (H4 revised). Defaults put Esc first on 2170 px bars | P0 | partial | mac, dfr | dfr adds Esc only on bars ≥2170 px. This 2008 px Mac14,7 has a physical Esc (confirmed in H2). See ux.md §7. **Now:** The hatch logic lives in sliverd with tests; not yet confirmed on the real bar. |
-| Fn held → the user's Fn layer (fully editable). Fn-Fn-hold → built-in F-keys, from any state | P0 | partial | mac, dfr | The hatch works even with app modals, custom layers, and a config with no F-keys. **Now:** Fn layer and hatch work in the core; the real Fn key path is untested on hardware. |
+| Built-in **safe layer** inside sliverd: F1–F12 (with Esc first on bars that have no physical Esc), plus media on Fn | P0 | done | dfr (it's the only layer) | Shown whenever the agent, config or a widget fails. It needs no config and no fonts beyond the built-in ones. **Verified on the real bar:** sharp labels after the stride fix (H28); killing the agent brings it back in 5–8 ms (H31). |
+| Esc and F-keys always reachable via sliverd's **safe hatch** (double-press Fn and hold → built-in F-keys; H14), even though every layout including Fn is fully editable (H4 revised). Defaults put Esc first on 2170 px bars | P0 | done | mac, dfr | dfr adds Esc only on bars ≥2170 px. This 2008 px Mac14,7 has a physical Esc (confirmed in H2). See ux.md §7. **Verified on the real bar:** Fn,Fn-hold → `hatch=true`, built-in F-keys (first real sliverd run, docs/hardware.md). |
+| Fn held → the user's Fn layer (fully editable). Fn-Fn-hold → built-in F-keys, from any state | P0 | partial | mac, dfr | The hatch works even with app modals, custom layers, and a config with no F-keys. **Now:** The real Fn key path works on hardware (Fn → built-in media row, Fn,Fn-hold → hatch). Not yet observed on hardware: Fn held → the *agent's* Fn layer (T72). |
 | Per-app "show F-keys by default" | P1 | done | mac (Keyboard prefs) | For terminals, IDEs and games. Expressed as a rule (see §5). **Now:** A rule pointing at the built-in `fkeys` layout. |
 | Render only on change, idle dim → off | P0 | partial | dfr | Invariant 3. The bar is OLED, so this is also the main burn-in protection. Defaults: dim at 30 s, off at 60 s, like dfr. **Now:** Idle dim/off in sliverd, render on change plus animation deadlines in the agent; real power draw is unmeasured. |
 | Wake on touch: the first touch on a dark bar only wakes it and doesn't fire an item | P0 | partial | dfr | Avoids accidental presses on a bar you can't see. **Now:** Implemented and tested headless; unverified on hardware. |
 | Headless renderer to PNG and simulated touch | P0 | done | (none) | Invariant 4. The settings preview uses the same renderer (ux.md). |
 | tiny-dfr config import (`/usr/share` + `/etc` merge) | P0 | done | dfr | Covers every dfr key: `MediaLayerDefault`, `ShowButtonOutlines`, `EnablePixelShift`, `FontTemplate`, `AdaptiveBrightness`, `ActiveBrightness`, `PrimaryLayerKeys`, `MediaLayerKeys` (Text/Icon/Theme/Time/Locale/Battery/Stretch/Action, key combos, spacers). |
-| Coexist with or replace tiny-dfr cleanly | P0 | partial | (none) | Packaging (ExecStartPre= handover both ways), restored by the safe-swap harness. **Now:** sliverd units, udev rules and the tiny-dfr fallback ladder exist (ADR-0005); the RPM installs, and the first real start is being debugged (fallback to tiny-dfr verified on the real machine). |
+| Coexist with or replace tiny-dfr cleanly | P0 | done | (none) | Packaging (ExecStartPre= handover both ways), restored by the safe-swap harness. **Verified on the real machine:** the RPM replaces tiny-dfr (H42), a failing sliverd falls back to tiny-dfr, and the harness borrows the bar from the installed sliverd and gives it back (H43). |
 
 ## 2. Items and widgets
 
@@ -111,7 +111,7 @@ we want, if the hardware allows them.
 | Feature | Tier | Status | Prior art | Notes |
 |---|---|---|---|---|
 | Outlines on/off, font (fontconfig pattern), icons (SVG/PNG, XDG theme) | P0 | done | dfr |  |
-| Pixel shift (±11 px x, ±2 px y) | P0 | partial | dfr | Default off, like dfr. Exposed as an *advanced* option. The OLED burn-in risk is real, but idle dim/off is the main protection. **Now:** Implemented in sliverd/config; not verified on the real panel. |
+| Pixel shift (±11 px x, ±2 px y) | P0 | todo | dfr | Default off, like dfr. Exposed as an *advanced* option. The OLED burn-in risk is real, but idle dim/off is the main protection. **Now:** Only the config key exists (also imported from tiny-dfr and shown in settings); nothing shifts pixels yet (T79). |
 | Themes: built-in light/dark/high-contrast/"dfr classic", plus user TOML themes | P1 | done | BTT | `sliver` (dark, default), `light`, `high-contrast` and `classic` built in (T60), plus user CSS stylesheets on top. The settings app picks between them with live previews of your own bar. |
 | Accent color from the desktop (GNOME/KDE accent, else a fixed default) | P1 | done | (none) | The settings portal's `accent-color` (with live changes) feeds `@accent` in the default theme; KDE's `kdeglobals` `AccentColor` is the fallback. Tested against a mock portal; no portal runs on the dev machine, so not yet seen live. |
 | Per-item colors (background, foreground, state colors) | P1 | done | MTMR, BTT | Stylesheets and `class`/state selectors. |
@@ -137,7 +137,7 @@ tiering only.
 
 | Feature | Tier | Status | Notes |
 |---|---|---|---|
-| sliverd (system) + sliver-agent (user) under systemd, privilege separated | P0 (daemon) / P1 (agent) | partial | Both have systemd units and packaging files; the package has not been built and installed end to end. |
+| sliverd (system) + sliver-agent (user) under systemd, privilege separated | P0 (daemon) / P1 (agent) | done | Installed from the RPM on the real machine (H42): sliverd as a DynamicUser system unit (cgroup-checked hardware gate), sliver-agent as a user unit, no root after start, 0 AVCs at start (full SELinux review: T76). |
 | Session D-Bus API v1: publish items/contexts, subscribe to presses, live updates | P1 | done | docs/api.md, introspection XML, drift test. |
 | `sliverctl` CLI: `show`, `set`, `push`, `layer`, `reload`, `status`, `render --png` | P1 | done |  |
 | Rust client crate, plus Python and shell examples | P1/P2 | done | `sliver-client`, Python and shell examples. |
