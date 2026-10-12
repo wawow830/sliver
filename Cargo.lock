@@ -1524,6 +1524,7 @@ dependencies = [
  "sliver-icons",
  "sliver-ipc",
  "sliver-modules",
+ "sliver-reload",
  "sliver-render",
  "sliver-session",
  "sliver-stats",

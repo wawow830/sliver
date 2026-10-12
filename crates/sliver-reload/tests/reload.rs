@@ -119,6 +119,17 @@ fn atomic_saves_reload_repeatedly_and_invalid_is_rejected() {
     d.save_atomic("config.toml", "[bar]\nname = \"fixed\"\n");
     assert!(matches!(next_outcome(&mut r, 5), Some(Outcome::Applied(_))));
     assert_eq!(bar_name(&r).as_deref(), Some("fixed"));
+
+    // valid TOML but an invalid config (base layer -> missing layout) is rejected too
+    d.save_atomic(
+        "config.toml",
+        "[bar]\nname = \"bad\"\n[layers]\nbase = \"nope\"\n",
+    );
+    match next_outcome(&mut r, 5) {
+        Some(Outcome::Rejected(e)) => assert!(e.iter().any(|e| e.contains("nope")), "{e:?}"),
+        other => panic!("expected Rejected, got {}", describe(&other)),
+    }
+    assert_eq!(bar_name(&r).as_deref(), Some("fixed"));
 }
 
 #[test]

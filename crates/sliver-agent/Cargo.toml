@@ -22,9 +22,10 @@ sliver-stats.workspace = true
 sliver-icons.workspace = true
 sliver-ipc.workspace = true
 sliver-render.workspace = true
-rustix = { workspace = true, features = ["event", "time", "pipe", "fs"] }
+rustix = { workspace = true, features = ["event", "time", "pipe"] }
 zbus = "5"
 signal-hook = "0.3"
+sliver-reload.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]

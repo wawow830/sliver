@@ -29,10 +29,9 @@ use sliver_agent::link::{Event, Link};
 use sliver_agent::modules::World;
 use sliver_agent::ops::{Op, start_ops};
 use sliver_agent::published::Published;
-use sliver_agent::reload::{SETTLE, Watcher};
 use sliver_api::registry::Focus;
 use sliver_api::service::{Control, ControlReply, ControlState};
-use sliver_config::{Config, Loaded};
+use sliver_config::Config;
 use sliver_feeds::{Aggregate, Feed, Feeds};
 use sliver_ipc::proto::{DisplayState, Layer, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
@@ -92,73 +91,53 @@ fn die(msg: &str) -> ! {
     std::process::exit(2)
 }
 
-/// The config (or the built-in defaults if it has errors), plus what to watch and the errors.
-struct Loaded2 {
-    config: Option<Config>,
-    path: Option<PathBuf>,
-    files: Vec<PathBuf>,
-    errors: Vec<String>,
-}
-
-/// Loads and reports the config. Errors are printed; `config` is `None` when there are any.
-fn load_config(path: Option<&Path>) -> Loaded2 {
-    let found = path
-        .map(Path::to_path_buf)
-        .or_else(sliver_config::find_config);
-    let loaded: Loaded = match &found {
-        Some(p) => sliver_config::load_file(p),
-        None => sliver_config::load(),
-    };
-    let src = found
-        .as_ref()
-        .map_or("built-in defaults".into(), |p| p.display().to_string());
-    // Parse errors and whole-config errors (e.g. a layer pointing at a missing layout) both
-    // block applying.
-    let mut d = loaded.diagnostics.clone();
-    if d.ok() {
-        d.extend(loaded.config.validate(sliver_config::Hardware::detect()));
-    }
-    for w in &d.warnings {
-        eprintln!("sliver-agent: {src}: warning: {w}");
-    }
-    for e in &d.errors {
-        eprintln!("sliver-agent: {src}: error: {e}");
-    }
-    let errors: Vec<String> = d.errors.iter().map(ToString::to_string).collect();
-    Loaded2 {
-        config: errors.is_empty().then_some(loaded.config),
-        path: found,
-        files: loaded.files,
-        errors,
-    }
-}
-
-/// Keeps the current config and stylesheet, and reloads them when their files change
-/// (customization.md §1, T26).
+/// The current config and stylesheet, hot-reloaded by `sliver-reload` (customization.md §1, T26):
+/// file changes (inotify, debounced), SIGUSR2 and `Control1.ReloadConfig`. A config with errors is
+/// never applied; the last good one stays and `errors` says why.
 struct Reloader {
-    explicit: Option<PathBuf>,
+    inner: Option<sliver_reload::Reloader>,
     config: Config,
     sheet: Stylesheet,
-    path: Option<PathBuf>,
-    /// Errors of the newest config on disk. Non-empty = we're on the last good one.
+    /// Why the newest config on disk isn't live. Empty = it is.
     errors: Vec<String>,
-    watcher: Option<Watcher>,
     /// SIGUSR2 arrives here (signal-hook's self-pipe).
     usr2: Option<UnixStream>,
-    due: Option<Instant>,
 }
 
 impl Reloader {
     fn start(explicit: Option<PathBuf>) -> Reloader {
-        let l = load_config(explicit.as_deref());
-        let config = l.config.unwrap_or_else(|| {
+        let (inner, applied) = match sliver_reload::Reloader::start(explicit.as_deref()) {
+            Ok((r, a)) => (Some(r), a),
+            Err(e) => {
+                eprintln!(
+                    "sliver-agent: no hot reload (inotify: {e}); using the built-in defaults"
+                );
+                let config = sliver_config::load_str("", Path::new(".")).config;
+                let a = sliver_reload::Applied {
+                    config,
+                    sheet: Stylesheet::sliver(),
+                    config_path: None,
+                    warnings: Vec::new(),
+                    errors: vec![format!("hot reload unavailable: {e}")],
+                };
+                (None, a)
+            }
+        };
+        let src = applied
+            .config_path
+            .as_ref()
+            .map_or("built-in defaults".into(), |p| p.display().to_string());
+        applied
+            .warnings
+            .iter()
+            .for_each(|w| eprintln!("sliver-agent: {src}: warning: {w}"));
+        applied
+            .errors
+            .iter()
+            .for_each(|e| eprintln!("sliver-agent: {src}: error: {e}"));
+        if !applied.errors.is_empty() {
             eprintln!("sliver-agent: using the built-in defaults until the config is fixed");
-            sliver_config::load_str("", Path::new(".")).config
-        });
-        let sheet = load_stylesheet(&config, l.path.as_deref());
-        let watcher = Watcher::new()
-            .inspect_err(|e| eprintln!("sliver-agent: no hot reload (inotify: {e})"))
-            .ok();
+        }
         let usr2 = UnixStream::pair().ok().and_then(|(r, w)| {
             r.set_nonblocking(true).ok()?;
             signal_hook::low_level::pipe::register(signal_hook::consts::SIGUSR2, w)
@@ -166,112 +145,109 @@ impl Reloader {
                 .ok()?;
             Some(r)
         });
-        let mut r = Reloader {
-            explicit,
-            config,
-            sheet,
-            path: l.path,
-            errors: l.errors,
-            watcher,
+        Reloader {
+            inner,
+            config: applied.config,
+            sheet: applied.sheet,
+            errors: applied.errors,
             usr2,
-            due: None,
+        }
+    }
+
+    fn watch_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
+        self.inner.as_ref().map(sliver_reload::Reloader::as_fd)
+    }
+
+    /// How long poll may sleep before a debounced change is due.
+    fn timeout_ms(&self) -> Option<i64> {
+        let d = self.inner.as_ref()?.deadline()?;
+        Some(d.saturating_duration_since(Instant::now()).as_millis() as i64 + 1)
+    }
+
+    /// After poll: feeds file events and SIGUSR2, reloads when due. Returns whether to redraw.
+    fn on_wake(
+        &mut self,
+        watch_ready: bool,
+        usr2_ready: bool,
+        agent: &mut Agent,
+        live: &mut Live,
+    ) -> bool {
+        let Some(inner) = &mut self.inner else {
+            return false;
         };
-        r.rewatch(&l.files);
-        r
-    }
-
-    /// Watches the config files, the stylesheets, and where a user config would appear.
-    fn rewatch(&mut self, files: &[PathBuf]) {
-        let Some(w) = &mut self.watcher else { return };
-        let mut list: Vec<PathBuf> = files.to_vec();
-        list.extend(self.sheet.files().iter().cloned());
-        match &self.explicit {
-            Some(p) => list.push(p.clone()),
-            // The user's config may not exist yet; its creation should load it.
-            None => list.extend(sliver_config::search_path().into_iter().take(2)),
+        let now = Instant::now();
+        if watch_ready {
+            inner.on_readable(now);
         }
-        if let Some(p) = &self.path {
-            list.push(p.clone());
-            list.push(p.with_file_name("style.css"));
-        }
-        w.watch(&list);
-    }
-
-    /// Reloads now. Applies the new config to `agent` and the module runtime only if it's valid.
-    /// Returns the errors (empty = applied).
-    fn reload(&mut self, agent: Option<&mut Agent>, live: &mut Live) -> Vec<String> {
-        let l = load_config(self.explicit.as_deref());
-        let src = l
-            .path
-            .as_ref()
-            .map_or("built-in defaults".into(), |p| p.display().to_string());
-        let Some(config) = l.config else {
-            eprintln!("sliver-agent: {src} has errors; keeping the last good config");
-            self.errors = l.errors.clone();
-            self.rewatch(&l.files);
-            return l.errors;
-        };
-        self.sheet = load_stylesheet(&config, l.path.as_deref());
-        live.restart_modules(&config);
-        if let Some(a) = agent {
-            a.config = config.clone();
-            a.sheet = self.sheet.clone();
-            let layers = &a.config.layers;
-            a.layers.retain(|l| layers.contains_key(l));
-        }
-        self.config = config;
-        self.path = l.path;
-        self.errors.clear();
-        self.rewatch(&l.files);
-        eprintln!("sliver-agent: reloaded {src}");
-        Vec::new()
-    }
-
-    /// After poll: notes file events and SIGUSR2. Returns whether a reload is due now.
-    fn on_wake(&mut self, watch_ready: bool, usr2_ready: bool) -> bool {
-        if watch_ready && self.watcher.as_mut().is_some_and(Watcher::drain) {
-            self.due = Some(Instant::now() + SETTLE);
-        }
+        let mut forced = false;
         if usr2_ready && let Some(r) = &mut self.usr2 {
             let mut buf = [0u8; 64];
             while matches!(r.read(&mut buf), Ok(n) if n > 0) {}
-            self.due = Some(Instant::now());
+            forced = true;
         }
-        match self.due {
-            Some(t) if t <= Instant::now() => {
-                self.due = None;
+        let outcome = if forced {
+            Some(inner.reload_now())
+        } else {
+            inner.poll_due(now)
+        };
+        outcome.is_some_and(|o| self.handle(o, Some(agent), live))
+    }
+
+    /// Reloads now (`sliverctl reload`). Returns the errors (empty = the file's config is live).
+    fn reload(&mut self, agent: Option<&mut Agent>, live: &mut Live) -> Vec<String> {
+        match self.inner.as_mut().map(sliver_reload::Reloader::reload_now) {
+            Some(o) => {
+                self.handle(o, agent, live);
+            }
+            None => self.errors = vec!["hot reload unavailable (no inotify)".into()],
+        }
+        self.errors.clone()
+    }
+
+    fn handle(
+        &mut self,
+        o: sliver_reload::Outcome,
+        agent: Option<&mut Agent>,
+        live: &mut Live,
+    ) -> bool {
+        use sliver_reload::Outcome;
+        match o {
+            Outcome::Applied(a) => {
+                let src = a
+                    .config_path
+                    .as_ref()
+                    .map_or("built-in defaults".into(), |p| p.display().to_string());
+                a.warnings
+                    .iter()
+                    .for_each(|w| eprintln!("sliver-agent: {src}: warning: {w}"));
+                live.restart_modules(&a.config);
+                if let Some(agent) = agent {
+                    agent.config = a.config.clone();
+                    agent.sheet = a.sheet.clone();
+                    let layers = &agent.config.layers;
+                    agent.layers.retain(|l| layers.contains_key(l));
+                }
+                self.config = a.config;
+                self.sheet = a.sheet;
+                self.errors.clear();
+                eprintln!("sliver-agent: reloaded {src}");
                 true
             }
-            _ => false,
+            Outcome::Rejected(errors) => {
+                errors
+                    .iter()
+                    .for_each(|e| eprintln!("sliver-agent: config error: {e}"));
+                eprintln!("sliver-agent: keeping the last good config");
+                self.errors = errors;
+                false
+            }
+            // Back to what's live (e.g. a broken save reverted): nothing to redraw, no errors.
+            Outcome::Unchanged => {
+                self.errors.clear();
+                false
+            }
         }
     }
-
-    /// How long poll may sleep before a pending reload is due.
-    fn timeout_ms(&self) -> Option<i64> {
-        self.due
-            .map(|t| t.saturating_duration_since(Instant::now()).as_millis() as i64 + 1)
-    }
-}
-
-/// The default `sliver` theme, then the user's stylesheet (`stylesheet = …` in the config, or
-/// `style.css` next to it) on top.
-fn load_stylesheet(config: &Config, config_path: Option<&Path>) -> Stylesheet {
-    let mut sheet = Stylesheet::sliver();
-    let dir = config_path.and_then(Path::parent);
-    let user = match (&config.stylesheet, dir) {
-        (Some(s), Some(d)) => Some(d.join(s)),
-        (Some(s), None) => Some(PathBuf::from(s)),
-        (None, Some(d)) => Some(d.join("style.css")).filter(|p| p.is_file()),
-        (None, None) => None,
-    };
-    if let Some(p) = user {
-        let mut diags = Vec::new();
-        match sheet.add_file(&p, &mut diags) {
-            Ok(()) => diags.iter().for_each(|d| eprintln!("sliver-agent: {d}")),
-            Err(e) => eprintln!("sliver-agent: {}: {e}", p.display()),
-        }
-    }
-    sheet
 }
 
 /// The live world: sliver-feeds (desktop, session, user modules) plus the ops thread.
@@ -808,7 +784,7 @@ fn run(
             let (fd, wake) = (link.fd(), live.feeds.as_fd());
             let optional = [
                 live.api.as_ref().map(|a| a.fd()),
-                reloader.watcher.as_ref().map(|w| w.fd()),
+                reloader.watch_fd(),
                 reloader.usr2.as_ref().map(|r| r.as_fd()),
             ];
             let mut fds = vec![
@@ -838,10 +814,7 @@ fn run(
                 ready(at[2]),
             )
         };
-        if reloader.on_wake(watch_ready, usr2_ready) {
-            reloader.reload(Some(&mut agent), live);
-            dirty = true;
-        }
+        dirty |= reloader.on_wake(watch_ready, usr2_ready, &mut agent, live);
         if world_changed {
             dirty |= live.pump();
         }

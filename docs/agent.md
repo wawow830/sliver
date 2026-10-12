@@ -120,12 +120,11 @@ Previews: `World::sample(now)` (sample battery, volume, brightness, now playing,
 Not yet: `workspaces`/`taskbar`/`notifications`/`cpu`… modules.
 
 ## Hot reload (T26)
-`main.rs` `Reloader` + `reload.rs` `Watcher`. inotify watches the *directories* of the config, its
-includes, the stylesheets (`Stylesheet::files`, including `@import`s), and the user config path
-even if it doesn't exist yet (through its nearest existing ancestor). Watching directories catches
-atomic rename-saves. Events settle for 200 ms, then the agent reloads. `sliverctl reload` (Control1
-`ReloadConfig`) and SIGUSR2 reload at once.
+`main.rs` `Reloader` wraps `sliver-reload` (fir). inotify watches the *directories* of the
+config, its includes, the stylesheets (including `@import`s) and where a user config would
+appear, so atomic rename-saves and a config created later both work. Changes are debounced.
+`sliverctl reload` (Control1 `ReloadConfig`) and SIGUSR2 reload at once.
 A config with parse **or validation** errors is never applied: the last good config stays, the
-errors are logged, and `healthy` goes false until a good save. User modules restart only if
-their specs changed (`Feeds::start_modules`). The realtime-signal forwarder is installed once and
-retargeted, so replaced runtimes really stop.
+errors are logged, and `healthy` goes false until a good save (or a revert). User modules restart
+only if their specs changed (`Feeds::start_modules`). The realtime-signal forwarder is installed
+once and retargeted, so replaced runtimes really stop.

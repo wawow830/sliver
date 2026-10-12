@@ -80,10 +80,16 @@ fn read(explicit: Option<&Path>) -> Read {
     let found = explicit
         .map(Path::to_path_buf)
         .or_else(sliver_config::find_config);
-    let loaded = match &found {
+    let mut loaded = match &found {
         Some(p) => sliver_config::load_file(p),
         None => sliver_config::load(),
     };
+    // Whole-config errors (a layer pointing at a missing layout, a group containing itself) block
+    // applying just like parse errors. Without this they'd be applied and fail at render time.
+    if loaded.diagnostics.ok() {
+        let v = loaded.config.validate(sliver_config::Hardware::detect());
+        loaded.diagnostics.extend(v);
+    }
     Read {
         loaded,
         config_path: found,
