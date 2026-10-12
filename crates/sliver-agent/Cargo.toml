@@ -1,0 +1,13 @@
+[package]
+name = "sliver-agent"
+description = "Sliver per-user session agent: compositor tracking, public D-Bus API, widgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

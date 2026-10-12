@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+repository = "https://github.com/wawow830/sliver"
+publish = false
+
+[workspace.dependencies]
+# Internal crates. Depend on these as `sliver-config.workspace = true`.
+sliver-config = { path = "crates/sliver-config" }
+sliver-ipc = { path = "crates/sliver-ipc" }
+sliver-render = { path = "crates/sliver-render" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.dev]
+# Keep target/ small: every peer has its own (ADR-0001).
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

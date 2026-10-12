@@ -10,7 +10,14 @@ You are probably a peer in sliver's agent swarm. Read these before doing anythin
 - `swarm/bin/swarm`: the swarm's shared-world tool (it's on PATH in peer panes).
 - `scripts/check`: the gate that `swarm land` runs. Keep it fast and green.
 - `docs/`: durable knowledge (hardware notes, API docs, UX). Write here instead of keeping things in your head.
-- Rust code lives in a Cargo workspace at the repo root (see ADR-0001).
+- Rust code lives in a Cargo workspace at the repo root (see ADR-0001). Crates are in `crates/`:
+  - bins: `sliverd` (system daemon), `sliver-agent` (session agent), `sliverctl` (CLI),
+    `sliver-settings` (GTK4 app)
+  - libs: `sliver-config` (layout model + TOML schema), `sliver-ipc` (sliverd<->agent protocol),
+    `sliver-render` (rendering + headless PNG)
+  - Add a crate when a concern is shared by 2+ crates or needs isolation (e.g. heavy deps). Put
+    shared deps in `[workspace.dependencies]` and use `x.workspace = true`; opt into `[lints] workspace = true`.
+- CI (`.github/workflows/ci.yml`) just runs `scripts/check` on aarch64.
 
 ## Rules
 - Work in your own worktree (`../sliver.peers/<you>`, branch `peer/<you>`). Never edit the main

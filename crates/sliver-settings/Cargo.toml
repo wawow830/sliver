@@ -1,0 +1,13 @@
+[package]
+name = "sliver-settings"
+description = "Sliver settings app and WYSIWYG Touch Bar editor (GTK4 + libadwaita)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

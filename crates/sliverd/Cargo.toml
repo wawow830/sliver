@@ -1,0 +1,13 @@
+[package]
+name = "sliverd"
+description = "Sliver system daemon: owns the Touch Bar display, touch input, backlight and key emission"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

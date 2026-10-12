@@ -1,0 +1,13 @@
+[package]
+name = "sliver-config"
+description = "Sliver layout model and TOML config schema (user + system), incl. tiny-dfr import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

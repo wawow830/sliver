@@ -1,0 +1,13 @@
+[package]
+name = "sliverctl"
+description = "Command-line client for the sliver session D-Bus API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

@@ -1,0 +1,13 @@
+[package]
+name = "sliver-render"
+description = "Touch Bar renderer: layout -> pixels, with a headless PNG path"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
