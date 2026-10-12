@@ -14,4 +14,5 @@ pub mod modules;
 pub mod ops;
 pub mod published;
 
+pub mod wait;
 pub use agent::Agent;

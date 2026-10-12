@@ -481,12 +481,17 @@ fn main() {
         Live::start(&reloader.config).unwrap_or_else(|e| die(&format!("starting feeds: {e}")));
     drop((config, sheet));
     let mut backoff = Duration::from_millis(250);
+    // Log the first failure and the recovery, not every retry (tiny-dfr may own the bar for days).
+    let mut failing = false;
     loop {
         match Conn::connect(&a.socket)
             .and_then(|c| Link::handshake(c, concat!("sliver-agent ", env!("CARGO_PKG_VERSION"))))
         {
             Ok(link) => {
                 backoff = Duration::from_millis(250);
+                if std::mem::take(&mut failing) {
+                    eprintln!("sliver-agent: sliverd is back");
+                }
                 let mut agent = Agent::new(
                     reloader.config.clone(),
                     reloader.sheet.clone(),
@@ -505,10 +510,25 @@ fn main() {
                 }
                 eprintln!("sliver-agent: lost sliverd, reconnecting");
             }
-            Err(e) => eprintln!("sliver-agent: {}: {e}", a.socket.display()),
+            Err(e) => {
+                if !failing {
+                    eprintln!(
+                        "sliver-agent: {}: {e}; waiting for sliverd (quietly until it's back)",
+                        a.socket.display()
+                    );
+                    failing = true;
+                }
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    // No socket at all (tiny-dfr drives the bar): sleep on inotify until it
+                    // appears, with a rare safety re-check. No polling timer (invariant 3).
+                    sliver_agent::wait::wait_for_path(&a.socket, Duration::from_secs(300));
+                    backoff = Duration::from_millis(250);
+                    continue;
+                }
+            }
         }
         std::thread::sleep(backoff);
-        backoff = (backoff * 2).min(Duration::from_secs(5));
+        backoff = (backoff * 2).min(Duration::from_secs(60));
     }
 }
 
