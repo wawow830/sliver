@@ -29,6 +29,12 @@ pub enum Op {
         player: String,
         cmd: Command,
     },
+    /// Seek `player` to this position (µs) on this track.
+    Seek {
+        player: String,
+        track: String,
+        pos_us: i64,
+    },
     Caffeine(bool),
     /// Switch Wi-Fi / Bluetooth / Do Not Disturb to this state.
     Wifi(bool),
@@ -89,6 +95,12 @@ fn run_ops(
             Op::Media { player, cmd } => {
                 sliver_session::mpris::control(&ses, &player, cmd).map_err(|e| e.to_string())
             }
+            Op::Seek {
+                player,
+                track,
+                pos_us,
+            } => sliver_session::mpris::set_position(&ses, &player, &track, pos_us)
+                .map_err(|e| e.to_string()),
             Op::Caffeine(on) => handle.set_caffeine(on).map_err(|e| e.to_string()),
             Op::Wifi(on) => sliver_session::network::set_wifi(&sys, on),
             Op::Bluetooth { adapter, on } => {

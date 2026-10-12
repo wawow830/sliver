@@ -77,6 +77,11 @@ pub enum Feed {
     Desktop(DesktopState),
     Session(SessionState),
     Module(Update),
+    /// Album art for `url` is now a local file (`None`: it could not be loaded).
+    Art {
+        url: String,
+        path: Option<std::path::PathBuf>,
+    },
     /// A source could not start or stopped. For logs and the status page.
     Note(String),
 }
@@ -199,10 +204,24 @@ impl Feeds {
     /// Forward a session source (the live one, or a scripted fake in tests).
     pub fn spawn_session(&self, mut src: impl SessionSource + Send + 'static) {
         let out = self.out.clone();
+        let cache = sliver_session::art::default_cache_dir(|k| std::env::var(k).ok());
         std::thread::Builder::new()
             .name("feed session".into())
             .spawn(move || {
+                let mut last_art: Option<String> = None;
                 while let Ok(Some(s)) = src.next_change() {
+                    // New album art: fetch it off the loop (it can be a download).
+                    let art = s.media.as_ref().and_then(|m| m.art_url.clone());
+                    if art != last_art {
+                        last_art = art.clone();
+                        if let (Some(url), Some(dir)) = (art, cache.clone()) {
+                            let o = out.clone();
+                            std::thread::spawn(move || {
+                                let path = sliver_session::art::resolve(&url, &dir);
+                                o.send(Feed::Art { url, path });
+                            });
+                        }
+                    }
                     if !out.send(Feed::Session(s)) {
                         return;
                     }
@@ -351,6 +370,8 @@ pub struct Aggregate {
     pub session: SessionState,
     modules: HashMap<String, Output>,
     apps: Option<DesktopEntries>,
+    /// The last album art resolved: (url, local file).
+    art: Option<(String, std::path::PathBuf)>,
 }
 
 impl Aggregate {
@@ -361,6 +382,7 @@ impl Aggregate {
             session: SessionState::default(),
             modules: HashMap::new(),
             apps,
+            art: None,
         }
     }
 
@@ -381,6 +403,15 @@ impl Aggregate {
         add_desktop(&mut c, &self.desktop, self.apps.as_ref());
         add_session(&mut c, &self.session);
         c
+    }
+
+    /// The local file for the current player's album art, once fetched.
+    pub fn media_art(&self) -> Option<&std::path::Path> {
+        let url = self.session.media.as_ref()?.art_url.as_deref()?;
+        self.art
+            .as_ref()
+            .filter(|(u, _)| u == url)
+            .map(|(_, p)| p.as_path())
     }
 
     pub fn module_output(&self, key: &str) -> Option<&Output> {
@@ -417,6 +448,10 @@ impl Aggregate {
                 } else {
                     Changed::Nothing
                 }
+            }
+            Feed::Art { url, path } => {
+                self.art = path.map(|p| (url, p));
+                Changed::Module("mpris".into())
             }
             Feed::Note(_) => Changed::Nothing,
         }

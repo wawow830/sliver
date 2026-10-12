@@ -10,6 +10,7 @@
 //! services on a private `dbus-daemon` (see `tests/`).
 
 pub mod appearance;
+pub mod art;
 pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
@@ -97,6 +98,10 @@ pub struct Media {
     pub can_next: bool,
     pub can_previous: bool,
     pub can_seek: bool,
+    /// `mpris:trackid`, needed to seek (`SetPosition`).
+    pub track_id: Option<String>,
+    /// When `position_us` was read (unix ms), so a UI can extrapolate while playing.
+    pub position_at_ms: Option<u64>,
 }
 
 /// Everything in this crate, flat and comparable.
@@ -122,6 +127,8 @@ pub struct SessionState {
     pub network: network::Network,
     pub bluetooth: bluetooth::Bluetooth,
     pub media: Option<Media>,
+    /// Every real player, the chosen one first (for a player picker).
+    pub players: Vec<Media>,
 }
 
 /// A blocking stream of session state changes.

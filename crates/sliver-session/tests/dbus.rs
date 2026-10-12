@@ -106,6 +106,7 @@ impl UpowerDevice {
 struct Track {
     status: &'static str,
     title: &'static str,
+    seeks: Vec<(String, i64)>,
 }
 struct MprisRoot;
 struct MprisPlayer(Arc<Mutex<Track>>);
@@ -135,6 +136,12 @@ impl MprisPlayer {
         );
         // some players send the length as u64, others as i64
         m.insert(
+            "mpris:trackid".into(),
+            Value::from(zbus::zvariant::ObjectPath::try_from("/track/1").unwrap())
+                .try_into()
+                .unwrap(),
+        );
+        m.insert(
             "mpris:length".into(),
             Value::from(215_000_000u64).try_into().unwrap(),
         );
@@ -151,6 +158,9 @@ impl MprisPlayer {
     #[zbus(property)]
     fn can_pause(&self) -> bool {
         true
+    }
+    fn set_position(&self, track: zbus::zvariant::ObjectPath<'_>, pos: i64) {
+        self.0.lock().unwrap().seeks.push((track.to_string(), pos));
     }
     fn play_pause(&self) {
         let mut t = self.0.lock().unwrap();
@@ -223,6 +233,7 @@ fn live_sources_against_mock_services() {
     let t1 = Arc::new(Mutex::new(Track {
         status: "Paused",
         title: "one",
+        seeks: Vec::new(),
     }));
     let p1 = bus.service("org.mpris.MediaPlayer2.mock1");
     p1.object_server()
@@ -238,6 +249,7 @@ fn live_sources_against_mock_services() {
             MprisPlayer(Arc::new(Mutex::new(Track {
                 status: "Playing",
                 title: "ghost",
+                seeks: Vec::new(),
             }))),
         )
         .unwrap();
@@ -260,6 +272,9 @@ fn live_sources_against_mock_services() {
         ("Mock Player", "one", "A, B")
     );
     assert_eq!(m.status, PlaybackStatus::Paused);
+    assert_eq!(m.track_id.as_deref(), Some("/track/1"));
+    assert!(m.position_at_ms.is_some());
+    assert_eq!(s.players.len(), 1);
     assert_eq!(m.length_us, Some(215_000_000));
     assert_eq!(m.position_us, Some(42));
     assert!(m.can_next && m.can_play_pause && !m.can_seek);
@@ -352,6 +367,7 @@ fn live_sources_against_mock_services() {
     let t2 = Arc::new(Mutex::new(Track {
         status: "Playing",
         title: "two",
+        seeks: Vec::new(),
     }));
     let p2 = bus.service("org.mpris.MediaPlayer2.mock2");
     p2.object_server()
@@ -391,4 +407,11 @@ fn live_sources_against_mock_services() {
     };
     // both paused now: the more recently changed one (mock2) stays selected
     assert!(m.player.ends_with("mock2"));
+
+    // seeking goes to the player with its track id
+    sliver_session::mpris::set_position(&client, &m.player, "/track/1", 5_000_000).unwrap();
+    assert_eq!(
+        t2.lock().unwrap().seeks,
+        vec![("/track/1".to_string(), 5_000_000)]
+    );
 }

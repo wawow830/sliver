@@ -96,6 +96,8 @@ pub struct World {
     pub stats: Stats,
     /// Recently used emoji (the picker's first tab).
     pub emoji: EmojiHandle,
+    /// Local file of the current player's album art (fetched by the feeds).
+    pub media_art: Option<std::path::PathBuf>,
     /// Installed applications, for taskbar icons.
     pub apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
 }
@@ -114,6 +116,7 @@ impl World {
             stats: Stats::default(),
             apps: Default::default(),
             emoji: Default::default(),
+            media_art: None,
         }
     }
 
@@ -166,6 +169,8 @@ pub struct UiState {
     pub timer: Option<TimerState>,
     /// `emoji` strips: which tab and how far scrolled.
     pub emoji: EmojiUi,
+    /// `mpris`: the player the user picked (hold), instead of the most recently active one.
+    pub player: Option<String>,
 }
 
 /// Where an emoji strip is: tab 0 = recents, 1..=9 = the Unicode groups.
@@ -764,7 +769,12 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             sp
         }
         "mpris" => {
-            let media = s.media.as_ref()?;
+            // The picked player, if it is still there; else the session's choice.
+            let media = ui
+                .player
+                .as_deref()
+                .and_then(|p| s.players.iter().find(|m| m.player == p))
+                .or(s.media.as_ref())?;
             let status = crate::context::media_status(media.status);
             let glyph = if status == "playing" { "⏸" } else { "▶" };
             let v = ValueMap(
@@ -785,6 +795,54 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
                 .on(Gesture::SwipeLeft, "next")
                 .on(Gesture::SwipeRight, "previous");
             sp.status = Some(status);
+            // Album art as the icon (when it is the session's own player and has been fetched).
+            let art = m
+                .config
+                .get("art")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let is_session_player = s.media.as_ref().is_some_and(|x| x.player == media.player);
+            if art && is_session_player {
+                if let Some(p) = &world.media_art {
+                    sp.default_icon = Some(p.display().to_string());
+                }
+            }
+            // Hold: switch to the next player when several are running.
+            if s.players.len() > 1 {
+                let idx = s
+                    .players
+                    .iter()
+                    .position(|m| m.player == media.player)
+                    .unwrap_or(0);
+                let next = &s.players[(idx + 1) % s.players.len()].player;
+                sp.defaults.push((
+                    Gesture::Hold,
+                    Action::ModuleAction(format!("player:{next}")),
+                ));
+            }
+            // `scrub = true`: a progress slider; drag to seek.
+            if m.config.get("scrub").and_then(|v| v.as_bool()) == Some(true) {
+                if let Some(len) = media.length_us.filter(|l| *l > 0) {
+                    let now_ms = world.now.timestamp_millis().max(0) as u64;
+                    let mut pos = media.position_us.unwrap_or(0).max(0);
+                    if media.status == sliver_session::PlaybackStatus::Playing {
+                        if let Some(at) = media.position_at_ms {
+                            pos += (now_ms.saturating_sub(at) as i64) * 1000;
+                        }
+                    }
+                    sp.slider = Some((pos as f64 / len as f64).clamp(0.0, 1.0) as f32);
+                    sp.percentage = Some(pos as f64 * 100.0 / len as f64);
+                    if media.can_seek {
+                        sp.defaults
+                            .retain(|(g, _)| *g != Gesture::SwipeLeft && *g != Gesture::SwipeRight);
+                        sp.defaults
+                            .push((Gesture::Drag, Action::ModuleAction("seek".into())));
+                    }
+                    if media.status == sliver_session::PlaybackStatus::Playing {
+                        sp.refresh = Some(std::time::Duration::from_secs(1));
+                    }
+                }
+            }
             sp
         }
         "idle-inhibitor" => {

@@ -869,3 +869,96 @@ fn network_bluetooth_dnd_taps_toggle() {
         t += 1_000_000;
     }
 }
+
+fn player(
+    name: &str,
+    title: &str,
+    status: sliver_session::PlaybackStatus,
+) -> sliver_session::Media {
+    sliver_session::Media {
+        player: format!("org.mpris.MediaPlayer2.{name}"),
+        identity: name.into(),
+        title: title.into(),
+        status,
+        length_us: Some(200_000_000),
+        position_us: Some(100_000_000),
+        can_seek: true,
+        can_play_pause: true,
+        track_id: Some("/track/1".into()),
+        ..Default::default()
+    }
+}
+
+/// Album art shows as the module's icon; holding switches players; `scrub = true` makes a
+/// progress slider that seeks on drag.
+#[test]
+fn now_playing_art_player_picker_and_scrub() {
+    use sliver_agent::agent::{Effect, SessionOp};
+    use sliver_ipc::proto::TouchPhase;
+    use sliver_session::PlaybackStatus::{Paused, Playing};
+    let toml = "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"mpris\"]\n[modules.mpris]\nformat = \"{title}\"\n";
+    let mut a = agent(toml);
+    let mut w = world(9, 41);
+    let one = player("one", "Song One", Playing);
+    let two = player("two", "Song Two", Paused);
+    w.session.media = Some(one.clone());
+    w.session.players = vec![one.clone(), two.clone()];
+    let art = format!(
+        "{}/../sliver-render/tests/fixtures/art-48x32.jpg",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    w.media_art = Some(std::path::PathBuf::from(&art));
+    a.render(&w);
+    let content = |a: &Agent| a.frame(Layer::Base).unwrap().cells[0].content.clone();
+    assert!(
+        matches!(content(&a), sliver_render::Content::IconMarkup(_, ref t) if t == "Song One"),
+        "art icon + title: {:?}",
+        content(&a)
+    );
+    // hold: picks the next player
+    let (id, x) = region(&a, "mpris");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    fx.extend(a.tick(1_000_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 1_100_000));
+    assert!(fx.contains(&Effect::Redraw), "{fx:?}");
+    a.render(&w);
+    assert!(
+        matches!(content(&a), sliver_render::Content::Markup(ref t) | sliver_render::Content::IconMarkup(_, ref t) if t == "Song Two"),
+        "{:?}",
+        content(&a)
+    );
+    // controls now target the picked player
+    let (id, x) = region(&a, "mpris");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 3_040_000));
+    fx.extend(a.tick(3_400_000));
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::Session(SessionOp::MediaOn { player, .. }) if player.ends_with(".two"))),
+        "{fx:?}"
+    );
+
+    // scrub: a slider at the playback position; dragging seeks
+    let mut a = agent(&toml.replace("format = \"{title}\"", "scrub = true"));
+    let mut w = world(9, 41);
+    w.session.media = Some(one.clone());
+    w.session.players = vec![one];
+    a.render(&w);
+    let f = a.frame(Layer::Base).unwrap();
+    let sliderv = match &f.cells[0].content {
+        sliver_render::Content::Slider { value, .. } => *value,
+        other => panic!("scrub renders a slider: {other:?}"),
+    };
+    assert!((sliderv - 0.5).abs() < 0.01, "100 s of 200 s: {sliderv}");
+    let t = f.layout.tracks[0].expect("track");
+    let (id, _) = region(&a, "mpris");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, t.x + t.w * 0.25, 1_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Move, t.x + t.w * 0.25, 20_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, t.x + t.w * 0.25, 40_000));
+    fx.extend(a.tick(400_000));
+    assert!(
+        fx.iter().any(
+            |e| matches!(e, Effect::Session(SessionOp::Seek { pct, .. }) if (24..=26).contains(pct))
+        ),
+        "{fx:?}"
+    );
+}

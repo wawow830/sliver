@@ -345,7 +345,7 @@ impl Live {
                 }
                 Feed::Session(s) => self.locked_hint = s.locked,
                 Feed::Note(n) => eprintln!("sliver-agent: {n}"),
-                Feed::Desktop(_) => {}
+                Feed::Desktop(_) | Feed::Art { .. } => {}
             }
             self.agg.apply(f);
         }
@@ -394,6 +394,7 @@ impl Live {
             stats: self.stats.clone(),
             apps: self.apps.clone(),
             emoji: self.emoji.clone(),
+            media_art: self.agg.media_art().map(std::path::Path::to_path_buf),
         }
     }
 
@@ -610,6 +611,24 @@ fn apply(
                     },
                     SessionOp::ToggleDnd => {
                         Op::Dnd(!live.agg.session.notifications.dnd.unwrap_or(false))
+                    }
+                    SessionOp::MediaOn { player, cmd } => Op::Media { player, cmd },
+                    SessionOp::Seek { player, pct } => {
+                        let s = &live.agg.session;
+                        let m = match &player {
+                            Some(p) => s.players.iter().find(|m| &m.player == p),
+                            None => s.media.as_ref(),
+                        };
+                        match m.and_then(|m| {
+                            Some((m.player.clone(), m.track_id.clone()?, m.length_us?))
+                        }) {
+                            Some((player, track, len)) => Op::Seek {
+                                player,
+                                track,
+                                pos_us: len * i64::from(pct) / 100,
+                            },
+                            None => continue,
+                        }
                     }
                     SessionOp::Media(cmd) => match &live.agg.session.media {
                         Some(m) => Op::Media {

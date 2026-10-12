@@ -13,7 +13,7 @@ pub enum IconError {
     Svg(#[from] usvg::Error),
     #[error("decoding PNG: {0}")]
     Png(String),
-    #[error("unsupported icon format (want .svg or .png): {0}")]
+    #[error("unsupported icon format (want .svg, .png or .jpg): {0}")]
     Format(String),
 }
 
@@ -105,13 +105,38 @@ impl Icon {
         })
     }
 
-    /// Loads an `.svg` or `.png` file. Files named `*-symbolic.*` are symbolic.
+    /// A JPEG photo (album art), as an opaque raster icon.
+    pub fn from_jpeg(data: &[u8]) -> Result<Icon, IconError> {
+        use zune_jpeg::JpegDecoder;
+        use zune_jpeg::zune_core::colorspace::ColorSpace;
+        use zune_jpeg::zune_core::options::DecoderOptions;
+        let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+        let mut dec = JpegDecoder::new_with_options(data, opts);
+        let pixels = dec
+            .decode()
+            .map_err(|e| IconError::Png(format!("jpeg: {e:?}")))?;
+        let info = dec
+            .info()
+            .ok_or_else(|| IconError::Png("jpeg: no header".into()))?;
+        let (w, h) = (u32::from(info.width), u32::from(info.height));
+        let mut pm = Pixmap::new(w, h).ok_or_else(|| IconError::Png("jpeg: empty".into()))?;
+        // Opaque pixels: premultiplication changes nothing.
+        pm.data_mut()
+            .copy_from_slice(&pixels[..(w * h * 4) as usize]);
+        Ok(Icon {
+            image: Image::Raster(Arc::new(pm)),
+            symbolic: false,
+        })
+    }
+
+    /// Loads an `.svg`, `.png` or `.jpg` file. Files named `*-symbolic.*` are symbolic.
     pub fn load(path: impl AsRef<Path>) -> Result<Icon, IconError> {
         let path = path.as_ref();
         let data = std::fs::read(path)?;
         let icon = match path.extension().and_then(|e| e.to_str()) {
             Some("svg") => Icon::from_svg(&data)?,
             Some("png") => Icon::from_png(&data)?,
+            Some("jpg" | "jpeg") => Icon::from_jpeg(&data)?,
             _ => return Err(IconError::Format(path.display().to_string())),
         };
         let symbolic = path
@@ -153,5 +178,30 @@ mod tests {
             assert!(Icon::builtin(name).is_some(), "{name}");
         }
         assert!(Icon::builtin("nope").is_none());
+    }
+}
+
+#[cfg(test)]
+mod jpeg_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_a_jpeg_and_loads_it_by_extension() {
+        let data = include_bytes!("../tests/fixtures/art-48x32.jpg");
+        let icon = Icon::from_jpeg(data).expect("jpeg decodes");
+        let Image::Raster(p) = &icon.image else {
+            panic!("raster expected")
+        };
+        assert_eq!((p.width(), p.height()), (48, 32));
+        // red at the top-left to blue at the bottom-right
+        let px = p.data();
+        assert!(px[0] > px[2], "top-left is red-ish: {:?}", &px[..4]);
+        let last = (47 + 31 * 48) * 4;
+        assert!(px[last + 2] > px[last], "bottom-right is blue-ish");
+        assert!(Icon::from_jpeg(b"not a jpeg").is_err());
+        let path = std::env::temp_dir().join(format!("sliver-art-{}.jpg", std::process::id()));
+        std::fs::write(&path, data).unwrap();
+        assert!(Icon::load(&path).is_ok());
+        let _ = std::fs::remove_file(&path);
     }
 }

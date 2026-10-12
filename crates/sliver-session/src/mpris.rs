@@ -51,6 +51,20 @@ pub fn parse_player(bus_name: &str, identity: Option<String>, p: &props::Props) 
         can_next: props::boolean(p, "CanGoNext") == Some(true),
         can_previous: props::boolean(p, "CanGoPrevious") == Some(true),
         can_seek: props::boolean(p, "CanSeek") == Some(true),
+        track_id: meta
+            .get("mpris:trackid")
+            .and_then(|v| v.try_clone().ok())
+            .and_then(|v| {
+                String::try_from(v.try_clone().ok()?).ok().or_else(|| {
+                    zbus::zvariant::OwnedObjectPath::try_from(v)
+                        .ok()
+                        .map(|o| o.as_str().to_string())
+                })
+            }),
+        position_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64),
     }
 }
 
@@ -104,6 +118,9 @@ fn read_players(conn: &Connection) -> Vec<Media> {
 pub struct Tracker {
     seen: HashMap<String, (Fingerprint, u64)>,
     tick: u64,
+    /// The last reading of each player, to keep `position_at_ms` stable while nothing changed:
+    /// a fresh timestamp on every re-read would make every read look like a state change.
+    last: HashMap<String, Media>,
 }
 
 type Fingerprint = (PlaybackStatus, String, String);
@@ -114,9 +131,42 @@ impl Tracker {
         let mut t = Self {
             seen: HashMap::new(),
             tick: 0,
+            last: HashMap::new(),
         };
-        state.media = t.refresh(read_players(conn));
+        let (media, players) = t.refresh_all(read_players(conn));
+        state.media = media;
+        state.players = players;
         t
+    }
+
+    /// The chosen player plus all players, the chosen one first.
+    fn refresh_all(&mut self, mut players: Vec<Media>) -> (Option<Media>, Vec<Media>) {
+        for m in &mut players {
+            if let Some(old) = self.last.get(&m.player) {
+                let same = Media {
+                    position_at_ms: old.position_at_ms,
+                    ..m.clone()
+                } == *old;
+                if same {
+                    m.position_at_ms = old.position_at_ms;
+                }
+            }
+        }
+        self.last = players
+            .iter()
+            .map(|m| (m.player.clone(), m.clone()))
+            .collect();
+        let all = players.clone();
+        let chosen = self.refresh(players);
+        let mut list: Vec<Media> = Vec::with_capacity(all.len());
+        if let Some(c) = &chosen {
+            list.push(c.clone());
+        }
+        list.extend(
+            all.into_iter()
+                .filter(|m| chosen.as_ref().is_none_or(|c| c.player != m.player)),
+        );
+        (chosen, list)
     }
 
     fn refresh(&mut self, players: Vec<Media>) -> Option<Media> {
@@ -141,8 +191,11 @@ impl Tracker {
 
     pub(crate) fn run(mut self, conn: Connection, signals: crate::Signals, hub: Hub) {
         for _ in signals {
-            let media = self.refresh(read_players(&conn));
-            if !hub.update(|s| s.media = media) {
+            let (media, players) = self.refresh_all(read_players(&conn));
+            if !hub.update(|s| {
+                s.media = media;
+                s.players = players;
+            }) {
                 return;
             }
         }
@@ -155,6 +208,24 @@ pub(crate) const RULES: [&str; 3] = [
     "type='signal',interface='org.mpris.MediaPlayer2.Player',member='Seeked'",
     "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0namespace='org.mpris.MediaPlayer2'",
 ];
+
+/// Seek to an absolute position (`SetPosition`). Needs the track id from [`Media::track_id`].
+pub fn set_position(
+    conn: &Connection,
+    player: &str,
+    track_id: &str,
+    position_us: i64,
+) -> zbus::Result<()> {
+    let track = zbus::zvariant::ObjectPath::try_from(track_id.to_string())?;
+    conn.call_method(
+        Some(player),
+        PATH,
+        Some("org.mpris.MediaPlayer2.Player"),
+        "SetPosition",
+        &(track, position_us),
+    )
+    .map(|_| ())
+}
 
 /// Commands for [`control`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +309,7 @@ mod tests {
         let mut t = Tracker {
             seen: HashMap::new(),
             tick: 0,
+            last: HashMap::new(),
         };
         let a = m("a", PlaybackStatus::Paused);
         let b = m("b", PlaybackStatus::Paused);

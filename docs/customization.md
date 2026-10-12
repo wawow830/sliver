@@ -178,7 +178,7 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 | `backlight`, `backlight/slider` | same | P0/P1 | Slider: press-and-slide. `on-drag` gets `{value}`. |
 | `kbd-backlight`, `kbd-backlight/slider` | (none) | P0/P1 | |
 | `audio`, `audio/slider` | `pulseaudio`, `wireplumber`, `pulseaudio/slider` | P0/P1 | `audio#mic` with `node = "source"` for the mic. |
-| `mpris` | `mpris` | P1 | `{title}`, `{artist}`, `{status_icon}`, `player`, `ignored-players`. |
+| `mpris` | `mpris` | P1 | Done. `{title}` `{artist}` `{status_icon}` `{album}` `{player}`; tap play/pause, swipe next/previous, **hold switches to the next player** when several run. Album art (`mpris:artUrl`: `file://`, or `http(s)://` fetched once with curl into `~/.cache/sliver/art`; PNG and JPEG) is the icon (`art = false` turns it off). `scrub = true` turns the module into a progress slider (position extrapolated while playing, no polling) that seeks on drag. |
 | `workspaces` | `hyprland/workspaces`, `sway/workspaces`, `niri/workspaces` | P1 | Done. One button per workspace (the focused output's, or all with `all-outputs = true`); classes `.active` `.urgent` `.empty` `.default`, `:checked` on the active one; `{name}` `{id}` `{windows}`; tap switches workspace. The backend is chosen automatically (Hyprland, sway, niri). The waybar names are accepted as aliases. |
 | `window` | `hyprland/window`… | P2 | Focused app/title. `rewrite` rules as in waybar. |
 | `mode` | `hyprland/submap`, `sway/mode` | P2 | |

@@ -60,9 +60,24 @@ pub enum Effect {
 pub enum SessionOp {
     ScreenBrightness(u8),
     KeyboardBrightness(u8),
-    Volume { mic: bool, pct: u8 },
-    ToggleMute { mic: bool },
+    Volume {
+        mic: bool,
+        pct: u8,
+    },
+    ToggleMute {
+        mic: bool,
+    },
     Media(sliver_session::mpris::Command),
+    /// A transport command for a specific (picked) player.
+    MediaOn {
+        player: String,
+        cmd: sliver_session::mpris::Command,
+    },
+    /// Seek the current (or picked) player to `pct` percent of the track.
+    Seek {
+        player: Option<String>,
+        pct: u8,
+    },
     ToggleCaffeine,
     ToggleWifi,
     ToggleBluetooth,
@@ -947,9 +962,27 @@ impl Agent {
                 pct: p,
             },
             ("audio" | "audio/slider", "toggle-mute", _) => SessionOp::ToggleMute { mic: cell.mic },
-            ("mpris", "play-pause", _) => SessionOp::Media(Command::PlayPause),
-            ("mpris", "next", _) => SessionOp::Media(Command::Next),
-            ("mpris", "previous", _) => SessionOp::Media(Command::Previous),
+            ("mpris", "play-pause" | "next" | "previous", _) => {
+                let cmd = match name {
+                    "play-pause" => Command::PlayPause,
+                    "next" => Command::Next,
+                    _ => Command::Previous,
+                };
+                match self.ui(&cell.key).player.clone() {
+                    Some(player) => SessionOp::MediaOn { player, cmd },
+                    None => SessionOp::Media(cmd),
+                }
+            }
+            ("mpris", "seek", Some(p)) => SessionOp::Seek {
+                player: self.ui(&cell.key).player.clone(),
+                pct: p,
+            },
+            ("mpris", n, _) if n.starts_with("player:") => {
+                let key = cell.key.clone();
+                self.ui(&key).player = Some(n["player:".len()..].to_string());
+                fx.push(Effect::Redraw);
+                return;
+            }
             ("idle-inhibitor", "toggle", _) => SessionOp::ToggleCaffeine,
             ("network", "toggle", _) => SessionOp::ToggleWifi,
             ("bluetooth", "toggle", _) => SessionOp::ToggleBluetooth,

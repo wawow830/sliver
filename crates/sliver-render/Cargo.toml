@@ -18,3 +18,4 @@ svgtypes.workspace = true
 thiserror.workspace = true
 tiny-skia.workspace = true
 skrifa = "0.40"
+zune-jpeg = "0.4"
