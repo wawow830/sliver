@@ -41,8 +41,8 @@ pub use format::{FmtValue, Formatted, IconRef, State, Template, ValueMap, Values
 pub use keys::Key;
 pub use load::{Loaded, find_config, load, load_file, load_str, search_path};
 pub use model::{
-    ApiPrefs, AppPolicy, AppPrefs, BAR_GESTURES, BUILTIN, Bar, Config, Display, FnMode,
-    LayerOptions, Layout, ModuleRef, ProviderPrefs, Rule, SCHEMA_VERSION, Zone,
+    ApiPrefs, AppPolicy, AppPrefs, BAR_GESTURES, BUILTIN, Bar, Config, Display, DisplayOverride,
+    FnMode, LayerOptions, Layout, ModuleRef, ProviderPrefs, Rule, SCHEMA_VERSION, Zone,
 };
 pub use module::{COMMON_KEYS, Common, Gesture, MODULE_TYPES, MenuEntry, ModuleId};
 pub use resolve::{

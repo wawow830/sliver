@@ -118,7 +118,7 @@ we want, if the hardware allows them.
 | Emoji and symbolic icons (recolored to the foreground) | P1 | done | mac | Colour emoji (COLRv1 and bitmap) and XDG symbolic icons. |
 | Press feedback: highlight and quick fade (the bar has no haptics) | P1 | done | mac | Pressed overlay swapped by sliverd, with a fade on release. |
 | Animations: layer switch slide/fade, slider expand. Off when "reduce motion" is set | P2 | partial | mac | Animations only run while something is changing (power). **Now:** CSS `transition` on colour and opacity done. Layer slide/fade and slider expand are not; reduce-motion is not read. |
-| Brightness: adaptive (follows the main display) or fixed, a curve editor, idle dim → off timeouts, an on-battery profile | P0 (dfr keys) / P2 (curve, profiles) | partial | dfr | The tiny-dfr keys (adaptive, active, dim/off timers) work in config/sliverd. Missing: curve editor and on-battery profile. |
+| Brightness: adaptive (follows the main display) or fixed, a curve editor, idle dim → off timeouts, an on-battery profile | P0 (dfr keys) / P2 (curve, profiles) | partial | dfr | The tiny-dfr keys (adaptive, active, dim/off timers) and the on-battery profile `[display.on-battery]` (T68) are sent to sliverd as `display_policy`, and resent on reload and AC ↔ battery. Missing: curve editor, settings-app UI for the battery profile. |
 
 ## 7. Portability
 

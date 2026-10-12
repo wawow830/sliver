@@ -1056,3 +1056,51 @@ fn notifications_show_latest_open_and_dismiss() {
         "{fx:?}"
     );
 }
+
+/// T68: `[display]` and `[display.on-battery]` reach sliverd's real idle/backlight core.
+#[test]
+fn display_config_and_battery_profile_reach_sliverd() {
+    let a = agent(
+        r#"
+        [display]
+        brightness = "fixed"
+        max-brightness = 200
+        [display.on-battery]
+        max-brightness = 40
+        dim-after = "never"
+        "#,
+    );
+    let (mut fake, link) = connect();
+    let send = |link: &Link, on_battery| {
+        let p =
+            sliver_agent::display::policy(&a.config.display, on_battery, link.panel.max_brightness);
+        link.send(&sliver_ipc::proto::AgentMsg::DisplayPolicy(p))
+            .unwrap();
+    };
+
+    send(&link, Some(false));
+    fake.pump().unwrap();
+    assert!(fake.errors.is_empty(), "{:?}", fake.errors);
+    assert_eq!(fake.policy.brightness, Some(200));
+    assert_eq!(fake.policy.follow_screen, Some(false));
+    assert_eq!(
+        fake.hw.backlight.current(),
+        Some(200),
+        "AC level on the backlight"
+    );
+
+    send(&link, Some(true));
+    fake.pump().unwrap();
+    assert_eq!(fake.policy.brightness, Some(40));
+    assert_eq!(fake.policy.dim_after_ms, Some(0), "never dims on battery");
+    assert_eq!(
+        fake.policy.off_after_ms,
+        Some(60_000),
+        "unset override keeps [display]"
+    );
+    assert_eq!(
+        fake.hw.backlight.current(),
+        Some(40),
+        "battery level on the backlight"
+    );
+}

@@ -33,7 +33,7 @@ use sliver_api::registry::Focus;
 use sliver_api::service::{Control, ControlReply, ControlState};
 use sliver_config::Config;
 use sliver_feeds::{Aggregate, Feed, Feeds};
-use sliver_ipc::proto::{DisplayState, Layer, SOCKET_PATH};
+use sliver_ipc::proto::{AgentMsg, DisplayPolicy, DisplayState, Layer, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
 use sliver_render::{Fonts, Renderer, Stylesheet};
 use std::collections::HashMap;
@@ -883,7 +883,19 @@ fn run(
     // Only pressed feedback changed: re-render just the touched layer's image (fast path).
     let mut press_dirty = false;
     let mut children = Vec::new();
+    // The display policy sliverd has from us (T68). Resent whenever the config or the power
+    // source changes it, and after a role change (sliverd ignores it from a standby agent).
+    let mut sent_policy: Option<DisplayPolicy> = None;
     loop {
+        let policy = sliver_agent::display::policy(
+            &agent.config.display,
+            live.agg.session.power.on_battery,
+            link.panel.max_brightness,
+        );
+        if sent_policy.as_ref() != Some(&policy) {
+            link.send(&AgentMsg::DisplayPolicy(policy.clone()))?;
+            sent_policy = Some(policy);
+        }
         if press_dirty && !dirty && agent.display != DisplayState::Off {
             for layer in agent.render_press() {
                 let f = agent.frame(layer).expect("rendered before");
@@ -1061,6 +1073,7 @@ fn run(
                 }
                 Event::Role(_) => {
                     dirty = true;
+                    sent_policy = None;
                     Vec::new()
                 }
                 Event::Error { code, msg } => {

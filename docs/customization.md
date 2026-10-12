@@ -53,6 +53,10 @@ dim-after = "30s"
 off-after = "60s"
 pixel-shift = false
 
+[display.on-battery]      # optional: replaces these [display] keys while on battery (UPower)
+max-brightness = 60
+off-after = "20s"
+
 [layers]                  # layer name -> its default layout. base and fn are reserved names.
 base = "default"
 fn = "fkeys"

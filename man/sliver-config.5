@@ -97,6 +97,20 @@ Durations (default 30s and 60s), or
 .BR """never""" .
 .TP
 .BR pixel\-shift " = " true | false
+.TP
+.B [display.on\-battery]
+.BR max\-brightness ,
+.B dim\-after
+and
+.B off\-after
+to use instead while running on battery (from UPower).
+Keys left out keep their
+.B [display]
+values.
+For example, a dimmer bar that turns off sooner:
+.B max\-brightness = 60
+and
+.BR "off\-after = ""20s""" .
 .SH [apps], [providers] AND [api]
 What apps and scripts that use the D\-Bus API may put on the bar.
 Your own layouts and rules always win over them.

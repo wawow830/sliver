@@ -53,6 +53,32 @@ pub struct Display {
     pub dim_after: Option<Duration>,
     pub off_after: Option<Duration>,
     pub pixel_shift: bool,
+    /// `[display.on-battery]`: replaces the values above while running on battery.
+    pub on_battery: DisplayOverride,
+}
+
+/// Values that replace [`Display`]'s while on battery. `None` = keep the normal value. The
+/// timeouts are doubly optional: `Some(None)` is an explicit "never".
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DisplayOverride {
+    pub max_brightness: Option<u8>,
+    pub dim_after: Option<Option<Duration>>,
+    pub off_after: Option<Option<Duration>>,
+}
+
+impl Display {
+    /// The values in effect now: on battery, `[display.on-battery]` replaces what it sets.
+    pub fn effective(&self, on_battery: bool) -> Display {
+        let mut x = self.clone();
+        if on_battery {
+            let o = &self.on_battery;
+            x.max_brightness = o.max_brightness.unwrap_or(x.max_brightness);
+            x.dim_after = o.dim_after.unwrap_or(x.dim_after);
+            x.off_after = o.off_after.unwrap_or(x.off_after);
+        }
+        x.on_battery = DisplayOverride::default();
+        x
+    }
 }
 
 impl Default for Display {
@@ -63,6 +89,7 @@ impl Default for Display {
             dim_after: Some(Duration::from_secs(30)),
             off_after: Some(Duration::from_secs(60)),
             pixel_shift: false,
+            on_battery: DisplayOverride::default(),
         }
     }
 }
@@ -458,6 +485,17 @@ fn parse_display(t: &Table, d: &mut Diagnostics) -> Display {
     if let Some(b) = r.bool("pixel-shift", d) {
         x.pixel_shift = b;
     }
+    if let Some(t) = r.table("on-battery", d) {
+        let mut b = Reader::new(t, "display.on-battery");
+        x.on_battery.max_brightness = b.uint("max-brightness", 255, d).map(|n| n as u8);
+        if let Some(v) = b.get("dim-after") {
+            x.on_battery.dim_after = Some(optional_duration(v, "display.on-battery.dim-after", d));
+        }
+        if let Some(v) = b.get("off-after") {
+            x.on_battery.off_after = Some(optional_duration(v, "display.on-battery.off-after", d));
+        }
+        b.finish(d);
+    }
     r.finish(d);
     x
 }
@@ -619,6 +657,47 @@ mod tests {
         for l in ["default", "fkeys", "media"] {
             assert!(c.layouts.contains_key(l), "{l}");
         }
+    }
+
+    #[test]
+    fn on_battery_display_override() {
+        let t: Table = r#"
+            [display]
+            max-brightness = 200
+            dim-after = "30s"
+            [display.on-battery]
+            max-brightness = 60
+            off-after = "never"
+        "#
+        .parse()
+        .unwrap();
+        let (c, d) = Config::from_table(&t);
+        assert!(d.ok() && d.warnings.is_empty(), "{d:#?}");
+        let ac = c.display.effective(false);
+        assert_eq!(ac.max_brightness, 200);
+        assert_eq!(ac.off_after, Some(Duration::from_secs(60)));
+        let bat = c.display.effective(true);
+        assert_eq!(bat.max_brightness, 60);
+        assert_eq!(
+            bat.dim_after,
+            Some(Duration::from_secs(30)),
+            "unset keys keep [display]"
+        );
+        assert_eq!(bat.off_after, None, "explicit never");
+        // No table: battery = AC.
+        assert_eq!(Display::default().effective(true), Display::default());
+
+        let t: Table = "[display.on-battery]\nmax-brightness = 300\nbogus = 1\n"
+            .parse()
+            .unwrap();
+        let (_, d) = Config::from_table(&t);
+        assert!(!d.ok(), "out of range is an error");
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.path == "display.on-battery.bogus"),
+            "{d:#?}"
+        );
     }
 
     #[test]
