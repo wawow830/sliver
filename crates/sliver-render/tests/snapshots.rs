@@ -337,3 +337,72 @@ fn markup_semantics() {
     let nu = render(Item::markup("aaaa"));
     assert!(ink(&u).0 > ink(&nu).0, "an underline draws extra pixels");
 }
+
+/// COLRv1 emoji from a vendored subset of Noto Color Emoji (the renderer paints the paint graph
+/// itself; swash can't).
+fn emoji_fonts() -> Fonts {
+    let mut fonts = Fonts::embedded();
+    fonts
+        .add_font_data(include_bytes!("../assets/fonts/NotoColorEmoji-COLRv1-subset.ttf").to_vec());
+    fonts
+}
+
+fn emoji_scene() -> Scene {
+    Scene::new(vec![
+        Item::text("😀").fill(1),
+        Item::text("❤️").fill(1),
+        Item::text("🔥").fill(1),
+        Item::text("🎵").fill(1),
+        Item::text("👍").fill(1),
+        Item::text("🌈").fill(1),
+        Item::text("hi 😀 ok").fill(1),
+        Item::markup("<b>🔥</b> <span foreground=\"#ff4040\">x</span>").fill(1),
+    ])
+}
+
+#[test]
+fn colr_emoji_snapshot() {
+    let mut renderer = Renderer::new(emoji_fonts());
+    let actual = renderer.render_new(&emoji_scene(), &Stylesheet::classic(), W, H);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("tests/snapshots/emoji.png");
+    if std::env::var_os("SLIVER_BLESS").is_some() {
+        actual.save_png(&path).unwrap();
+        return;
+    }
+    let expected = Pixmap::load_png(&path).expect("run with SLIVER_BLESS=1");
+    let mismatched = expected
+        .data()
+        .chunks(4)
+        .zip(actual.data().chunks(4))
+        .filter(|(e, a)| e.iter().zip(a.iter()).any(|(e, a)| e.abs_diff(*a) > 2))
+        .count();
+    assert!(
+        mismatched <= 20,
+        "{mismatched} pixels differ from emoji.png"
+    );
+}
+
+/// The emoji are really coloured (not white glyph masks, not blank): count distinct hues.
+#[test]
+fn colr_emoji_has_colour() {
+    let mut renderer = Renderer::new(emoji_fonts());
+    let p = renderer.render_new(
+        &Scene::new(vec![Item::text("🔥").fill(1)]),
+        &Stylesheet::classic(),
+        120,
+        60,
+    );
+    let saturated = p
+        .data()
+        .chunks(4)
+        .filter(|c| {
+            let (mx, mn) = (c[..3].iter().max().unwrap(), c[..3].iter().min().unwrap());
+            c[3] > 200 && mx - mn > 80
+        })
+        .count();
+    assert!(
+        saturated > 100,
+        "{saturated} saturated pixels: the flame should be orange/red"
+    );
+}

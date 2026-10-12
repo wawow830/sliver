@@ -15,6 +15,7 @@
 //!    the panel's native framebuffer layout.
 
 mod color;
+mod colr;
 mod geometry;
 mod icon;
 pub mod markup;

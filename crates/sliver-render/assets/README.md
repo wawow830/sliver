@@ -14,3 +14,11 @@ no system fonts or icon themes (GOAL invariant 1). Also used for deterministic s
   ```
 - `icons/*.svg`: Material Symbols as shipped by tiny-dfr 0.3.7 (`share/tiny-dfr/`), Apache-2.0,
   see `icons/LICENSE`. White fill, 48x48 viewport.
+- `fonts/NotoColorEmoji-COLRv1-subset.ttf`: Noto Color Emoji (COLRv1, from Fedora's
+  `google-noto-color-emoji-fonts`) subset to 😀 ❤️ 🔥 🎵 👍 🌈. **Not embedded in the binary**: it
+  is only a test fixture for the COLRv1 painter (`src/colr.rs`). SIL OFL 1.1 (same text as
+  `fonts/OFL.txt`). Regenerate:
+  ```
+  pyftsubset Noto-COLRv1.ttf --unicodes="U+1F600,U+2764,U+FE0F,U+1F525,U+1F3B5,U+1F44D,U+1F308" \
+    --layout-features='*' --no-hinting --desubroutinize --output-file=NotoColorEmoji-COLRv1-subset.ttf
+  ```

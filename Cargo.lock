@@ -1600,6 +1600,7 @@ version = "0.1.0"
 dependencies = [
  "cosmic-text",
  "resvg",
+ "skrifa 0.40.0",
  "svgtypes",
  "thiserror",
  "tiny-skia",

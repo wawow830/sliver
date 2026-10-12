@@ -15,7 +15,11 @@ pub struct Fonts {
     pub(crate) cache: SwashCache,
     labels: HashMap<LabelKey, Arc<Label>>,
     families: HashMap<Vec<String>, String>,
+    /// Painted COLRv1 glyphs; `None` = this glyph isn't a colour glyph.
+    color: HashMap<ColorKey, Option<Arc<crate::colr::ColorImage>>>,
 }
+
+type ColorKey = (fontdb::ID, u16, u16, u32, [u8; 4]);
 
 #[derive(PartialEq, Eq, Hash)]
 struct LabelKey {
@@ -58,7 +62,40 @@ impl Fonts {
             cache: SwashCache::new(),
             labels: HashMap::new(),
             families: HashMap::new(),
+            color: HashMap::new(),
         }
+    }
+
+    /// Make another font available (a user's emoji font, or a test fixture). Labels shaped before
+    /// this call keep their old fallback choices until the cache turns over.
+    pub fn add_font_data(&mut self, data: Vec<u8>) {
+        self.system.db_mut().load_font_data(data);
+        self.labels.clear();
+    }
+
+    /// The COLRv1 image for a glyph, painted and cached. `None` for ordinary glyphs.
+    pub(crate) fn color_glyph(
+        &mut self,
+        font_id: fontdb::ID,
+        weight: fontdb::Weight,
+        glyph_id: u16,
+        size: f32,
+        fg: [u8; 4],
+    ) -> Option<Arc<crate::colr::ColorImage>> {
+        let key = (font_id, weight.0, glyph_id, size.to_bits(), fg);
+        if let Some(hit) = self.color.get(&key) {
+            return hit.clone();
+        }
+        if self.color.len() >= LABEL_CACHE_MAX {
+            self.color.clear();
+        }
+        let painted = (|| {
+            let font = self.system.get_font(font_id, weight)?;
+            let index = self.system.db().face(font_id)?.index;
+            crate::colr::render(font.data(), index, glyph_id, size, fg).map(Arc::new)
+        })();
+        self.color.insert(key, painted.clone());
+        painted
     }
 }
 

@@ -506,11 +506,27 @@ impl Renderer {
     ) {
         let baseline = (cy + label.cap_height / 2.0).round();
         let clip_x = (clip.x.floor() as i32, clip.right().ceil() as i32);
-        let Fonts { system, cache, .. } = &mut self.fonts;
         for run in label.buffer.layout_runs() {
             draw_decorations(pixmap, &run, (x, baseline), color, clip_x);
             for glyph in run.glyphs {
                 let phys = glyph.physical((x, baseline), 1.0);
+                // COLRv1 emoji: swash can't draw them, so paint the paint graph ourselves.
+                let fg = glyph
+                    .color_opt
+                    .map_or([color.r, color.g, color.b, 255], |c| {
+                        [c.r(), c.g(), c.b(), 255]
+                    });
+                if let Some(img) = self.fonts.color_glyph(
+                    glyph.font_id,
+                    glyph.font_weight,
+                    glyph.glyph_id,
+                    glyph.font_size,
+                    fg,
+                ) {
+                    blit_color(pixmap, &img, (phys.x, phys.y), color.a, clip_x);
+                    continue;
+                }
+                let Fonts { system, cache, .. } = &mut self.fonts;
                 let Some(image) = cache.get_image(system, phys.cache_key) else {
                     continue;
                 };
@@ -697,6 +713,47 @@ fn draw_icon(icon: &Icon, x: f32, y: f32, size: f32, fg: Color, opacity: f32, pi
 }
 
 /// Source-over blends a glyph image into the premultiplied RGBA pixmap.
+/// Source-over a premultiplied colour bitmap at `origin` (+ its own offset), scaled by `alpha`.
+fn blit_color(
+    pixmap: &mut Pixmap,
+    img: &crate::colr::ColorImage,
+    origin: (i32, i32),
+    alpha: u8,
+    clip_x: (i32, i32),
+) {
+    let (pw, ph) = (pixmap.width() as i32, pixmap.height() as i32);
+    let (x_lo, x_hi) = (clip_x.0.max(0), clip_x.1.min(pw));
+    let (ox, oy) = (origin.0 + img.left, origin.1 + img.top);
+    let (iw, ih) = (img.pixmap.width() as i32, img.pixmap.height() as i32);
+    let src = img.pixmap.data();
+    let dst = pixmap.data_mut();
+    for sy in 0..ih {
+        let y = oy + sy;
+        if y < 0 || y >= ph {
+            continue;
+        }
+        for sx in 0..iw {
+            let x = ox + sx;
+            if x < x_lo || x >= x_hi {
+                continue;
+            }
+            let s = &src[((sy * iw + sx) * 4) as usize..][..4];
+            let k = u32::from(alpha);
+            let sa = u32::from(s[3]) * k / 255;
+            if sa == 0 {
+                continue;
+            }
+            let d = &mut dst[((y * pw + x) * 4) as usize..][..4];
+            let inv = 255 - sa;
+            for c in 0..3 {
+                d[c] = ((u32::from(s[c]) * k + 127) / 255 + (u32::from(d[c]) * inv + 127) / 255)
+                    .min(255) as u8;
+            }
+            d[3] = (sa + (u32::from(d[3]) * inv + 127) / 255).min(255) as u8;
+        }
+    }
+}
+
 /// Underline and strikethrough lines of a run (set by `<u>`, `<s>` in markup).
 fn draw_decorations(
     pixmap: &mut Pixmap,

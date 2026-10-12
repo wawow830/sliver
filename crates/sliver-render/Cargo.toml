@@ -16,3 +16,4 @@ resvg.workspace = true
 svgtypes.workspace = true
 thiserror.workspace = true
 tiny-skia.workspace = true
+skrifa = "0.40"
