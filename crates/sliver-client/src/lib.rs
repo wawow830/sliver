@@ -338,9 +338,10 @@ pub struct Client {
 }
 
 impl Client {
-    /// Connect to the session bus.
+    /// Connect to the session bus. The socket is opened directly (`sliver_bus`), so a
+    /// long-running app embedding the client doesn't get zbus's idle pool thread waking it.
     pub fn session() -> Result<Client> {
-        Self::new(Connection::session()?)
+        Self::new(sliver_bus::session()?)
     }
 
     /// Use an existing connection (e.g. a private bus in tests).

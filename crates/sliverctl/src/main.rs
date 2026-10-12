@@ -174,7 +174,8 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
         Cmd::Preset(args) => return Ok(preset::run(&args)),
         _ => {}
     }
-    let conn = Connection::session().map_err(|e| format!("session bus: {e}"))?;
+    // Opened directly (sliver_bus): `publish` runs for hours and must not wake twice a second.
+    let conn = sliver_bus::session().map_err(|e| format!("session bus: {e}"))?;
     match cmd {
         Cmd::Help | Cmd::Version | Cmd::Config(_) | Cmd::Preset(_) => unreachable!(),
         Cmd::Status => {

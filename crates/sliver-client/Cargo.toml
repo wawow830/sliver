@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 sliver-ipc.workspace = true
+sliver-bus.workspace = true
 zbus = "5"
 serde.workspace = true
 
