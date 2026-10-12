@@ -154,6 +154,11 @@ pub struct DisplayPolicy {
     /// tiny-dfr's `sqrt`. sliverd normalises it (clamps, sorts, drops duplicate screens, keeps 16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curve: Option<Vec<[u16; 2]>>,
+    /// Slowly move the whole picture by up to ±11 px x / ±2 px y against OLED burn-in (tiny-dfr
+    /// `EnablePixelShift`). sliverd moves frames and touches; the agent keeps its content 11 px
+    /// in from both ends while it's on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_shift: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

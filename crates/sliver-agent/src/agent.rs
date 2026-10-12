@@ -240,6 +240,9 @@ impl Agent {
     /// rebuilt (callers present them; the link drops unchanged pixels).
     pub fn render(&mut self, world: &World) -> Vec<Layer> {
         self.errors.clear();
+        // Pixel shift (T79): keep content clear of the ends sliverd moves it towards.
+        self.renderer
+            .set_extra_inset(crate::display::content_inset(&self.config.display));
         let mut ctx = match &self.fixed_ctx {
             Some(c) => c.clone(),
             None => crate::context::build(

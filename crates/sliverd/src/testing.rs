@@ -274,6 +274,7 @@ impl TestDaemon {
                 q.dim_brightness = p.dim_brightness.or(q.dim_brightness);
                 q.off_after_ms = p.off_after_ms.or(q.off_after_ms);
                 q.follow_screen = p.follow_screen.or(q.follow_screen);
+                q.pixel_shift = p.pixel_shift.or(q.pixel_shift);
             }
             _ => {}
         }

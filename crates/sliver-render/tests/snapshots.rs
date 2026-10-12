@@ -453,3 +453,27 @@ fn between_widths_and_zone_overflow() {
         [true]
     );
 }
+
+#[test]
+fn extra_inset_keeps_content_clear_of_the_edges() {
+    let scene = Scene::new(fkeys());
+    let mut r = Renderer::new(Fonts::embedded());
+    let plain = r.layout(&scene, &Stylesheet::sliver(), W, H);
+    r.set_extra_inset([0.0, 11.0, 0.0, 11.0]);
+    let inset = r.layout(&scene, &Stylesheet::sliver(), W, H);
+    let (first, last) = (inset.items[0], *inset.items.last().unwrap());
+    assert!(first.x >= plain.items[0].x + 11.0 - 0.5, "{first:?}");
+    assert!(
+        last.right() <= plain.items.last().unwrap().right() - 11.0 + 0.5,
+        "{last:?}"
+    );
+    // The render uses the same geometry: nothing drawn in the 11 px edge strips.
+    let mut px = Pixmap::new(W, H).unwrap();
+    r.render(&scene, &Stylesheet::sliver(), &mut px);
+    let bg = px.pixel(0, 0).unwrap();
+    for x in (0..11).chain(W - 11..W) {
+        for y in 0..H {
+            assert_eq!(px.pixel(x, y).unwrap(), bg, "drawn at ({x}, {y})");
+        }
+    }
+}

@@ -28,6 +28,20 @@ pub fn policy(display: &Display, on_battery: Option<bool>, panel_max: u32) -> Di
                 .map(|&(s, b)| [permille(s), permille(b)])
                 .collect(),
         ),
+        pixel_shift: Some(d.pixel_shift),
+    }
+}
+
+/// While pixel shift is on, sliverd moves the picture up to this far either way in x, so content
+/// is laid out this far in from both ends (tiny-dfr renders into `width - 22` for the same reason).
+pub const PIXEL_SHIFT_INSET: f32 = 11.0;
+
+/// The renderer's extra `[top, right, bottom, left]` inset for this config.
+pub fn content_inset(display: &Display) -> [f32; 4] {
+    if display.pixel_shift {
+        [0.0, PIXEL_SHIFT_INSET, 0.0, PIXEL_SHIFT_INSET]
+    } else {
+        [0.0; 4]
     }
 }
 
@@ -63,8 +77,16 @@ mod tests {
                 off_after_ms: Some(60_000),
                 follow_screen: Some(true),
                 curve: Some(vec![]),
+                pixel_shift: Some(false),
             }
         );
+        let shifted = Display {
+            pixel_shift: true,
+            ..Display::default()
+        };
+        assert_eq!(policy(&shifted, None, 255).pixel_shift, Some(true));
+        assert_eq!(content_inset(&shifted), [0.0, 11.0, 0.0, 11.0]);
+        assert_eq!(content_inset(&Display::default()), [0.0; 4]);
         let never = Display {
             dim_after: None,
             off_after: None,

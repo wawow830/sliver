@@ -1395,3 +1395,31 @@ fn display_config_and_battery_profile_reach_sliverd() {
         "battery level on the backlight"
     );
 }
+
+/// T79: with pixel shift on, the agent draws nothing within 11 px of either end, because sliverd
+/// moves the whole picture up to 11 px either way. (Edge touch regions may still reach the ends.)
+#[test]
+fn pixel_shift_keeps_content_off_the_ends() {
+    let mut a = agent("[display]\npixel-shift = true\n");
+    let layers = a.render(&world(9, 41));
+    assert!(a.errors.is_empty(), "{:?}", a.errors);
+    // The bar background: the corner of an inset frame is never covered.
+    let bg = a.frame(Layer::Base).unwrap().image.pixel(0, 0).unwrap();
+    let ink_near_ends = |p: &Pixmap, n: u32| {
+        let w = p.width();
+        (0..p.height()).any(|y| (0..n).chain(w - n..w).any(|x| p.pixel(x, y).unwrap() != bg))
+    };
+    let mut plain = agent("");
+    plain.render(&world(9, 41));
+    assert!(
+        ink_near_ends(&plain.frame(Layer::Fn).unwrap().image, 11),
+        "test needs content near an end without pixel shift"
+    );
+    for l in layers {
+        let f = a.frame(l).unwrap();
+        assert!(
+            !ink_near_ends(&f.image, 11),
+            "{l:?}: drawn within 11 px of an end"
+        );
+    }
+}

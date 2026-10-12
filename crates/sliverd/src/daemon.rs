@@ -23,6 +23,7 @@ use crate::idle::Idle;
 use crate::ipc::Attachment;
 use crate::keystate::KeyState;
 use crate::profile::DeviceProfile;
+use crate::shift::PixelShift;
 
 /// Identifies one agent connection. Assigned by the transport, increasing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -183,6 +184,10 @@ pub struct Daemon {
     frame: Pixmap,
     /// What the panel shows. `None` until the first flush.
     shown: Option<Pixmap>,
+    /// Pixel shift (T79): where the composed frame is moved to on the panel.
+    shift: PixelShift,
+    /// Scratch for the shifted frame (reused, only while shifting).
+    shifted: Option<Pixmap>,
     out: Vec<Out>,
 }
 
@@ -247,6 +252,9 @@ impl Daemon {
             backlight: None,
             frame,
             shown: None,
+            // Different starting point per run, like tiny-dfr's random start.
+            shift: PixelShift::new(now ^ u64::from(std::process::id()).rotate_left(17)),
+            shifted: None,
             out: Vec::new(),
         };
         d.recompose();
@@ -264,6 +272,11 @@ impl Daemon {
 
     pub fn display_state(&self) -> DisplayState {
         self.idle.state()
+    }
+
+    /// Pixel shift's current `(dx, dy)`: how far the picture is moved on the panel.
+    pub fn pixel_shift(&self) -> (i32, i32) {
+        self.shift.offset()
     }
 
     /// The connection currently driving the bar, if any.
@@ -298,7 +311,11 @@ impl Daemon {
     /// When to deliver the next [`Input::Tick`], if ever. `None` means sleep until input.
     pub fn next_deadline(&self) -> Option<u64> {
         let pong = self.liveness.outstanding.map(|(_, at)| at);
-        [self.idle.deadline(), pong].into_iter().flatten().min()
+        let shift = self.shift.deadline(self.idle.state() != DisplayState::Off);
+        [self.idle.deadline(), pong, shift]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     pub fn handle(&mut self, now: u64, input: Input) -> Vec<Out> {
@@ -345,6 +362,42 @@ impl Daemon {
         if after != before {
             self.display_changed(now, after);
         }
+        if self.shift.tick(now, self.idle.state() != DisplayState::Off) {
+            self.flush();
+        }
+    }
+
+    /// Pixel shift on/off (agent policy). The built-in layers are laid out again so they keep
+    /// clear of the ends the picture moves towards, like the agent's.
+    fn set_pixel_shift(&mut self, on: bool, now: u64) {
+        if !self.shift.set_enabled(on, now) {
+            return;
+        }
+        let x = if on {
+            crate::shift::RANGE_X as f32
+        } else {
+            0.0
+        };
+        self.renderer.set_extra_inset([0.0, x, 0.0, x]);
+        let (w, h) = (self.panel.width, self.panel.height);
+        let esc = !self.profile.physical_esc;
+        self.fkeys = BuiltinLayer::new(
+            BuiltinKind::FKeys,
+            esc,
+            &mut self.renderer,
+            &self.sheet,
+            w,
+            h,
+        );
+        self.media = BuiltinLayer::new(
+            BuiltinKind::Media,
+            esc,
+            &mut self.renderer,
+            &self.sheet,
+            w,
+            h,
+        );
+        self.recompose();
     }
 
     fn fn_key(&mut self, now: u64, held: bool) {
@@ -587,6 +640,9 @@ impl Daemon {
                 None,
             ),
             AgentMsg::DisplayPolicy(p) if is_active => {
+                if let Some(on) = p.pixel_shift {
+                    self.set_pixel_shift(on, now);
+                }
                 let before = self.idle.state();
                 let after = self.idle.set_policy(&p, now);
                 if after != before {
@@ -786,7 +842,11 @@ impl Daemon {
 
     // ---- touch --------------------------------------------------------------------------------
 
-    fn touch(&mut self, now: u64, ev: TouchEvent) {
+    fn touch(&mut self, now: u64, mut ev: TouchEvent) {
+        // The picture is moved by pixel shift: hit-test where the finger is on the frame.
+        let (dx, dy) = self.shift.offset();
+        ev.x = (ev.x - dx as f32).clamp(0.0, self.panel.width.saturating_sub(1) as f32);
+        ev.y = (ev.y - dy as f32).clamp(0.0, self.panel.height.saturating_sub(1) as f32);
         let was_off = self.idle.state() == DisplayState::Off;
         self.activity(now);
         if ev.phase == TouchPhase::Down && (was_off || now < self.settle_until) {
@@ -969,21 +1029,55 @@ impl Daemon {
         if self.idle.state() == DisplayState::Off {
             return; // flushed on wake
         }
+        let (dx, dy) = self.shift.offset();
+        let mut shifted = self.shifted.take();
+        let target = if (dx, dy) == (0, 0) {
+            &self.frame
+        } else {
+            let buf = shifted.get_or_insert_with(|| self.frame.clone());
+            shift_into(&self.frame, buf, dx, dy);
+            &*buf
+        };
         let damage = match &self.shown {
             None => vec![Span {
                 x: 0,
-                w: self.frame.width(),
+                w: target.width(),
             }],
-            Some(prev) => panel::damage(prev, &self.frame, DAMAGE_MERGE_GAP),
+            Some(prev) => panel::damage(prev, target, DAMAGE_MERGE_GAP),
         };
-        if damage.is_empty() {
-            return;
+        if !damage.is_empty() {
+            self.hw.display.flush(target, &damage);
+            match &mut self.shown {
+                Some(s) => s.data_mut().copy_from_slice(target.data()),
+                None => self.shown = Some(target.clone()),
+            }
         }
-        self.hw.display.flush(&self.frame, &damage);
-        match &mut self.shown {
-            Some(s) => s.data_mut().copy_from_slice(self.frame.data()),
-            None => self.shown = Some(self.frame.clone()),
+        self.shifted = shifted;
+    }
+}
+
+/// `dst` = `src` moved by `(dx, dy)`, black where nothing lands (pixel shift). Same size.
+fn shift_into(src: &Pixmap, dst: &mut Pixmap, dx: i32, dy: i32) {
+    let (w, h) = (src.width() as i32, src.height() as i32);
+    let row = w as usize * 4;
+    let d = dst.data_mut();
+    for px in d.chunks_exact_mut(4) {
+        px.copy_from_slice(&[0, 0, 0, 255]);
+    }
+    let s = src.data();
+    let (x0, x1) = (dx.max(0), (w + dx).min(w)); // destination columns that receive pixels
+    if x0 >= x1 {
+        return;
+    }
+    for y in 0..h {
+        let sy = y - dy;
+        if !(0..h).contains(&sy) {
+            continue;
         }
+        let (dst_at, src_at) = (y as usize * row, sy as usize * row);
+        let len = (x1 - x0) as usize * 4;
+        let (ds, ss) = (x0 as usize * 4, (x0 - dx) as usize * 4);
+        d[dst_at + ds..dst_at + ds + len].copy_from_slice(&s[src_at + ss..src_at + ss + len]);
     }
 }
 

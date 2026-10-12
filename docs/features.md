@@ -111,7 +111,7 @@ we want, if the hardware allows them.
 | Feature | Tier | Status | Prior art | Notes |
 |---|---|---|---|---|
 | Outlines on/off, font (fontconfig pattern), icons (SVG/PNG, XDG theme) | P0 | done | dfr |  |
-| Pixel shift (±11 px x, ±2 px y) | P0 | todo | dfr | Default off, like dfr. Exposed as an *advanced* option. The OLED burn-in risk is real, but idle dim/off is the main protection. **Now:** Only the config key exists (also imported from tiny-dfr and shown in settings); nothing shifts pixels yet (T79). |
+| Pixel shift (±11 px x, ±2 px y) | P0 | partial | dfr | Default off, like dfr. Exposed as an *advanced* option. The OLED burn-in risk is real, but idle dim/off is the main protection. **Now:** Implemented (T79): sliverd moves the whole picture (agent frames and the built-in layers) along tiny-dfr's path in 1 px steps every 15 s, resting 60 s at the ends, never while dark, and maps touches back; content keeps 11 px clear of both ends. Real-panel check pending. |
 | Themes: built-in light/dark/high-contrast/"dfr classic", plus user TOML themes | P1 | done | BTT | `sliver` (dark, default), `light`, `high-contrast` and `classic` built in (T60), plus user CSS stylesheets on top. The settings app picks between them with live previews of your own bar. |
 | Accent color from the desktop (GNOME/KDE accent, else a fixed default) | P1 | done | (none) | The settings portal's `accent-color` (with live changes) feeds `@accent` in the default theme; KDE's `kdeglobals` `AccentColor` is the fallback. Tested against a mock portal; no portal runs on the dev machine, so not yet seen live. |
 | Per-item colors (background, foreground, state colors) | P1 | done | MTMR, BTT | Stylesheets and `class`/state selectors. |

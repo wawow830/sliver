@@ -29,6 +29,7 @@ pub mod profile;
 pub mod real;
 pub mod server;
 pub mod session;
+pub mod shift;
 #[cfg(feature = "testing")]
 pub mod testing;
 

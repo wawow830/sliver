@@ -994,3 +994,119 @@ fn emit_keys_tap_and_up_only_releases_own_keys() {
     );
     assert!(rig.keys().is_empty());
 }
+
+fn shift_on() -> AgentMsg {
+    AgentMsg::DisplayPolicy(DisplayPolicy {
+        pixel_shift: Some(true),
+        ..Default::default()
+    })
+}
+
+/// `p` moved by `(dx, dy)` with black where nothing lands: what the panel should show.
+fn moved(p: &Pixmap, dx: i32, dy: i32) -> Vec<[u8; 4]> {
+    let (w, h) = (p.width() as i32, p.height() as i32);
+    let mut out = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            let (sx, sy) = (x - dx, y - dy);
+            out.push(if (0..w).contains(&sx) && (0..h).contains(&sy) {
+                let px = p.pixel(sx as u32, sy as u32).unwrap();
+                [px.red(), px.green(), px.blue(), 255]
+            } else {
+                [0, 0, 0, 255]
+            });
+        }
+    }
+    out
+}
+
+fn pixels(p: &Pixmap) -> Vec<[u8; 4]> {
+    p.data()
+        .chunks_exact(4)
+        .map(|c| [c[0], c[1], c[2], 255])
+        .collect()
+}
+
+/// T79: the panel shows the frame moved by the current shift, steps 1 px at a time on a slow
+/// timer, and touches are hit-tested where the finger is on the (moved) picture.
+#[test]
+fn pixel_shift_moves_the_picture_and_the_touches() {
+    let (mut rig, regions) = rig_with_agent();
+    let still = rig.hw.display.frame();
+    assert_eq!(rig.d.pixel_shift(), (0, 0));
+    // Never idle: stepping takes up to a minute, and a dark bar would swallow the test tap.
+    rig.send(
+        A,
+        AgentMsg::DisplayPolicy(DisplayPolicy {
+            dim_after_ms: Some(0),
+            off_after_ms: Some(0),
+            ..Default::default()
+        }),
+    );
+    rig.send(A, shift_on());
+    let mut last = rig.d.pixel_shift();
+    assert!(
+        pixels(&rig.hw.display.frame()) == moved(&still, last.0, last.1),
+        "panel = frame moved by {last:?}"
+    );
+    // Steps every 15 s (or 60 s at an end), 1 px in x, until it's at least 2 px off centre.
+    while last.0.abs() < 2 {
+        let at = rig.d.next_deadline().expect("shift step scheduled");
+        rig.advance(at - rig.now);
+        let now = rig.d.pixel_shift();
+        assert_eq!((now.0 - last.0).abs(), 1, "{last:?} -> {now:?}");
+        assert!(pixels(&rig.hw.display.frame()) == moved(&still, now.0, now.1));
+        last = now;
+    }
+    // 2 px inside the Copy region's end *on the frame*, at the end the picture moved towards:
+    // without the correction, a 2+ px shift would put the finger outside the region.
+    let copy = regions[0].rect;
+    let frame_x = if last.0 > 0 {
+        (copy.x + copy.w) as f32 - 2.0
+    } else {
+        copy.x as f32 + 1.0
+    };
+    let on_glass = frame_x + last.0 as f32;
+    rig.down(0, on_glass);
+    assert_eq!(
+        rig.keys(),
+        vec![Down(KEY_LEFTCTRL), Down(KEY_C)],
+        "shift {last:?}"
+    );
+    rig.up(0, on_glass);
+
+    // Off again: centred at once and no more steps.
+    rig.send(
+        A,
+        AgentMsg::DisplayPolicy(DisplayPolicy {
+            pixel_shift: Some(false),
+            ..Default::default()
+        }),
+    );
+    assert_eq!(rig.d.pixel_shift(), (0, 0));
+    assert!(pixels(&rig.hw.display.frame()) == pixels(&still));
+}
+
+/// T79: no steps (no wakeups) while the bar is dark; the built-in layers keep clear of the ends.
+#[test]
+fn pixel_shift_sleeps_while_dark_and_insets_the_safe_layer() {
+    let (mut rig, _) = rig_with_agent();
+    rig.send(A, shift_on());
+    rig.input(Input::Disconnected { client: A }); // the policy stays; safe layer shown
+    let (dx, _) = rig.d.pixel_shift();
+    let f = rig.hw.display.frame();
+    let w = f.width() as i32;
+    for x in (0..w).filter(|&x| x < 11 + dx || x >= w - 11 + dx) {
+        for y in 0..f.height() {
+            let px = f.pixel(x as u32, y).unwrap();
+            assert_eq!(
+                (px.red(), px.green(), px.blue()),
+                (0, 0, 0),
+                "ink at ({x}, {y}), dx {dx}"
+            );
+        }
+    }
+    rig.advance(60_000); // idle: off
+    assert_eq!(rig.d.display_state(), DisplayState::Off);
+    assert_eq!(rig.d.next_deadline(), None, "a dark bar sleeps");
+}

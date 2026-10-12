@@ -102,6 +102,9 @@ pub struct Renderer {
     fonts: Fonts,
     styles: HashMap<String, Arc<Style>>,
     styles_generation: u64,
+    /// Extra `[top, right, bottom, left]` inset on top of the bar's padding (pixel shift keeps
+    /// content clear of the edges it moves towards).
+    extra_inset: [f32; 4],
 }
 
 impl Renderer {
@@ -111,7 +114,18 @@ impl Renderer {
             fonts,
             styles: HashMap::new(),
             styles_generation: 0,
+            extra_inset: [0.0; 4],
         }
+    }
+
+    /// Lays everything out `[top, right, bottom, left]` px further in than the stylesheet says.
+    /// Used while pixel shift is on, so the shifted content never runs off the panel.
+    pub fn set_extra_inset(&mut self, inset: [f32; 4]) {
+        self.extra_inset = inset;
+    }
+
+    pub fn extra_inset(&self) -> [f32; 4] {
+        self.extra_inset
     }
 
     fn compute_styles(&mut self, scene: &Scene, sheet: &Stylesheet) -> Styles {
@@ -253,7 +267,9 @@ impl Renderer {
     }
 
     fn layout_styled(&mut self, scene: &Scene, st: &Styles, width: u32, height: u32) -> Layout {
-        let bar = Rect::new(0.0, 0.0, width as f32, height as f32).inset(st.bar.padding);
+        let bar = Rect::new(0.0, 0.0, width as f32, height as f32)
+            .inset(st.bar.padding)
+            .inset(self.extra_inset);
         let mut item_sizes: Vec<Vec<Sizing>> = Vec::new();
         let mut zone_sizes = Vec::new();
         let mut styles = st.items.iter().zip(&st.parts);
