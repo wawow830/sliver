@@ -5,8 +5,8 @@ sanctioned way for a peer to touch the real bar.** Read `docs/hardware.md` first
 
 ## Use (after the human has installed it)
 ```
-cargo build -p sliverd
-harness/safeswap/bar run target/debug/sliverd --seconds 30 -- --backend real   # blocks; Ctrl-C ends it
+cargo build --release -p sliverd        # release for anything timing-sensitive; debug is fine for logic
+harness/safeswap/bar run target/release/sliverd --seconds 30 -- --backend real -v   # blocks; Ctrl-C ends it
 harness/safeswap/bar snap bar.png      # PNG (2008x60) of whatever is on the bar right now
 harness/safeswap/bar logs              # sliverd's stdout/stderr from the last run
 harness/safeswap/bar status | stop | restore

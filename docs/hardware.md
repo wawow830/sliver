@@ -352,8 +352,12 @@ the keyboard counters will be 0 too.
 **Full stack on the real bar** (sliverd -v + sliver-agent over `$SLIVER_OUT_DIR/sliverd.sock`,
 human tapping): agent frame on the panel 0.4 s after connect; every touch forwarded to the agent as
 `Touch { region, phase }`; liveness ping/pong <10 ms; agent-driven keys out through uinput; killing
-the agent → safe layer in 5–8 ms. Recipe: start `bar run target/debug/sliverd --seconds 60 -- -v`,
-then run `target/debug/sliver-agent --socket /run/sliver-safeswap/out/sliverd.sock` as the user.
+the agent → safe layer in 5–8 ms. Recipe (**use release builds for anything timing-related**: a
+debug agent renders a full frame in ~37 ms vs ~2 ms in release): `cargo build --release -p sliverd
+-p sliver-agent`, start `bar run target/release/sliverd --seconds 60 -- -v`, then run
+`target/release/sliver-agent --socket /run/sliver-safeswap/out/sliverd.sock` as the user.
+Debug-build latencies from that run: touch → agent present 27–38 ms, touch → panel 46–63 ms.
+ash's press fast path (8cdca17) plus a release build should bring it to ~10–15 ms.
 
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
