@@ -19,3 +19,4 @@ rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 sliver-testbus.workspace = true
+sliver-bus.workspace = true

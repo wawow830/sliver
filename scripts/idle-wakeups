@@ -100,7 +100,7 @@ def thread_switches(pid: int) -> dict[str, int]:
             name = (t / "comm").read_text().strip()
             for line in (t / "status").read_text().splitlines():
                 if line.startswith("voluntary_ctxt_switches:"):
-                    key = f"{comm(pid)}/{name}"
+                    key = f"{comm(pid)}/{name}:{t.name}"  # tid: names are cut at 15 chars
                     out[key] = out.get(key, 0) + int(line.split()[1])
         except OSError:
             pass

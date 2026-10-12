@@ -398,6 +398,22 @@ connection in the agent process goes through it. Now on ≈ 3.9–4.8/s, off ≈
 sandbox and its spawner). On the live session the installed agent measured ~8/s before T103 (real
 buses, compositor events). Budgets: on ≤ 8/s, off ≤ 3/s.
 
+**The real system bus (T117, hazel's measurement of the installed agent: 1.45/s with the bar off,
+nothing happening).** The private-bus harness has no NetworkManager or UPower, so it can't show
+this. On the real laptop NetworkManager, bluez and UPower emit `PropertiesChanged` every few
+seconds (signal strength, scans, battery readings), and each one wakes the async-io reactor, the
+zbus executor and the session watcher thread together, then triggers a re-read (more bus
+round trips). `cargo run -p sliver-session --example idle-probe -- 40 session` against the real
+buses (`DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket`) showed 1.9/s while the
+subscriptions were on. **Fixed:** `Handle::set_awake(false)`, called when sliverd reports the
+display off, removes the three chatty match rules (logind stays: lock and sleep must always work),
+and `set_awake(true)` puts them back and re-reads network, Bluetooth and power, so nothing is
+missed. Same measurement with the bar off: **0.03/s**. While the bar is on the subscriptions stay,
+because the network/battery modules show those values live. The probe (`idle-probe`) also takes
+`audio`, `notifications`, `tray`, `appearance`, `screensaver` and `dark`, to bisect other sources;
+on the sandbox buses each of those is silent except audio without a PulseAudio server (one
+`pactl` retry cycle every 30 s, about 25 wakeups, 0.8/s on average).
+
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
 

@@ -1203,6 +1203,7 @@ fn run(
                         live.lock_watch.wake();
                         live.push_focus();
                     }
+                    live.feeds.set_awake(state != DisplayState::Off);
                     // User module timers stop while the bar is off (invariant 3).
                     if let Some(rt) = live.modules() {
                         rt.set_active(state != DisplayState::Off);

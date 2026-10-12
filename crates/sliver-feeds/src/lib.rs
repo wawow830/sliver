@@ -316,6 +316,14 @@ impl Feeds {
         self.spawn_session(s);
     }
 
+    /// The bar is on or off: sources that only matter while something is on screen sleep while
+    /// it is off (invariant 3).
+    pub fn set_awake(&self, on: bool) {
+        if let Some(h) = &self.session {
+            h.set_awake(on);
+        }
+    }
+
     /// Start the user modules and forward their updates. Also routes `pkill -RTMIN+N`.
     /// Starts the user modules, or restarts them with new `specs` (config reload). Unchanged specs
     /// keep the running modules and their last output.

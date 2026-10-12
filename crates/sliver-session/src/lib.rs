@@ -193,6 +193,11 @@ pub struct Handle {
     hub: Hub,
     system: zbus::blocking::Connection,
     caffeine: Arc<Mutex<Option<zbus::zvariant::OwnedFd>>>,
+    /// Are the chatty system-bus subscriptions on? (see [`Handle::set_awake`])
+    awake: Arc<std::sync::atomic::AtomicBool>,
+    awake_gate: Arc<Mutex<()>>,
+    /// What the bus actually has subscribed (changes only under `awake_gate`).
+    chatty_on: Arc<std::sync::atomic::AtomicBool>,
     /// KDE's `Inhibit` cookie while Do Not Disturb is on (see [`Handle::set_dnd`]).
     dnd_cookie: Arc<Mutex<Option<u32>>>,
 }
@@ -204,6 +209,52 @@ impl Handle {
     pub fn refresh_brightness(&self, sysfs: &brightness::Sysfs) -> bool {
         let levels = sysfs.levels();
         self.hub.update(|s| s.brightness = levels)
+    }
+
+    /// The bar is on (`true`) or off (`false`). While it is off nothing is on screen, so the
+    /// NetworkManager, bluez and UPower subscriptions (they change several times a minute:
+    /// signal strength, scans, battery readings) are dropped and the session thread sleeps; they come
+    /// back with a fresh read of all three when the bar wakes (invariant 3). The work runs on its own
+    /// thread, so the caller never waits for the bus.
+    pub fn set_awake(&self, on: bool) {
+        use std::sync::atomic::Ordering;
+        if self.awake.swap(on, Ordering::SeqCst) == on {
+            return;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            let _one_at_a_time = me.awake_gate.lock().unwrap_or_else(|e| e.into_inner());
+            // Whatever was asked last wins if calls piled up.
+            let on = me.awake.load(Ordering::SeqCst);
+            let Ok(bus) = zbus::blocking::fdo::DBusProxy::new(&me.system) else {
+                return;
+            };
+            let have = me.chatty_on.swap(on, Ordering::SeqCst);
+            if have == on {
+                return;
+            }
+            for r in &SYSTEM_RULES[..CHATTY_RULES] {
+                if let Ok(rule) = zbus::MatchRule::try_from(*r) {
+                    let _ = if on {
+                        bus.add_match_rule(rule)
+                    } else {
+                        bus.remove_match_rule(rule)
+                    };
+                }
+            }
+            if on {
+                // Changes while we weren't listening.
+                let mut n = me.hub.snapshot().network;
+                network::read_into(&me.system, &mut n);
+                me.hub.update(|s| s.network = n);
+                let mut b = me.hub.snapshot().bluetooth;
+                bluetooth::read_into(&me.system, &mut b);
+                me.hub.update(|s| s.bluetooth = b);
+                let mut p = me.hub.snapshot().power;
+                power::read_into(&me.system, &mut p);
+                me.hub.update(|s| s.power = p);
+            }
+        });
     }
 
     /// Hold (or release) a logind `idle` inhibitor, which idle daemons such as hypridle honour.
@@ -245,6 +296,9 @@ impl Session {
             hub: hub.clone(),
             system: system.clone(),
             caffeine: Arc::default(),
+            awake: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            awake_gate: Arc::default(),
+            chatty_on: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dnd_cookie: Arc::default(),
         };
         let h = hub.clone();
@@ -277,11 +331,16 @@ impl SessionSource for Session {
     }
 }
 
+/// How many of the first [`SYSTEM_RULES`] are the chatty ones (NetworkManager, bluez and UPower
+/// emit property changes all the time: signal strength, scans, battery readings). They are dropped
+/// while the bar is off ([`Handle::set_awake`]); logind (lock, sleep, idle) always stays.
+const CHATTY_RULES: usize = 3;
+
 const SYSTEM_RULES: [&str; 6] = [
     "type='signal',sender='org.freedesktop.NetworkManager'",
     "type='signal',sender='org.bluez'",
-    "type='signal',sender='org.freedesktop.login1'",
     "type='signal',sender='org.freedesktop.UPower'",
+    "type='signal',sender='org.freedesktop.login1'",
     "type='signal',sender='org.freedesktop.UPower.PowerProfiles'",
     "type='signal',sender='net.hadess.PowerProfiles'",
 ];

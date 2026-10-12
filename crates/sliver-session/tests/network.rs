@@ -272,6 +272,75 @@ fn network_and_bluetooth_follow_their_services() {
     assert_eq!(next(&rx).network.state, NetState::Disconnected);
 }
 
+/// While the bar is off the NetworkManager subscription is dropped (invariant 3: signal strength
+/// updates are ~1 wakeup/s on a real laptop); signals then change nothing, and when the bar wakes
+/// the state is read again, so nothing is missed.
+#[test]
+fn dark_bar_drops_chatty_subscriptions_and_resyncs_on_wake() {
+    let Some(bus) = Bus::start() else {
+        eprintln!("SKIP: dbus-daemon not installed");
+        return;
+    };
+    let state = Arc::new(Mutex::new(70u32));
+    let strength = Arc::new(Mutex::new(66u8));
+    let nm = bus.service("org.freedesktop.NetworkManager");
+    let os = nm.object_server();
+    os.at(
+        "/org/freedesktop/NetworkManager",
+        Nm(state.clone(), Arc::new(Mutex::new(true))),
+    )
+    .unwrap();
+    os.at("/org/freedesktop/NetworkManager/ActiveConnection/1", Active)
+        .unwrap();
+    os.at("/org/freedesktop/NetworkManager/IP4Config/1", Ip4)
+        .unwrap();
+    os.at("/org/freedesktop/NetworkManager/Devices/2", Dev)
+        .unwrap();
+    os.at("/org/freedesktop/NetworkManager/Devices/2", Wireless)
+        .unwrap();
+    os.at(
+        "/org/freedesktop/NetworkManager/AccessPoint/3",
+        Ap(strength.clone()),
+    )
+    .unwrap();
+
+    let client = bus.connect();
+    let session = Session::start(client.clone(), client);
+    let handle = session.handle();
+    let rx = spawn_states(session);
+    assert_eq!(next(&rx).network.signal_pct, Some(66));
+    let ap_changed = || {
+        nm.emit_signal(
+            None::<&str>,
+            "/org/freedesktop/NetworkManager/AccessPoint/3",
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            &(
+                "org.freedesktop.NetworkManager.AccessPoint",
+                HashMap::<&str, Value>::new(),
+                Vec::<&str>::new(),
+            ),
+        )
+        .unwrap();
+    };
+
+    handle.set_awake(false);
+    std::thread::sleep(Duration::from_millis(500)); // the rule removal runs on its own thread
+    *strength.lock().unwrap() = 40;
+    ap_changed();
+    assert!(
+        rx.recv_timeout(Duration::from_millis(700)).is_err(),
+        "a dark bar must not hear NetworkManager"
+    );
+    // wake: the new strength is read at once, without any signal
+    handle.set_awake(true);
+    assert_eq!(next(&rx).network.signal_pct, Some(40));
+    // and the subscription is back
+    *strength.lock().unwrap() = 55;
+    ap_changed();
+    assert_eq!(next(&rx).network.signal_pct, Some(55));
+}
+
 #[test]
 fn missing_services_leave_unknown() {
     let Some(bus) = Bus::start() else {
