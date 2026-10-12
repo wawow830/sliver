@@ -8,6 +8,7 @@ mod bar;
 mod edit;
 mod pages;
 mod preview;
+mod rules;
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -200,7 +201,7 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
             "rules",
             "Layouts & Rules",
             "view-list-symbolic",
-            pages::rules_page(&state),
+            rules::page(ui),
         ),
         (
             "gestures",

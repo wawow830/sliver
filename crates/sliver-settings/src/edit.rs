@@ -283,6 +283,94 @@ pub fn customize_for_app(
     ))
 }
 
+fn rules(ed: &Editor, merged: &Table) -> Result<Vec<Table>, String> {
+    // Rules are an array: like zones, edit the effective list (built-ins have none, includes may).
+    let raw = match ed.get("rules")? {
+        Some(v) => Some(v),
+        None => merged.get("rules").cloned(),
+    };
+    Ok(match raw {
+        Some(Value::Array(a)) => a
+            .into_iter()
+            .filter_map(|r| r.as_table().cloned())
+            .collect(),
+        Some(_) => return Err("rules isn't a list".into()),
+        None => Vec::new(),
+    })
+}
+
+fn rule_label(r: &Table, i: usize) -> String {
+    r.get("name")
+        .and_then(Value::as_str)
+        .map_or_else(|| format!("rules[{i}]"), str::to_owned)
+}
+
+/// Adds a rule at the top (new rules are usually the most specific, ux.md §2). Returns its index.
+pub fn add_rule(ed: &mut Editor, merged: &Table, rule: Table) -> Result<String, String> {
+    let mut all = rules(ed, merged)?;
+    let label = rule_label(&rule, 0);
+    all.insert(0, rule);
+    ed.set_tables("rules", &all)?;
+    Ok(format!("Added rule {label}"))
+}
+
+pub fn remove_rule(ed: &mut Editor, merged: &Table, index: usize) -> Result<String, String> {
+    let mut all = rules(ed, merged)?;
+    if index >= all.len() {
+        return Err("no such rule".into());
+    }
+    let gone = all.remove(index);
+    if all.is_empty() {
+        ed.remove("rules")?;
+    } else {
+        ed.set_tables("rules", &all)?;
+    }
+    Ok(format!("Removed rule {}", rule_label(&gone, index)))
+}
+
+/// Moves a rule up (`-1`) or down (`1`): order is priority, first match wins.
+pub fn move_rule(
+    ed: &mut Editor,
+    merged: &Table,
+    index: usize,
+    delta: isize,
+) -> Result<String, String> {
+    let mut all = rules(ed, merged)?;
+    let to = index
+        .checked_add_signed(delta)
+        .filter(|t| *t < all.len())
+        .ok_or("can't move further")?;
+    if index >= all.len() {
+        return Err("no such rule".into());
+    }
+    all.swap(index, to);
+    ed.set_tables("rules", &all)?;
+    Ok(format!("Moved rule {}", rule_label(&all[to], to)))
+}
+
+/// Sets or clears one key of rule `index` (`name`, `when`, `layer`, `layout`).
+pub fn set_rule_key(
+    ed: &mut Editor,
+    merged: &Table,
+    index: usize,
+    k: &str,
+    value: Option<Value>,
+) -> Result<String, String> {
+    let mut all = rules(ed, merged)?;
+    let r = all.get_mut(index).ok_or("no such rule")?;
+    match value {
+        Some(v) => {
+            r.insert(k.to_owned(), v);
+        }
+        None => {
+            r.remove(k);
+        }
+    }
+    let label = rule_label(r, index);
+    ed.set_tables("rules", &all)?;
+    Ok(format!("Changed {k} of rule {label}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,6 +494,64 @@ mod tests {
         set_module_key(&mut ed, &merged, "default", "main", 0, "format", None).unwrap();
         assert_eq!(ed.get("modules.clock.format").unwrap(), None);
         assert!(ed.check(HERE).ok(), "{:#?}", ed.check(HERE));
+    }
+
+    #[test]
+    fn rules_crud_keeps_order_and_comments() {
+        let src = "version = 1\n# my rules\n[[rules]]\nname = \"locked\"\nwhen = { locked = true }\nlayout = \"fkeys\"\n";
+        let (mut ed, merged) = fresh(src);
+        let mut r = Table::new();
+        r.insert("name".into(), "terminals".into());
+        r.insert(
+            "when".into(),
+            "v = { app-id = [\"foot\", \"kitty\"] }"
+                .parse::<Table>()
+                .unwrap()["v"]
+                .clone(),
+        );
+        r.insert("layout".into(), "fkeys".into());
+        add_rule(&mut ed, &merged, r).unwrap();
+        let names = |ed: &Editor| {
+            ed.load()
+                .config
+                .rules
+                .iter()
+                .map(|r| r.name.clone().unwrap_or_default())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&ed), ["terminals", "locked"]);
+        let merged = ed.load().merged;
+        move_rule(&mut ed, &merged, 1, -1).unwrap();
+        assert_eq!(names(&ed), ["locked", "terminals"]);
+        let merged = ed.load().merged;
+        set_rule_key(&mut ed, &merged, 1, "layout", Some("media".into())).unwrap();
+        let l = ed.load();
+        assert!(l.diagnostics.ok(), "{:#?}", l.diagnostics);
+        let ctx = Context::new().with("app_id", "kitty");
+        assert_eq!(l.config.resolve("base", &ctx).unwrap().layout, "media");
+        assert!(ed.text().contains("# my rules"));
+        remove_rule(&mut ed, &l.merged, 0).unwrap();
+        let merged = ed.load().merged;
+        remove_rule(&mut ed, &merged, 0).unwrap();
+        assert!(ed.load().config.rules.is_empty());
+        assert!(ed.check(HERE).ok());
+        let merged = ed.load().merged;
+        assert!(remove_rule(&mut ed, &merged, 0).is_err());
+    }
+
+    #[test]
+    fn move_rule_down_with_comments() {
+        let src = "version = 1\n\n[[rules]]\nname = \"New rule\"\nlayout = \"default\"\nwhen = { app-id = \"change-me\" }\n# terminals want F-keys\n[[rules]]\nname = \"Terminals\"\nwhen = { app-id = [\"foot\", \"kitty\"] }\nlayout = \"fkeys\"\n";
+        let (mut ed, merged) = fresh(src);
+        move_rule(&mut ed, &merged, 0, 1).unwrap();
+        let names: Vec<_> = ed
+            .load()
+            .config
+            .rules
+            .iter()
+            .map(|r| r.name.clone().unwrap())
+            .collect();
+        assert_eq!(names, ["Terminals", "New rule"], "{}", ed.text());
     }
 
     #[test]

@@ -93,6 +93,8 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         .content_width(BAR.0 as i32 / 2)
         .content_height(BAR.1 as i32 / 2)
         .halign(gtk::Align::Center)
+        // Room for the overlay scrollbar, so it never sits on (and swallows clicks on) the bar.
+        .margin_bottom(12)
         .build();
     {
         let frame = frame.clone();
@@ -182,10 +184,10 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             picture.queue_draw();
             why.set_text(&match rule {
                 Some(i) => format!(
-                    "Editing layout “{layout}”, picked by rules[{i}]{}. Changes apply instantly.",
+                    "Editing layout “{layout}”, picked by rules[{i}]{}. Click a module to edit it; changes apply instantly.",
                     config.rules[i].name.as_deref().map(|n| format!(" ({n})")).unwrap_or_default()
                 ),
-                None => format!("Editing layout “{layout}”, the {layer} layer's default. Changes apply instantly."),
+                None => format!("Editing layout “{layout}”, the {layer} layer's default. Click a module to edit it; changes apply instantly."),
             });
             zone_groups(&ui, &zones, &layout);
         })
@@ -213,6 +215,44 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             });
         });
     }
+    // Click a module on the preview to open it in the inspector (ux.md §4 "Select").
+    let click = gtk::GestureClick::new();
+    {
+        let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
+        click.connect_pressed(move |_, _, x, _| {
+            // The preview is drawn at half scale.
+            eprintln!(
+                preview
+                    .borrow()
+                    .hit(x as f32 * 2.0)
+                    .map(|h| (h.zone, h.key.clone()))
+            );
+            let Some(hit) = preview.borrow().hit(x as f32 * 2.0) else {
+                return;
+            };
+            let state = ui.state();
+            let layout = shown_layout.borrow().clone();
+            let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
+                return;
+            };
+            let Some(z) = zones.get(hit.zone) else { return };
+            let ids: Vec<String> = z.modules.iter().map(|m| m.id().to_string()).collect();
+            let Some(i) = hit.module_index(&ids) else {
+                return;
+            };
+            let m = &z.modules[i];
+            inspector(
+                &ui,
+                &layout,
+                &z.name,
+                i,
+                &m.id().to_string(),
+                &state.loaded.config.module_block(m),
+            );
+        });
+    }
+    picture.add_controller(click);
+    picture.set_cursor_from_name(Some("pointer"));
     refresh();
     page.upcast()
 }

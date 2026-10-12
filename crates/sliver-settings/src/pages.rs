@@ -51,64 +51,6 @@ pub(crate) fn width_text(w: Width) -> String {
     }
 }
 
-pub(crate) fn rules_page(state: &State) -> gtk::Widget {
-    let c = &state.loaded.config;
-    let page = adw::PreferencesPage::new();
-
-    let layers = group(
-        "Layers",
-        Some("Each layer's default layout. Fn shows the fn layer; other layers open from actions."),
-    );
-    for (layer, layout) in &c.layers {
-        layers.add(&row(layer, &format!("→ {layout}")));
-    }
-    page.add(&layers);
-
-    let rules = group(
-        "Rules",
-        Some(
-            "Checked top to bottom; the first match wins. With no match, the layer's default layout is used.",
-        ),
-    );
-    if c.rules.is_empty() {
-        rules.add(&row("No rules yet", "Every app gets the default layouts."));
-    }
-    for (i, r) in c.rules.iter().enumerate() {
-        let title = r.name.clone().unwrap_or_else(|| format!("rules[{i}]"));
-        rules.add(&row(
-            &title,
-            &format!(
-                "when {} → {} ({} layer)",
-                summarize(&r.when),
-                r.layout,
-                r.layer
-            ),
-        ));
-    }
-    page.add(&rules);
-
-    let layouts = group("Layouts", None);
-    for (name, l) in &c.layouts {
-        let zones = c
-            .layout_zones(name)
-            .map(|z| {
-                z.iter()
-                    .map(|z| format!("{} ({})", z.name, z.modules.len()))
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            })
-            .unwrap_or_else(|e| e.to_string());
-        let ext = l
-            .extends
-            .as_deref()
-            .map(|p| format!("extends {p} · "))
-            .unwrap_or_default();
-        layouts.add(&row(name, &format!("{ext}{zones}")));
-    }
-    page.add(&layouts);
-    page.upcast()
-}
-
 pub(crate) fn summarize(c: &Condition) -> String {
     if c.is_always() {
         return "always".into();
