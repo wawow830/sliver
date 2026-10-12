@@ -74,6 +74,8 @@ max-brightness = 128      # 0-255
 dim-after = "30s"
 off-after = "60s"
 pixel-shift = false
+# curve = [[0, 0.2], [0.5, 0.6], [1, 1]]  # adaptive: [screen, bar] fractions, 2-16 points,
+#                                          # straight lines between; default: tiny-dfr's sqrt
 
 [display.on-battery]      # optional: replaces these [display] keys while on battery (UPower)
 max-brightness = 60

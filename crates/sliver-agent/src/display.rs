@@ -21,7 +21,19 @@ pub fn policy(display: &Display, on_battery: Option<bool>, panel_max: u32) -> Di
         dim_brightness: None,
         off_after_ms: Some(ms(d.off_after)),
         follow_screen: Some(d.adaptive),
+        // Always sent, so removing `curve` from the config goes back to sqrt on reload.
+        curve: Some(
+            d.curve
+                .iter()
+                .map(|&(s, b)| [permille(s), permille(b)])
+                .collect(),
+        ),
     }
+}
+
+/// Fraction (0–1, validated by sliver-config) → per-mille for the wire.
+fn permille(f: f32) -> u16 {
+    (f.clamp(0.0, 1.0) * 1000.0).round() as u16
 }
 
 /// tiny-dfr 0–255 → panel units, rounded, but never 0 for a non-zero setting (a T2 bar has only
@@ -50,6 +62,7 @@ mod tests {
                 dim_brightness: None,
                 off_after_ms: Some(60_000),
                 follow_screen: Some(true),
+                curve: Some(vec![]),
             }
         );
         let never = Display {
@@ -65,6 +78,14 @@ mod tests {
             "0 = never"
         );
         assert_eq!(p.follow_screen, Some(false));
+        let curved = Display {
+            curve: vec![(0.0, 0.05), (0.333, 0.4), (1.0, 1.0)],
+            ..Display::default()
+        };
+        assert_eq!(
+            policy(&curved, None, 255).curve,
+            Some(vec![[0, 50], [333, 400], [1000, 1000]])
+        );
     }
 
     #[test]

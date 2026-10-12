@@ -53,6 +53,10 @@ pub struct Display {
     pub dim_after: Option<Duration>,
     pub off_after: Option<Duration>,
     pub pixel_shift: bool,
+    /// Adaptive brightness curve: `(screen, bar)` fractions (0–1) of the main display's brightness
+    /// and of `max_brightness`, screens strictly increasing, 2–16 points. Empty = tiny-dfr's
+    /// `sqrt` (the default).
+    pub curve: Vec<(f32, f32)>,
     /// `[display.on-battery]`: replaces the values above while running on battery.
     pub on_battery: DisplayOverride,
 }
@@ -89,6 +93,7 @@ impl Default for Display {
             dim_after: Some(Duration::from_secs(30)),
             off_after: Some(Duration::from_secs(60)),
             pixel_shift: false,
+            curve: Vec::new(),
             on_battery: DisplayOverride::default(),
         }
     }
@@ -485,6 +490,9 @@ fn parse_display(t: &Table, d: &mut Diagnostics) -> Display {
     if let Some(b) = r.bool("pixel-shift", d) {
         x.pixel_shift = b;
     }
+    if let Some(v) = r.get("curve") {
+        x.curve = parse_curve(v, "display.curve", d);
+    }
     if let Some(t) = r.table("on-battery", d) {
         let mut b = Reader::new(t, "display.on-battery");
         x.on_battery.max_brightness = b.uint("max-brightness", 255, d).map(|n| n as u8);
@@ -498,6 +506,57 @@ fn parse_display(t: &Table, d: &mut Diagnostics) -> Display {
     }
     r.finish(d);
     x
+}
+
+/// `curve = [[screen, bar], ...]`: fractions 0–1, screens strictly increasing, 2–16 points. Any
+/// problem is an error and leaves the default (sqrt).
+fn parse_curve(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<(f32, f32)> {
+    let num = |v: &Value| match v {
+        Value::Integer(i) => Some(*i as f64),
+        Value::Float(f) => Some(*f),
+        _ => None,
+    };
+    let Value::Array(points) = v else {
+        d.error(path, "expected [[screen, bar], ...]");
+        return Vec::new();
+    };
+    if !(2..=16).contains(&points.len()) {
+        d.error(path, format!("needs 2 to 16 points, got {}", points.len()));
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(points.len());
+    for (i, p) in points.iter().enumerate() {
+        let pair = match p {
+            Value::Array(a) if a.len() == 2 => num(&a[0]).zip(num(&a[1])),
+            _ => None,
+        };
+        let Some((sx, bx)) = pair else {
+            d.error(
+                format!("{path}[{i}]"),
+                "expected [screen, bar] (two numbers)",
+            );
+            return Vec::new();
+        };
+        if !(0.0..=1.0).contains(&sx) || !(0.0..=1.0).contains(&bx) {
+            d.error(
+                format!("{path}[{i}]"),
+                "screen and bar are fractions from 0 to 1",
+            );
+            return Vec::new();
+        }
+        if out
+            .last()
+            .is_some_and(|&(prev, _): &(f32, f32)| sx as f32 <= prev)
+        {
+            d.error(
+                format!("{path}[{i}]"),
+                "screen values must be strictly increasing",
+            );
+            return Vec::new();
+        }
+        out.push((sx as f32, bx as f32));
+    }
+    out
 }
 
 fn parse_layer_options(t: &Table, path: &str, d: &mut Diagnostics) -> LayerOptions {
@@ -698,6 +757,34 @@ mod tests {
                 .any(|w| w.path == "display.on-battery.bogus"),
             "{d:#?}"
         );
+    }
+
+    #[test]
+    fn display_curve() {
+        let t: Table = "[display]\ncurve = [[0, 0.05], [0.5, 0.4], [1, 1]]\n"
+            .parse()
+            .unwrap();
+        let (c, d) = Config::from_table(&t);
+        assert!(d.ok() && d.warnings.is_empty(), "{d:#?}");
+        assert_eq!(c.display.curve, vec![(0.0, 0.05), (0.5, 0.4), (1.0, 1.0)]);
+        assert!(
+            Display::default().curve.is_empty(),
+            "default: tiny-dfr's sqrt"
+        );
+        for (bad, path) in [
+            ("curve = [[0, 0]]", "display.curve"),
+            ("curve = 3", "display.curve"),
+            ("curve = [[0, 0], [1]]", "display.curve[1]"),
+            ("curve = [[0, 0], [1.5, 1]]", "display.curve[1]"),
+            ("curve = [[0.5, 0], [0.5, 1]]", "display.curve[1]"),
+            ("curve = [[0, 0], [\"x\", 1]]", "display.curve[1]"),
+        ] {
+            let t: Table = format!("[display]\n{bad}\n").parse().unwrap();
+            let (c, d) = Config::from_table(&t);
+            assert!(!d.ok(), "{bad}");
+            assert!(d.errors.iter().any(|e| e.path == path), "{bad}: {d:#?}");
+            assert!(c.display.curve.is_empty(), "{bad}: falls back to sqrt");
+        }
     }
 
     #[test]

@@ -149,6 +149,11 @@ pub struct DisplayPolicy {
     /// Scale with the main display's backlight (tiny-dfr `AdaptiveBrightness`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_screen: Option<bool>,
+    /// Adaptive brightness curve: points `[screen, bar]` in per-mille (0–1000) of the main
+    /// display's brightness and of `brightness`, piecewise-linear and flat beyond the ends. Empty =
+    /// tiny-dfr's `sqrt`. sliverd normalises it (clamps, sorts, drops duplicate screens, keeps 16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve: Option<Vec<[u16; 2]>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]

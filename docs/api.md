@@ -334,7 +334,7 @@ sliverd rotates to the panel (`60x2008` on Mac14,7). Intel T2 bars report their 
 | `detach_buffer` | `id` | |
 | `present` | `serial` u32, `layer` (`base`/`fn`), `image` id, `pressed` id?, `regions` [Region], `damage` [[x,w]]? | sliverd **copies** the buffer(s) and replies `presented`. Agent may reuse the buffer after that. |
 | `clear_layer` | `layer` | `fn` only: fall back to the built-in fn layer |
-| `display_policy` | `brightness` (0..max), `dim_after_ms`, `dim_brightness`, `off_after_ms`, `follow_screen` b | sliverd keeps its defaults until set |
+| `display_policy` | `brightness` (0..max), `dim_after_ms`, `dim_brightness`, `off_after_ms`, `follow_screen` b, `curve` [[screen, bar]]? | every field optional: missing keeps sliverd's current value. `curve`: per-mille (0–1000) points, piecewise-linear, flat beyond the ends; `[]` = tiny-dfr's sqrt; sliverd clamps, sorts, drops duplicate screens and keeps 16 |
 | `wake` | — | leave dim/off (e.g. new notification); rate-limited 1/s |
 | `emit_keys` | `keys` [u16], `mode` (`tap`/`down`/`up`) | for keys decided by agent regions (long-press → key, macros). Rate-limited. |
 | `pong` | `nonce` | |

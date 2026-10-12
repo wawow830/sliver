@@ -123,6 +123,16 @@ Durations (default 30s and 60s), or
 .TP
 .BR pixel\-shift " = " true | false
 .TP
+.BR curve " = " [[ \fIscreen\fP ", " \fIbar\fP "], ...]"
+How adaptive brightness maps the main screen's brightness to the bar's.
+Both are fractions from 0 to 1 (of the screen's maximum, and of
+.BR max\-brightness ),
+with 2 to 16 points and the screen values strictly increasing.
+Between points the bar follows a straight line, and beyond the first and last point it stays flat.
+Left out, the bar follows tiny\-dfr's square\-root curve.
+For example, a bar that stays readable on a dark screen:
+.BR "curve = [[0, 0.2], [0.5, 0.6], [1, 1]]" .
+.TP
 .B [display.on\-battery]
 .BR max\-brightness ,
 .B dim\-after
