@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sliver_api::identity::RealProc;
-use sliver_api::registry::{ContextId, Focus};
+use sliver_api::registry::{AppPolicy, AppSource, ContextId, Focus, Policy};
 use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};
 
 /// How long a D-Bus `Control1` call waits for the agent core.
@@ -149,6 +149,13 @@ impl ApiLink {
         }
     }
 
+    /// The user's preferences for published items (`[apps]`, `[providers]`, `[api]`). Call it at
+    /// startup and on every config reload.
+    pub fn set_policy(&self, policy: Policy) {
+        self.api.state().policy = policy;
+        self.host.changed();
+    }
+
     /// Focus from our own compositor backend (GNOME/KDE push theirs over `Desktop1`).
     pub fn set_focus(&self, focus: Focus) {
         self.api.set_focus(focus);
@@ -163,5 +170,103 @@ impl ApiLink {
         if let Err(e) = zbus::block_on(self.api.interact(context, item, what)) {
             eprintln!("sliver-agent: event to {item}: {e}");
         }
+    }
+}
+
+/// `[apps."<app-id>"]`, `[providers."<id>"]` and `[api]` (customization.md §6b) as the API
+/// registry's [`Policy`] (api.md §4).
+pub fn policy_from_config(config: &sliver_config::Config) -> Policy {
+    let app = |p: sliver_config::AppPolicy| AppPolicy {
+        source: match (p.controls, p.pin) {
+            (false, _) => AppSource::Disabled,
+            (true, Some(provider)) => AppSource::Provider(provider),
+            (true, None) => AppSource::Auto,
+        },
+        allow_modal: p.whole_bar,
+    };
+    let mut per_app: std::collections::HashMap<String, AppPolicy> = config
+        .apps
+        .keys()
+        .filter(|k| k.as_str() != "*")
+        .map(|k| {
+            (
+                k.trim_end_matches(".desktop").to_owned(),
+                app(config.app_policy(k)),
+            )
+        })
+        .collect();
+    // The defaults every other app gets (`app_policy` of an unlisted id = `"*"` + built-ins).
+    per_app.insert("*".into(), app(config.app_policy("*")));
+    let mut ordered: Vec<(i64, &String)> = config
+        .providers
+        .iter()
+        .filter_map(|(id, p)| p.order.map(|o| (o, id)))
+        .collect();
+    ordered.sort();
+    Policy {
+        allow_app: true,
+        allow_target: config.api.target,
+        per_app,
+        hidden_providers: config
+            .providers
+            .iter()
+            .filter(|(_, p)| !p.show)
+            .map(|(id, _)| id.clone())
+            .collect(),
+        status_order: ordered.into_iter().map(|(_, id)| id.clone()).collect(),
+        sandbox_status_allowed: config
+            .providers
+            .iter()
+            .filter(|(_, p)| p.allow)
+            .map(|(id, _)| id.clone())
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_prefs_become_registry_policy() {
+        let loaded = sliver_config::load_str(
+            r#"
+version = 1
+[apps."*"]
+whole-bar = false
+[apps."org.mozilla.firefox.desktop"]
+pin = "org.example.FxTabs"
+[apps.foot]
+controls = false
+whole-bar = true
+[providers."org.example.Noisy"]
+show = false
+[providers."org.flat.App"]
+allow = true
+order = 2
+[providers."org.example.First"]
+order = 1
+[api]
+target = false
+"#,
+            std::path::Path::new("."),
+        );
+        assert!(
+            loaded.diagnostics.errors.is_empty(),
+            "{:?}",
+            loaded.diagnostics.errors
+        );
+        let p = policy_from_config(&loaded.config);
+        assert!(!p.allow_target);
+        let fx = p.for_app("org.mozilla.Firefox");
+        assert_eq!(fx.source, AppSource::Provider("org.example.FxTabs".into()));
+        assert!(!fx.allow_modal, "inherits whole-bar = false from \"*\"");
+        let foot = p.for_app("FOOT");
+        assert_eq!((foot.source, foot.allow_modal), (AppSource::Disabled, true));
+        let other = p.for_app("kitty");
+        assert_eq!((other.source, other.allow_modal), (AppSource::Auto, false));
+        assert!(p.hidden_providers.contains("org.example.Noisy"));
+        assert!(p.sandbox_status_allowed.contains("org.flat.App"));
+        assert_eq!(p.status_order, vec!["org.example.First", "org.flat.App"]);
     }
 }

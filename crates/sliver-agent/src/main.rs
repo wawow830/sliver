@@ -240,6 +240,9 @@ impl Reloader {
                     .iter()
                     .for_each(|w| eprintln!("sliver-agent: {src}: warning: {w}"));
                 live.restart_modules(&a.config);
+                if let Some(api) = &live.api {
+                    api.set_policy(sliver_agent::api::policy_from_config(&a.config));
+                }
                 if let Some(agent) = agent {
                     agent.config = a.config.clone();
                     agent.sheet = a.sheet.clone();
@@ -299,6 +302,9 @@ impl Live {
                 None
             }
         };
+        if let Some(api) = &api {
+            api.set_policy(sliver_agent::api::policy_from_config(config));
+        }
         let mut feeds = Feeds::new()?;
         feeds.start_desktop(|k| std::env::var(k).ok());
         feeds.start_session();
