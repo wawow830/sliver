@@ -372,6 +372,12 @@ backlight (`apple-panel-bl`, max 509) makes the kernel send a backlight `change`
 (`SOURCE=sysfs`); sliverd's udev monitor picks it up and re-applies the bar. Measured: screen
 56 → 228 → 56 moved the bar 43 → 87 → 43 (tiny-dfr's `sqrt(screen) * 128 + 1`) with no touch.
 
+**P0 sweep (T72):** idle dim at 30 s and off at 60 s after the last seat0 activity; the first tap
+on the dark bar only wakes it, the next one fires (H45). Key repeat: `sliver-hwprobe --hold-key 114
+600` holds volume-down through the uinput keyboard; Hyprland (repeat 250 ms / 35 Hz, `repeating`
+bind) took the volume 0.22 → 0.00, i.e. ≥11 presses (H48). Repeat is the compositor's job: sliverd
+sends key-down on touch and key-up on release.
+
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
 

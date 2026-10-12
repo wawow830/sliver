@@ -41,6 +41,8 @@ struct Opts {
     touchviz: Option<u64>,
     udev_listen: Option<u64>,
     power_cycle: Option<u64>,
+    /// `(code, ms)`: hold one key down through the uinput keyboard (key-repeat check).
+    hold_key: Option<(u16, u64)>,
 }
 
 fn parse_args() -> Result<Opts, String> {
@@ -60,9 +62,21 @@ fn parse_args() -> Result<Opts, String> {
             "--touchviz" => o.touchviz = Some(num("--touchviz")?.min(120)),
             "--udev-listen" => o.udev_listen = Some(num("--udev-listen")?.min(600)),
             "--power-cycle" => o.power_cycle = Some(num("--power-cycle")?.clamp(2, 60)),
+            "--hold-key" => {
+                let code = num("--hold-key CODE")?;
+                let ms = num("--hold-key CODE MS")?.min(3000);
+                // Only reversible keys: volume and screen brightness up/down.
+                if ![114, 115, 224, 225].contains(&code) {
+                    return Err(
+                        "--hold-key only takes 114/115 (volume) or 224/225 (brightness)".into(),
+                    );
+                }
+                o.hold_key = Some((code as u16, ms));
+            }
             "-h" | "--help" => {
                 println!(
-                    "usage: sliver-hwprobe [--sysfs-only] [--draw S] [--touch S] [--backlight N] [--touchviz S]"
+                    "usage: sliver-hwprobe [--sysfs-only] [--draw S] [--touch S] [--backlight N] [--touchviz S] \
+                     [--udev-listen S] [--power-cycle S] [--hold-key CODE MS]"
                 );
                 std::process::exit(0);
             }
@@ -70,6 +84,23 @@ fn parse_args() -> Result<Opts, String> {
         }
     }
     Ok(o)
+}
+
+/// Holds `code` down for `ms` through sliverd's uinput keyboard ("Sliver Touch Bar Keys"), the
+/// way a finger resting on a key button does. Whether it repeats is the compositor's call.
+fn hold_key(code: u16, ms: u64) -> std::io::Result<()> {
+    let mut k = sliver_hw::uinput::UinputKeys::create()?;
+    // Give the compositor time to pick the new keyboard up before the first event.
+    std::thread::sleep(Duration::from_millis(1500));
+    let t = Instant::now();
+    k.key(code, true);
+    k.sync()?;
+    std::thread::sleep(Duration::from_millis(ms));
+    k.key(code, false);
+    k.sync()?;
+    println!("hold-key: {code} held {} ms", t.elapsed().as_millis());
+    std::thread::sleep(Duration::from_millis(300));
+    Ok(())
 }
 
 fn main() {
@@ -116,6 +147,15 @@ fn main() {
         std::env::var("SLIVER_OUT_DIR").ok(),
         sliver_hw::listen_fd("backlight")
     );
+
+    if let Some((code, ms)) = opts.hold_key {
+        if let Err(e) = hold_key(code, ms) {
+            println!("hold-key: ERROR {e}");
+            std::process::exit(1);
+        }
+        println!("== done");
+        return;
+    }
 
     if let Some(secs) = opts.power_cycle {
         let r = match &card {
