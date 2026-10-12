@@ -100,8 +100,12 @@ waits up to 2 s for the answer, so the core stays single-threaded.
   placeholder wins (and also sends the app event with `pass-through`).
 - After each render the drawn contexts go to `OnScreen`, and sliverd's display state to the
   API. `Control1`: layer switch/push/pop/toggle, signal, refresh, trigger, bar show/hide/toggle,
-  variables, preview PNGs, config validation, the module list. Not yet: layout, profile,
-  reload (T26), per-module show/hide, `update`.
+  variables, preview PNGs, config validation, the module list, `SetLayout` (also the `layout`
+  action: a config copy whose current layer shows that layout; empty name = back to rules),
+  per-module show/hide/toggle/reset (runtime only), and `Update` (output pushed to exec-less
+  custom modules). Not yet: profiles, reload (T26).
+- Modal app contexts cover every zone but the user's first and get a × that sends `CloseModal`
+  (`bar.modal`, `zone.zone-modal`, `#modal-close`).
 
 Tests: `tests/api.rs` runs the agent with the API on a private `dbus-daemon` and a real client
 (publish → render → tap/drag → `Event` signals).
@@ -113,5 +117,5 @@ Works: everything above, plus `--render` and the real sliverd loop. Verified end
 Previews: `World::sample(now)` (sample battery, volume, brightness, now playing, window) with
 `preview = true` draws empty App controls / Status items as outlined `.placeholder` cells.
 
-Not yet: modal app contexts covering the bar, `workspaces`/`taskbar`/`notifications`/`cpu`…
+Not yet: `workspaces`/`taskbar`/`notifications`/`cpu`…
 modules, the `layout` action, hot reload (T26).

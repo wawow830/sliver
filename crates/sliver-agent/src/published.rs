@@ -72,11 +72,44 @@ pub enum PubKind {
     },
     /// One segment of a segmented control.
     Segment(i32),
+    /// The ✕ that closes a modal context.
+    Close,
 }
 
 fn color(s: &Option<String>) -> Option<Color> {
     let c = sliver_render::markup::color(s.as_deref()?)?;
     Some(Color::rgba(c[0], c[1], c[2], c[3]))
+}
+
+/// The ✕ at the end of a modal context (api.md §4).
+pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
+    let icon = icons.get("window-close-symbolic", None, icon_size);
+    Cell {
+        key: format!("modal/{}#close", ctx.provider),
+        id: format!("app/{}#close", ctx.provider),
+        kind: "app".into(),
+        mic: false,
+        css_id: "modal-close".into(),
+        classes: vec!["app".into(), "modal-close".into()],
+        width: Width::Auto,
+        content: icon.map_or_else(|| Content::Text("×".into()), Content::Icon),
+        touch: Touch::Agent,
+        on: Vec::new(),
+        next_change: None,
+        pressed: false,
+        checked: false,
+        disabled: false,
+        drawer: None,
+        foreground: None,
+        background: None,
+        published: Some(PubRef {
+            context: ctx.id,
+            item: String::new(),
+            kind: PubKind::Close,
+            gestures: Vec::new(),
+        }),
+        pass_through: false,
+    }
 }
 
 /// Cells for a context's items. `class` is `app` or `status`; `focused` adds `.focused-app`.

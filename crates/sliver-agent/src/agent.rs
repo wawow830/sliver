@@ -101,6 +101,12 @@ pub struct Agent {
     pub errors: Vec<String>,
     /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
     pub hidden: bool,
+    /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
+    pub hidden_modules: std::collections::BTreeSet<String>,
+    /// `sliverctl layout NAME`: a copy of the config whose current layers show that layout.
+    layout_override: Option<(String, Config)>,
+    /// `sliverctl update MODULE …`: output pushed to exec-less custom modules.
+    pub pushed: HashMap<String, sliver_modules::Output>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +158,9 @@ impl Agent {
             drag: HashMap::new(),
             pub_drag: HashMap::new(),
             hidden: false,
+            hidden_modules: Default::default(),
+            layout_override: None,
+            pushed: HashMap::new(),
             errors: Vec::new(),
         }
     }
@@ -189,7 +198,11 @@ impl Agent {
         let mut out = Vec::new();
         let base = self.base_layer().to_owned();
         for (layer, name) in [(Layer::Base, base.as_str()), (Layer::Fn, "fn")] {
-            match self.config.resolve(name, &self.ctx) {
+            let config = self
+                .layout_override
+                .as_ref()
+                .map_or(&self.config, |(_, c)| c);
+            match config.resolve(name, &self.ctx) {
                 Ok(mut r) => {
                     if self.hidden && layer == Layer::Base {
                         r.zones.iter_mut().for_each(|z| z.modules.clear());
@@ -210,12 +223,62 @@ impl Agent {
     }
 
     fn build(&mut self, r: &Resolved, world: &World, id_base: u32) -> Frame {
+        let mut world_pushed;
+        let world = if self.pushed.is_empty() {
+            world
+        } else {
+            world_pushed = world.clone();
+            for (k, v) in &self.pushed {
+                world_pushed
+                    .outputs
+                    .entry(k.clone())
+                    .or_insert_with(|| v.clone());
+            }
+            &world_pushed
+        };
+        // A modal app context covers everything but the user's first zone (api.md §4).
+        let modal = (id_base == 0 && world.published.modal)
+            .then(|| world.published.app.clone())
+            .flatten();
+        let mut zones = r.zones.clone();
+        if modal.is_some() && !zones.is_empty() {
+            zones.truncate(1);
+            zones.push(sliver_config::ResolvedZone {
+                name: "modal".into(),
+                width: sliver_config::Width::Fill(1),
+                align: sliver_config::Align::Start,
+                class: vec!["modal".into()],
+                modules: Vec::new(),
+            });
+        }
         let ui = &self.ui;
         let lookup = |k: &str| ui.get(k).cloned().unwrap_or_default();
-        let per_zone: Vec<Vec<Cell>> = r
-            .zones
+        let hidden = &self.hidden_modules;
+        let per_zone: Vec<Vec<Cell>> = zones
             .iter()
             .map(|z| {
+                if z.name == "modal"
+                    && let Some(ctx) = &modal
+                {
+                    let mut cells = Vec::new();
+                    crate::published::cells(
+                        ctx,
+                        "app",
+                        true,
+                        &mut self.icons,
+                        ICON_LOOKUP_SIZE,
+                        &mut cells,
+                    );
+                    cells.push(crate::published::close_cell(
+                        ctx,
+                        &mut self.icons,
+                        ICON_LOOKUP_SIZE,
+                    ));
+                    for c in &mut cells {
+                        c.pressed = self.pressed.contains(&c.key);
+                    }
+                    return cells;
+                }
                 let mut cells = Vec::new();
                 modules::cells(
                     &z.modules,
@@ -225,14 +288,18 @@ impl Agent {
                     &lookup,
                     &mut cells,
                 );
+                cells.retain(|c| !hidden.contains(&c.id) && !hidden.contains(&c.key));
                 for c in &mut cells {
                     c.pressed = self.pressed.contains(&c.key);
                 }
                 cells
             })
             .collect();
-        let classes = vec![format!("layer-{}", r.layer), format!("layout-{}", r.layout)];
-        let scene = frame::scene(&r.zones, &per_zone, classes);
+        let mut classes = vec![format!("layer-{}", r.layer), format!("layout-{}", r.layout)];
+        if modal.is_some() {
+            classes.push("modal".into());
+        }
+        let scene = frame::scene(&zones, &per_zone, classes);
         let cells = per_zone.into_iter().flatten().collect();
         frame::render(
             &mut self.renderer,
@@ -571,6 +638,13 @@ impl Agent {
                 c.interface.clone(),
                 c.method.clone(),
             ])),
+            Action::Layout(name) => match self.set_layout(name) {
+                Ok(()) => {
+                    fx.extend(self.cancel_touches());
+                    fx.push(Effect::Redraw);
+                }
+                Err(e) => fx.push(Effect::Log(format!("layout: {e}"))),
+            },
             Action::Signal(n) => fx.push(Effect::Signal(*n)),
             Action::Update(m) => fx.push(Effect::Update(m.clone())),
             Action::ModuleAction(name) => {
@@ -585,6 +659,29 @@ impl Agent {
 }
 
 impl Agent {
+    /// `Control1.SetLayout`: show `layout` on the current base layer until the next call (an
+    /// empty name goes back to the rules).
+    pub fn set_layout(&mut self, layout: &str) -> Result<(), String> {
+        if layout.is_empty() {
+            self.layout_override = None;
+            return Ok(());
+        }
+        self.config
+            .layout_zones(layout)
+            .map_err(|e| e.to_string())?;
+        let layer = self.base_layer().to_owned();
+        let mut c = self.config.clone();
+        c.layers.insert(layer.clone(), layout.to_owned());
+        c.rules.retain(|r| r.layer != layer);
+        self.layout_override = Some((layout.to_owned(), c));
+        Ok(())
+    }
+
+    /// The layout forced by [`Agent::set_layout`], if any.
+    pub fn layout_override(&self) -> Option<&str> {
+        self.layout_override.as_ref().map(|(n, _)| n.as_str())
+    }
+
     /// Runs an action that didn't come from a touch (D-Bus `Control1`, sliverctl).
     pub fn run_action(&mut self, a: &Action, now: u64, fx: &mut Vec<Effect>) {
         self.execute(a, None, None, now, fx);
@@ -732,6 +829,8 @@ impl Agent {
             }
         }
         match (p.kind, ag) {
+            (PubKind::Close, AG::Tap) => send(I::CloseModal, fx),
+            (PubKind::Close, _) => {}
             (PubKind::Segment(i), AG::Tap) => send(I::Select(i), fx),
             (PubKind::Slider { .. }, AG::Tap) => {}
             _ => send(I::Gesture(ag), fx),

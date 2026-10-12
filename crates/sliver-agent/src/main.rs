@@ -508,7 +508,65 @@ fn control(agent: &mut Agent, live: &mut Live, req: Control) -> (Reply, Vec<Effe
             ))
         }
         Control::ListModules => Ok(ControlReply::Modules(agent.list_modules())),
-        other => Err(format!("not supported yet: {other:?}")),
+        Control::SetLayout(name) => match agent.set_layout(&name) {
+            Ok(()) => {
+                fx.push(Effect::Redraw);
+                done
+            }
+            Err(e) => Err(e),
+        },
+        Control::Hide(m) | Control::Show(m) | Control::Toggle(m) if m.is_empty() => {
+            Err("which module?".into())
+        }
+        Control::Hide(m) => {
+            agent.hidden_modules.insert(m);
+            fx.push(Effect::Redraw);
+            done
+        }
+        Control::Show(m) => {
+            agent.hidden_modules.remove(&m);
+            fx.push(Effect::Redraw);
+            done
+        }
+        Control::Toggle(m) => {
+            if !agent.hidden_modules.remove(&m) {
+                agent.hidden_modules.insert(m);
+            }
+            fx.push(Effect::Redraw);
+            done
+        }
+        Control::ResetVisibility => {
+            agent.hidden_modules.clear();
+            fx.push(Effect::Redraw);
+            done
+        }
+        Control::Update(module, props) => {
+            use sliver_api::item::Prop;
+            let out = agent.pushed.entry(module).or_default();
+            for (k, v) in props {
+                match (k.as_str(), v) {
+                    ("text", Prop::Str(s)) => out.text = s,
+                    ("icon", Prop::Str(s)) => out.icon = Some(s),
+                    ("alt", Prop::Str(s)) => out.alt = Some(s),
+                    ("class", Prop::Str(s)) => {
+                        out.classes = s.split_whitespace().map(str::to_owned).collect()
+                    }
+                    ("percentage", Prop::Num(n)) => out.percentage = Some(n),
+                    ("percentage", Prop::Int(n)) => out.percentage = Some(n as f64),
+                    ("value", Prop::Num(n)) => out.value = Some(n),
+                    ("value", Prop::Int(n)) => out.value = Some(n as f64),
+                    ("hidden", Prop::Bool(b)) => out.hidden = b,
+                    ("tooltip" | "detail", Prop::Str(s)) => out.detail = Some(s),
+                    (k, _) => {
+                        return (Err(format!("unknown or mistyped output field {k:?}")), fx);
+                    }
+                }
+            }
+            fx.push(Effect::Redraw);
+            done
+        }
+        Control::SetProfile(_) => Err("profiles aren't supported yet".into()),
+        Control::ReloadConfig => Err("reload isn't wired yet (T26); restart the agent".into()),
     };
     (reply, fx)
 }

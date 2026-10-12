@@ -303,3 +303,125 @@ fn published_items_end_to_end() {
     }
     assert!(kinds.iter().any(|k| k.starts_with("zoom:")), "{kinds:?}");
 }
+
+#[test]
+fn modal_context_covers_the_bar_and_closes() {
+    let Some(bus) = bus() else {
+        eprintln!("dbus-daemon not installed; skipping");
+        return;
+    };
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.addr.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let api = ApiLink::serve(conn, true).unwrap();
+    let app = zbus::blocking::connection::Builder::address(bus.addr.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let app_events = events(&app);
+    let path: OwnedObjectPath = app
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_TOUCHBAR),
+            "CreateContext",
+            &(opts(&[
+                ("provider", Value::from("org.example.Picker")),
+                ("modal", Value::from(true)),
+            ]),),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    let items = vec![opts(&[
+        ("id", Value::from("pick")),
+        ("type", Value::from("segmented")),
+        (
+            "segments",
+            Value::from(
+                ["Red", "Green", "Blue"]
+                    .map(|l| opts(&[("label", Value::from(l))]))
+                    .to_vec(),
+            ),
+        ),
+        ("selected", Value::from(1i32)),
+    ])];
+    let _: Vec<String> = app
+        .call_method(
+            Some(BUS_NAME),
+            path.as_str(),
+            Some(IFACE_CONTEXT),
+            "SetItems",
+            &(items,),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    api.set_focus(Focus {
+        window: Some(Window {
+            class: "picker".into(),
+            pid: Some(std::process::id()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut world = World::at(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 0).unwrap());
+    world.published = Published::snapshot(&api.api);
+    assert!(world.published.modal, "{:?}", world.published);
+
+    let loaded = sliver_config::load_str("", std::path::Path::new("."));
+    let mut a = Agent::new(
+        loaded.config,
+        Stylesheet::sliver(),
+        Renderer::new(Fonts::embedded()),
+        Icons::builtin_only(),
+        2008,
+        60,
+    );
+    a.render(&world);
+    let f = a.frame(Layer::Base).unwrap();
+    check("api-modal", &f.image);
+    let keys: Vec<&str> = f.cells.iter().map(|c| c.key.as_str()).collect();
+    assert_eq!(keys.len(), 4, "3 segments + close, nothing else: {keys:?}");
+    assert!(f.cells[1].checked, "selected segment");
+
+    // Tap the ✕ (simulated): the app is told, and the context stops being shown.
+    let close = f
+        .cells
+        .iter()
+        .position(|c| c.key.ends_with("#close"))
+        .unwrap() as u32
+        + 1;
+    let fx = a.touch(close, 0, TouchPhase::Down, 1.0, 0);
+    let mut fx2 = a.touch(close, 0, TouchPhase::Up, 1.0, 1000);
+    fx2.extend(fx);
+    for e in &fx2 {
+        if let Effect::Api {
+            context,
+            item,
+            what,
+        } = e
+        {
+            api.interact(*context, item, *what);
+        }
+    }
+    assert!(
+        fx2.iter().any(|e| matches!(
+            e,
+            Effect::Api {
+                what: sliver_api::registry::Interaction::CloseModal,
+                ..
+            }
+        )),
+        "{fx2:?}"
+    );
+    let (_, kind, _) = app_events.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(kind, "closed");
+    world.published = Published::snapshot(&api.api);
+    assert!(world.published.app.is_none() || !world.published.modal);
+}

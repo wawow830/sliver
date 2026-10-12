@@ -516,3 +516,49 @@ fn transitions_wake_the_loop_only_while_animating() {
         "settled: the loop can sleep"
     );
 }
+
+#[test]
+fn runtime_layout_visibility_and_pushed_output() {
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        modules = ["custom/push", "clock"]
+        [modules."custom/push"]
+        format = "[{}]"
+        "#,
+    );
+    let w = world(9, 41);
+    a.pushed.insert(
+        "custom/push".into(),
+        sliver_modules::Output {
+            text: "pushed".into(),
+            ..Default::default()
+        },
+    );
+    a.render(&w);
+    let texts: Vec<String> = a
+        .frame(Layer::Base)
+        .unwrap()
+        .cells
+        .iter()
+        .map(|c| format!("{:?}", c.content))
+        .collect();
+    assert!(texts[0].contains("[pushed]"), "{texts:?}");
+
+    a.hidden_modules.insert("clock".into());
+    a.render(&w);
+    assert_eq!(a.frame(Layer::Base).unwrap().cells.len(), 1);
+
+    assert!(a.set_layout("nope").is_err());
+    a.set_layout("fkeys").unwrap();
+    a.render(&w);
+    assert_eq!(
+        a.frame(Layer::Base).unwrap().cells.len(),
+        12,
+        "fkeys on base"
+    );
+    a.set_layout("").unwrap();
+    a.render(&w);
+    assert_eq!(a.frame(Layer::Base).unwrap().cells.len(), 1);
+}
