@@ -14,3 +14,9 @@ is never left without Escape or the F-keys.
 
 Status: early. Built by a decentralized swarm of agents, with a human in the loop for root,
 hardware, taste and anything public.
+
+## License
+
+Sliver is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+option. Bundled third-party assets keep their own licenses (fonts: OFL-1.1, icons: Apache-2.0,
+see `crates/sliver-render/assets/`), and code derived from tiny-dfr keeps its MIT notice.

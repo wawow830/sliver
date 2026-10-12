@@ -38,8 +38,9 @@ Creating the COPR project is an `external` ask for the human. Chroots: `fedora-*
 (Asahi) and `fedora-*-x86_64` (t2linux).
 
 ## Still open
-- **License** (H27): the spec's `sliver_license` macro, the `LICENSE` file and the metainfo
-  `project_license`. The bundled-crate license list should then be refreshed from `%cargo_license_summary`.
+- **Bundled-crate licenses:** the spec's `bundled_licenses` is hand-written. Refresh it when
+  dependencies change: `RUSTC_BOOTSTRAP=1 cargo tree -Zavoid-dev-deps --workspace --edges=no-build,no-dev,no-proc-macro --target=all --prefix=none --format '# {l}' | sort -u`
+  (`cargo2rpm license-summary` needs the vendored tree). Sliver itself: MIT OR Apache-2.0 (H27).
 - **D-Bus activation** of the agent (T36): `Type=dbus` + `packaging/dbus/io.github.wawow830.Sliver.service`
   once the agent owns the bus name. There's a marked line in the spec.
 - **SELinux:** sliverd runs `unconfined_service_t` (like tiny-dfr). It needs nothing beyond standard

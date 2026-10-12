@@ -1,10 +1,11 @@
 # Sliver: the Touch Bar platform for Linux Macs. Built from a git snapshot plus a cargo vendor
 # tarball (offline, so it works in mock/COPR). Local build: scripts/rpm-build. See docs/packaging.md.
 
-# Pending the human's license decision (H27). The only place to change it.
+# Sliver's own license (H27: MIT OR Apache-2.0, like most Rust projects).
 %global sliver_license MIT OR Apache-2.0
-# What the bundled crates add, filled from %%cargo_license_summary at the next spec refresh.
-%global bundled_licenses Apache-2.0 AND MIT AND (MIT OR Apache-2.0) AND Unicode-3.0 AND OFL-1.1 AND Zlib AND BSD-3-Clause AND ISC
+# Bundled crates (cargo tree --format '{l}', see docs/packaging.md) plus embedded assets
+# (Noto Sans: OFL-1.1, Material icons: Apache-2.0).
+%global bundled_licenses (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR GPL-2.0-only) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND BSD-2-Clause AND BSD-3-Clause AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Apache-2.0 OR LGPL-2.1-or-later) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT) AND Unicode-3.0 AND Zlib AND (Zlib OR Apache-2.0 OR MIT) AND OFL-1.1
 
 %bcond check 1
 
@@ -13,7 +14,7 @@ Version:        0.1.0
 Release:        0.1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Touch Bar platform and customizer for Linux Macs
 URL:            https://github.com/wawow830/sliver
-License:        %{sliver_license} AND %{bundled_licenses}
+License:        (%{sliver_license}) AND %{bundled_licenses}
 Source0:        %{name}-%{version}.tar.gz
 Source1:        %{name}-%{version}-vendor.tar.xz
 
@@ -43,7 +44,7 @@ reachable. This metapackage installs the daemon, the session agent and the CLI.
 
 %package -n sliverd
 Summary:        Sliver Touch Bar system daemon
-License:        %{sliver_license} AND %{bundled_licenses}
+License:        (%{sliver_license}) AND %{bundled_licenses}
 %{?systemd_requires}
 Requires:       systemd-udev
 # The fallback when sliverd can't run (OnFailure=tiny-dfr.service, ADR-0005). The two coexist:
@@ -58,7 +59,7 @@ systemd hands the bar back to tiny-dfr.
 
 %package -n sliver-agent
 Summary:        Sliver Touch Bar session agent
-License:        %{sliver_license} AND %{bundled_licenses}
+License:        (%{sliver_license}) AND %{bundled_licenses}
 Requires:       sliverd = %{version}-%{release}
 
 %description -n sliver-agent
@@ -67,7 +68,7 @@ renders the bar and drives sliverd. It serves the public io.github.wawow830.Sliv
 
 %package -n sliverctl
 Summary:        Command-line control for the Sliver Touch Bar
-License:        %{sliver_license} AND %{bundled_licenses}
+License:        (%{sliver_license}) AND %{bundled_licenses}
 
 %description -n sliverctl
 sliverctl switches layers and profiles, edits and checks the config, publishes items from
@@ -75,7 +76,7 @@ scripts, and imports tiny-dfr and waybar configs.
 
 %package -n sliver-settings
 Summary:        Sliver Touch Bar settings app
-License:        %{sliver_license} AND %{bundled_licenses}
+License:        (%{sliver_license}) AND %{bundled_licenses}
 Requires:       sliver-agent = %{version}-%{release}
 
 %description -n sliver-settings
@@ -155,12 +156,12 @@ fi
 %systemd_user_preun sliver-agent.service
 
 %files
-%license LICENSE.dependencies cargo-vendor.txt
+%license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies cargo-vendor.txt
 %doc README.md GOAL.md docs/user-guide.md docs/api.md docs/customization.md docs/styling.md
 %doc examples
 
 %files -n sliverd
-%license LICENSE.dependencies
+%license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
 %doc docs/sliverd.md docs/decisions/0005-sliverd-system-integration.md
 %{_libexecdir}/sliverd
 %{_unitdir}/sliverd.service
@@ -168,18 +169,18 @@ fi
 %{_udevrulesdir}/99-z-sliverd.rules
 
 %files -n sliver-agent
-%license LICENSE.dependencies
+%license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
 %doc docs/agent.md
 %{_bindir}/sliver-agent
 %{_userunitdir}/sliver-agent.service
 %{_userpresetdir}/90-sliver.preset
 
 %files -n sliverctl
-%license LICENSE.dependencies
+%license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
 %{_bindir}/sliverctl
 
 %files -n sliver-settings
-%license LICENSE.dependencies
+%license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
 %{_bindir}/sliver-settings
 %{_datadir}/applications/io.github.wawow830.Sliver.Settings.desktop
 %{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
