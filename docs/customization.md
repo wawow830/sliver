@@ -340,6 +340,11 @@ edge-swipe-from-right = "notify-send hi"
   Per-layer options (`timeout`, `close-button`) go in `[layer-options.<name>]`.
 - **Rules:** `[[rules]]` with `name`, `when`, `layer` (default `base`) and `layout`. **First match
   top to bottom wins.** If none matches, the `[layers]` default is used.
+- **The lock screen** (T88): the built-ins have one rule, `when = { locked = true }` → layout
+  `locked` (media transport, brightness and volume sliders, mute, and Esc where there's no physical
+  Esc). Like any array, your own `rules` replace it. The settings app copies it along and puts new
+  rules below it, and `rules = []` means "no rules, not even that one". Privacy doesn't depend on
+  it either way (§9.4).
 - **Conditions** (`when`, here and on modules) form a table whose keys are context keys
   (integration.md §1; `app-id` and `app_id` are the same key). All keys must match. `any = [ {…},
   {…} ]` means at least one of the sub-tables matches, and `not = {…}` negates. A value can be:
@@ -428,8 +433,11 @@ These are the selectors sliver guarantees, mirroring waybar:
 3. **Touch targets** are advice, not an invariant: the validator *warns* when a module with an
    action is narrower than 80 px, and warns loudly below 60 px (birch, features.md §9). It never
    refuses.
-4. **Privacy while locked:** app items, `custom/*` output and notification text are never shown
-   on the lock screen, whatever the config says.
+4. **Privacy while locked:** app items (`app-controls`, `status-items`, `app/*`), `custom/*` output,
+   `graph`, notification text and window titles (`window`, `taskbar`) are never shown on the lock
+   screen, whatever the config says (`sliver_config::resolve::HIDDEN_WHILE_LOCKED`). By default,
+   notification text also stays off the bar while the screen is shared (`screencast`; the built-in
+   `[modules.notifications] when`, removable).
 5. **Power:** interval floor 100 ms, restart floor 1 s, script timeouts, and no busy loops.
 6. **Apps can't override the user's layout outside placeholders, and they can't block the hatch.**
    Modal app contexts never cover the user's first zone. A config error never reaches the bar

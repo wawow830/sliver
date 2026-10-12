@@ -165,16 +165,19 @@ impl Config {
     }
 
     fn is_builtin_block(&self, id: &ModuleId) -> bool {
-        // Blocks from builtin.toml stay valid even if the user's layouts no longer use them.
-        matches!(
-            id.to_string().as_str(),
-            "key/Esc#auto"
-                | "group/control-strip"
-                | "custom/expand"
-                | "backlight/slider"
-                | "audio/slider"
-                | "mpris"
-        )
+        // Blocks from builtin.toml stay valid even if the user's layouts no longer use them. Read
+        // from builtin.toml itself, so the list can't drift.
+        static NAMES: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+        NAMES
+            .get_or_init(|| {
+                crate::model::BUILTIN
+                    .parse::<toml::Table>()
+                    .ok()
+                    .and_then(|t| t.get("modules")?.as_table().cloned())
+                    .map(|m| m.keys().cloned().collect())
+                    .unwrap_or_default()
+            })
+            .contains(&id.to_string())
     }
 
     fn check_module(
@@ -329,10 +332,12 @@ impl Config {
                 .map(String::as_str)
                 .into_iter()
                 .collect();
+            // Lock-screen layouts don't count: F-keys aren't for typing a password, and the safe
+            // hatch still works there.
             s.extend(
                 self.rules
                     .iter()
-                    .filter(|r| r.layer == layer)
+                    .filter(|r| r.layer == layer && !r.when.requires_flag("locked"))
                     .map(|r| r.layout.as_str()),
             );
             s

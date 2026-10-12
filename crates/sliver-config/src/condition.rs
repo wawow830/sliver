@@ -182,6 +182,14 @@ impl Condition {
         Self::default()
     }
 
+    /// Whether this only matches when context flag `key` is true (`{ locked = true, … }`).
+    pub fn requires_flag(&self, key: &str) -> bool {
+        let key = canonical_key(key);
+        self.all
+            .iter()
+            .any(|(k, m)| *k == key && matches!(m, Matcher::Is(CtxValue::Bool(true))))
+    }
+
     pub fn parse(v: &Value, path: &str, d: &mut Diagnostics) -> Option<Condition> {
         match v {
             Value::Table(t) => Some(Self::parse_table(t, path, "", d)),

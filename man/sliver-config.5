@@ -234,6 +234,19 @@ Rules are checked top to bottom, and the first match wins.
 If none matches, the
 .B [layers]
 default applies.
+The built\-in rules are one lock\-screen rule,
+.B when = { locked = true }
+showing layout
+.B locked
+(media keys, brightness, volume, mute).
+Your own
+.B rules
+replace it, and
+.B rules = []
+removes it.
+Whatever the rules say, published app items,
+.B custom/
+output, notifications, window titles and the taskbar are never shown while the screen is locked.
 .SH CONDITIONS
 A condition
 .RB ( when ,

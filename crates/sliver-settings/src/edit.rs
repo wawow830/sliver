@@ -304,13 +304,8 @@ pub fn customize_for_app(
             &Value::String(base_layout.to_owned()),
         )?;
     }
-    let mut rules: Vec<Table> = match ed.get("rules")? {
-        Some(Value::Array(a)) => a
-            .into_iter()
-            .filter_map(|r| r.as_table().cloned())
-            .collect(),
-        _ => Vec::new(),
-    };
+    // The effective list (it may still be the built-in one), so the lock-screen rule survives.
+    let mut rules = rules(ed, merged)?;
     let already = rules
         .iter()
         .any(|r| r.get("layout").and_then(Value::as_str) == Some(&name));
@@ -321,8 +316,9 @@ pub fn customize_for_app(
         rule.insert("name".into(), Value::String(app_id.to_owned()));
         rule.insert("when".into(), Value::Table(when));
         rule.insert("layout".into(), Value::String(name.clone()));
-        // New app rules go first (ux.md §2: settings inserts by specificity; app rules are specific).
-        rules.insert(0, rule);
+        // New app rules go first (ux.md §2: settings inserts by specificity; app rules are
+        // specific), but below the lock-screen rule, which must keep winning.
+        rules.insert(top_slot(&rules), rule);
         ed.set_tables("rules", &rules)?;
     }
     Ok((
@@ -353,11 +349,27 @@ fn rule_label(r: &Table, i: usize) -> String {
         .map_or_else(|| format!("rules[{i}]"), str::to_owned)
 }
 
-/// Adds a rule at the top (new rules are usually the most specific, ux.md §2). Returns its index.
+/// Where new rules go: the top (they're usually the most specific, ux.md §2), below any leading
+/// lock-screen rules (`when = { locked = true }`), so an app's layout never shows while locked.
+fn top_slot(rules: &[Table]) -> usize {
+    rules
+        .iter()
+        .take_while(|r| {
+            r.get("when").and_then(Value::as_table).is_some_and(|w| {
+                w.iter().any(|(k, v)| {
+                    sliver_config::canonical_key(k) == "locked" && v.as_bool() == Some(true)
+                })
+            })
+        })
+        .count()
+}
+
+/// Adds a rule at the top, below lock-screen rules (see [`top_slot`]).
 pub fn add_rule(ed: &mut Editor, merged: &Table, rule: Table) -> Result<String, String> {
     let mut all = rules(ed, merged)?;
     let label = rule_label(&rule, 0);
-    all.insert(0, rule);
+    let at = top_slot(&all);
+    all.insert(at, rule);
     ed.set_tables("rules", &all)?;
     Ok(format!("Added rule {label}"))
 }
@@ -369,7 +381,8 @@ pub fn remove_rule(ed: &mut Editor, merged: &Table, index: usize) -> Result<Stri
     }
     let gone = all.remove(index);
     if all.is_empty() {
-        ed.remove("rules")?;
+        // `rules = []`, not no key: without the key the built-in rules (the lock screen) come back.
+        ed.set("rules", &Value::Array(Vec::new()))?;
     } else {
         ed.set_tables("rules", &all)?;
     }
@@ -602,12 +615,20 @@ mod tests {
                 .map(|r| r.name.clone().unwrap_or_default())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(names(&ed), ["terminals", "locked"]);
+        assert_eq!(
+            names(&ed),
+            ["locked", "terminals"],
+            "new rules go below the lock screen"
+        );
         let merged = ed.load().merged;
         move_rule(&mut ed, &merged, 1, -1).unwrap();
-        assert_eq!(names(&ed), ["locked", "terminals"]);
+        assert_eq!(
+            names(&ed),
+            ["terminals", "locked"],
+            "but can be moved by hand"
+        );
         let merged = ed.load().merged;
-        set_rule_key(&mut ed, &merged, 1, "layout", Some("media".into())).unwrap();
+        set_rule_key(&mut ed, &merged, 0, "layout", Some("media".into())).unwrap();
         let l = ed.load();
         assert!(l.diagnostics.ok(), "{:#?}", l.diagnostics);
         let ctx = Context::new().with("app_id", "kitty");
@@ -646,13 +667,27 @@ mod tests {
         assert_eq!(name, "firefox");
         let l = ed.load();
         assert!(l.diagnostics.ok(), "{:#?}", l.diagnostics);
-        assert_eq!(l.config.rules[0].layout, "firefox");
-        assert_eq!(l.config.rules[1].layout, "fkeys");
+        assert_eq!(
+            l.config.rules[0].layout, "fkeys",
+            "the lock-screen rule stays first"
+        );
+        assert_eq!(l.config.rules[1].layout, "firefox");
         let ctx = Context::new().with("app_id", "org.mozilla.firefox");
         assert_eq!(l.config.resolve("base", &ctx).unwrap().layout, "firefox");
+        let locked = ctx.clone().with("locked", true);
+        assert_eq!(l.config.resolve("base", &locked).unwrap().layout, "fkeys");
         // Doing it twice doesn't duplicate the rule.
         customize_for_app(&mut ed, &l.merged, "org.mozilla.firefox", "default").unwrap();
         assert_eq!(ed.load().config.rules.len(), 2);
         assert!(customize_for_app(&mut ed, &l.merged, "  ", "default").is_err());
+
+        // With no rules of the user's own, the built-in lock-screen rule is copied along, first.
+        let (mut ed, merged) = fresh("version = 1\n");
+        customize_for_app(&mut ed, &merged, "foot", "default").unwrap();
+        let l = ed.load();
+        let layouts: Vec<&str> = l.config.rules.iter().map(|r| r.layout.as_str()).collect();
+        assert_eq!(layouts, ["locked", "foot"]);
+        let ctx = Context::new().with("app_id", "foot").with("locked", true);
+        assert_eq!(l.config.resolve("base", &ctx).unwrap().layout, "locked");
     }
 }

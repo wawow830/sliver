@@ -50,6 +50,25 @@ modules = ["key/BrightnessDown", "key/BrightnessUp", "key/MicMute", "key/Search"
            "key/IllumDown", "key/IllumUp", "key/PreviousSong", "key/PlayPause",
            "key/NextSong", "key/Mute", "key/VolumeDown", "key/VolumeUp"]
 
+# --- locked: what the bar shows on the lock screen (ux.md §5) --------------------------------------
+# Like macOS: nothing that shows content (no app controls, titles, script output or notifications),
+# just media transport, brightness, volume and mute, plus Esc where the Mac has no physical one.
+# The rule below picks it; the agent also hides private content while locked whatever the layout
+# says (T87), so a hand-written [[rules]] list that drops this rule still doesn't leak.
+[[layouts.locked.zones]]
+name = "esc"
+modules = ["key/Esc#auto"]
+
+[[layouts.locked.zones]]
+name = "main"
+width = "fill"
+align = "center"
+modules = ["key/PreviousSong", "key/PlayPause", "key/NextSong"]
+
+[[layouts.locked.zones]]
+name = "controls"
+modules = ["backlight/slider#locked", "audio/slider#locked", "key/Mute"]
+
 # --- emoji: the picker strip (tabs, one page of emoji, close) --------------------------------------
 [[layouts.emoji.zones]]
 name = "esc"
@@ -94,3 +113,23 @@ hide-empty-text = true
 
 [modules."emoji#strip"]
 mode = "strip"
+
+# Notification text stays off the bar while the screen is shared: a camera or the person next to
+# you can see the bar (ux.md §5). Remove it with `when = {}` in your [modules.notifications].
+[modules.notifications]
+when = { not = { screencast = true } }
+
+# Expanded on the lock screen: there's room, and nothing to reveal.
+[modules."backlight/slider#locked"]
+collapsed = false
+
+[modules."audio/slider#locked"]
+collapsed = false
+
+# --- rules --------------------------------------------------------------------------------------
+# First match wins, so the lock screen comes first. Settings keeps new rules below it. Your own
+# [[rules]] list replaces this one (arrays replace): keep a locked rule first if you write one.
+[[rules]]
+name = "Locked screen"
+when = { locked = true }
+layout = "locked"

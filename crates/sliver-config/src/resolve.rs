@@ -13,6 +13,8 @@ use crate::values::{Align, Width};
 pub const MAX_DEPTH: usize = 8;
 
 /// Module types that never show while the session is locked (customization.md §9.4).
+/// Whatever the layout says: published items, script output, notification text, and window titles
+/// (a stale focus can still name the last window, e.g. an email subject).
 pub const HIDDEN_WHILE_LOCKED: &[&str] = &[
     "app-controls",
     "status-items",
@@ -20,6 +22,8 @@ pub const HIDDEN_WHILE_LOCKED: &[&str] = &[
     "custom",
     "graph",
     "notifications",
+    "window",
+    "taskbar",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -351,13 +355,46 @@ mod tests {
     }
 
     #[test]
-    fn privacy_while_locked() {
+    fn built_in_lock_screen_and_screencast() {
         let c = config(
-            r#"[modules."custom/vpn"]
+            r#"[[layouts.default.zones]]
+name = "main"
+modules = ["notifications", "clock"]"#,
+        );
+        let locked = Context::new()
+            .with("locked", true)
+            .with("physical_esc", true);
+        let r = c.resolve("base", &locked).unwrap();
+        assert_eq!(
+            r.layout, "locked",
+            "the built-in rule picks the lock-screen layout"
+        );
+        assert_eq!(
+            ids(&r),
+            [
+                vec![],
+                vec!["key/PreviousSong", "key/PlayPause", "key/NextSong"],
+                vec!["backlight/slider#locked", "audio/slider#locked", "key/Mute"],
+            ]
+        );
+        let sharing = Context::new().with("screencast", true);
+        assert_eq!(ids(&c.resolve("base", &sharing).unwrap()), [["clock"]]);
+        assert_eq!(
+            ids(&c.resolve("base", &Context::new()).unwrap()),
+            [["notifications", "clock"]]
+        );
+    }
+
+    #[test]
+    fn privacy_while_locked() {
+        // `rules = []` drops the built-in lock-screen rule: hiding must not depend on it.
+        let c = config(
+            r#"rules = []
+[modules."custom/vpn"]
 format = "vpn"
 [[layouts.default.zones]]
 name = "main"
-modules = ["custom/vpn", "clock", "app-controls"]"#,
+modules = ["custom/vpn", "clock", "app-controls", "window", "taskbar"]"#,
         );
         let r = c
             .resolve("base", &Context::new().with("locked", true))
