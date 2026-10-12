@@ -228,5 +228,5 @@ and whether the display is on, dimmed or off.
 Logs: `journalctl -u sliverd -b` (the daemon) and `journalctl --user -u sliver-agent` (config
 errors, failing scripts, compositor connection). For a debug log from the daemon, add
 `Environment=SLIVER_LOG=debug` in a runtime drop-in
-(`/run/systemd/system/sliverd.service.d/debug.conf`) and restart it. Run the agent by hand with
-`sliver-agent -v`.
+(`/run/systemd/system/sliverd.service.d/debug.conf`) and restart it. The agent logs everything it
+has to say to its journal already.
