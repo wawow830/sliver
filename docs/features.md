@@ -30,7 +30,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 | Wake on touch: the first touch on a dark bar only wakes it and doesn't fire an item | P0 | partial | dfr | Avoids accidental presses on a bar you can't see. **Now:** Implemented and tested headless; unverified on hardware. |
 | Headless renderer to PNG and simulated touch | P0 | done | (none) | Invariant 4. The settings preview uses the same renderer (ux.md). |
 | tiny-dfr config import (`/usr/share` + `/etc` merge) | P0 | done | dfr | Covers every dfr key: `MediaLayerDefault`, `ShowButtonOutlines`, `EnablePixelShift`, `FontTemplate`, `AdaptiveBrightness`, `ActiveBrightness`, `PrimaryLayerKeys`, `MediaLayerKeys` (Text/Icon/Theme/Time/Locale/Battery/Stretch/Action, key combos, spacers). |
-| Coexist with or replace tiny-dfr cleanly | P0 | partial | (none) | Packaging (systemd `Conflicts=`), restored by the safe-swap harness. **Now:** sliverd units, udev rules and the tiny-dfr fallback ladder exist (ADR-0005); the package is not installable yet. |
+| Coexist with or replace tiny-dfr cleanly | P0 | partial | (none) | Packaging (ExecStartPre= handover both ways), restored by the safe-swap harness. **Now:** sliverd units, udev rules and the tiny-dfr fallback ladder exist (ADR-0005); the RPM installs, and the first real start is being debugged (fallback to tiny-dfr verified on the real machine). |
 
 ## 2. Items and widgets
 

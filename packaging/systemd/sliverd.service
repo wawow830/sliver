@@ -10,12 +10,13 @@ Documentation=https://github.com/wawow830/sliver/blob/main/docs/sliverd.md
 Requires=sliverd.socket
 After=sliverd.socket systemd-user-sessions.service systemd-logind.service plymouth-quit.service dev-sliver_display.device
 BindsTo=dev-sliver_display.device
-# Exactly one daemon drives the bar. Ordering after tiny-dfr means its DRM master is released
-# before we open the card.
-Conflicts=tiny-dfr.service
-After=tiny-dfr.service
-# Restart=always retries quickly. If that hits the start limit, fall back to tiny-dfr (which
-# Conflicts= stops us for, so the two never fight). Clear it with `systemctl reset-failed sliverd`.
+# Exactly one daemon drives the bar, but NOT via Conflicts=tiny-dfr: that stops tiny-dfr as soon
+# as a start is queued, even one the start limit then refuses, and OnFailure= doesn't fire again
+# for an already-failed unit. That left the real bar dead once (a second `systemctl start sliverd`
+# after the fallback). Instead ExecStartPre below stops tiny-dfr only when a start really runs,
+# and tiny-dfr's drop-in (tiny-dfr.service.d/50-sliver.conf) stops us when it starts.
+# Restart=always retries quickly. If that hits the start limit, fall back to tiny-dfr. Clear it
+# with `systemctl reset-failed sliverd`.
 StartLimitIntervalSec=60
 StartLimitBurst=5
 OnFailure=tiny-dfr.service
@@ -25,6 +26,9 @@ Type=exec
 # sliver-hw refuses to open the bar outside the safe-swap harness unless this is set. Only this
 # unit sets it: OnFailure=tiny-dfr above is the safety net here.
 Environment=SLIVER_SYSTEM_UNIT=1
+# Blocking, so tiny-dfr has released DRM master before we open the card. Runs on every (re)start
+# that the start limit lets through, never on a refused one.
+ExecStartPre=+/usr/bin/systemctl stop tiny-dfr.service
 ExecStart=/usr/libexec/sliverd
 Sockets=sliverd.socket
 Restart=always

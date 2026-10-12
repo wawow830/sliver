@@ -21,6 +21,13 @@ grep -qx 'Environment=SLIVER_SYSTEM_UNIT=1' packaging/systemd/sliverd.service \
   || { echo "sliverd.service must set Environment=SLIVER_SYSTEM_UNIT=1"; exit 1; }
 ! grep -q 'SLIVER_SAFESWAP' packaging/systemd/sliverd.service \
   || { echo "sliverd.service must not set SLIVER_SAFESWAP"; exit 1; }
+# Conflicts=tiny-dfr stops the fallback even for starts the start limit refuses (left the real
+# bar dead once). The handover is ExecStartPre= in both directions; itest-units.sh tests it.
+! grep -q '^Conflicts=.*tiny-dfr' packaging/systemd/sliverd.service packaging/systemd/sliverd.socket \
+  || { echo "sliverd units must not use Conflicts=tiny-dfr (see sliverd.service)"; exit 1; }
+grep -q '^ExecStartPre=+-/usr/bin/systemctl stop sliverd.socket sliverd.service' \
+  packaging/systemd/tiny-dfr.service.d/50-sliver.conf \
+  || { echo "tiny-dfr drop-in must stop sliverd"; exit 1; }
 # sliverd units + udev rules (ADR-0005). Skipped where the tools are missing. Full behaviour test:
 # packaging/itest-units.sh (needs a user systemd manager, ~10 s).
 if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then

@@ -14,9 +14,14 @@ package, and hand the bar back when it can't run.
   overrides *only* `SYSTEMD_WANTS` on the digitizers (→ `sliverd.service`). tiny-dfr's T2 USB
   config switch and `/dev/tiny_dfr_*` aliases stay, so tiny-dfr can still start as a fallback.
   Removing our rule gives the bar back to tiny-dfr.
-- **Exactly one owner.** `sliverd.service` has `Conflicts=tiny-dfr.service` and is ordered
-  `After=` it, so tiny-dfr's DRM master is gone before sliverd opens the card. It's `BindsTo=` our
-  DRM alias `/dev/sliver_display`.
+- **Exactly one owner, handed over in `ExecStartPre=`, not `Conflicts=`.** `sliverd.service` runs
+  `ExecStartPre=+systemctl stop tiny-dfr.service` (blocking, so tiny-dfr's DRM master is gone before
+  sliverd opens the card), and our drop-in `tiny-dfr.service.d/50-sliver.conf` runs
+  `ExecStartPre=+-systemctl stop sliverd.socket sliverd.service`. It's `BindsTo=` our DRM alias
+  `/dev/sliver_display`. *Amended after the first real install:* the original `Conflicts=` stopped
+  tiny-dfr as soon as a start was queued, even one the start limit then refused, and `OnFailure=`
+  doesn't fire again for an already-failed unit. A second `systemctl start sliverd` after the
+  fallback left the bar with no daemon. ExecStartPre only runs for starts that really happen.
 - **Recovery ladder.** `Restart=always`, `RestartSec=500ms`, `RestartMode=direct` (no trip through
   `failed`), then `StartLimitBurst=5` in 60 s, then `OnFailure=tiny-dfr.service`. A crash costs
   ~0.5 s of bar. A crash loop costs ~3 s, then tiny-dfr. `systemctl reset-failed sliverd &&
@@ -24,8 +29,9 @@ package, and hand the bar back when it can't run.
   and lets systemd act.
 - **Socket.** `sliverd.socket` (`/run/sliver/sliverd.sock`, 0666, `FileDescriptorName=ipc`) comes up
   with the service (`Requires=`), not via `sockets.target`, so nothing starts sliverd on a Mac
-  without a Touch Bar. It also `Conflicts=tiny-dfr.service`, so a reconnecting agent can't pull
-  sliverd back after the fallback. sliverd authorises connections itself (seat0 active uid).
+  without a Touch Bar. tiny-dfr's drop-in stops it, so a reconnecting agent can't pull sliverd back
+  after the fallback (and after the start limit it couldn't anyway). Starting the socket alone
+  never touches tiny-dfr. sliverd authorises connections itself (seat0 active uid).
 - **No root.** `DynamicUser=yes` with `SupplementaryGroups=video input`: the card is `root:video
   0660`, and the input nodes plus `/dev/uinput` are `root:input 0660` (measured on Mac14,7). The bar
   backlight's `brightness` is root-only, so the udev rule gives it to group `video` (g+w), as
@@ -41,8 +47,10 @@ package, and hand the bar back when it can't run.
 - Any member of `video` can set the bar brightness. That's harmless, and it's the same trust as the DRM card.
 - Verified without root or hardware: `udevadm verify`, `systemd-analyze verify` (in `scripts/check`
   when available), and `packaging/itest-units.sh`. The itest runs the real `[Unit]` sections under
-  the user manager: crash loop → start limit → tiny-dfr, no early fallback, preemption both ways, and
-  no reactivation via the socket after the fallback.
+  the user manager with the real handover commands: crash loop → start limit → tiny-dfr, no early
+  fallback, preemption both ways, no reactivation via the socket after the fallback, a refused start
+  after the fallback leaving tiny-dfr up (fails on the old `Conflicts=` units), socket-only start,
+  and simultaneous starts (exactly one runs).
 - Installing the files is a `sudo` ask. The first boot with them is a `hardware` ask (watch the
   bar, confirm `systemctl status sliverd`, and check that the fallback works with
   `systemctl kill -s SEGV` ×6).

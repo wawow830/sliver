@@ -102,6 +102,8 @@ install -Dpm0644 packaging/systemd/sliverd.service %{buildroot}%{_unitdir}/slive
 install -Dpm0644 packaging/systemd/sliverd.socket %{buildroot}%{_unitdir}/sliverd.socket
 # `systemctl start sliver` works too (people type the project name).
 ln -s sliverd.service %{buildroot}%{_unitdir}/sliver.service
+install -Dpm0644 packaging/systemd/tiny-dfr.service.d/50-sliver.conf \
+    %{buildroot}%{_unitdir}/tiny-dfr.service.d/50-sliver.conf
 install -Dpm0644 packaging/udev/99-z-sliverd.rules %{buildroot}%{_udevrulesdir}/99-z-sliverd.rules
 install -Dpm0644 packaging/systemd/user/sliver-agent.service %{buildroot}%{_userunitdir}/sliver-agent.service
 install -Dpm0644 packaging/systemd/user-preset/90-sliver.preset %{buildroot}%{_userpresetdir}/90-sliver.preset
@@ -177,6 +179,8 @@ fi
 %{_unitdir}/sliverd.service
 %{_unitdir}/sliverd.socket
 %{_unitdir}/sliver.service
+%dir %{_unitdir}/tiny-dfr.service.d
+%{_unitdir}/tiny-dfr.service.d/50-sliver.conf
 %{_udevrulesdir}/99-z-sliverd.rules
 %{_mandir}/man8/sliverd.8*
 

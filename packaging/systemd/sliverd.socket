@@ -8,7 +8,6 @@
 [Unit]
 Description=Sliver Touch Bar daemon IPC socket
 Documentation=https://github.com/wawow830/sliver/blob/main/docs/api.md
-Conflicts=tiny-dfr.service
 
 [Socket]
 ListenSequentialPacket=/run/sliver/sliverd.sock

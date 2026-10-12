@@ -96,7 +96,8 @@ saves/restores the bar brightness across boots here.
 
 **For sliverd:** reuse the same seat rule (or ship our own equivalent), our own
 `SYSTEMD_WANTS`, the same `BindsTo` device aliases (use our own alias names), and
-`Conflicts=tiny-dfr.service`. Coexistence = exactly one of the two units wants the device.
+a handover so exactly one runs (ADR-0005: `ExecStartPre=` stops in both directions; `Conflicts=` turned
+out unsafe with a start limit). Coexistence = exactly one of the two units wants the device.
 
 ## How tiny-dfr works (v0.3.7, ~1800 lines, single-threaded)
 

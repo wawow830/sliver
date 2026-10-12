@@ -4,6 +4,10 @@
 #   1. sliverd keeps crashing → start limit → OnFailure starts tiny-dfr, the socket goes away
 #   2. tiny-dfr starting while sliverd runs → sliverd (and its socket) stop
 #   3. after the fallback, an agent connecting can't reactivate sliverd
+#   5. after the fallback, `systemctl start sliverd` (refused: start limit) leaves tiny-dfr running
+#      (this left the real bar dead once, with Conflicts=)
+#   6. starting only the socket doesn't take the bar from tiny-dfr
+#   7. both started at once → exactly one runs
 # The real units' [Unit] sections are used as-is (renamed with a unique prefix). [Service] is
 # replaced by a stand-in, and device bindings are dropped (no devices in a user manager).
 set -euo pipefail
@@ -28,18 +32,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+prefix() {
+  sed -e "s/\bsliverd\.socket\b/$P-sliverd.socket/g" \
+      -e "s/\bsliverd\.service\b/$P-sliverd.service/g" \
+      -e "s/\btiny-dfr\.service\b/$P-tiny-dfr.service/g" \
+      -e 's|/usr/bin/systemctl |/usr/bin/systemctl --user |'
+}
 # [Unit] of the real file, with names prefixed and device bindings removed.
 unit_section() {
-  sed -n '/^\[Unit\]/,/^\[/p' "$1" | sed '$!b;/^\[/d' \
-    | sed -e "s/\bsliverd\.socket\b/$P-sliverd.socket/g" \
-          -e "s/\bsliverd\.service\b/$P-sliverd.service/g" \
-          -e "s/\btiny-dfr\.service\b/$P-tiny-dfr.service/g" \
-          -e '/^BindsTo=dev-/d' -e 's/ dev-sliver_display\.device//'
+  sed -n '/^\[Unit\]/,/^\[/p' "$1" | sed '$!b;/^\[/d' | prefix \
+    | sed -e '/^BindsTo=dev-/d' -e 's/ dev-sliver_display\.device//'
 }
+# The real handover commands (ExecStartPre=), prefixed and pointed at the user manager.
+handover() { { grep -E '^ExecStartPre=' "$1" || true; } | prefix; }
 
 write_sliverd() { # $1 = ExecStart
   { unit_section packaging/systemd/sliverd.service
     printf '[Service]\nType=exec\nExecStart=%s\nSockets=%s\n' "$1" "$P-sliverd.socket"
+    handover packaging/systemd/sliverd.service
     grep -E '^(Restart|RestartSec|RestartMode)=' packaging/systemd/sliverd.service
   } > "$DIR/$P-sliverd.service"
 }
@@ -47,8 +57,9 @@ write_sliverd() { # $1 = ExecStart
 { unit_section packaging/systemd/sliverd.socket
   printf '[Socket]\nListenSequentialPacket=%s\nFileDescriptorName=ipc\nRemoveOnStop=yes\n' "$SOCK"
 } > "$DIR/$P-sliverd.socket"
-printf '[Unit]\nDescription=fake tiny-dfr\n[Service]\nExecStart=/usr/bin/sleep infinity\nRestart=always\n' \
-  > "$DIR/$P-tiny-dfr.service"
+{ printf '[Unit]\nDescription=fake tiny-dfr\n[Service]\nExecStart=/usr/bin/sleep infinity\nRestart=always\n'
+  handover packaging/systemd/tiny-dfr.service.d/50-sliver.conf
+} > "$DIR/$P-tiny-dfr.service"
 
 state() { systemctl --user is-active "$1" 2>/dev/null || true; }
 wait_for() { # unit state timeout_s
@@ -88,6 +99,12 @@ sleep 0.5
 wait_for "$P-tiny-dfr.service" active 1
 echo ok
 
+echo "== 5. a refused start after the fallback leaves tiny-dfr running"
+systemctl --user start "$P-sliverd.service" 2>/dev/null && { echo "FAIL: start not refused"; exit 1; }
+sleep 0.5
+wait_for "$P-tiny-dfr.service" active 1
+echo ok
+
 echo "== 2. tiny-dfr preempts a healthy sliverd"
 write_sliverd "/usr/bin/sleep infinity"; fresh
 systemctl --user start "$P-sliverd.service"
@@ -102,5 +119,28 @@ echo "== 4. sliverd preempts tiny-dfr (udev wants sliverd)"
 systemctl --user start "$P-sliverd.service"
 wait_for "$P-tiny-dfr.service" inactive 5
 wait_for "$P-sliverd.service" active 5
+echo ok
+
+echo "== 6. starting only the socket leaves tiny-dfr alone"
+systemctl --user start "$P-tiny-dfr.service"
+wait_for "$P-sliverd.service" inactive 5
+systemctl --user start "$P-sliverd.socket"
+sleep 0.5
+wait_for "$P-tiny-dfr.service" active 1
+echo ok
+
+echo "== 7. both started at once: one of them ends up driving the bar"
+for i in 1 2 3 4 5; do
+  fresh
+  case $i in
+    1|2) systemctl --user start --no-block "$P-sliverd.service" "$P-tiny-dfr.service" ;;
+    3) systemctl --user start --no-block "$P-sliverd.service"; systemctl --user start --no-block "$P-tiny-dfr.service" ;;
+    *) systemctl --user start --no-block "$P-tiny-dfr.service"; systemctl --user start --no-block "$P-sliverd.service" ;;
+  esac
+  sleep 1.5
+  a=$(state "$P-sliverd.service"); b=$(state "$P-tiny-dfr.service")
+  [[ "$a" == active || "$b" == active ]] || { echo "FAIL: neither runs (sliverd $a, tiny-dfr $b)"; exit 1; }
+  [[ "$a" != active || "$b" != active ]] || { echo "FAIL: both run"; exit 1; }
+done
 echo ok
 echo "itest-units: all ok"

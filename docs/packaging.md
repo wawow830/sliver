@@ -6,7 +6,7 @@ Owner: **hazel**. System integration design: ADR-0005. Files: `packaging/`, `scr
 | package | contents |
 |---|---|
 | `sliver` | metapackage: sliverd + sliver-agent + sliverctl, Recommends sliver-settings. Docs, examples, bundled-crate licenses |
-| `sliverd` | `/usr/libexec/sliverd`, `sliverd.{service,socket}` (+ alias `sliver.service`), `99-z-sliverd.rules`. Recommends `tiny-dfr` (fallback) |
+| `sliverd` | `/usr/libexec/sliverd`, `sliverd.{service,socket}` (+ alias `sliver.service`), `tiny-dfr.service.d/50-sliver.conf` (handover, ADR-0005), `99-z-sliverd.rules`. Recommends `tiny-dfr` (fallback) |
 | `sliver-agent` | `/usr/bin/sliver-agent`, user unit `sliver-agent.service` (`Type=dbus`), D-Bus activation file for `io.github.wawow830.Sliver`, user preset (enabled by default) |
 | `sliverctl` | `/usr/bin/sliverctl` |
 | `sliver-settings` | `/usr/bin/sliver-settings`, `.desktop`, AppStream metainfo |
@@ -30,7 +30,8 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full rel
   back to tiny-dfr (working dim/off, no OLED burn-in). Only without tiny-dfr installed does it run at a
   fixed brightness, logging a warning.
 - **No takeover at install.** sliverd's udev rule applies from the next boot (or the next digitizer
-  `add` event). Switch right away with `sudo systemctl start sliverd`, and `Conflicts=` stops tiny-dfr.
+  `add` event). Switch right away with `sudo systemctl start sliverd`: its `ExecStartPre=` stops tiny-dfr. Back with
+  `sudo systemctl start tiny-dfr` (the drop-in stops sliverd and its socket).
 - **Uninstall gives the bar back:** `%preun` stops sliverd, and `%postun` starts tiny-dfr (if it's
   installed) so Esc/F-keys don't wait for a reboot.
 - **Upgrade** restarts sliverd (`%systemd_postun_with_restart`), which costs ~0.5 s of bar. The agent
