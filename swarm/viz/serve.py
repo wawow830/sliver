@@ -57,12 +57,23 @@ def load_state():
 
 # ------------------------------------------------------------- live peer info (cached)
 
+IDLE_AFTER = 60     # stop polling herdr/git this long after the last page request
+FETCH_EVERY = 60    # git fetch at most this often while someone is watching
+
+
 class Live:
-    """Polls herdr in the background so page requests never block on it."""
+    """Polls herdr in the background so page requests never block on it.
+    Only while someone is watching: the page asks for a snapshot every few seconds."""
 
     def __init__(self):
         self.data, self.repo = {}, {}
+        self.seen, self.fetched = time.time(), 0.0  # poll for a minute after start, so the first page load has data
+        self.viewer = threading.Event()
         threading.Thread(target=self.loop, daemon=True).start()
+
+    def touch(self):
+        self.seen = time.time()
+        self.viewer.set()
 
     def peer(self, name):
         info = {"agent": None, "cost": None, "ctx": None, "activity": ""}
@@ -126,8 +137,10 @@ class Live:
         return {"loc": loc, "commits": int(commits or 0), "crates": crates}
 
     def loop(self):
-        n = 0
         while True:
+            if time.time() - self.seen > IDLE_AFTER:
+                self.viewer.clear()
+                self.viewer.wait()  # nobody watching: no herdr reads, no fetches
             try:
                 st = load_state()
                 names = [k for k, v in st.get("peers", {}).items() if v.get("status") != "gone"]
@@ -142,12 +155,12 @@ class Live:
                         if not v.get(key) and self.data.get(k, {}).get(key):
                             v[key] = self.data[k][key]
                 self.data = fresh
-                if n % 5 == 0:
+                if time.time() - self.fetched > FETCH_EVERY:
+                    self.fetched = time.time()
                     subprocess.run(["git", "fetch", "-q", "origin"], cwd=MAIN, capture_output=True, timeout=30)
                     self.repo = self.repo_stats()
             except Exception as e:
                 print("viz: live poll error:", repr(e))
-            n += 1
             time.sleep(3)
 
 
@@ -281,6 +294,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, f.read_bytes(), "font/otf")
             return self.send(404, b"font not installed", "text/plain")
         if path == "/api/snapshot":
+            LIVE.touch()
             return self.send(200, json.dumps(snapshot()).encode(), "application/json")
         if path == "/api/stream":
             self.send_response(200)
