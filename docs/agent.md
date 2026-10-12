@@ -71,7 +71,8 @@ stop while the display is off.
 
 Data modules: `battery` (tiny-dfr icons, states with lower-is-worse), `backlight`, `kbd-backlight`,
 `audio` (`node = "source"` for the mic), their `/slider` variants (`collapsed = true` shows just
-the icon until tapped, then closes after 5 s), `mpris` (values escaped as markup), `idle-inhibitor`,
+the icon until touched: it opens on press, and sliding without lifting moves the value relative to
+where it was; it closes 5 s after the last touch), `mpris` (values escaped as markup), `idle-inhibitor`,
 `power-profiles`, `language`, `window`, `mode`. Modules with no data are hidden. Format output is
 markup (waybar).
 

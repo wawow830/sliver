@@ -123,6 +123,8 @@ pub struct Agent {
     /// Macro steps and drawer closings due at a monotonic time (µs).
     scheduled: Vec<(u64, Scheduled)>,
     drag: HashMap<u32, DragState>,
+    /// Press-and-slide anchors per region: (finger x, slider value 0–100) when sliding began.
+    slide: HashMap<u32, (f32, f64)>,
     /// Published sliders being dragged: last value sent, by region.
     pub_drag: HashMap<u32, f64>,
     /// Problems resolving layers, for logging/status. Cleared on each render.
@@ -193,6 +195,7 @@ impl Agent {
             oneshot: None,
             scheduled: Vec::new(),
             drag: HashMap::new(),
+            slide: HashMap::new(),
             pub_drag: HashMap::new(),
             hidden: false,
             hidden_modules: Default::default(),
@@ -549,6 +552,33 @@ impl Agent {
                 if changed {
                     fx.push(Effect::RedrawPress);
                 }
+                if !on {
+                    self.slide.remove(&region);
+                }
+                return;
+            }
+            Gesture::Slide(x) => {
+                // The slider opened under the finger (press on its icon). Move the value by
+                // how far the finger slid, so touching it never jumps the value.
+                let f = self.frame_for(region).expect("cell came from a frame");
+                let i = f.cell_index(region).expect("cell came from a frame");
+                let (Some(t), sliver_render::Content::Slider { value, .. }) =
+                    (f.layout.tracks.get(i).copied().flatten(), &cell.content)
+                else {
+                    return; // Not open (yet): nothing to slide.
+                };
+                if t.w <= 0.0 {
+                    return;
+                }
+                let (x0, v0) = *self
+                    .slide
+                    .entry(region)
+                    .or_insert((x, (*value as f64 * 100.0).round()));
+                let v = (v0 + ((x - x0) / t.w) as f64 * 100.0)
+                    .clamp(0.0, 100.0)
+                    .round();
+                self.keep_drawer_open(&cell, now);
+                self.run_drag(region, Some(v), now, false, fx);
                 return;
             }
             Gesture::Drag(x) => {
@@ -561,6 +591,7 @@ impl Agent {
                     }
                     _ => x.round() as f64,
                 };
+                self.keep_drawer_open(&cell, now);
                 self.run_drag(region, Some(value), now, false, fx);
                 return;
             }
@@ -626,6 +657,23 @@ impl Agent {
             }
             _ => {}
         }
+    }
+
+    /// An auto-closing drawer (an opened collapsed slider) stays open while it's being used.
+    fn keep_drawer_open(&mut self, cell: &Cell, now: u64) {
+        let Some(d) = &cell.drawer else { return };
+        let Some(after) = d.collapse_after else {
+            return;
+        };
+        if !self.ui(&d.group).expanded {
+            return;
+        }
+        self.scheduled
+            .retain(|s| !matches!(&s.1, Scheduled::CloseDrawer(g) if *g == d.group));
+        self.scheduled.push((
+            now + after.as_micros() as u64,
+            Scheduled::CloseDrawer(d.group.clone()),
+        ));
     }
 
     /// Runs `on-drag` with `value` now if allowed, else keeps it pending. `flush` runs the
@@ -1173,6 +1221,13 @@ fn tool_exists(name: &str) -> bool {
 }
 
 /// What the recognizer should look for on this cell.
+/// A slider shown as just its icon until opened (`collapsed = true`).
+fn collapsed_slider(c: &Cell) -> bool {
+    c.kind.ends_with("/slider")
+        && c.drawer.is_some()
+        && !matches!(c.content, sliver_render::Content::Slider { .. })
+}
+
 fn bindings(c: &Cell) -> Bindings {
     if let Some(p) = &c.published {
         use sliver_api::item::Gesture as AG;
@@ -1190,6 +1245,7 @@ fn bindings(c: &Cell) -> Bindings {
                 || user(CGesture::SwipeRight),
             drag: slider,
             on_press: false,
+            slide: false,
             swipe_threshold: None,
         };
     }
@@ -1211,7 +1267,10 @@ fn bindings(c: &Cell) -> Bindings {
         release: has(CGesture::Release),
         swipe: has(CGesture::SwipeLeft) || has(CGesture::SwipeRight),
         drag: has(CGesture::Drag),
-        on_press: hold_layer
+        // A collapsed slider opens on press, so the same touch can slide it.
+        slide: collapsed_slider(c),
+        on_press: collapsed_slider(c)
+            || hold_layer
             || c.on
                 .iter()
                 .any(|(g, a)| *g == CGesture::Tap && matches!(a, Action::Key(_) | Action::Keys(_))),

@@ -27,6 +27,9 @@ pub struct Bindings {
     pub drag: bool,
     /// Fire `tap` on touch-down (keys, layer holds).
     pub on_press: bool,
+    /// Press-and-slide (collapsed sliders): once the finger moves past the slop, report
+    /// [`Gesture::Slide`] positions until it lifts.
+    pub slide: bool,
     pub swipe_threshold: Option<f32>,
 }
 
@@ -43,6 +46,9 @@ pub enum Gesture {
     SwipeRight,
     /// Finger position along the bar, in bar pixels.
     Drag(f32),
+    /// Like `Drag`, but for a press-and-slide: the finger started elsewhere (on a collapsed
+    /// slider's icon), so the position counts relative to where sliding began.
+    Slide(f32),
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +121,10 @@ impl Recognizer {
                 let dx = x - tc.start_x;
                 if tc.b.drag {
                     out.push((tc.region, Gesture::Drag(x)));
+                } else if tc.b.slide && (tc.moved || dx.abs() > SLOP_PX) {
+                    tc.moved = true;
+                    tc.hold_at = None;
+                    out.push((tc.region, Gesture::Slide(x)));
                 } else if dx.abs() > SLOP_PX && !tc.moved {
                     tc.moved = true;
                     tc.hold_at = None;
@@ -137,6 +147,9 @@ impl Recognizer {
                 if phase == TouchPhase::Up && tc.b.drag {
                     // Where the finger lifted is the final value.
                     out.push((tc.region, Gesture::Drag(x)));
+                }
+                if phase == TouchPhase::Up && tc.b.slide && tc.moved {
+                    out.push((tc.region, Gesture::Slide(x)));
                 }
                 out.push((tc.region, Gesture::Pressed(false)));
                 if phase == TouchPhase::Cancel {
@@ -281,6 +294,26 @@ mod tests {
         r.touch(R, db, 0, Down, 0.0, 1_000_000);
         r.touch(R, db, 0, Up, 0.0, 1_050_000);
         assert_eq!(r.tick(1_050_000 + DOUBLE_TAP_US), [(R, Tap)]);
+    }
+
+    #[test]
+    fn press_and_slide() {
+        let s = Bindings {
+            tap: true,
+            on_press: true,
+            slide: true,
+            ..Bindings::default()
+        };
+        let mut r = Recognizer::new();
+        // Opens on press; small jitter isn't a slide.
+        assert_eq!(only(r.touch(R, s, 1, Down, 10.0, 0)), [Tap]);
+        assert_eq!(only(r.touch(R, s, 1, Move, 13.0, 5)), []);
+        assert_eq!(only(r.touch(R, s, 1, Move, 30.0, 9)), [Slide(30.0)]);
+        assert_eq!(only(r.touch(R, s, 1, Move, 25.0, 12)), [Slide(25.0)]);
+        assert_eq!(only(r.touch(R, s, 1, Up, 26.0, 15)), [Slide(26.0)]);
+        // A plain tap stays a tap (opens) with no slide.
+        assert_eq!(only(r.touch(R, s, 1, Down, 10.0, 100)), [Tap]);
+        assert_eq!(only(r.touch(R, s, 1, Up, 11.0, 110)), []);
     }
 
     #[test]

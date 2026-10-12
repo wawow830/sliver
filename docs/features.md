@@ -86,7 +86,7 @@ we want, if the hardware allows them.
 | *(no pressure/force, no hover, no vertical swipes)* | n/a |  |  | The hardware reports none of these, and the bar is only 6 mm tall. Never design for them. |
 | Hold: key repeat for key buttons | P0 | done | (none) |  |
 | Long-press (≈500 ms, configurable) | P1 | done | MTMR longTap | Doesn't delay tap. Tap fires on release before the threshold. |
-| Press-and-slide on a collapsed slider | P1 | partial | mac | Touch the volume icon and slide without lifting. **Now:** Collapsed sliders open on tap and then drag; true press-and-slide without lifting is not verified. |
+| Press-and-slide on a collapsed slider | P1 | done | mac | Touch the volume icon and slide without lifting. **Now:** The slider opens on press and the same touch slides it, relative to the current value (the value never jumps to where the finger landed). Using it keeps it open; it closes 5 s after the last touch. Tested headless through sliverd's router; not yet on the real bar. |
 | Swipe left/right on an item | P1 | done | Pock, MTMR | Item scope. Paged widgets (workspaces, media). |
 | Double-tap | P2 | done | BTT | Off by default. When it's set, it delays that item's single tap. |
 | Two-finger swipe across the whole bar (→ volume/brightness/custom) | P2 | todo | MTMR swipe | MT slots exist (count pending). There's little room for 3+ fingers on a 6 mm strip, so ship two-finger only. |

@@ -472,6 +472,59 @@ fn session_modules() {
     );
 }
 
+/// Touch a collapsed slider's icon and slide without lifting: it opens under the finger and
+/// the value moves by how far the finger slid (never jumping to where the finger landed).
+#[test]
+fn press_and_slide_a_collapsed_slider() {
+    use sliver_agent::agent::{Effect::*, SessionOp};
+    use sliver_ipc::proto::TouchPhase::*;
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "controls"
+        modules = ["backlight/slider"]
+        "#,
+    );
+    let (mut fake, mut link) = connect();
+    let w = session_world(); // screen brightness 70 %
+    let layers = a.render(&w);
+    present(&a, &mut link, &mut fake, &layers);
+    let (id, x) = region(&a, "backlight/slider");
+    fake.touch(0, Down, x, 30.0).unwrap();
+    assert!(
+        deliver(&mut a, &mut link, &mut fake).contains(&Redraw),
+        "opens on press"
+    );
+    let layers = a.render(&w);
+    present(&a, &mut link, &mut fake, &layers);
+    let f = a.frame(Layer::Base).unwrap();
+    let i = f.cell_index(id).expect("same region once open");
+    let t = f.layout.tracks[i].expect("open slider has a trough");
+    // Slide right by a fifth of the trough: past the slop it starts, anchored at 70 %.
+    fake.touch(0, Move, x + 20.0, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(
+        fx.contains(&Session(SessionOp::ScreenBrightness(70))),
+        "{fx:?}"
+    );
+    fake.touch(0, Up, x + 20.0 + t.w * 0.2, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(
+        fx.contains(&Session(SessionOp::ScreenBrightness(90))),
+        "{fx:?}"
+    );
+    // Still open after lifting (it closes on its own later), and a fresh drag on the open
+    // slider is absolute again.
+    assert!(a.frame(Layer::Base).unwrap().layout.tracks[i].is_some());
+    fake.touch(1, Down, t.x + t.w * 0.25, 30.0).unwrap();
+    fake.touch(1, Up, t.x + t.w * 0.25, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(
+        fx.contains(&Session(SessionOp::ScreenBrightness(25))),
+        "{fx:?}"
+    );
+}
+
 #[test]
 fn preview_of_the_default_bar() {
     let mut a = agent("");
