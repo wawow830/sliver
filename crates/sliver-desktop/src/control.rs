@@ -85,6 +85,8 @@ pub struct BusCall {
     pub method: &'static str,
     /// The single `i` (int32) argument, if the method takes one.
     pub arg: Option<i32>,
+    /// String arguments, after `arg` (at most one of the two is used per call today).
+    pub text: Vec<String>,
 }
 
 /// What the GNOME extension exports (`integration/gnome-shell`).
@@ -100,6 +102,7 @@ pub fn bus_call(backend: Backend, a: &Action) -> Option<BusCall> {
             iface: "org.kde.KWin",
             method: "setCurrentDesktop",
             arg: Some(i32::try_from(w.id).ok()?),
+            text: Vec::new(),
         }),
         (Backend::Kde, Action::NextLayout) => Some(BusCall {
             dest: "org.kde.keyboard",
@@ -107,6 +110,36 @@ pub fn bus_call(backend: Backend, a: &Action) -> Option<BusCall> {
             iface: "org.kde.KeyboardLayouts",
             method: "switchToNextLayout",
             arg: None,
+            text: Vec::new(),
+        }),
+        // KWin's own window runner (what KRunner uses): "0_{internalId}" is a window. The script
+        // reports windows as `kwin:{internalId}`. It can activate but has no close action.
+        (Backend::Kde, Action::FocusWindow { address }) => Some(BusCall {
+            dest: "org.kde.KWin",
+            path: "/WindowsRunner",
+            iface: "org.kde.krunner1",
+            method: "Run",
+            arg: None,
+            text: vec![
+                format!("0_{}", address.strip_prefix("kwin:")?),
+                String::new(),
+            ],
+        }),
+        (Backend::Gnome, Action::FocusWindow { address }) => Some(BusCall {
+            dest: GNOME_SHELL_NAME,
+            path: "/io/github/wawow830/Sliver/Shell",
+            iface: "io.github.wawow830.Sliver.Shell1",
+            method: "FocusWindow",
+            arg: None,
+            text: vec![address.strip_prefix("mutter:")?.to_owned()],
+        }),
+        (Backend::Gnome, Action::CloseWindow { address }) => Some(BusCall {
+            dest: GNOME_SHELL_NAME,
+            path: "/io/github/wawow830/Sliver/Shell",
+            iface: "io.github.wawow830.Sliver.Shell1",
+            method: "CloseWindow",
+            arg: None,
+            text: vec![address.strip_prefix("mutter:")?.to_owned()],
         }),
         (Backend::Gnome, Action::FocusWorkspace(w)) => Some(BusCall {
             dest: GNOME_SHELL_NAME,
@@ -114,6 +147,7 @@ pub fn bus_call(backend: Backend, a: &Action) -> Option<BusCall> {
             iface: "io.github.wawow830.Sliver.Shell1",
             method: "FocusWorkspace",
             arg: Some(i32::try_from(w.id).ok()?),
+            text: Vec::new(),
         }),
         _ => None,
     }

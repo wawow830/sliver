@@ -40,3 +40,19 @@ Please run it on a real GNOME session before relying on it.
   `io.github.wawow830.Sliver.Shell1.FocusWorkspace(i)` (1-based). Not yet run on a real shell.
 
 Both calls use `NoAutoStart`: with no script or extension running, tapping does nothing but log.
+
+## The window list (taskbar)
+
+Both the KWin script and the GNOME extension push **every** window with `Desktop1.SetWindows`
+(`SetWindowsV` on KDE): `window`, `app-id`, `title`, `pid`, `workspace` (the `SetWorkspaces` id),
+`focused`, `urgent`. KWin's script sends it only when the list changed; the extension coalesces
+signal bursts over 50 ms. The agent turns focus + workspaces + windows into its desktop state, so
+the `taskbar` module and pinned apps work there.
+
+The agent's taskbar actions go back like this:
+
+* KDE focus: KWin's window runner, `org.kde.KWin /WindowsRunner org.kde.krunner1 Run("0_{internalId}", "")`
+  (what KRunner uses). Verified in the nested KWin test. **KWin has no close action**, so
+  long-pressing a taskbar button on KDE only logs.
+* GNOME focus and close: `Sliver.Shell1.FocusWindow(s)` / `CloseWindow(s)` on the extension, by the
+  window's `mutter:<stable sequence>` id. Not yet run on a real shell.

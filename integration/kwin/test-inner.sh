@@ -49,6 +49,32 @@ grep -q '"app-id"' "$log" && grep -q 'sliver-test-app' "$log" || { echo "FAIL: n
 grep -q '"method": "SetWorkspacesV"' "$log" || { echo "FAIL: no SetWorkspacesV"; exit 1; }
 echo "ok: kwin script reported the focused window and the desktops"
 
+# The window list for the taskbar: SetWindowsV with our test window, focused, on a desktop.
+grep -q '"method": "SetWindowsV"' "$log" || { echo "FAIL: no SetWindowsV"; exit 1; }
+last_windows() { grep '"method": "SetWindowsV"' "$log" | tail -1; }
+last_windows | grep -q 'sliver-test-app' || { echo "FAIL: the window list lacks the test window"; last_windows; exit 1; }
+echo "ok: the window list reached the agent"
+
+# A second window; then focus the first through KWin's window runner, which is what the agent
+# calls (control::bus_call: org.kde.krunner1 Run "0_{internalId}"), and watch the focus move.
+WAYLAND_DISPLAY=$sock kitty --class sliver-test-two --title "second" sh -c 'sleep 8' \
+    >"$work/kitty2.log" 2>&1 & pids+=($!)
+for _ in $(seq 1 50); do last_windows | grep -q 'sliver-test-two' && break; sleep 0.2; done
+last_windows | grep -q 'sliver-test-two' || { echo "FAIL: the second window never appeared"; last_windows; exit 1; }
+first=$(last_windows | python3 -c '
+import json,sys
+w=json.loads(sys.stdin.read())["arg"]
+print([x["window"]["value"] for x in w if x["app-id"]["value"]=="sliver-test-app"][0])')
+focused_app() { last_windows | python3 -c '
+import json,sys
+w=json.loads(sys.stdin.read())["arg"]
+print([x["app-id"]["value"] for x in w if x["focused"]["value"]][0])'; }
+[ "$(focused_app)" = "sliver-test-two" ] || { echo "FAIL: the new window should have focus, got $(focused_app)"; exit 1; }
+busctl --user call org.kde.KWin /WindowsRunner org.kde.krunner1 Run ss "0_${first#kwin:}" "" >/dev/null
+for _ in $(seq 1 50); do [ "$(focused_app)" = "sliver-test-app" ] && break; sleep 0.2; done
+[ "$(focused_app)" = "sliver-test-app" ] || { echo "FAIL: the window runner did not focus $first"; last_windows; exit 1; }
+echo "ok: the window runner focused the first window and the list followed"
+
 # The write side: the agent switches desktops with KWin's own setCurrentDesktop (control::bus_call).
 busctl --user call org.kde.KWin /VirtualDesktopManager org.kde.KWin.VirtualDesktopManager createDesktop us 1 "Two" >/dev/null
 sleep 0.5

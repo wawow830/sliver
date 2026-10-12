@@ -171,6 +171,16 @@ pub fn bus_call(call: &sliver_desktop::control::BusCall) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let flags = zbus::proxy::MethodFlags::NoAutoStart.into();
     let r = match call.arg {
+        _ if call.text.len() == 2 => proxy
+            .call_with_flags::<_, _, ()>(
+                call.method,
+                flags,
+                &(call.text[0].as_str(), call.text[1].as_str()),
+            )
+            .map(|_| ()),
+        _ if call.text.len() == 1 => proxy
+            .call_with_flags::<_, _, ()>(call.method, flags, &(call.text[0].as_str(),))
+            .map(|_| ()),
         Some(n) => proxy
             .call_with_flags::<_, _, zbus::zvariant::OwnedValue>(call.method, flags, &(n,))
             .map(|_| ()),

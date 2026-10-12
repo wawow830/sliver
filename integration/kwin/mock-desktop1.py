@@ -17,6 +17,8 @@ XML = """
     <method name="SetFocus"><arg name="window" type="a{sv}" direction="in"/></method>
     <method name="SetWorkspaces"><arg name="workspaces" type="aa{sv}" direction="in"/></method>
     <method name="SetWorkspacesV"><arg name="workspaces" type="av" direction="in"/></method>
+    <method name="SetWindows"><arg name="windows" type="aa{sv}" direction="in"/></method>
+    <method name="SetWindowsV"><arg name="windows" type="av" direction="in"/></method>
   </interface>
 </node>
 """

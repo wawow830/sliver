@@ -25,6 +25,8 @@ const SHELL_NAME = `${NAME}.Shell`;
 const SHELL_PATH = `${PATH}/Shell`;
 const SHELL_XML = `<node><interface name="${NAME}.Shell1">
   <method name="FocusWorkspace"><arg type="i" direction="in" name="number"/></method>
+  <method name="FocusWindow"><arg type="s" direction="in" name="window"/></method>
+  <method name="CloseWindow"><arg type="s" direction="in" name="window"/></method>
 </interface></node>`;
 
 function str(v) {
@@ -96,13 +98,77 @@ export default class SliverFocus extends Extension {
         });
         this._wsCountIds = ['workspace-added', 'workspace-removed'].map(
             s => this._wm.connect(s, () => this._pushWorkspaces()));
+        // The window list for the taskbar, coalesced: signals fire in bursts.
+        this._windowWatch = new Map();
+        this._windowsTimer = 0;
+        this._createdId = this._display.connect('window-created', (_d, w) => {
+            this._watchWindow(w);
+            this._scheduleWindows();
+        });
+        this._allWindows().forEach(w => this._watchWindow(w));
         this._focusChanged();
         this._pushWorkspaces();
+        this._scheduleWindows();
         // The agent's "switch to workspace N" (1-based, as reported in SetWorkspaces).
         this._exported = Gio.DBusExportedObject.wrapJSObject(SHELL_XML, this);
         this._exported.export(Gio.DBus.session, SHELL_PATH);
         this._ownerId = Gio.bus_own_name_on_connection(
             Gio.DBus.session, SHELL_NAME, Gio.BusNameOwnerFlags.NONE, null, null);
+    }
+
+    // Windows are "mutter:<stable sequence>", as SetFocus reports them.
+    _byId(id) {
+        return this._allWindows().find(w => String(w.get_stable_sequence()) === String(id));
+    }
+
+    FocusWindow(id) {
+        this._byId(id)?.activate(global.get_current_time());
+    }
+
+    CloseWindow(id) {
+        this._byId(id)?.delete(global.get_current_time());
+    }
+
+    _allWindows() {
+        return global.get_window_actors().map(a => a.meta_window).filter(w => isPlain(w));
+    }
+
+    _watchWindow(w) {
+        if (this._windowWatch.has(w))
+            return;
+        const ids = [
+            w.connect('notify::title', () => this._scheduleWindows()),
+            w.connect('workspace-changed', () => this._scheduleWindows()),
+            w.connect('notify::demands-attention', () => this._scheduleWindows()),
+            w.connect('unmanaged', () => {
+                this._windowWatch.delete(w);
+                this._scheduleWindows();
+            }),
+        ];
+        this._windowWatch.set(w, ids);
+    }
+
+    _scheduleWindows() {
+        if (this._windowsTimer)
+            return;
+        this._windowsTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            this._windowsTimer = 0;
+            this._pushWindows();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _pushWindows() {
+        const focus = this._display?.focus_window;
+        const list = this._allWindows()
+            .filter(w => !w.is_skip_taskbar())
+            .slice(0, 256)
+            .map(w => ({
+                ...describe(w),
+                'focused': GLib.Variant.new_boolean(w === focus),
+                'urgent': GLib.Variant.new_boolean(!!w.demands_attention),
+            }));
+        call('SetWindows', new GLib.Variant('(aa{sv})', [list]));
     }
 
     FocusWorkspace(number) {
@@ -111,6 +177,16 @@ export default class SliverFocus extends Extension {
     }
 
     disable() {
+        if (this._windowsTimer)
+            GLib.source_remove(this._windowsTimer);
+        this._windowsTimer = 0;
+        for (const [w, ids] of this._windowWatch ?? [])
+            ids.forEach(id => w.disconnect(id));
+        this._windowWatch = null;
+        if (this._createdId)
+            this._display?.disconnect(this._createdId);
+        this._createdId = 0;
+        call('SetWindows', new GLib.Variant('(aa{sv})', [[]]));
         if (this._ownerId)
             Gio.bus_unown_name(this._ownerId);
         this._exported?.unexport();
@@ -147,6 +223,7 @@ export default class SliverFocus extends Extension {
     _pushFocus() {
         const dict = this._window ? describe(this._window) : {};
         call('SetFocus', new GLib.Variant('(a{sv})', [dict]));
+        this._scheduleWindows();
     }
 
     _pushWorkspaces() {
