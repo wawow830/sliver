@@ -10,6 +10,7 @@
 
 pub mod fake;
 pub mod hyprland;
+pub mod niri;
 pub mod sway;
 
 use serde::{Deserialize, Serialize};
