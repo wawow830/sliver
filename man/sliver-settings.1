@@ -16,14 +16,22 @@ Everything it changes is written to your configuration file
 keeping your comments and formatting, and the running
 .BR sliver\-agent (1)
 picks it up at once.
+Every edit is validated before it is written.
 Hand edits and the app can be mixed freely: when the file changes on disk, the window reloads it.
+.PP
+It talks to the running agent on the session bus for live status, the active rule, the Apps page and
+.BR Mirror ,
+and still works without it (a banner says so).
+Only one window runs (application id
+.IR io.github.wawow830.Sliver.Settings );
+starting it again raises that window.
 .PP
 On first launch, when you have no configuration yet, it explains the safe hatch (press Fn twice and
 hold it to get Escape and F1\(enF12, whatever the layout says) and offers a starting point.
 .PP
 Given
 .I preset.sliver
-files (or when a file manager opens one), it shows each preset for review: the layout, and every
+files (or when a file manager opens one, also while it's already running), it shows each preset for review: the layout, and every
 script and command it would run, before anything is imported.
 .SH PAGES
 .TP
@@ -33,7 +41,10 @@ Drag modules from the library onto the preview, drag to reorder, drag off to rem
 width handle to resize.
 The inspector edits the selected module: its content, style and actions.
 .B Mirror
-also shows the layout you're editing on the real Touch Bar while the window is focused.
+also shows the layout you're editing on the real Touch Bar while the window is focused (through the
+agent's
+.B HoldLayout
+call, released when the window closes or loses focus).
 .TP
 .B Layouts & Rules
 Which layout shows when: per app, workspace and state (media playing, screen locked, on battery,
@@ -83,13 +94,25 @@ Undo the last change.
 Redo.
 .SH FILES
 .TP
-.I ~/.config/sliver/sliver.toml
-The configuration it edits
-.RI ( $XDG_CONFIG_HOME
-is honoured).
+.I ~/.config/sliver/config.toml
+The configuration it edits, unless a profile is active.
 .TP
-.I ~/.config/sliver/profiles/
-Named profiles.
+.I ~/.config/sliver/profiles/NAME.toml
+The active profile's file, which it edits instead when one is active.
+.TP
+.I style.css
+The stylesheet next to the edited file.
+The Appearance page keeps its settings in a managed block at the top, between
+.B /* sliver\-settings: begin */
+and
+.BR "/* sliver\-settings: end */" ;
+the rest of the file is yours.
+.SH ENVIRONMENT
+.TP
+.B XDG_CONFIG_HOME
+Used instead of
+.I ~/.config
+when set.
 .SH SEE ALSO
 .BR sliver\-config (5),
 .BR sliver\-stylesheet (5),
@@ -98,4 +121,6 @@ Named profiles.
 .BR sliverd (8)
 .PP
 .I docs/user\-guide.md
+and
+.I docs/ux.md
 in the sliver sources.
