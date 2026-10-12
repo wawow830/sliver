@@ -19,6 +19,7 @@ agent.rs: the sans-IO core that ties it together. main.rs: config/stylesheet loa
   if it hangs. Everything else interactive becomes an `agent` region for gesture recognition.
 - **Regions** are full height and reach up to 12 px into neighbouring gaps (split in the middle),
   so near-misses count but empty bar space doesn't.
+- **Touch feedback** on agent regions: a press re-renders only that frame's image (`Frame::repress`, ~0.9 ms release vs ~2 ms for a full redraw; `cargo run --release -p sliver-agent --example bench`). Run release builds on hardware: debug renders are ~10x slower.
 - **Power (invariant 3).** Nothing renders unless something changed. The only timer is the
   earliest `next_change` of a module (clock ticks), and there are none while the display is off.
   The link drops frames whose pixels and regions didn't change, coalesces frames while sliverd

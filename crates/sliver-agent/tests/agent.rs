@@ -266,8 +266,18 @@ fn touches_become_actions() {
     // Hold → key through sliverd, and pressed feedback is drawn by us.
     let idle = a.frame(Layer::Base).unwrap().image.clone();
     fake.touch(0, TouchPhase::Down, x, 30.0).unwrap();
-    assert_eq!(deliver(&mut a, &mut link, &mut fake), [Redraw]);
-    let layers = a.render(&world(9, 41));
+    assert_eq!(deliver(&mut a, &mut link, &mut fake), [RedrawPress]);
+    // The fast path re-renders just the base image…
+    let layers = a.render_press();
+    assert_eq!(layers, [Layer::Base]);
+    let fast = a.frame(Layer::Base).unwrap().image.clone();
+    // …and matches a full render.
+    a.render(&world(9, 41));
+    assert_eq!(
+        fast.data(),
+        a.frame(Layer::Base).unwrap().image.data(),
+        "fast = full"
+    );
     assert_ne!(
         a.frame(Layer::Base).unwrap().image.data(),
         idle.data(),

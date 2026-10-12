@@ -22,6 +22,8 @@ pub struct Frame {
     pub cells: Vec<Cell>,
     pub layout: Layout,
     pub id_base: u32,
+    /// What was drawn, so a press can re-render just the image ([`Frame::repress`]).
+    pub scene: Scene,
 }
 
 impl Frame {
@@ -105,6 +107,33 @@ pub fn render(
         cells,
         layout,
         id_base,
+        scene: scene.clone(),
+    }
+}
+
+impl Frame {
+    /// Re-renders only the image with these cells pressed: the fast path for touch feedback on
+    /// agent regions (regions, layout and the pressed twin can't change from a press). Returns
+    /// whether anything changed.
+    pub fn repress(
+        &mut self,
+        renderer: &mut Renderer,
+        sheet: &Stylesheet,
+        pressed: &dyn Fn(&Cell) -> bool,
+    ) -> bool {
+        let mut changed = false;
+        for (item, cell) in self.scene.items_mut().zip(self.cells.iter_mut()) {
+            let p = pressed(cell);
+            if cell.pressed != p {
+                cell.pressed = p;
+                item.pressed = p;
+                changed = true;
+            }
+        }
+        if changed {
+            renderer.render(&self.scene, sheet, &mut self.image);
+        }
+        changed
     }
 }
 

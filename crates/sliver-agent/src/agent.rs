@@ -33,6 +33,8 @@ pub enum Effect {
     Spawn(Vec<String>),
     /// Something visible changed: render and present.
     Redraw,
+    /// Only pressed feedback changed: [`Agent::render_press`] is enough (much cheaper).
+    RedrawPress,
     /// Not fatal, worth logging.
     Log(String),
     /// Change session state (volume, brightness, media, inhibitors). Run off the main loop.
@@ -351,6 +353,22 @@ impl Agent {
         )
     }
 
+    /// Re-renders just the images of frames whose pressed cells changed (after
+    /// [`Effect::RedrawPress`]). Returns the layers to present.
+    pub fn render_press(&mut self) -> Vec<Layer> {
+        let pressed = &self.pressed;
+        let is_pressed = |c: &Cell| pressed.contains(&c.key);
+        let mut out = Vec::new();
+        for (i, layer) in [Layer::Base, Layer::Fn].into_iter().enumerate() {
+            if let Some(f) = &mut self.frames[i]
+                && f.repress(&mut self.renderer, &self.sheet, &is_pressed)
+            {
+                out.push(layer);
+            }
+        }
+        out
+    }
+
     /// When some module's content changes on its own next (the earliest clock tick), if ever.
     /// Nothing ticks while the display is off (invariant 3).
     pub fn next_change(&self) -> Option<DateTime<Local>> {
@@ -507,7 +525,7 @@ impl Agent {
                     self.pressed.remove(&cell.key)
                 };
                 if changed {
-                    fx.push(Effect::Redraw);
+                    fx.push(Effect::RedrawPress);
                 }
                 return;
             }

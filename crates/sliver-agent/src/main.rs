@@ -574,6 +574,7 @@ fn apply(
     link: &Link,
     children: &mut Vec<Child>,
     live: &Live,
+    press: &mut bool,
 ) -> std::io::Result<bool> {
     let mut redraw = false;
     for e in effects {
@@ -635,6 +636,7 @@ fn apply(
                 });
             }
             Effect::Redraw => redraw = true,
+            Effect::RedrawPress => *press = true,
             Effect::EmitKeys(keys, mode) => link.emit_keys(&keys, mode)?,
             Effect::Log(msg) => eprintln!("sliver-agent: {msg}"),
             Effect::Spawn(argv) => match spawn_detached(&argv) {
@@ -811,8 +813,17 @@ fn run(
     reloader: &mut Reloader,
 ) -> std::io::Result<()> {
     let mut dirty = true;
+    // Only pressed feedback changed: re-render just the touched layer's image (fast path).
+    let mut press_dirty = false;
     let mut children = Vec::new();
     loop {
+        if press_dirty && !dirty && agent.display != DisplayState::Off {
+            for layer in agent.render_press() {
+                let f = agent.frame(layer).expect("rendered before");
+                link.present(layer, &f.image, &f.pressed, &f.regions)?;
+            }
+        }
+        press_dirty = false;
         if dirty && agent.display != DisplayState::Off {
             for layer in agent.render(&live.world()) {
                 let f = agent.frame(layer).expect("just rendered");
@@ -916,12 +927,12 @@ fn run(
             for (req, reply) in requests {
                 let (answer, fx) = control(&mut agent, live, reloader, req);
                 let _ = reply.send(answer);
-                dirty |= apply(fx, &link, &mut children, live)?;
+                dirty |= apply(fx, &link, &mut children, live, &mut press_dirty)?;
             }
         }
         let world_changed = world_changed || api_woke;
         let fx = agent.tick(now_us());
-        dirty |= apply(fx, &link, &mut children, live)?;
+        dirty |= apply(fx, &link, &mut children, live, &mut press_dirty)?;
         if world_changed && !readable {
             continue;
         }
@@ -990,7 +1001,7 @@ fn run(
                     Vec::new()
                 }
             };
-            dirty |= apply(fx, &link, &mut children, live)?;
+            dirty |= apply(fx, &link, &mut children, live, &mut press_dirty)?;
         }
     }
 }
