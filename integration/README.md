@@ -65,3 +65,12 @@ The agent's taskbar actions go back like this:
   long-pressing a taskbar button on KDE only logs.
 * GNOME focus and close: `Sliver.Shell1.FocusWindow(s)` / `CloseWindow(s)` on the extension, by the
   window's `mutter:<stable sequence>` id. Verified by `integration/gnome-shell/test.sh`.
+
+## Live compositor checks
+
+`scripts/live-compositors [sway|labwc|niri|gnome-shell ...]` fetches each compositor's rpms into
+`target/test-compositors/` without root (`dnf download --resolve` + `rpm2cpio`) and runs
+`integration/<name>/test.sh` against it, headless, on private runtime dirs and buses. About 400 MB
+the first time; not part of `scripts/check`. Covered this way: the sway backend (sway 1.11), the
+generic Wayland backend (labwc 0.9), niri 26.04 (nested in a headless sway) and the GNOME
+extension (gnome-shell 50.5). KWin has its own nested test (`integration/kwin/test.sh`).

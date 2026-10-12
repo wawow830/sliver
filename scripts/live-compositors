@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Run the checks against real compositors (sway, labwc, niri, gnome-shell), all headless, none
+# needing root. Fetches what is missing into PREFIX (default target/test-compositors) with
+# `dnf download --resolve` + rpm2cpio, then runs integration/{sway,labwc,niri,gnome-shell}/test.sh.
+# About 400 MB of rpms the first time; later runs reuse them. Not part of scripts/check (slow,
+# needs network the first time).
+#
+#   scripts/live-compositors [--fetch-only] [sway|labwc|niri|gnome-shell ...]
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+prefix=${SLIVER_TEST_ROOT:-$root/target/test-compositors}
+fetch_only=0
+want=()
+for a in "$@"; do
+    case $a in
+        --fetch-only) fetch_only=1 ;;
+        *) want+=("$a") ;;
+    esac
+done
+[ ${#want[@]} -gt 0 ] || want=(sway labwc niri gnome-shell)
+
+fetch() { # name, packages...
+    local name=$1; shift
+    local dir=$prefix/$name
+    [ -e "$dir/.done" ] && return 0
+    command -v dnf >/dev/null && command -v rpm2cpio >/dev/null || { echo "need dnf and rpm2cpio to fetch $name"; return 1; }
+    mkdir -p "$dir/rpms" "$dir/root"
+    dnf download --resolve --destdir "$dir/rpms" "$@" >/dev/null 2>&1
+    for f in "$dir"/rpms/*.rpm; do rpm2cpio "$f" | (cd "$dir/root" && cpio -idm --quiet 2>/dev/null); done
+    touch "$dir/.done"
+}
+
+status=0
+for c in "${want[@]}"; do
+    case $c in
+        sway)        fetch sway sway foot wlroots0.19 ;;
+        labwc)       fetch labwc labwc foot wlroots0.19 ;;
+        niri)        fetch niri niri sway foot wlroots0.19 ;;
+        gnome-shell) fetch gnome-shell gnome-shell mutter gjs gsettings-desktop-schemas ;;
+        *) echo "unknown compositor $c"; exit 2 ;;
+    esac
+    [ $fetch_only = 1 ] && continue
+    echo "=== $c"
+    if [ "$c" = gnome-shell ]; then
+        SLIVER_GNOME_ROOT=$prefix/$c/root "$root/integration/gnome-shell/test.sh" || status=1
+    else
+        SLIVER_TEST_ROOT=$prefix/$c/root "$root/integration/$c/test.sh" || status=1
+    fi
+done
+exit $status
