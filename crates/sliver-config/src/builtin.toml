@@ -94,17 +94,3 @@ hide-empty-text = true
 
 [modules."emoji#strip"]
 mode = "strip"
-
-# --- ready-made modules (not in any layout until you add them): `modules = ["custom/power", ...]`
-[modules."custom/power"]
-format = "⏻"
-menu = [
-  { label = "Lock", on-tap = "loginctl lock-session" },
-  { label = "Suspend", on-tap = "systemctl suspend" },
-  { label = "Reboot", on-tap = "systemctl reboot" },
-  { label = "Power off", on-tap = "systemctl poweroff" },
-]
-
-[modules."custom/screenshot"]
-format = "📷"
-on-tap = { key = "Print" }

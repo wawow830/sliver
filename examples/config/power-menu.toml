@@ -1,0 +1,21 @@
+# A power menu and a screenshot button. Copy this into ~/.config/sliver/config.toml (or
+# `include = ["power-menu.toml"]`) and add them to a layout zone, for example:
+#
+#   [[layouts.default.zones]]
+#   name = "main"
+#   modules = ["app-controls", "custom/screenshot", "custom/power"]
+#
+# Tapping the power button opens a sub-bar (entries and a ✕); picking one runs it.
+
+[modules."custom/power"]
+format = "⏻"
+menu = [
+  { label = "Lock", on-tap = "loginctl lock-session" },
+  { label = "Suspend", on-tap = "systemctl suspend" },
+  { label = "Reboot", on-tap = "systemctl reboot" },
+  { label = "Power off", on-tap = "systemctl poweroff" },
+]
+
+[modules."custom/screenshot"]
+format = "📷"
+on-tap = { key = "Print" }
