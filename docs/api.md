@@ -30,20 +30,30 @@ Additive changes bump the `Version` property (minor).
 ## 1. Mental model
 
 ```
- ┌─────┬──────────────────────────── app zone ───────────────────────┬──── status ────┬─ system ─┐
- │ Esc │  focused app's context  (or user's layout for that app)     │ 3rd-party items│ ☀ 🔊 🕒  │
- └─────┴─────────────────────────────────────────────────────────────┴────────────────┴──────────┘
+  Esc zone   Main zone                                                Controls zone
+ ┌─────┬──────────────────────────────────────────────────────────┬──────────────────────────────┐
+ │ Esc │ ◀ ▶  [ App controls: focused app's context ]             │ [Status items] ☀ 🔊 🕒  ‹    │
+ └─────┴──────────────────────────────────────────────────────────┴──────────────────────────────┘
 ```
 
-- The **user's layout** (config, settings app) splits the bar into **zones**. Apps never decide zones,
-  and never touch the Esc zone or the system zone (Control Strip analogue). The user can put zones
-  anywhere, hide them, or replace the app zone with their own layout per app.
+Terms match docs/ux.md (elm). The **user's layout** (config, settings app) has three zones: **Esc**
+(pinned), **Main**, and **Controls** (collapsible control strip). Apps never decide the layout. Their
+items only appear where the user put one of two **placeholder items**:
+- **App controls**: the focused app's context. The default layout puts it in Main.
+- **Status items**: third-party `status` contexts. The default layout puts it in Controls.
+
+If a layout has no placeholder, those items don't show. That's how the user opts out per layout.
+Rules, layers and layout resolution all happen in the agent. sliverd only knows the safe layer.
+
 - A **context** is a list of **items** published by one D-Bus client (NSTouchBar analogue).
   It has a **scope**:
-  - `app`: shown in the app zone while one of *the caller's own* windows is focused (verified, see §4).
-  - `target`: shown in the app zone while a window matching a selector is focused
+  - `app`: fills App controls while one of *the caller's own* windows is focused (verified, see §4).
+  - `target`: fills App controls while a window matching a selector is focused
     (a script adding controls for another app; BetterTouchTool-style). Unverified, lower priority.
-  - `status`: shown in the status zone regardless of focus (StatusNotifierItem/Control Strip analogue).
+  - `status`: shown in Status items regardless of focus (StatusNotifierItem/Control Strip analogue).
+- An `app` context may be **modal** (color picker, recording controls). It then covers Main and
+  Controls, **never Esc**, if the user's per-app "may take the whole bar" setting allows (default on).
+  The agent always draws a ✕ on it. Modal ends on ✕, on focus loss, or when the app hides the context.
 - **Items** are declarative (button, toggle, slider, …). The agent renders them, does hit-testing and
   gesture recognition, and sends **events** back to the owner. Apps never draw pixels.
 - Contexts live exactly as long as the owner's bus connection. Persistent customization belongs in
@@ -68,6 +78,10 @@ CreateContext(a{sv} options) -> (o context)
 | `window` | s | `app` scope: bind to one toplevel, portal-style handle `wayland:<xdg-foreign handle>`, `x11:<hex xid>`, or `hyprland:<address>`. The agent falls back to app-level binding if it can't resolve it. |
 | `target` | a{sv} | `target` scope selector: `app-id` s, `workspace` s, `title-regex` s. All given keys must match. |
 | `include-children` | b | `app` scope: also match when the focused window's process is an ancestor of the caller (a program in a terminal). Lower priority than the terminal's own context. |
+| `modal` | b | `app` scope: cover Main + Controls while on screen (see §1). The owner gets `Event("", "closed", {})` when the user dismisses it. |
+
+Item identity: `(provider, item id)` is the stable key the user's prefs use to hide, reorder or pin app
+items into their own layouts. **Keep item ids stable across releases.**
 
 Properties (read-only, `PropertiesChanged` emitted)
 
@@ -108,6 +122,7 @@ Event(s item, s kind, a{sv} data)
 | `value` | `value` d, `phase` s (`begin`/`change`/`end`) | slider dragged (agent moves it immediately; changes coalesced to ≤ 60/s) |
 | `selected` | `index` i | segmented control |
 | `popover` | `open` b | popover opened/closed |
+| `closed` | `{}` | modal context dismissed by the user (item is `""`) |
 
 Optimistic state: the agent updates toggles/sliders/segments locally at once. The app is the source
 of truth and may correct it with `Update`.
@@ -153,13 +168,15 @@ is `P`, or both are in the same app instance: same Flatpak instance (`/.flatpak-
 systemd app unit (`app-*.scope` / `app-*.service` cgroup). Claims a client makes about its own app id
 are never trusted for `app` scope.
 
-### Who wins the app zone, highest first
+### Who fills App controls, highest first
 1. **The user.** A per-app layout in config always wins (`app_source = "user"`), and the user can pin
    a specific provider or disable app contexts per app.
 2. The focused app's own `app` context (window-bound before app-bound).
 3. `app` contexts with `include-children` (e.g. vim in a terminal).
 4. `target` contexts whose selector matches (most recently shown first).
-5. The user's default layout for the app zone.
+5. Nothing: the placeholder collapses.
+
+While the session is **locked**, App controls and Status items are empty whatever the layout says (privacy).
 
 Status zone: all visible `status` contexts, ordered by user prefs, then provider id. Overflow drops the
 lowest `priority` items; the user can hide any provider.
@@ -269,11 +286,14 @@ highlight if absent.
 | `error` | `code`, `msg`, `serial`? | rejected message; never fatal by itself |
 
 ### Safety rules sliverd enforces (invariant 1)
-- **Liveness:** sliverd pings every 2 s; no `pong` for 6 s, disconnect, `bye`, or a malformed frame →
-  built-in safe layer at once. Key regions of the last good frame keep working until then.
+- **Liveness:** an agent crash is a socket hangup, detected at once. Hangs are checked only when they
+  matter, with no idle timers (invariant 3): sliverd sends `ping` when the display wakes, and on an
+  agent-region touch if it hasn't pinged in the last 5 s. No `pong` within 2 s, a disconnect, `bye`, or a
+  malformed frame → built-in safe layer at once. Key regions of the last good frame keep working until then.
 - **Escape floor:** a frame is accepted only if `base ∪ fn` (with the built-in fn layer standing in
   for a cleared one) contains key regions for `KEY_ESC` and `KEY_F1`–`KEY_F12`, each ≥ 32 px wide and
-  fully on screen. Otherwise sliverd replaces the `fn` layer with its built-in one and sends
+  fully on screen. (If H2 confirms a physical Esc, the floor becomes system config with Esc optional.
+  The UX still keeps Esc on the bar.) Otherwise sliverd replaces the `fn` layer with its built-in one and sends
   `error{code:"escape-floor"}`. User config can't remove Escape; the settings app warns first.
 - **Validation:** geometry in bounds, ≤ 128 regions, no overlapping key regions, keycodes in range.
   **`KEY_SYSRQ` is refused** in regions and `emit_keys` (a same-uid process must not get kernel SysRq).
@@ -281,9 +301,10 @@ highlight if absent.
 - Bounded everything: queues, buffers, message size. A misbehaving agent is disconnected, never followed.
 
 ### Key-region touch semantics
-A touch that starts on a key region presses its keys, lifting releases them, and sliding off the region
-releases them too. A touch never presses a second region (tiny-dfr parity; birch to confirm against
-docs/hardware.md, T8 implements it). Each touch slot is independent, so multi-touch chords work.
+A touch that starts on a key region presses its keys, and lifting releases them. Sliding off the region
+releases them, and sliding back presses them again. A touch never presses a second region. Each
+slot is independent, so multi-touch chords work. This is tiny-dfr parity (docs/hardware.md), with one
+deliberate change: combos are released in **reverse** order (modifiers last). T8 implements it.
 
 ## 7. Lifecycles
 - **Agent restart:** clients see `NameOwnerChanged` for `NS` and must re-create their contexts.
@@ -316,7 +337,7 @@ sliverctl publish --scope status --provider org.example.Hello button:hi:Hello |
 ## 9. Prior art and what we took
 - **NSTouchBar:** declarative items, app provides the bar for its own focus, popovers, visibility
   priority, customizable items. Not taken: the responder chain (we use "latest visible context wins").
-- **Control Strip:** a system zone apps can't touch.
+- **Control Strip:** a Controls zone apps can't touch (except via the Status items placeholder).
 - **BetterTouchTool / MTMR:** per-app user layouts beating the app, user variables as conditions, scripts targeting other apps.
 - **Pock:** widgets as a first-class concept (built in to the agent, status contexts for external ones).
 - **MPRIS:** `PropertiesChanged`-driven state, re-discovery on name owner change.

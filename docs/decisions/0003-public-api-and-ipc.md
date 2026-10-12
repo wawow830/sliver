@@ -29,7 +29,7 @@ because these are the only interfaces other people's code will depend on.
    hit-tested and emitted inside sliverd, and Fn swaps layers locally. So keys never wait on the agent
    and survive an agent hang. Everything else (sliders, gestures, widgets) is an `agent` region and gets
    raw touch events.
-6. **sliverd enforces invariant 1 itself:** liveness pings (6 s) → safe layer; an "escape floor"
+6. **sliverd enforces invariant 1 itself:** hangup or a missed on-demand ping (2 s; no idle timers) → safe layer; an "escape floor"
    (Esc + F1–F12 must exist as key regions in base ∪ fn, else the built-in fn layer is substituted);
    strict validation; `KEY_SYSRQ` refused; only the active seat0 session's uid can drive the bar.
 
