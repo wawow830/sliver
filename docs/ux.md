@@ -298,9 +298,9 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   - The window **refreshes when the config changes on disk** from outside (an editor, `sliverctl
     config set`). GIO directory monitors catch rename-saves, and the app's own saves are skipped.
 - **Mirror** (Q10, on by default): while the window is focused, the base-layer layout being
-  edited shows on the real bar (`Control1.SetLayout`). It's reset when focus leaves, the window
-  closes, or the switch is turned off. If the app is killed, the agent should drop the override
-  when its caller leaves the bus (asked ash).
+  edited shows on the real bar (`Control1.HoldLayout` on one connection kept for the window's
+  lifetime). It's released when focus leaves, the window closes, or the switch is turned off. If
+  the app crashes or is killed, the hold dies with its connection. Verified with `kill -9`.
 - **Display & Power, Appearance, Gestures** are editable (T52). Appearance has the theme (`theme`)
   and opens the stylesheet in your editor, showing its problems. Gestures has tap timing, the Fn
   mode and whole-bar gestures.

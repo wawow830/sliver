@@ -100,23 +100,38 @@ pub fn agent_status(done: impl Fn(Agent) + 'static) {
     });
 }
 
-/// Mirror to Touch Bar (ux.md §4, Q10): ask the agent to show `layout` on the real bar
-/// (`Control1.SetLayout`); `""` returns it to the rules. Fire and forget, off the main thread;
-/// an absent agent is fine.
-pub fn set_layout(layout: &str) {
-    let layout = layout.to_owned();
-    std::thread::spawn(move || set_layout_now(&layout));
+/// The session-bus connection Mirror holds for the window's lifetime: `HoldLayout` lasts as long
+/// as the connection that asked, so a crashed or killed editor never pins the bar (cedar, 4b5b28f).
+fn mirror_conn() -> Option<Connection> {
+    static CONN: std::sync::OnceLock<Option<Connection>> = std::sync::OnceLock::new();
+    CONN.get_or_init(|| Connection::session().ok()).clone()
 }
 
-/// Blocking version, for the window closing (a background thread would die with the process).
+fn hold(conn: &Connection, layout: &str) {
+    let _ = conn.call_method(
+        Some(BUS_NAME),
+        ROOT_PATH,
+        Some(IFACE_CONTROL),
+        "HoldLayout",
+        &(layout,),
+    );
+}
+
+/// Mirror to Touch Bar (ux.md §4, Q10): show `layout` on the real bar while we hold it
+/// (`Control1.HoldLayout`). `""` releases it back to the rules. Off the main thread; an absent agent
+/// is fine.
+pub fn set_layout(layout: &str) {
+    let layout = layout.to_owned();
+    std::thread::spawn(move || {
+        if let Some(c) = mirror_conn() {
+            hold(&c, &layout);
+        }
+    });
+}
+
+/// Blocking release for the window closing (process exit would also drop the hold).
 pub fn set_layout_now(layout: &str) {
-    if let Ok(conn) = Connection::session() {
-        let _ = conn.call_method(
-            Some(BUS_NAME),
-            ROOT_PATH,
-            Some(IFACE_CONTROL),
-            "SetLayout",
-            &(layout,),
-        );
+    if let Some(c) = mirror_conn() {
+        hold(&c, layout);
     }
 }
