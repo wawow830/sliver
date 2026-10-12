@@ -122,6 +122,11 @@ pub fn open() -> io::Result<RealHardware> {
     let panel = DrmPanel::open(&card)?;
     let (width, height) = panel.logical_size();
     let input = HwInput::open(&touch, width, height)?;
+    crate::debug!(
+        "input devices {:?}, hotplug {}",
+        input.device_names(),
+        input.hotplug()
+    );
     let backlight = SysfsBacklight::open()?;
     let max_brightness = backlight.max();
     let keys = UinputKeys::create()?;
