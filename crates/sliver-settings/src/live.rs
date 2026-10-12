@@ -144,6 +144,8 @@ pub struct ContextInfo {
     pub scope: String,
     pub items: i64,
     pub on_screen: bool,
+    /// A Flatpak/Snap client (verified by the agent): needs `allow` for status items.
+    pub sandboxed: bool,
 }
 
 fn list_contexts() -> Result<Vec<ContextInfo>, String> {
@@ -177,6 +179,10 @@ fn list_contexts() -> Result<Vec<ContextInfo>, String> {
                 .unwrap_or(0),
             on_screen: d
                 .get("on-screen")
+                .and_then(|v| bool::try_from(v.try_clone().ok()?).ok())
+                .unwrap_or(false),
+            sandboxed: d
+                .get("sandboxed")
                 .and_then(|v| bool::try_from(v.try_clone().ok()?).ok())
                 .unwrap_or(false),
         })

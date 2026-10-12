@@ -108,6 +108,15 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                             format!("providers.{}.show", q(&p)),
                             state.loaded.config.provider_prefs(&p).show,
                         ));
+                        if mine.iter().any(|c| c.sandboxed) {
+                            live.add(&switch_row(
+                                &ui,
+                                &format!("Allow {p} to show status items"),
+                                "A sandboxed app (Flatpak/Snap): status items need your OK",
+                                format!("providers.{}.allow", q(&p)),
+                                state.loaded.config.provider_prefs(&p).allow,
+                            ));
+                        }
                     }
                 }
                 Err(e) => live.add(&row("The agent isn't answering", &e)),
