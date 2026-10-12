@@ -38,6 +38,13 @@ if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate packaging/desktop/*.desktop
 fi
 
+# Tests must never start the real audio tools (they leak `pactl subscribe` orphans and touch the
+# real PipeWire): use fake scripts via audio::Tools { wpctl, pactl } or SessionOptions::hermetic().
+echo "== no real audio tools in tests"
+if grep -rnE 'Tools::default\(\)|SessionOptions::default\(\)|Command::new\("(pactl|wpctl)"\)' crates/*/tests 2>/dev/null; then
+  echo "tests must not start the real wpctl/pactl (see scripts/check)"; exit 1
+fi
+
 if command -v node >/dev/null; then
   echo "== desktop integration scripts"
   for f in integration/kwin/sliver-focus/contents/code/main.js integration/gnome-shell/*/extension.js; do

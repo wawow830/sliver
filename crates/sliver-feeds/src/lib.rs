@@ -32,6 +32,41 @@ use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+/// What [`Feeds::start_session_on`] starts. The default is the real desktop: real audio tools,
+/// real sysfs, notifications and tray on.
+#[derive(Debug, Clone)]
+pub struct SessionOptions {
+    /// `None` = no audio source (and no `wpctl`/`pactl` process ever).
+    pub audio: Option<sliver_session::audio::Tools>,
+    /// Where backlight levels are read; `None` = skip.
+    pub sysfs: Option<sliver_session::brightness::Sysfs>,
+    pub notifications: bool,
+    pub tray: bool,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        SessionOptions {
+            audio: Some(sliver_session::audio::Tools::default()),
+            sysfs: Some(sliver_session::brightness::Sysfs::default()),
+            notifications: true,
+            tray: true,
+        }
+    }
+}
+
+impl SessionOptions {
+    /// Nothing that spawns a process or touches the real machine: for hermetic tests.
+    pub fn hermetic() -> SessionOptions {
+        SessionOptions {
+            audio: None,
+            sysfs: None,
+            notifications: false,
+            tray: false,
+        }
+    }
+}
+
 /// One thing that happened.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Feed {
@@ -176,43 +211,63 @@ impl Feeds {
     /// brightness, notifications and the tray. Each optional part that cannot start leaves a
     /// [`Feed::Note`] and its keys stay unknown.
     pub fn start_session(&mut self) {
-        let (system, session) = match (
-            zbus::blocking::Connection::system(),
-            zbus::blocking::Connection::session(),
-        ) {
-            (Ok(a), Ok(b)) => (a, b),
-            (a, b) => {
-                let why = a
-                    .err()
-                    .or(b.err())
-                    .map(|e| e.to_string())
-                    .unwrap_or_default();
+        let system = zbus::blocking::Connection::system();
+        match system {
+            Ok(system) => self.start_session_on(
+                system,
+                zbus::blocking::Connection::session,
+                SessionOptions::default(),
+            ),
+            Err(e) => {
                 self.out
-                    .send(Feed::Note(format!("session sources: no D-Bus ({why})")));
+                    .send(Feed::Note(format!("session sources: no D-Bus ({e})")));
+            }
+        }
+    }
+
+    /// [`Feeds::start_session`] on explicit buses and tools, so tests run against a private bus
+    /// and fake `wpctl`/`pactl` (tests must never start the real audio tools). `session` makes
+    /// a fresh connection to the session bus each time it is called.
+    pub fn start_session_on(
+        &mut self,
+        system: zbus::blocking::Connection,
+        session: impl Fn() -> zbus::Result<zbus::blocking::Connection>,
+        opts: SessionOptions,
+    ) {
+        let first = match session() {
+            Ok(c) => c,
+            Err(e) => {
+                self.out
+                    .send(Feed::Note(format!("session sources: no session bus ({e})")));
                 return;
             }
         };
-        let s = sliver_session::Session::start(system, session);
+        let s = sliver_session::Session::start(system, first);
         let handle = s.handle();
-        handle.start_audio(sliver_session::audio::Tools::default());
-        handle.refresh_brightness(&sliver_session::brightness::Sysfs::default());
-        match (
-            zbus::blocking::Connection::session(),
-            zbus::blocking::Connection::session(),
-        ) {
-            (Ok(m), Ok(q)) => {
-                if let Err(e) = handle.start_notifications(m, q) {
-                    self.out.send(Feed::Note(format!("notifications: {e}")));
+        if let Some(tools) = opts.audio {
+            handle.start_audio(tools);
+        }
+        if let Some(sysfs) = &opts.sysfs {
+            handle.refresh_brightness(sysfs);
+        }
+        if opts.notifications {
+            match (session(), session()) {
+                (Ok(m), Ok(q)) => {
+                    if let Err(e) = handle.start_notifications(m, q) {
+                        self.out.send(Feed::Note(format!("notifications: {e}")));
+                    }
+                }
+                _ => {
+                    self.out.send(Feed::Note(
+                        "notifications: no second session connection".into(),
+                    ));
                 }
             }
-            _ => {
-                self.out.send(Feed::Note(
-                    "notifications: no second session connection".into(),
-                ));
-            }
         }
-        if let Ok(c) = zbus::blocking::Connection::session() {
-            handle.start_tray(c);
+        if opts.tray {
+            if let Ok(c) = session() {
+                handle.start_tray(c);
+            }
         }
         self.session = Some(handle);
         self.spawn_session(s);
