@@ -14,6 +14,7 @@ pub mod brightness;
 pub mod fake;
 pub mod logind;
 pub mod mpris;
+pub mod notifications;
 pub mod power;
 pub(crate) mod props;
 
@@ -107,6 +108,7 @@ pub struct SessionState {
     /// We hold the "caffeine" inhibitor (see [`Handle::set_caffeine`]).
     pub caffeine: bool,
     pub audio: audio::Audio,
+    pub notifications: notifications::Notifications,
     pub brightness: brightness::Levels,
     pub power: Power,
     pub media: Option<Media>,

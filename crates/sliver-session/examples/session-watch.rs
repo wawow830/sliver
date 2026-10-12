@@ -10,6 +10,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .refresh_brightness(&sliver_session::brightness::Sysfs::default());
     s.handle()
         .start_audio(sliver_session::audio::Tools::default());
+    s.handle()
+        .start_notifications(Connection::session()?, Connection::session()?)?;
     while let Some(state) = s.next_change()? {
         println!("{state:?}");
     }

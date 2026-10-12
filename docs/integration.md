@@ -192,6 +192,11 @@ on this machine.
   `ActiveProfile`.
 
 ### Brightness: sysfs read, logind write
+**Implemented** (`sliver_session::brightness`): `Sysfs` finds the screen (never the Touch Bar:
+matched by tiny-dfr's device names or the `panel-summit` driver) and the keyboard LED;
+`Handle::refresh_brightness` pushes levels (call on own writes, wake, and a slow timer only
+while a slider shows); `brightness::set` writes through logind. Verified live (screen 23%).
+udev events are not wired yet.
 
 - Two backlight devices **(verified)**: `/sys/class/backlight/apple-panel-bl` (laptop screen,
   max 509) and `/sys/class/backlight/228600000.dsi.0` (max 255; this looks like the Touch Bar
@@ -210,6 +215,8 @@ on this machine.
 - Scale: map to percent in the widget; curves belong in the appearance layer, not here.
 
 ### Audio: PipeWire
+**Implemented** (`sliver_session::audio`): the `wpctl` + `pactl subscribe` option below, verified
+live. `Handle::start_audio(Tools)`; writes via `audio::set_volume/change_volume/set_mute/set_mic_mute`.
 
 Needed: default sink volume + mute, default source mute (mic toggle), and writes.
 
@@ -238,6 +245,10 @@ must not treat it as a real second player or it will show duplicates. Prefer tal
 players directly (zbus) over shelling out to `playerctl`.
 
 ### Notifications and DND
+**Implemented** (`sliver_session::notifications`): `BecomeMonitor` counting works on this
+session bus (verified); only `replaces_id` of `Notify` is read, never summary/body. DND via
+dunst `paused` and KDE `Inhibited`; quickshell (this machine's server) exposes neither, so
+`dnd` is `None` here and the agent needs its own "hide chips" DND.
 
 `org.freedesktop.Notifications` is owned by quickshell (`qs -c ii`) on this machine
 **(verified)**. The spec has no DND and no "list". To count/show notifications, the agent must
@@ -251,6 +262,9 @@ small adapter list keyed on the bus-name owner, falling back to "sliver-managed"
 notification chips only).
 
 ### Caffeine / inhibit
+**Implemented** (logind part): `SessionState.idle_inhibited` follows `BlockInhibited`;
+`Handle::set_caffeine` holds an `idle` inhibitor fd (released when the agent dies). hypridle
+honours logind inhibitors only if `ignore_systemd_inhibit` is false (default).
 
 `org.freedesktop.ScreenSaver` (`Inhibit`/`UnInhibit`; owned by hypridle on this machine
 **(verified)**) and logind `Inhibit(what, who, why, mode)` (fd-based: closing the fd releases).
