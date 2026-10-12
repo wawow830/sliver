@@ -6,7 +6,7 @@ Owner: **hazel**. System integration design: ADR-0005. Files: `packaging/`, `scr
 | package | contents |
 |---|---|
 | `sliver` | metapackage: sliverd + sliver-agent + sliverctl, Recommends sliver-settings. Docs, examples, bundled-crate licenses |
-| `sliverd` | `/usr/libexec/sliverd`, `sliverd.{service,socket}`, `99-z-sliverd.rules`. Recommends `tiny-dfr` (fallback) |
+| `sliverd` | `/usr/libexec/sliverd`, `sliverd.{service,socket}` (+ alias `sliver.service`), `99-z-sliverd.rules`. Recommends `tiny-dfr` (fallback) |
 | `sliver-agent` | `/usr/bin/sliver-agent`, user unit `sliver-agent.service` (`Type=dbus`), D-Bus activation file for `io.github.wawow830.Sliver`, user preset (enabled by default) |
 | `sliverctl` | `/usr/bin/sliverctl` |
 | `sliver-settings` | `/usr/bin/sliver-settings`, `.desktop`, AppStream metainfo |
