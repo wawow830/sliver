@@ -7,7 +7,7 @@ feature tiers are in [features.md](features.md). The app is GTK4 + libadwaita (A
 
 1. **The bar is the preview.** The on-screen preview is pixels from the same renderer as sliverd.
    It's never a GTK approximation. "Mirror to Touch Bar" puts the edit on the real bar live.
-2. **Never strand the user.** No edit can remove Esc from the Base or Fn layer, or F1–F12 from the
+2. **Never strand the user.** On a machine with no physical Esc, no edit can remove Esc from the Base or Fn layer. On any machine, no edit can remove F1–F12 from the
    Fn layer (§7). Every destructive action can be undone.
 3. **The 90% path is one click.** For example, "Customize for Firefox…" lives in the editor.
    Rules, inheritance and priorities exist but stay out of the way.
@@ -24,9 +24,9 @@ feature tiers are in [features.md](features.md). The app is GTK4 + libadwaita (A
 | **Bar** | The physical strip. |
 | **Item** | Anything on the bar: a button, widget, group or spacer. |
 | **Widget** | An item with live content (clock, volume, now playing). |
-| **Zone** | One of three fixed regions of a layout: **Esc** (left, pinned) · **Main** (flexible) · **Controls** (right, the collapsible control strip). |
+| **Zone** | One of three fixed regions of a layout: **Esc** (left) · **Main** (flexible) · **Controls** (right, the collapsible control strip). The Esc zone is pinned and locked only on bars with no physical Esc (2170 px models). On 2008 px bars with a physical Esc (this Mac14,7, pending H2) it's empty by default and the user can put anything there, including an Esc. |
 | **Layout** | Items arranged into zones. Has a name. |
-| **Layer** | The slot a layout is shown in. **Base** is the default. **Fn** shows while Fn is held. Custom layers (Media, Emoji…) open from an action and close with Esc or ✕. |
+| **Layer** | The slot a layout is shown in. **Base** is the default. **Fn** shows while Fn is held. Custom layers (Media, Emoji…) open from an action and close with their auto ✕ button, the bar's Esc if there is one, or an idle timeout. |
 | **Rule** | "When ‹conditions›, use ‹layout› for ‹layer›". |
 | **App controls** | A placeholder item. Items that the focused app publishes appear here. |
 | **Profile** | A complete config: layouts, rules, appearance. One is active. |
@@ -102,8 +102,11 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 ### Interactions
 - **Add**: drag from the Library onto the bar preview (as in macOS Customize Touch Bar). An insert
   caret shows the drop slot. Double-clicking a library tile appends it to the end of Main.
-- **Reorder**: drag within or across zones. Items can't be dropped into the Esc zone on
-  Base or Fn, where Esc stays first.
+- **Reorder**: drag within or across zones. On bars with no physical Esc, items can't be dropped
+  into the Esc zone on Base or Fn, where Esc stays first.
+- **Size limits**: the editor warns when an item would be narrower than 80 px (~9 mm, the
+  comfortable touch target) and won't go below 60 px. Those limits come from birch,
+  features.md §9.
 - **Remove**: drag off the bar (poof), press Delete, or use the context menu. A toast says
   "Removed Volume · Undo".
 - **Resize**: a handle on the right edge of the selected item. Width is **Auto** (fits content),
@@ -129,7 +132,7 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 ### Mirror to Touch Bar
 - On by default while the window is focused (Q10). It turns off after 60 s unfocused or when the
   window closes, and the bar returns to the resolved layout.
-- Esc and Fn keep working during mirroring. Pressing an item on the real bar while mirroring
+- The bar Esc (if present) and Fn keep working during mirroring. Pressing an item on the real bar while mirroring
   selects it **and** fires it, unless "Select only" is toggled.
 - It's implemented as an agent "preview override". It never touches the daemon's safe layer.
 
@@ -167,9 +170,9 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
   the UI. Hand-written TOML can do more.
 - "Active now" marks the winning rule. Clicking it explains why: "Firefox matched; Terminals
   didn't (app = firefox)".
-- There's a built-in **F-keys** layout (Esc + F1–F12). A rule pointing at it implements macOS's
+- There's a built-in **F-keys** layout (F1–F12, with Esc first on bars that have no physical Esc). A rule pointing at it implements macOS's
   per-app "show F-keys", and the settings app offers this as a one-click option per app.
-- **Locked screen** layout: the default contents are Esc, brightness, volume and media controls.
+- **Locked screen** layout: the default contents are brightness, volume and media controls, plus Esc on bars with no physical Esc.
   App controls, script widgets and notification text are **never** shown while locked, whatever
   the layout says (privacy).
 
@@ -178,7 +181,7 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 - When a focused app publishes items (API, pending cedar), they render inside the user's **App
   controls** placeholder. If a layout has no placeholder, app items don't show. That's how a
   user opts out per layout.
-- An app may never cover the Esc zone. Taking Main + Controls ("modal", e.g. a color picker)
+- An app may never cover the Esc zone or remove Fn → F-keys. Taking Main + Controls ("modal", e.g. a color picker)
   needs the per-app "may take the whole bar" toggle, which defaults on for the focused app and
   ends when focus leaves or on Esc.
 - Default policy for new apps is **Allow** (Q6). The Apps page lists every app seen, with
@@ -189,7 +192,9 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 
 | Rule | Enforcement |
 |---|---|
-| Esc is first on Base and Fn | The Esc zone is locked. The Esc item can be restyled but not deleted or moved. |
+| Esc is reachable | **No physical Esc** (2170 px bars, auto-detected from bar length, overridable in config): the Esc zone is locked and the Esc item can be restyled but not deleted or moved. **Physical Esc present** (2008 px bars): the Esc zone is optional. |
+| Every item is touchable | Width below 80 px gets a warning; below 60 px is refused. |
+| A dark bar doesn't fire | The first touch on a dimmed-off bar only wakes it. |
 | Fn layer has F1–F12 | Validation: you can restyle, reorder, add F13–F24 or a group, but not delete F1–F12 (Q2). |
 | A broken config never reaches the bar | The settings app validates before writing. The agent re-validates and keeps the last good config. The daemon's safe layer is the final backstop. |
 | Scripts can't hang the bar | Each script has a timeout (default 2 s). On failure the item shows "!" and the error goes to Status. |
@@ -197,7 +202,8 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 
 ## 8. Onboarding (first launch)
 
-1. "Sliver is running. Your Touch Bar is still Esc and F-keys if anything goes wrong."
+1. "Sliver is running. If anything goes wrong, your Touch Bar falls back to F-keys (and Esc, if
+   your Mac has no physical Esc key)."
 2. If a tiny-dfr config is found: "Import your tiny-dfr setup?" Show a side-by-side render of
    the imported config. [Import] (default) / [Start fresh].
 3. Choose a starting preset, each shown as a real render: **Classic** (dfr), **macOS-like**,
@@ -229,7 +235,7 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 
 | # | Question | Options | Pick |
 |---|---|---|---|
-| Q1 | Fresh-install default bar | A dfr classic (F-keys, Fn → media) · B macOS-like (Esc · App controls · control strip, Fn → F-keys) · C Desktop (Esc · workspaces · app controls · now playing · clock/battery · control strip) | **B**. tiny-dfr users keep their imported config. |
+| Q1 | Fresh-install default bar | A dfr classic (F-keys, Fn → media) · B macOS-like (Esc zone · App controls · control strip, Fn → F-keys; the Esc zone is empty when a physical Esc exists) · C Desktop (Esc zone · workspaces · app controls · now playing · clock/battery · control strip) | **B**. tiny-dfr users keep their imported config. |
 | Q2 | How locked is the Fn layer | A locked to F1–F12 (style only) · B editable but must keep Esc + F1–F12 · C fully editable | **B** |
 | Q3 | Apply model | A instant apply + undo (GNOME HIG) · B explicit Save/Revert | **A** |
 | Q4 | Item width model | A grid units only (dfr Stretch) · B free px · C Auto/Fixed/Fill per item | **C** |
@@ -238,6 +244,6 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 | Q7 | App name in menus | A "Sliver" (GenericName "Touch Bar Settings", Keywords touch bar) · B "Touch Bar" · C "Sliver Settings" | **A**. It avoids leaning on Apple's trademark and stays findable. |
 | Q8 | Default visual style | A dfr look (outlined, white on black, bold) · B macOS-like (filled dark-gray rounded keys, no outlines) · C B + desktop accent for active toggles and sliders | **C** |
 | Q9 | Collapsible control strip zone | A yes, macOS-style (collapsed 4 items ↔ expanded) · B no, just items | **A** |
-| Q10 | Mirror to real bar while editing | A on by default · B off by default | **A**. Esc and Fn still work. |
+| Q10 | Mirror to real bar while editing | A on by default · B off by default | **A**. The bar Esc (if any) and Fn still work. |
 
 Answers get recorded here, and in an ADR if they constrain the config schema (Q2, Q4, Q5).

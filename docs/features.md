@@ -22,11 +22,12 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (the config on this machine is
 
 | Feature | Tier | Prior art | Notes |
 |---|---|---|---|
-| Built-in **safe layer** (Esc + F1–F12, plus media on Fn) inside sliverd | P0 | dfr (it's the only layer) | Shown whenever the agent, config or a widget fails. It needs no config and no fonts beyond the built-in ones. |
-| Esc is always present on the Base and Fn layers | P0 | mac, dfr | See ux.md §Invariants in the editor. |
+| Built-in **safe layer** inside sliverd: F1–F12 (with Esc first on bars that have no physical Esc), plus media on Fn | P0 | dfr (it's the only layer) | Shown whenever the agent, config or a widget fails. It needs no config and no fonts beyond the built-in ones. |
+| Esc is always reachable: on the bar when there's **no physical Esc** (2170 px bars), optional otherwise | P0 | mac, dfr | dfr adds Esc only on bars ≥2170 px. This 2008 px Mac14,7 most likely has a physical Esc (the keyboard reports `KEY_ESC`; H2 confirms). See ux.md §7. |
 | Fn held → F-key layer, from any state | P0 | mac, dfr | Works even with app modals and custom layers. |
 | Per-app "show F-keys by default" | P1 | mac (Keyboard prefs) | For terminals, IDEs and games. Expressed as a rule (see §5). |
-| Render only on change, idle dim → off | P0 | dfr | Invariant 3. |
+| Render only on change, idle dim → off | P0 | dfr | Invariant 3. The bar is OLED, so this is also the main burn-in protection. Defaults: dim at 30 s, off at 60 s, like dfr. |
+| Wake on touch: the first touch on a dark bar only wakes it and doesn't fire an item | P0 | dfr | Avoids accidental presses on a bar you can't see. |
 | Headless renderer to PNG and simulated touch | P0 | (none) | Invariant 4. The settings preview uses the same renderer (ux.md). |
 | tiny-dfr config import (`/usr/share` + `/etc` merge) | P0 | dfr | Covers every dfr key: `MediaLayerDefault`, `ShowButtonOutlines`, `EnablePixelShift`, `FontTemplate`, `AdaptiveBrightness`, `ActiveBrightness`, `PrimaryLayerKeys`, `MediaLayerKeys` (Text/Icon/Theme/Time/Locale/Battery/Stretch/Action, key combos, spacers). |
 | Coexist with or replace tiny-dfr cleanly | P0 | (none) | Packaging (systemd `Conflicts=`), restored by the safe-swap harness. |
@@ -82,12 +83,13 @@ we want, if the hardware allows them.
 | Gesture | Tier | Prior art | Notes |
 |---|---|---|---|
 | Tap: fires on release, cancels on slide-off | P0 | dfr | dfr fires on press. Decide this per item: keys fire on press for latency, everything else on release. |
+| *(no pressure/force, no hover, no vertical swipes)* | n/a | | The hardware reports none of these, and the bar is only 6 mm tall. Never design for them. |
 | Hold: key repeat for key buttons | P0 | (none) | |
 | Long-press (≈500 ms, configurable) | P1 | MTMR longTap | Doesn't delay tap. Tap fires on release before the threshold. |
 | Press-and-slide on a collapsed slider | P1 | mac | Touch the volume icon and slide without lifting. |
 | Swipe left/right on an item | P1 | Pock, MTMR | Item scope. Paged widgets (workspaces, media). |
 | Double-tap | P2 | BTT | Off by default. When it's set, it delays that item's single tap. |
-| Multi-finger swipe across the whole bar (2/3-finger → volume/brightness/custom) | P2 | MTMR swipe | Only if multi-touch is reliable (pending birch). |
+| Two-finger swipe across the whole bar (→ volume/brightness/custom) | P2 | MTMR swipe | MT slots exist (count pending). There's little room for 3+ fingers on a 6 mm strip, so ship two-finger only. |
 | Edge swipe from Esc → reveal a hidden layer | P3 | (none) | Experimental. |
 
 ## 5. Layers, layouts, contexts
@@ -96,7 +98,7 @@ we want, if the hardware allows them.
 |---|---|---|---|
 | Two layers: Base and Fn, plus `MediaLayerDefault` | P0 | dfr | |
 | Custom layers (Media, Emoji, "Dev"…) entered by an action | P1 | BTT groups | |
-| Zones: **Esc** (pinned) · **Main** · **Control strip** (collapsible) | P1 | mac | ux.md §Model. |
+| Zones: **Esc** (locked only when there's no physical Esc) · **Main** · **Control strip** (collapsible) | P1 | mac | ux.md §Model. |
 | Per-app layout (app_id or class) | P1 | mac, BTT | Hyprland first (T7). |
 | Window title regex, per workspace, per monitor | P2 | BTT | |
 | State contexts: media playing, screen locked, on battery, low battery, fullscreen, DND, external display, time of day | P2 | BTT conditional groups | Locked screen gets a privacy-safe layout (ux.md). |
@@ -109,7 +111,7 @@ we want, if the hardware allows them.
 | Feature | Tier | Prior art | Notes |
 |---|---|---|---|
 | Outlines on/off, font (fontconfig pattern), icons (SVG/PNG, XDG theme) | P0 | dfr | |
-| Pixel shift | P0 | dfr | Default off, like dfr (pending birch on burn-in risk). |
+| Pixel shift (±11 px x, ±2 px y) | P0 | dfr | Default off, like dfr. Exposed as an *advanced* option. The OLED burn-in risk is real, but idle dim/off is the main protection. |
 | Themes: built-in light/dark/high-contrast/"dfr classic", plus user TOML themes | P1 | BTT | |
 | Accent color from the desktop (GNOME/KDE accent, else a fixed default) | P1 | (none) | |
 | Per-item colors (background, foreground, state colors) | P1 | MTMR, BTT | |
@@ -145,13 +147,21 @@ tiering only.
 | RPM + COPR, udev, polkit, SELinux-clean, man pages | P1 (RPM) / P2 (rest) |
 | Intel T2 (t2linux) | P2 |
 
-## 9. Hardware-dependent unknowns (pending birch)
+## 9. Hardware facts that shape features (from birch, docs/hardware.md)
 
-- Physical size and px density, which decide the minimum comfortable target width. The working
-  assumption is ~218 ppi, so 60 px ≈ 7 mm tall and 2008 px ≈ 23 cm wide. dfr fits Esc + 12 keys,
-  about 150 px each.
-- Number of touch slots, so whether multi-finger gestures (§4) are realistic.
-- Brightness range and true panel-off, which feed idle dim/off and the curve editor.
-- Update latency and partial updates, which decide whether animations and press-and-slide are
-  cheap enough on power.
-- Burn-in risk, which decides whether pixel shift and idle-off should default to on.
+- **Size:** 2008×60 px over 230×6 mm, so ~8.7 px/mm. dfr F-keys are ~152 px (17 mm) with 16 px
+  gaps. **Minimum target is 80 px (~9 mm); 60 px is the hard floor.** The editor warns below 80
+  and refuses below 60. At 80 px, at most ~22 items fit, which matches dfr's "breaks around 24".
+- **Touch:** multitouch slots and contact size/orientation are reported. There's no pressure, no
+  hover, and vertical motion is meaningless. The slot count and coordinate resolution are still
+  pending (they need a harness run).
+- **Backlight:** raw 0–255. dfr uses 1 = dim and 0 = off. While the backlight is 0, touches are
+  ignored and the first touch wakes the bar. Whether DRM ACTIVE=0 truly powers the panel off is
+  pending.
+- **Updates:** memcpy + DIRTYFB with per-button damage rects, with no vsync or page flip. Damage
+  is cheap, so the renderer should damage per item. Refresh rate and latency haven't been
+  measured. Assume ~60 Hz, keep animations short, and skip them when idle.
+- **OLED:** burn-in from static items is real. Rely on idle dim/off. Pixel shift is advanced
+  and opt-in.
+- **Physical Esc:** most likely present on this machine (H2). If so, Esc on the bar is
+  optional, and the F-keys are the only bar-only keys.
