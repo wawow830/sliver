@@ -1533,6 +1533,7 @@ dependencies = [
  "rustix",
  "signal-hook",
  "sliver-api",
+ "sliver-bus",
  "sliver-config",
  "sliver-desktop",
  "sliver-emoji",
@@ -1559,6 +1560,16 @@ dependencies = [
  "serde",
  "sliver-desktop",
  "sliver-ipc",
+ "sliver-testbus",
+ "zbus",
+]
+
+[[package]]
+name = "sliver-bus"
+version = "0.1.0"
+dependencies = [
+ "async-io",
+ "async-trait",
  "sliver-testbus",
  "zbus",
 ]
@@ -1605,6 +1616,7 @@ name = "sliver-feeds"
 version = "0.1.0"
 dependencies = [
  "rustix",
+ "sliver-bus",
  "sliver-config",
  "sliver-desktop",
  "sliver-icons",

@@ -14,6 +14,7 @@ publish = false
 # Internal crates. Depend on these as `sliver-config.workspace = true`.
 sliver-desktop = { path = "crates/sliver-desktop" }
 sliver-session = { path = "crates/sliver-session" }
+sliver-bus = { path = "crates/sliver-bus" }
 sliver-icons = { path = "crates/sliver-icons" }
 sliver-modules = { path = "crates/sliver-modules" }
 sliver-waybar = { path = "crates/sliver-waybar" }

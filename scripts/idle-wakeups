@@ -27,12 +27,12 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# Per second, everything together, with ~1.5x headroom. Measured on the Mac14,7 (T101): on 5.6-9.2,
-# off 3.8-4.1, of which 2.0 is zbus's idle `blocking` pool thread (a 500 ms park loop in the
-# `blocking` crate, docs/hardware.md) and most of the rest the audio feed retrying without a
-# PulseAudio server (backing off to 30 s). Before T101's fix that retry loop alone was ~50/s.
-BUDGET_ON = float(os.environ.get("IDLE_WAKEUPS_ON", "12"))
-BUDGET_OFF = float(os.environ.get("IDLE_WAKEUPS_OFF", "6"))
+# Per second, everything together, with headroom. Measured on the Mac14,7: T101 on 5.6-9.2, off
+# 3.8-4.1; since T103 (sliver-bus: no zbus `blocking` pool thread, -2.0/s) on 3.9-4.8, off 1.3-1.4.
+# Most of what's left is the audio feed retrying without a PulseAudio server (every 30 s) and the
+# D-Bus reactor; before T101's fix that retry loop alone was ~50/s. `--threads` breaks it down.
+BUDGET_ON = float(os.environ.get("IDLE_WAKEUPS_ON", "8"))
+BUDGET_OFF = float(os.environ.get("IDLE_WAKEUPS_OFF", "3"))
 SETTLE_S = 5
 # Display timeouts in the sandbox config: "on" is measured before dim, "off" after off.
 DIM_AFTER_S = 40
@@ -88,14 +88,39 @@ def comm(pid: int) -> str:
         return "?"
 
 
-def snapshot(roots: list[int]) -> dict[int, tuple[str, int]]:
+def thread_switches(pid: int) -> dict[str, int]:
+    """Voluntary context switches per thread of `pid`, keyed `process/thread` by name."""
+    out: dict[str, int] = {}
+    try:
+        tasks = list((Path("/proc") / str(pid) / "task").iterdir())
+    except OSError:
+        return out
+    for t in tasks:
+        try:
+            name = (t / "comm").read_text().strip()
+            for line in (t / "status").read_text().splitlines():
+                if line.startswith("voluntary_ctxt_switches:"):
+                    key = f"{comm(pid)}/{name}"
+                    out[key] = out.get(key, 0) + int(line.split()[1])
+        except OSError:
+            pass
+    return out
+
+
+def snapshot(roots: list[int], threads: bool = False) -> dict:
+    if threads:
+        snap: dict = {}
+        for p in tree(roots):
+            for k, n in thread_switches(p).items():
+                snap[(p, k)] = (k, n)
+        return snap
     return {p: (comm(p), switches(p)) for p in tree(roots)}
 
 
-def measure(roots: list[int], seconds: float) -> tuple[float, dict[str, int]]:
-    before = snapshot(roots)
+def measure(roots: list[int], seconds: float, threads: bool = False) -> tuple[float, dict[str, int]]:
+    before = snapshot(roots, threads)
     time.sleep(seconds)
-    after = snapshot(roots)
+    after = snapshot(roots, threads)
     per: dict[str, int] = {}
     for pid, (name, n) in after.items():
         # A helper started during the window counts from zero.
@@ -107,6 +132,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--release", action="store_true", help="use target/release (default: debug)")
     ap.add_argument("--seconds", type=float, default=30, help="length of each phase (default 30)")
+    ap.add_argument("--threads", action="store_true", help="break the counts down per thread")
     a = ap.parse_args()
     if a.seconds + SETTLE_S > DIM_AFTER_S:
         ap.error(f"--seconds must be at most {DIM_AFTER_S - SETTLE_S}")
@@ -163,9 +189,9 @@ def main() -> int:
             if p.poll() is not None:
                 print(f"idle-wakeups: {p.args[0]} exited early; see {tmp}", file=sys.stderr)
                 return 1
-        on, on_per = measure(roots, a.seconds)
+        on, on_per = measure(roots, a.seconds, a.threads)
         time.sleep(max(0.0, OFF_AFTER_S + 2 - SETTLE_S - a.seconds))
-        off, off_per = measure(roots, a.seconds)
+        off, off_per = measure(roots, a.seconds, a.threads)
 
         ok = True
         for phase, rate, per, budget in (("on", on, on_per, BUDGET_ON),

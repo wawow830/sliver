@@ -1,0 +1,21 @@
+[package]
+name = "sliver-bus"
+description = "Sliver's D-Bus connections without zbus's idle 'blocking' pool thread (invariant 3)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+zbus = "5"
+# The versions zbus itself uses (no new code in the tree).
+async-io = "2"
+async-trait = "0.1"
+
+[dev-dependencies]
+sliver-testbus.workspace = true

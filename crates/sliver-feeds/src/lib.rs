@@ -239,13 +239,12 @@ impl Feeds {
     /// brightness, notifications and the tray. Each optional part that cannot start leaves a
     /// [`Feed::Note`] and its keys stay unknown.
     pub fn start_session(&mut self) {
-        let system = zbus::blocking::Connection::system();
+        // sliver-bus: connections that don't start zbus's idle `blocking` pool thread (T103).
+        let system = sliver_bus::system();
         match system {
-            Ok(system) => self.start_session_on(
-                system,
-                zbus::blocking::Connection::session,
-                SessionOptions::default(),
-            ),
+            Ok(system) => {
+                self.start_session_on(system, sliver_bus::session, SessionOptions::default())
+            }
             Err(e) => {
                 self.out
                     .send(Feed::Note(format!("session sources: no D-Bus ({e})")));

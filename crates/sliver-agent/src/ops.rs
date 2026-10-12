@@ -55,8 +55,8 @@ pub enum Op {
 pub fn start_ops(handle: sliver_session::Handle) -> io::Result<Sender<Op>> {
     let (tx, rx) = channel::<Op>();
     let (sys, ses) = (
-        Connection::system().map_err(io::Error::other)?,
-        Connection::session().map_err(io::Error::other)?,
+        sliver_bus::system().map_err(io::Error::other)?,
+        sliver_bus::session().map_err(io::Error::other)?,
     );
     thread::Builder::new()
         .name("agent-ops".into())
@@ -162,7 +162,7 @@ fn open_notification(ses: &Connection, id: u32) -> Result<(), String> {
 /// Make a GNOME/KDE desktop-control call on the session bus. It never starts the destination
 /// (no extension, no effect) and gives up after a few seconds.
 pub fn bus_call(call: &sliver_desktop::control::BusCall) -> Result<(), String> {
-    let conn = Connection::session().map_err(|e| e.to_string())?;
+    let conn = sliver_bus::session().map_err(|e| e.to_string())?;
     let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(&conn)
         .destination(call.dest)
         .and_then(|b| b.path(call.path))

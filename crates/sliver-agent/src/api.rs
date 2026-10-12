@@ -75,7 +75,8 @@ pub struct ApiLink {
 impl ApiLink {
     /// Serves the API on the session bus as `io.github.wawow830.Sliver`.
     pub fn start() -> zbus::Result<ApiLink> {
-        let conn = zbus::block_on(zbus::Connection::session())?;
+        // sliver-bus: no zbus `blocking` pool thread waking twice a second (T103).
+        let conn = zbus::block_on(sliver_bus::session_async())?;
         ApiLink::serve(conn, true)
     }
 

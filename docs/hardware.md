@@ -388,10 +388,15 @@ private buses, 30 s idle with the bar on and 30 s with it off. sliverd: **0** wa
 The agent was at ~52/s because the audio feed respawned `pactl subscribe` about every 0.75 s
 when no PulseAudio server answered: a successful spawn reset the backoff even though pactl exited
 at once. Fixed: only a pactl that stays up 10 s resets it, otherwise it backs off to 30 s. Now
-on ≈ 6/s, off ≈ 3–4/s. The floor is **2/s from zbus's `blocking` pool thread**: zbus connects
-Unix sockets via `blocking::unblock`, and `blocking` 1.7 parks an idle pool thread in a 500 ms
-`wait_timeout` loop it never leaves below the pool limit. On the live session the installed agent
-measured ~8/s (real buses, compositor events). Budgets: on ≤ 12/s, off ≤ 6/s.
+on ≈ 6/s, off ≈ 3–4/s. The floor was then **2/s from zbus's `blocking` pool thread**: zbus connects
+and closes Unix sockets via `blocking::unblock`, and `blocking` 1.7 parks an idle pool thread in a
+500 ms `wait_timeout` loop it never leaves below the pool limit (`BLOCKING_MAX_THREADS=1` doesn't
+help: it only exits *above* the limit). **Fixed in T103:** `crates/sliver-bus` connects the socket
+itself and gives zbus a write half that shuts down directly, so the pool never starts. Every D-Bus
+connection in the agent process goes through it. Now on ≈ 3.9–4.8/s, off ≈ 1.3–1.4/s
+(`scripts/idle-wakeups --threads`: the async-io reactor, the audio feed's 30 s `pactl` retry in the
+sandbox and its spawner). On the live session the installed agent measured ~8/s before T103 (real
+buses, compositor events). Budgets: on ≤ 8/s, off ≤ 3/s.
 
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
