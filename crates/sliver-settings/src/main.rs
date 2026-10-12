@@ -4,6 +4,7 @@
 //! file: it's applied instantly (Q3), validated before it's written (a broken config never lands),
 //! and can be undone from the toast. The running agent hot-reloads the file.
 
+mod act;
 mod apps;
 mod bar;
 mod cond;

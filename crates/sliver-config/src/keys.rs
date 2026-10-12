@@ -23,6 +23,11 @@ impl Key {
         self.name
     }
 
+    /// Every key name, sorted case-insensitively (for pickers).
+    pub fn names() -> impl Iterator<Item = &'static str> {
+        KEYS.iter().map(|(n, _)| *n)
+    }
+
     /// Looks a key up by name, ignoring case and `_`/`-`. Also accepts kernel names such as
     /// `KEY_ESC` or `kbdillumup`.
     pub fn from_name(s: &str) -> Option<Key> {

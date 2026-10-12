@@ -1493,11 +1493,7 @@ fn inspector(
         "Look",
         Some("Empty clears the setting. Formats use waybar syntax, e.g. {icon} {capacity}%."),
     );
-    let actions = group(
-        "Touch",
-        Some("A shell command, or TOML for typed actions: { key = \"F5\" }, { layer = \"media\" }"),
-    );
-    let fields: [(&adw::PreferencesGroup, &str, &str); 5] = [
+    let fields: [(&adw::PreferencesGroup, &str, &str); 3] = [
         (&look, "format", "Format"),
         (&look, "icon", "Icon (name or path)"),
         (
@@ -1505,10 +1501,7 @@ fn inspector(
             "width",
             "Width: auto, fill, a px number, or { fill = 2 }",
         ),
-        (&actions, "on-tap", "On tap"),
-        (&actions, "on-hold", "On hold"),
     ];
-    let tap_entry: Rc<RefCell<Option<adw::EntryRow>>> = Rc::default();
     for (g, key, label) in fields {
         let current = block.get(key).map(|v| match v {
             Value::String(s) => s.clone(),
@@ -1519,7 +1512,6 @@ fn inspector(
             .show_apply_button(true)
             .build();
         entry.set_text(current.as_deref().unwrap_or(""));
-        let is_tap = key == "on-tap";
         let (ui, layout, zone, key) = (
             ui.clone(),
             layout.to_owned(),
@@ -1538,44 +1530,39 @@ fn inspector(
                 edit::set_module_key(ed, merged, &layout, &zone, index, &key, value)
             });
         });
-        if is_tap {
-            *tap_entry.borrow_mut() = Some(entry.clone());
-        }
         g.add(&entry);
     }
-    // D-Bus presets: fill the "On tap" field (press its apply button to keep it).
-    {
-        let model = gtk::StringList::new(&[]);
-        model.append("Choose a D-Bus action…");
-        for p in crate::dbus_presets::PRESETS {
-            model.append(p.label);
-        }
-        let combo = adw::ComboRow::builder()
-            .title("Fill “On tap” with a D-Bus action")
-            .model(&model)
-            .build();
-        let tap_entry = tap_entry.clone();
-        combo.connect_selected_notify(move |c| {
-            let i = c.selected() as usize;
-            if i == 0 {
-                return;
-            }
-            if let (Some(p), Some(e)) = (
-                crate::dbus_presets::PRESETS.get(i - 1),
-                tap_entry.borrow().as_ref(),
-            ) {
-                e.set_text(p.toml);
-                e.grab_focus();
-            }
-        });
-        actions.add(&combo);
-    }
+    // Touch (ux.md §4.2): one action picker per gesture.
+    let state = ui.state();
+    let choices = Rc::new(crate::act::Choices {
+        layers: state.loaded.config.layers.keys().cloned().collect(),
+        layouts: state.loaded.config.layouts.keys().cloned().collect(),
+        profiles: sliver_config::profile::list(),
+    });
+    let gesture_pickers: Vec<adw::PreferencesGroup> =
+        [("on-tap", "On tap"), ("on-hold", "On hold")]
+            .into_iter()
+            .map(|(key, label)| {
+                let write: Rc<dyn Fn(Option<Value>)> = {
+                    let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());
+                    Rc::new(move |v| {
+                        let (layout, zone) = (layout.clone(), zone.clone());
+                        apply(&ui, move |ed, merged| {
+                            edit::set_module_key(ed, merged, &layout, &zone, index, key, v)
+                        });
+                    })
+                };
+                crate::act::editor(label, block.get(key), choices.clone(), write)
+            })
+            .collect();
     if let Some(note) = width_px.and_then(width_note) {
         let size = group("Size", Some(&note));
         page.add(&size);
     }
     page.add(&look);
-    page.add(&actions);
+    for g in &gesture_pickers {
+        page.add(g);
+    }
     // Visibility (ux.md §4.3): the condition builder, as on rules.
     let write: Rc<dyn Fn(Option<Value>)> = {
         let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());

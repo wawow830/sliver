@@ -364,6 +364,12 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   replace). "Group modules…" on a zone header turns checked modules into a new `group/<name>`
   where the first of them was. Not done: entering a group on the preview with a breadcrumb, and
   grouping a multi-selection made on the preview.
+- **Action picker** (T110, `act.rs`): On tap and On hold in the inspector each pick what they
+  do: nothing, a command, a key (searchable list of every key name), a key combination, an app
+  (searchable installed apps), a web address, open a layer (and how: until tapped again, while
+  held, for one tap), close the layer, switch layout or profile, or a D-Bus call (fir's presets).
+  Anything else (macros, argv `exec`, signals) stays editable under Advanced as TOML and is never
+  rewritten.
 - **Testing headless** (never on the live session): `scripts/settings-headless OUT.png [STEP...]`.
   It runs the app on GTK's Broadway backend with a sandboxed `XDG_CONFIG_HOME`
   (`target/test-tmp/xdg-ui`), on a **private D-Bus**, and drives it through agent-browser: clicks

@@ -275,7 +275,7 @@ fn label(r: &Row) -> String {
 
 /// Calls `f` with the entry's text when the user is done with it (Enter, or leaving the field),
 /// so typing doesn't write the config on every keystroke.
-fn on_commit(e: &gtk::Entry, f: impl Fn(String) + 'static) {
+pub(crate) fn on_commit(e: &gtk::Entry, f: impl Fn(String) + 'static) {
     let f = Rc::new(f);
     {
         let f = f.clone();
@@ -288,7 +288,7 @@ fn on_commit(e: &gtk::Entry, f: impl Fn(String) + 'static) {
 }
 
 /// Installed `.desktop` apps as (id without `.desktop`, name), by name.
-fn installed_apps() -> Vec<(String, String)> {
+pub(crate) fn installed_apps() -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = gtk::gio::AppInfo::all()
         .into_iter()
         .filter(|a| a.should_show())
@@ -303,7 +303,7 @@ fn installed_apps() -> Vec<(String, String)> {
 }
 
 /// "Add app…": a popover with a search field over the installed apps; `chosen` gets the app id.
-fn app_picker(chosen: impl Fn(&str) + 'static) -> gtk::MenuButton {
+pub(crate) fn app_picker(chosen: impl Fn(&str) + 'static) -> gtk::MenuButton {
     let apps = installed_apps();
     let search = gtk::SearchEntry::builder()
         .placeholder_text("Search apps")
