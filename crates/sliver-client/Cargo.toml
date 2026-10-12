@@ -1,0 +1,19 @@
+[package]
+name = "sliver-client"
+description = "Rust client for Sliver's public Touch Bar D-Bus API, with automatic re-publishing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sliver-ipc.workspace = true
+zbus = "5"
+serde.workspace = true
+
+[dev-dependencies]
+sliver-api.workspace = true

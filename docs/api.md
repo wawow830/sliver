@@ -237,7 +237,7 @@ For `sliverctl`, the settings app and DE integrations. Unsandboxed clients only.
 
 `NS.Control1`
 ```
-SwitchLayer(s name)                 PushLayer(s name, u timeout_ms)   PopLayer()
+SwitchLayer(s name)                 PushLayer(s name, u timeout_ms)   PopLayer()   ToggleLayer(s name)
 SetLayout(s name)                   SetProfile(s name)                ReloadConfig() -> (as errors)
 Bar(s action)                       show | hide | toggle the whole bar (the hatch keeps working)
 ValidateConfig(s toml) -> (as errors)
@@ -380,6 +380,11 @@ deliberate change: combos are released in **reverse** order (modifiers last). T8
 
 ## 8. Examples
 
+Clients: **`crates/sliver-client`** (Rust: builders, an event channel, and automatic re-publishing
+when the agent restarts or starts late), **`sliverctl`** (every `Control1` method, plus `publish`), and
+**`examples/`** (`python/pomodoro.py` in plain Gio, `shell/README.md`). All three are tested end to end
+against the real server on a private bus, the Python example included.
+
 Shell (`busctl`):
 ```sh
 ctx=$(busctl --user call io.github.wawow830.Sliver /io/github/wawow830/Sliver \
@@ -391,7 +396,7 @@ busctl --user call io.github.wawow830.Sliver "$ctx" io.github.wawow830.Sliver.Co
 # prints one event per line) or the Python example.
 ```
 
-`sliverctl` (planned, T14). Every `Control1` method is one subcommand:
+`sliverctl` (`sliverctl help`). Every `Control1` method is one subcommand:
 ```sh
 sliverctl publish --scope status --provider org.example.Hello button:hi:Hello |
   while read -r item kind _; do notify-send "$item $kind"; done

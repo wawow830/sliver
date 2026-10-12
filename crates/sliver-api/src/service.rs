@@ -52,6 +52,7 @@ pub enum Control {
     SwitchLayer(String),
     PushLayer(String, u32),
     PopLayer,
+    ToggleLayer(String),
     SetLayout(String),
     SetProfile(String),
     ReloadConfig,
@@ -620,6 +621,14 @@ impl ControlIface {
         #[zbus(connection)] c: &Connection,
     ) -> Result<()> {
         self.unit(c, &h, Control::PopLayer).await
+    }
+    async fn toggle_layer(
+        &self,
+        #[zbus(header)] h: Header<'_>,
+        #[zbus(connection)] c: &Connection,
+        name: String,
+    ) -> Result<()> {
+        self.unit(c, &h, Control::ToggleLayer(name)).await
     }
     async fn set_layout(
         &self,

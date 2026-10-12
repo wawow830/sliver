@@ -16,6 +16,8 @@ sliver-session = { path = "crates/sliver-session" }
 sliver-icons = { path = "crates/sliver-icons" }
 sliver-config = { path = "crates/sliver-config" }
 sliver-ipc = { path = "crates/sliver-ipc" }
+sliver-api = { path = "crates/sliver-api" }
+sliver-client = { path = "crates/sliver-client" }
 sliver-render = { path = "crates/sliver-render" }
 # External crates shared by several members.
 serde = { version = "1.0.229", features = ["derive"] }
