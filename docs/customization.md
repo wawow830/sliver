@@ -234,8 +234,8 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
   mem). The validator warns if a stacked child has actions, because 30 px is below the touch-target advice.
 - `drawer`: the first module is the leader and the rest stay hidden until revealed. `reveal =
   "tap" | "hold" | "swipe"` (no hover here). `mode = "inline"` expands in place and pushes neighbors
-  (the macOS control strip, Q9/H11). `mode = "bar"` opens a temporary layer with a ✕ (MTMR/BTT
-  folders). Also `start-expanded`, `collapse-after`, `transition-duration`, `children-class`, and
+  (the macOS control strip, Q9/H11). `mode = "bar"` opens the rest of the group as a sub-bar below the first zone, with an automatic ✕ (MTMR/BTT
+  folders; tap the leader). `reveal` is tap only for now. Also `start-expanded`, `collapse-after`, `transition-duration`, `children-class`, and
   `transition-left-to-right`, all named as in waybar.
 - The default base layout's main zone is `app-controls` followed by `group/fkeys` (F1–F12,
   `module-width = "fill"`, `when = { not = { app-controls = true } }`). The bar shows F-keys

@@ -136,6 +136,8 @@ pub struct Agent {
     emoji: modules::EmojiHandle,
     /// An open `menu` sub-bar: the entries it shows.
     menu: Option<Vec<sliver_config::MenuEntry>>,
+    /// An open bar-mode drawer: the group's key.
+    subbar: Option<String>,
     /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
     pub hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
@@ -207,6 +209,7 @@ impl Agent {
             errors: Vec::new(),
             emoji: Default::default(),
             menu: None,
+            subbar: None,
         }
     }
 
@@ -290,7 +293,10 @@ impl Agent {
         let menu = (id_base == 0 && modal.is_none())
             .then(|| self.menu.clone())
             .flatten();
-        if menu.is_some() && !zones.is_empty() {
+        let subbar = (id_base == 0 && modal.is_none())
+            .then(|| self.subbar.clone())
+            .flatten();
+        if (menu.is_some() || subbar.is_some()) && !zones.is_empty() {
             zones.truncate(1);
             zones.push(sliver_config::ResolvedZone {
                 name: "menu".into(),
@@ -316,6 +322,25 @@ impl Agent {
         let per_zone: Vec<Vec<Cell>> = zones
             .iter()
             .map(|z| {
+                if z.name == "menu"
+                    && menu.is_none()
+                    && let Some(key) = &subbar
+                {
+                    // Looked up in the full zone list (the sub-bar replaces all but the first).
+                    let mut cells = crate::modules::subbar_cells(
+                        &r.zones,
+                        key,
+                        world,
+                        &mut self.icons,
+                        ICON_LOOKUP_SIZE,
+                        &lookup,
+                    )
+                    .unwrap_or_default();
+                    for c in &mut cells {
+                        c.pressed = self.pressed.contains(&c.key);
+                    }
+                    return cells;
+                }
                 if z.name == "menu"
                     && let Some(entries) = &menu
                 {
@@ -644,6 +669,11 @@ impl Agent {
                         fx.push(Effect::Redraw);
                     }
                 }
+            }
+            (None, Some(d)) if want == CGesture::Tap && d.bar => {
+                self.subbar = Some(d.group.clone());
+                fx.extend(self.cancel_touches());
+                fx.push(Effect::Redraw);
             }
             (None, Some(d)) if want == CGesture::Tap => {
                 let open = !self.ui(&d.group).expanded;
@@ -1094,6 +1124,7 @@ impl Agent {
             }
             ("menu", "menu:close", _) => {
                 self.menu = None;
+                self.subbar = None;
                 fx.extend(self.cancel_touches());
                 fx.push(Effect::Redraw);
                 return;

@@ -282,6 +282,8 @@ pub struct Drawer {
     pub group: String,
     /// Close again this long after opening (`drawer.collapse-after`).
     pub collapse_after: Option<std::time::Duration>,
+    /// `mode = "bar"`: tapping opens the group's other modules as a sub-bar, not inline.
+    pub bar: bool,
 }
 
 /// Builds the cells for one zone's modules. Hidden modules produce nothing; groups flatten.
@@ -294,6 +296,54 @@ pub fn cells(
     out: &mut Vec<Cell>,
 ) {
     cells_in(modules, "", world, icons, icon_size, ui, out);
+}
+
+/// Is this group a `drawer = { mode = "bar" }` one?
+fn is_bar_drawer(m: &ModuleInstance) -> bool {
+    m.config
+        .get("drawer")
+        .and_then(|d| d.get("mode"))
+        .and_then(|v| v.as_str())
+        == Some("bar")
+}
+
+/// The cells of an open bar-mode drawer: the group's modules after its leader, then a ✕. `key`
+/// is the group's cell key (as in [`Drawer::group`]); `None` when no such group is in `zones`.
+pub fn subbar_cells(
+    zones: &[sliver_config::ResolvedZone],
+    key: &str,
+    world: &World,
+    icons: &mut Icons,
+    icon_size: u32,
+    ui: &dyn Fn(&str) -> UiState,
+) -> Option<Vec<Cell>> {
+    fn find<'a>(ms: &'a [ModuleInstance], prefix: &str, key: &str) -> Option<&'a ModuleInstance> {
+        for m in ms {
+            let k = format!("{prefix}{}", m.id);
+            if m.id.kind == "group" {
+                if k == key {
+                    return Some(m);
+                }
+                if let Some(f) = find(&m.children, &format!("{k}/"), key) {
+                    return Some(f);
+                }
+            }
+        }
+        None
+    }
+    let group = zones.iter().find_map(|z| find(&z.modules, "", key))?;
+    let mut out = Vec::new();
+    cells_in(
+        group.children.get(1..).unwrap_or_default(),
+        &format!("{key}/"),
+        world,
+        icons,
+        icon_size,
+        ui,
+        &mut out,
+    );
+    out.extend(menu_cells(&[], icons, icon_size));
+    Some(out)
 }
 
 fn cells_in(
@@ -311,7 +361,13 @@ fn cells_in(
             let drawer = m.config.contains_key("drawer");
             let open = ui(&key).expanded;
             // A closed drawer shows only its first module (the handle).
-            let shown = if drawer && !open { 1 } else { m.children.len() };
+            // (a bar-mode drawer never grows in place: its rest shows in the sub-bar)
+            let bar = drawer && is_bar_drawer(m);
+            let shown = if drawer && (bar || !open) {
+                1
+            } else {
+                m.children.len()
+            };
             let start = out.len();
             let children = &m.children[..shown.min(m.children.len())];
             cells_in(
@@ -332,6 +388,7 @@ fn cells_in(
                 handle.drawer = Some(Drawer {
                     group: key.clone(),
                     collapse_after,
+                    bar,
                 });
                 handle.checked = open;
                 if handle.touch == Touch::None {
@@ -1627,6 +1684,7 @@ fn cell(
         .then(|| Drawer {
             group: key,
             collapse_after: Some(std::time::Duration::from_secs(5)),
+            bar: false,
         }),
     })
 }

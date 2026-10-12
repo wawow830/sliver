@@ -827,6 +827,65 @@ fn emoji_picker_types_pages_and_closes() {
     );
 }
 
+/// `drawer = { mode = "bar" }`: tapping the leader opens the rest of the group as a sub-bar
+/// with a ✕, instead of expanding in place.
+#[test]
+fn bar_mode_drawer_opens_a_sub_bar() {
+    use sliver_agent::agent::Effect;
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"custom/x\", \"group/tools\"]\n\
+[modules.\"custom/x\"]\nformat = \"X\"\n\
+[modules.\"group/tools\"]\nmodules = [\"custom/more\", \"custom/a\", \"custom/b\"]\ndrawer = { mode = \"bar\" }\n\
+[modules.\"custom/more\"]\nformat = \"more\"\n[modules.\"custom/a\"]\nformat = \"A\"\non-tap = \"echo a\"\n[modules.\"custom/b\"]\nformat = \"B\"\n",
+    );
+    let w = world(9, 41);
+    a.render(&w);
+    let keys = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|c| c.key.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        keys(&a),
+        ["custom/x", "group/tools/custom/more"],
+        "closed: only the leader"
+    );
+    let tap = |a: &mut Agent, key: &str, t: u64| {
+        let (id, x) = region(a, key);
+        let mut fx = a.touch(id, 0, TouchPhase::Down, x, t);
+        fx.extend(a.touch(id, 0, TouchPhase::Up, x, t + 40_000));
+        fx.extend(a.tick(t + 400_000));
+        fx
+    };
+    let fx = tap(&mut a, "group/tools/custom/more", 1_000);
+    assert!(fx.contains(&Effect::Redraw), "{fx:?}");
+    a.render(&w);
+    assert_eq!(
+        keys(&a),
+        [
+            "custom/x",
+            "group/tools/custom/more",
+            "group/tools/custom/a",
+            "group/tools/custom/b",
+            "menu/close"
+        ],
+        "the first zone stays; the rest of the group follows it"
+    );
+    let fx = tap(&mut a, "group/tools/custom/a", 2_000_000);
+    assert!(fx.iter().any(|e| matches!(e, Effect::Spawn(argv) if argv.last().is_some_and(|s| s.contains("echo a")))), "{fx:?}");
+    tap(&mut a, "menu/close", 3_000_000);
+    a.render(&w);
+    assert_eq!(
+        keys(&a),
+        ["custom/x", "group/tools/custom/more"],
+        "✕ closes it"
+    );
+}
+
 /// A module with `menu = [...]` opens a sub-bar (entries + ✕) on its trigger gesture; picking an
 /// entry runs its action and closes it.
 #[test]
