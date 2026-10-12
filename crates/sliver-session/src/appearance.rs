@@ -21,6 +21,10 @@ pub struct Appearance {
     pub accent: Option<[u8; 3]>,
     /// `Some(true)` = the user prefers a dark theme, `Some(false)` = light, `None` = no preference.
     pub dark: Option<bool>,
+    /// The desktop turned animations off: GNOME's `enable-animations = false` (through the
+    /// portal), or KDE's `AnimationDurationFactor=0`. `None` = unknown (animate).
+    #[serde(default)]
+    pub reduce_motion: Option<bool>,
 }
 
 /// The portal's accent value: `(ddd)` with each channel in 0..=1. Anything else, or a channel out
@@ -71,11 +75,29 @@ pub fn kde_accent(kdeglobals: &str) -> Option<[u8; 3]> {
 }
 
 fn read_setting(conn: &Connection, key: &str) -> Option<OwnedValue> {
+    read_ns(conn, NS, key)
+}
+
+fn read_ns(conn: &Connection, ns: &str, key: &str) -> Option<OwnedValue> {
     // ReadOne (portal >= 1.?) returns the value; Read wraps it in one more variant.
-    props::call_no_autostart::<_, OwnedValue>(conn, DEST, PATH, IFACE, "ReadOne", &(NS, key))
+    props::call_no_autostart::<_, OwnedValue>(conn, DEST, PATH, IFACE, "ReadOne", &(ns, key))
         .or_else(|| {
-            props::call_no_autostart::<_, OwnedValue>(conn, DEST, PATH, IFACE, "Read", &(NS, key))
+            props::call_no_autostart::<_, OwnedValue>(conn, DEST, PATH, IFACE, "Read", &(ns, key))
         })
+}
+
+/// KDE: `[KDE]` → `AnimationDurationFactor=0` means animations are off.
+pub fn kde_reduce_motion(kdeglobals: &str) -> Option<bool> {
+    let mut in_kde = false;
+    for line in kdeglobals.lines() {
+        let line = line.trim();
+        if let Some(sec) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            in_kde = sec == "KDE";
+        } else if in_kde && let Some(v) = line.strip_prefix("AnimationDurationFactor=") {
+            return v.trim().parse::<f64>().ok().map(|f| f <= 0.0);
+        }
+    }
+    None
 }
 
 /// Read both settings; `kdeglobals` fills in a missing accent.
@@ -86,10 +108,20 @@ pub fn read_into(conn: &Connection, a: &mut Appearance, kdeglobals: Option<&Path
         Value::U32(2) => Some(false),
         _ => None,
     });
+    // GNOME's switch, exposed by the GNOME/GTK portals (the GTK settings namespace).
+    a.reduce_motion =
+        read_ns(conn, "org.gnome.desktop.interface", "enable-animations").and_then(|v| {
+            match unwrap_variants(&v) {
+                Value::Bool(on) => Some(!on),
+                _ => None,
+            }
+        });
+    let kde = kdeglobals.and_then(|p| std::fs::read_to_string(p).ok());
     if a.accent.is_none() {
-        a.accent = kdeglobals
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|t| kde_accent(&t));
+        a.accent = kde.as_deref().and_then(kde_accent);
+    }
+    if a.reduce_motion.is_none() {
+        a.reduce_motion = kde.as_deref().and_then(kde_reduce_motion);
     }
 }
 
@@ -218,5 +250,20 @@ mod tests {
         );
         assert_eq!(kde_accent("[General]\nColorScheme=Breeze\n"), None);
         assert_eq!(kde_accent("[General]\nAccentColor=bad\n"), None);
+    }
+
+    #[test]
+    fn kde_animation_speed() {
+        assert_eq!(
+            kde_reduce_motion(
+                "[General]\nAnimationDurationFactor=1\n[KDE]\nAnimationDurationFactor=0\n"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            kde_reduce_motion("[KDE]\nAnimationDurationFactor=0.5\n"),
+            Some(false)
+        );
+        assert_eq!(kde_reduce_motion("[KDE]\nLookAndFeelPackage=x\n"), None);
     }
 }

@@ -818,6 +818,11 @@ impl Agent {
         self.emoji = handle;
     }
 
+    /// The desktop's reduce-motion setting: transitions (and layer slides) jump to their end.
+    pub fn set_reduce_motion(&mut self, on: bool) {
+        self.renderer.set_reduce_motion(on);
+    }
+
     /// `Control1.SetLayout`: show `layout` on the current base layer until the next call (an
     /// empty name goes back to the rules).
     pub fn set_layout(&mut self, layout: &str) -> Result<(), String> {

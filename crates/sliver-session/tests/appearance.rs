@@ -1,4 +1,4 @@
-//! The accent colour and colour scheme from a mock settings portal.
+//! The accent colour, colour scheme and reduce-motion from a mock settings portal.
 
 use sliver_session::{Session, SessionSource, SessionState};
 use std::sync::mpsc::{Receiver, channel};
@@ -9,13 +9,17 @@ use zbus::zvariant::{OwnedValue, StructureBuilder, Value};
 mod common;
 use common::Bus;
 
-struct Portal(Arc<Mutex<([f64; 3], u32)>>);
+struct Portal(Arc<Mutex<([f64; 3], u32, bool)>>);
 
 #[zbus::interface(name = "org.freedesktop.portal.Settings")]
 impl Portal {
     fn read_one(&self, namespace: &str, key: &str) -> OwnedValue {
+        let (rgb, scheme, animations) = *self.0.lock().unwrap();
+        if namespace == "org.gnome.desktop.interface" {
+            assert_eq!(key, "enable-animations");
+            return OwnedValue::from(animations);
+        }
         assert_eq!(namespace, "org.freedesktop.appearance");
-        let (rgb, scheme) = *self.0.lock().unwrap();
         match key {
             "accent-color" => OwnedValue::try_from(Value::Structure(
                 StructureBuilder::new()
@@ -55,7 +59,7 @@ fn accent_and_scheme_follow_the_portal_and_kde_fills_in() {
         eprintln!("SKIP: dbus-daemon not installed");
         return;
     };
-    let state = Arc::new(Mutex::new(([1.0, 0.0, 0.0], 1u32)));
+    let state = Arc::new(Mutex::new(([1.0, 0.0, 0.0], 1u32, true)));
     let portal = bus.service("org.freedesktop.portal.Desktop");
     portal
         .object_server()
@@ -70,8 +74,9 @@ fn accent_and_scheme_follow_the_portal_and_kde_fills_in() {
     handle.start_appearance(bus.connect(), None);
     let a = next(&rx).appearance;
     assert_eq!((a.accent, a.dark), (Some([255, 0, 0]), Some(true)));
+    assert_eq!(a.reduce_motion, Some(false));
 
-    *state.lock().unwrap() = ([0.0, 1.0, 0.0], 2);
+    *state.lock().unwrap() = ([0.0, 1.0, 0.0], 2, false);
     portal
         .emit_signal(
             None::<&str>,
@@ -87,6 +92,7 @@ fn accent_and_scheme_follow_the_portal_and_kde_fills_in() {
         .unwrap();
     let a = next(&rx).appearance;
     assert_eq!((a.accent, a.dark), (Some([0, 255, 0]), Some(false)));
+    assert_eq!(a.reduce_motion, Some(true), "GNOME turned animations off");
 }
 
 #[test]
@@ -98,7 +104,7 @@ fn no_portal_falls_back_to_kdeglobals_without_starting_anything() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("kdeglobals"),
-        "[General]\nAccentColor=61,174,233\n",
+        "[General]\nAccentColor=61,174,233\n[KDE]\nAnimationDurationFactor=0\n",
     )
     .unwrap();
     let client = bus.connect();
@@ -107,6 +113,10 @@ fn no_portal_falls_back_to_kdeglobals_without_starting_anything() {
     let rx = spawn_states(session);
     let _ = next(&rx);
     handle.start_appearance(bus.connect(), Some(dir.join("kdeglobals")));
-    assert_eq!(next(&rx).appearance.accent, Some([61, 174, 233]));
+    let a = next(&rx).appearance;
+    assert_eq!(
+        (a.accent, a.reduce_motion),
+        (Some([61, 174, 233]), Some(true))
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

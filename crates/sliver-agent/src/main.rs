@@ -524,6 +524,7 @@ fn main() {
                     link.panel.height,
                 );
                 agent.set_emoji(live.emoji.clone());
+                agent.set_reduce_motion(reduce_motion(&live));
                 eprintln!(
                     "sliver-agent: connected to sliverd ({}, {}x{}, {:?})",
                     link.panel.model, link.panel.width, link.panel.height, link.role
@@ -553,6 +554,11 @@ fn main() {
         std::thread::sleep(backoff);
         backoff = (backoff * 2).min(Duration::from_secs(60));
     }
+}
+
+/// Whether the desktop asked for no animations (unknown: animate).
+fn reduce_motion(live: &Live) -> bool {
+    live.agg.session.appearance.reduce_motion.unwrap_or(false)
 }
 
 /// Monotonic clock in µs: the same clock sliverd stamps touches with (evdev, CLOCK_MONOTONIC).
@@ -1059,6 +1065,7 @@ fn run(
         if world_changed {
             dirty |= live.pump();
             dirty |= reloader.sync_accent(&mut agent, live);
+            agent.set_reduce_motion(reduce_motion(live));
         }
         if api_woke && let Some(api) = &live.api {
             let (changed, requests) = api.drain();
