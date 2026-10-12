@@ -1027,7 +1027,40 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
                 _ => ("linked", "network-wired-symbolic".into()),
             };
             let essid = n.ssid.clone().unwrap_or_else(|| n.name.clone());
+            // Throughput is only sampled when the module has an explicit `interval`, so a
+            // plain network cell still never wakes the bar.
+            let polled = matches!(m.common.interval, Some(sliver_config::Interval::Every(_)));
+            let (rates, hist) = if polled {
+                world.stats.with(|s| {
+                    let r = s.net_rates(std::time::Instant::now());
+                    (r.unwrap_or_default(), s.net_history())
+                })
+            } else {
+                Default::default()
+            };
             let v = ValueMap::new()
+                .with(
+                    "bandwidthDownBytes",
+                    sliver_stats::human_rate(rates.down, false),
+                )
+                .with(
+                    "bandwidthUpBytes",
+                    sliver_stats::human_rate(rates.up, false),
+                )
+                .with(
+                    "bandwidthTotalBytes",
+                    sliver_stats::human_rate(rates.down + rates.up, false),
+                )
+                .with(
+                    "bandwidthDownBits",
+                    sliver_stats::human_rate(rates.down, true),
+                )
+                .with("bandwidthUpBits", sliver_stats::human_rate(rates.up, true))
+                .with(
+                    "bandwidthTotalBits",
+                    sliver_stats::human_rate(rates.down + rates.up, true),
+                )
+                .with("spark", sliver_stats::sparkline(&hist, None))
                 .with("ifname", esc(n.iface.as_deref().unwrap_or("")))
                 .with("essid", esc(&essid))
                 .with(
@@ -1046,6 +1079,9 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             sp.percentage = n.signal_pct.map(f64::from);
             sp.status = Some(status);
             sp.checked = n.wifi_enabled == Some(true) && status != "disconnected";
+            if polled {
+                sp.refresh = Some(poll_every(m, 5));
+            }
             sp
         }
         "bluetooth" => {
@@ -1273,13 +1309,17 @@ fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let now = std::time::Instant::now();
     let mut sp = match m.id.kind.as_str() {
         "cpu" => {
-            let (usage, load, ghz) = stats.with(|s| (s.cpu_usage(now), s.load(), s.cpu_ghz()));
+            let (usage, load, ghz, hist) = stats.with(|s| {
+                let u = s.cpu_usage(now);
+                (u, s.load(), s.cpu_ghz(), s.cpu_history())
+            });
             let usage = usage?;
             let v = ValueMap::new()
                 .with("usage", pct0(usage))
                 .with("", pct0(usage))
                 .with("load", load.map_or(0.0, |l| l.one))
-                .with("avg_frequency", (ghz.unwrap_or(0.0) * 10.0).round() / 10.0);
+                .with("avg_frequency", (ghz.unwrap_or(0.0) * 10.0).round() / 10.0)
+                .with("spark", sliver_stats::sparkline(&hist, Some(100.0)));
             let mut sp = Spec::new(v, "CPU {usage}%");
             sp.percentage = Some(usage);
             sp
@@ -1730,6 +1770,43 @@ mod tests {
             &empty,
         );
         assert!(none.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn network_bandwidth_and_cpu_sparkline() {
+        let dir = std::env::temp_dir().join(format!("sliver-agent-bw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("proc/net")).unwrap();
+        std::fs::write(dir.join("proc/stat"), "cpu  100 0 100 800 0 0 0 0 0 0\n").unwrap();
+        std::fs::write(
+            dir.join("proc/net/dev"),
+            " eth0: 1000 1 0 0 0 0 0 0 500 1 0 0 0 0 0 0\n",
+        )
+        .unwrap();
+        let mut w = world();
+        w.stats = Stats::with_roots(dir.join("proc"), dir.join("sys"));
+        w.session.network.state = sliver_session::network::NetState::Connected;
+        w.session.network.kind = sliver_session::network::NetKind::Ethernet;
+        w.session.network.iface = Some("eth0".into());
+        let text = |c: &Cell| match &c.content {
+            Content::Markup(t) | Content::Text(t) | Content::IconMarkup(_, t) => t.clone(),
+            other => panic!("{other:?}"),
+        };
+        let toml = |extra: &str| {
+            format!(
+                "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"network\", \"cpu\"]\n[modules.network]\nformat = \"{{bandwidthDownBytes}} {{bandwidthUpBits}}\"\n{extra}[modules.cpu]\nformat = \"{{spark}}\"\n"
+            )
+        };
+        // no `interval`: not sampled, no wake-ups
+        let cells = stat_cells(&toml(""), &w);
+        assert!(cells[0].next_change.is_none());
+        assert_eq!(text(&cells[0]), "0B/s 0b/s");
+        assert_eq!(text(&cells[1]).chars().count(), 1, "one cpu sample so far");
+        // with one: the first read primes the counters
+        let cells = stat_cells(&toml("interval = 2\n"), &w);
+        assert_eq!((cells[0].next_change.unwrap() - w.now).num_seconds(), 2);
+        assert_eq!(text(&cells[0]), "0B/s 0b/s");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

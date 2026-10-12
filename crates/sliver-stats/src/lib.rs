@@ -1,5 +1,5 @@
-//! `sliver-stats`: the numbers behind the `cpu`, `memory`, `load`, `temperature` and `disk`
-//! modules, read from `/proc` and `/sys`.
+//! `sliver-stats`: the numbers behind the `cpu`, `memory`, `load`, `temperature`, `disk` and
+//! network-throughput modules, read from `/proc` and `/sys`.
 //!
 //! Everything is a plain file read (no polling thread, no subprocess): the agent samples when it
 //! renders a frame that shows such a module, and schedules its next render from the module's
@@ -9,13 +9,16 @@
 mod cpu;
 mod disk;
 mod mem;
+mod net;
 mod temp;
 
 pub use cpu::{CpuTimes, parse_cpu_line};
 pub use disk::{Disk, disk};
 pub use mem::{Mem, parse_meminfo};
+pub use net::{NetRates, human_rate, parse_net_dev, sparkline};
 pub use temp::{Sensor, sensors};
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -46,6 +49,20 @@ pub struct Sampler {
     sys_root: PathBuf,
     prev: Option<(Instant, CpuTimes)>,
     usage: Option<f64>,
+    net_prev: Option<(Instant, u64, u64)>,
+    net: Option<NetRates>,
+    cpu_hist: VecDeque<f64>,
+    net_hist: VecDeque<f64>,
+}
+
+/// How many samples the sparklines remember.
+pub const HISTORY: usize = 16;
+
+fn push(h: &mut VecDeque<f64>, v: f64) {
+    if h.len() == HISTORY {
+        h.pop_front();
+    }
+    h.push_back(v);
 }
 
 impl Default for Sampler {
@@ -61,6 +78,10 @@ impl Sampler {
             sys_root: sys_root.into(),
             prev: None,
             usage: None,
+            net_prev: None,
+            net: None,
+            cpu_hist: VecDeque::new(),
+            net_hist: VecDeque::new(),
         }
     }
 
@@ -75,15 +96,52 @@ impl Sampler {
         match self.prev {
             None => {
                 self.usage = Some(times.usage_since(CpuTimes::default()));
+                push(&mut self.cpu_hist, self.usage.unwrap_or(0.0));
                 self.prev = Some((now, times));
             }
             Some((t, old)) if now.saturating_duration_since(t) >= CPU_WINDOW => {
                 self.usage = Some(times.usage_since(old));
+                push(&mut self.cpu_hist, self.usage.unwrap_or(0.0));
                 self.prev = Some((now, times));
             }
             Some(_) => {}
         }
         self.usage
+    }
+
+    /// Recent CPU usage samples (percent), oldest first.
+    pub fn cpu_history(&self) -> Vec<f64> {
+        self.cpu_hist.iter().copied().collect()
+    }
+
+    /// Recent download rates (bytes/s), oldest first.
+    pub fn net_history(&self) -> Vec<f64> {
+        self.net_hist.iter().copied().collect()
+    }
+
+    /// Network throughput over the time since the last window. The first call has nothing to
+    /// compare with and reports zero; calls closer together than a second keep the last rates.
+    pub fn net_rates(&mut self, now: Instant) -> Option<NetRates> {
+        let (rx, tx) = parse_net_dev(&self.read("net/dev")?)?;
+        match self.net_prev {
+            None => {
+                self.net = Some(NetRates::default());
+                self.net_prev = Some((now, rx, tx));
+            }
+            Some((t, orx, otx)) if now.saturating_duration_since(t) >= CPU_WINDOW => {
+                let secs = now.saturating_duration_since(t).as_secs_f64();
+                // Counters reset when an interface goes away: treat as no traffic.
+                let r = NetRates {
+                    down: rx.saturating_sub(orx) as f64 / secs,
+                    up: tx.saturating_sub(otx) as f64 / secs,
+                };
+                push(&mut self.net_hist, r.down);
+                self.net = Some(r);
+                self.net_prev = Some((now, rx, tx));
+            }
+            Some(_) => {}
+        }
+        self.net
     }
 
     /// Average current frequency over all cores, in GHz (needs cpufreq; `None` without it).

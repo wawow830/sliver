@@ -127,3 +127,49 @@ fn disk_of_the_temp_dir() {
     assert!((d.percent_used() + d.percent_free() - 100.0).abs() < 1e-9);
     assert!(disk(Path::new("/nonexistent/x")).is_none());
 }
+
+#[test]
+fn net_dev_rates_and_sparkline() {
+    let a = "Inter-|   Receive |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n    lo: 999 1 0 0 0 0 0 0 999 1 0 0 0 0 0 0\n wlan0: 1000 1 0 0 0 0 0 0 500 1 0 0 0 0 0 0\n veth1: 77 1 0 0 0 0 0 0 77 1 0 0 0 0 0 0\n";
+    assert_eq!(
+        parse_net_dev(a),
+        Some((1000, 500)),
+        "loopback and veth skipped"
+    );
+    assert!(parse_net_dev("nothing").is_none());
+    assert_eq!(human_rate(512.0, false), "512B/s");
+    assert_eq!(human_rate(1536.0, false), "1.5KB/s");
+    assert_eq!(human_rate(300.0 * 1024.0, false), "300KB/s");
+    assert_eq!(human_rate(1024.0 * 1024.0, true), "8.0Mb/s");
+    assert_eq!(sparkline(&[0.0, 50.0, 100.0], Some(100.0)), "▁▅█");
+    assert_eq!(sparkline(&[1.0, 2.0], None), "▅█");
+    assert_eq!(sparkline(&[0.0, 0.0], None), "▁▁");
+    assert_eq!(sparkline(&[], None), "");
+
+    let dir = std::env::temp_dir().join(format!("sliver-net-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("net")).unwrap();
+    let dev = |rx: u64, tx: u64| format!(" eth0: {rx} 1 0 0 0 0 0 0 {tx} 1 0 0 0 0 0 0\n");
+    fs::write(dir.join("net/dev"), dev(1000, 1000)).unwrap();
+    fs::write(dir.join("stat"), STAT_A).unwrap();
+    let mut s = Sampler::with_roots(&dir, &dir);
+    let t0 = Instant::now();
+    assert_eq!(s.net_rates(t0), Some(NetRates::default()));
+    fs::write(dir.join("net/dev"), dev(3000, 1500)).unwrap();
+    assert_eq!(
+        s.net_rates(t0 + Duration::from_millis(100)),
+        Some(NetRates::default()),
+        "too soon: unchanged"
+    );
+    let r = s.net_rates(t0 + Duration::from_secs(2)).unwrap();
+    assert_eq!((r.down, r.up), (1000.0, 250.0));
+    assert_eq!(s.net_history(), vec![1000.0]);
+    s.cpu_usage(t0);
+    assert_eq!(s.cpu_history().len(), 1);
+    for i in 0..40u64 {
+        fs::write(dir.join("net/dev"), dev(5000 + i, 0)).unwrap();
+        s.net_rates(t0 + Duration::from_secs(3 + i));
+    }
+    assert_eq!(s.net_history().len(), HISTORY, "bounded");
+    let _ = fs::remove_dir_all(&dir);
+}
