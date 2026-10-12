@@ -750,7 +750,7 @@ def reclaim_disk():
 # OAuth logins CLIProxyAPI already holds. Read-only: it never refreshes tokens, since that would break
 # CLIProxyAPI's own refresh chain. Accounts are pooled with equal weight, because CLIProxyAPI round-robins them.
 
-QUOTA_DEFAULTS = {"enabled": True, "pause_below": 40, "resume_at": 45, "windows": ["five_hour", "seven_day"], "every": 300}
+QUOTA_DEFAULTS = {"enabled": True, "pause_below": 40, "resume_at": 45, "windows": ["five_hour"], "every": 300}
 WINDOW_NAMES = {"five_hour": "5-hour", "seven_day": "weekly"}
 AUTH_DIR = Path(os.environ.get("SWARM_QUOTA_AUTH_DIR", "~/.cli-proxy-api")).expanduser()
 USAGE_URL = os.environ.get("SWARM_QUOTA_URL", "https://api.anthropic.com/api/oauth/usage")
@@ -1207,7 +1207,7 @@ def main():
     x = sp.add_parser("quota", help="Claude usage left, and the auto-pause/resume settings")
     x.add_argument("--pause-below", type=int, metavar="PCT", help="auto-pause at this %% left (default 40)")
     x.add_argument("--resume-at", type=int, metavar="PCT", help="auto-resume at this %% left (default 45)")
-    x.add_argument("--windows", help="which limits to watch: five_hour,seven_day (default both)")
+    x.add_argument("--windows", help="which limits to watch: five_hour,seven_day (default five_hour)")
     x.add_argument("--on", action="store_true"); x.add_argument("--off", action="store_true"); x.set_defaults(f=cmd_quota)
     x = sp.add_parser("up", help="(human) create swarm tab, start pulse, spawn peers")
     x.add_argument("--peers", default=""); x.add_argument("--model"); x.set_defaults(f=cmd_up)
