@@ -15,7 +15,9 @@ swarm human edit [H3 c]              # change an earlier answer; the peer is tol
 swarm send ash "please prioritize per-app layouts"   # talk to one peer
 swarm say "new priority: ..."        # talk to everyone
 swarm task add "..." --body "..."    # add work
-swarm pause / swarm resume           # stop/start waking peers (they finish their current turn)
+swarm pause                          # natural stop: peers finish their current turn, nobody gets woken,
+                                     #   messages queue, panes and claims stay as they are
+swarm resume                         # pick up exactly where they left off
 swarm down                           # interrupt all peers and stop the pulse (state is kept)
 swarm up --peers ash,birch           # bring it back (`swarm spawn NAME --resume` revives a peer's session)
 ```

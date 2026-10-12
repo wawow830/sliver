@@ -174,7 +174,7 @@ def cmd_task(a):
             after = [x.strip() for x in (a.after or "").split(",") if x.strip()]
             t = {"id": tid, "title": a.title, "body": a.body or "", "area": a.area or "", "after": after,
                  "status": "open", "owner": None, "created_by": by, "created_at": now(), "notes": []}
-            if a.claim:
+            if a.claim and not (is_peer() and s["paused"]):
                 t.update(status="claimed", owner=by, claimed_at=now())
             s["tasks"][tid] = t
         channel("task", f"added {tid}: {a.title}", by=by, task=tid)
@@ -201,6 +201,7 @@ def cmd_task(a):
         with state() as s:
             t = s["tasks"].get(a.id) or sys.exit(f"no task {a.id}")
             if a.sub == "claim":
+                refuse_if_paused("claiming")
                 if t["status"] != "open" and not a.force:
                     sys.exit(f"{a.id} is {t['status']} by {t.get('owner')}; ask them, or --force if they're gone")
                 if blocked_by(s, t) and not a.force:
@@ -238,8 +239,31 @@ def cmd_say(a):
     print("ok")
 
 
+PAUSE_NOTE = ("The swarm is paused by the human. Finish the step you're on (commit, and land it if it's green), "
+              "then end your turn. Don't claim or start new work. Your claims stay yours, and you'll be woken on resume.")
+
+
+def is_paused():
+    try:
+        return json.loads((home() / "state.json").read_text()).get("paused", False)
+    except (OSError, ValueError):
+        return False
+
+
+def is_peer():
+    n = me(required=False)
+    return bool(n) and n != "human"
+
+
+def refuse_if_paused(what):
+    if is_peer() and is_paused():
+        sys.exit(f"swarm: not {what}. {PAUSE_NOTE}")
+
+
 def deliver(to, frm, text, kind="msg", now_=False):
     append(home() / "inbox" / f"{to}.jsonl", {"at": now(), "from": frm, "kind": kind, "text": text})
+    if is_paused():
+        return  # queued; the pulse delivers it on resume
     st = agent_status(to)
     if st in ("idle", "done") or (now_ and st == "working"):
         prompt_peer(to, f"[swarm] new message from {frm}. Run `swarm inbox`.")
@@ -253,7 +277,7 @@ def cmd_send(a):
         if a.peer not in s["peers"]:
             sys.exit(f"unknown peer {a.peer}; see `swarm peers`")
     deliver(a.peer, me(required=False) or "human", a.text, now_=a.now)
-    print("ok")
+    print("ok (queued: the swarm is paused, delivered on resume)" if is_paused() else "ok")
 
 
 def cmd_inbox(a):
@@ -516,6 +540,7 @@ def cmd_rest(a):
 
 
 def cmd_wake(a):
+    refuse_if_paused("waking")
     set_status("active", a.reason)
 
 
@@ -541,6 +566,7 @@ def pick_split_target(tab_id):
 
 
 def cmd_spawn(a):
+    refuse_if_paused("spawning")
     name = a.name
     if not NAME_RE.match(name):
         sys.exit("name must match [a-z][a-z0-9_-]{0,31}")
@@ -738,16 +764,50 @@ def cmd_pulse(a):
         time.sleep(a.interval)
 
 
+def live_peers(s):
+    return [n for n, p in sorted(s["peers"].items()) if p.get("status") != "gone"]
+
+
+def still_working(names):
+    return [n for n in names if agent_status(n) == "working"]
+
+
+def pulse_running():
+    r = sh("pgrep", "-f", "swarm/bin/swarm pulse", check=False)
+    return r.returncode == 0
+
+
 def cmd_pause(a):
+    """A natural stop: nobody gets woken, and working peers finish their turn on their own."""
     with state() as s:
+        already = s["paused"]
         s["paused"] = True
-    channel("system", "swarm paused by human", by="human"); print("paused")
+        s.setdefault("swarm", {})["paused_at"] = s["swarm"].get("paused_at") if already else now()
+        names = live_peers(s)
+    if not already:
+        channel("system", f"swarm paused by the human. {PAUSE_NOTE}", by="human")
+    working = still_working(names)
+    print("paused. Nobody gets woken: not by the pulse, and not by messages (they queue until resume).")
+    print(f"still finishing their current turn: {', '.join(working)}" if working else "everyone has settled.")
+    print("`swarm status` shows when they've settled. `swarm resume` picks up where they left off.")
 
 
 def cmd_resume(a):
     with state() as s:
+        was = s["paused"]
         s["paused"] = False
-    channel("system", "swarm resumed by human", by="human"); print("resumed")
+        s.setdefault("swarm", {}).pop("paused_at", None)
+        queued = {n: unread(n, s) for n in live_peers(s)}
+    if was:
+        channel("system", "swarm resumed by the human. Carry on where you left off.", by="human")
+    q = ", ".join(f"{n} ({c})" for n, c in queued.items() if c > 0)
+    print("resumed." if was else "wasn't paused.")
+    if q:
+        print(f"queued messages for: {q}")
+    if pulse_running():
+        print("the pulse wakes peers with work or messages on its next tick (within ~45s).")
+    else:
+        print("the pulse isn't running, so nobody will be woken. Run `swarm up` to start it again.")
 
 
 # ---------------------------------------------------------------- up / down / status
@@ -794,8 +854,13 @@ def cmd_down(a):
 
 def cmd_status(a):
     with state(write=False) as s:
-        paused = " (PAUSED)" if s["paused"] else ""
-        print(f"== sliver swarm{paused}")
+        paused, names = s["paused"], live_peers(s)
+    if paused:
+        working = still_working(names)
+        settle = f"still finishing: {', '.join(working)}" if working else "everyone has settled"
+        print(f"== sliver swarm (PAUSED, {settle}; `swarm resume` to continue)")
+    else:
+        print("== sliver swarm")
     print("\n== peers"); cmd_peers(argparse.Namespace(all=False))
     print("\n== needs human"); cmd_human(argparse.Namespace(sub="list", all=False, brief=True))
     print("\n== board"); cmd_task(argparse.Namespace(sub="list", all=False, mine=False))
@@ -872,6 +937,8 @@ def main():
     x.add_argument("--port", type=int, default=7777); x.add_argument("--host", default="127.0.0.1"); x.set_defaults(f=cmd_viz)
 
     a = ap.parse_args()
+    if a.cmd not in ("pause", "resume", "pulse", "viz", "up", "down") and is_peer() and is_paused():
+        print(f"\u23f8 {PAUSE_NOTE}\n", file=sys.stderr)
     a.f(a)
 
 
