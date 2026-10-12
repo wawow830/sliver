@@ -41,6 +41,8 @@ const BUILTIN_ALIASES: &[(&str, &str)] = &[
 pub struct Icons {
     loader: Option<IconLoader>,
     cache: HashMap<(String, Option<String>, u32), Option<Icon>>,
+    /// Relative icon paths are relative to the config file's directory.
+    base: Option<std::path::PathBuf>,
 }
 
 impl Icons {
@@ -49,6 +51,7 @@ impl Icons {
         Icons {
             loader: Some(IconLoader::from_env()),
             cache: HashMap::new(),
+            base: None,
         }
     }
 
@@ -57,6 +60,16 @@ impl Icons {
         Icons {
             loader: None,
             cache: HashMap::new(),
+            base: None,
+        }
+    }
+
+    /// Where relative icon paths (`icons/x.png`, `logo.svg`) are looked up: the directory of
+    /// the active config file. `None`: the working directory.
+    pub fn set_base_dir(&mut self, dir: Option<&std::path::Path>) {
+        if self.base.as_deref() != dir {
+            self.base = dir.map(Into::into);
+            self.cache.clear();
         }
     }
 
@@ -79,8 +92,12 @@ impl Icons {
     }
 
     fn lookup(&self, name: &str, theme: Option<&str>, size: u32) -> Option<Icon> {
-        if name.contains('/') {
+        if is_path(name) {
             let path = expand_home(name);
+            let path = match &self.base {
+                Some(base) if path.is_relative() => base.join(path),
+                _ => path,
+            };
             return Icon::load(&path).ok();
         }
         if let Some(icon) = Icon::builtin(name) {
@@ -103,6 +120,13 @@ impl Icons {
             .find(|(xdg, _)| *xdg == base)
             .and_then(|(_, b)| Icon::builtin(b))
     }
+}
+
+/// A file rather than a theme icon name: anything with a `/` (absolute, `~/`, relative), or a
+/// bare file name with an image extension (`logo.svg` next to the config).
+fn is_path(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    name.contains('/') || [".png", ".svg", ".svgz"].iter().any(|e| lower.ends_with(e))
 }
 
 fn expand_home(p: &str) -> std::path::PathBuf {
@@ -128,5 +152,35 @@ mod tests {
         assert!(icons.get("no-such-icon", None, 36).is_none());
         let i = icons.get("audio-volume-high", None, 36).unwrap();
         assert!(i.symbolic, "built-ins follow the foreground color");
+    }
+
+    #[test]
+    fn file_paths_resolve_next_to_the_config() {
+        let dir = std::env::temp_dir().join(format!("sliver-icons-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("icons")).unwrap();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>"#;
+        std::fs::write(dir.join("logo.svg"), svg).unwrap();
+        std::fs::write(dir.join("icons/x.svg"), svg).unwrap();
+        let mut icons = Icons::builtin_only();
+        assert!(
+            icons.get("logo.svg", None, 36).is_none(),
+            "not in the working directory"
+        );
+        icons.set_base_dir(Some(&dir));
+        assert!(icons.get("logo.svg", None, 36).is_some(), "bare file name");
+        assert!(
+            icons.get("icons/x.svg", None, 36).is_some(),
+            "relative path"
+        );
+        let abs = dir.join("icons/x.svg");
+        assert!(
+            icons.get(abs.to_str().unwrap(), None, 36).is_some(),
+            "absolute"
+        );
+        assert!(
+            icons.get("audio-volume-high", None, 36).is_some(),
+            "names still names"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

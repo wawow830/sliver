@@ -105,6 +105,8 @@ struct Reloader {
     /// The active profile and all profiles, read on (re)load rather than every frame. Empty with
     /// `--config FILE`.
     profile: (String, Vec<String>),
+    /// The live config file (`None`: built-in defaults); relative icon paths start here.
+    config_path: Option<PathBuf>,
 }
 
 impl Reloader {
@@ -155,6 +157,7 @@ impl Reloader {
             errors: applied.errors,
             usr2,
             profile: Default::default(),
+            config_path: applied.config_path,
         };
         me.read_profiles();
         me
@@ -269,11 +272,13 @@ impl Reloader {
                 if let Some(agent) = agent {
                     agent.config = a.config.clone();
                     agent.sheet = a.sheet.clone();
+                    agent.set_config_dir(a.config_path.as_deref().and_then(Path::parent));
                     let layers = &agent.config.layers;
                     agent.layers.retain(|l| layers.contains_key(l));
                 }
                 self.config = a.config;
                 self.sheet = a.sheet;
+                self.config_path = a.config_path;
                 self.errors.clear();
                 eprintln!("sliver-agent: reloaded {src}");
                 true
@@ -457,6 +462,7 @@ fn main() {
             a.size.0,
             a.size.1,
         );
+        agent.set_config_dir(reloader.config_path.as_deref().and_then(Path::parent));
         // Give the live sources a moment to report, so the preview shows real state.
         let world = match Live::start(&agent.config) {
             Ok(mut live) => {
@@ -525,6 +531,7 @@ fn main() {
                 );
                 agent.set_emoji(live.emoji.clone());
                 agent.set_reduce_motion(reduce_motion(&live));
+                agent.set_config_dir(reloader.config_path.as_deref().and_then(Path::parent));
                 eprintln!(
                     "sliver-agent: connected to sliverd ({}, {}x{}, {:?})",
                     link.panel.model, link.panel.width, link.panel.height, link.role

@@ -906,6 +906,11 @@ impl Agent {
         self.emoji = handle;
     }
 
+    /// Relative icon paths in the config resolve against this (the config file's directory).
+    pub fn set_config_dir(&mut self, dir: Option<&std::path::Path>) {
+        self.icons.set_base_dir(dir);
+    }
+
     /// The desktop's reduce-motion setting: transitions (and layer slides) jump to their end.
     pub fn set_reduce_motion(&mut self, on: bool) {
         self.renderer.set_reduce_motion(on);
