@@ -156,7 +156,7 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 ## 5. Layouts & Rules page
 
 ```
- Rules (first match wins among equally specific)        [+ Rule]
+ Rules (top to bottom, first match wins)                [+ Rule]
  ┌──────────────────────────────────────────────────────────────┐
  │ ≡ Locked screen     when screen locked       → Locked    Base │
  │ ≡ Terminals         app ∈ {foot, kitty}      → F-keys    Base │
@@ -210,7 +210,7 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 | Esc is reachable | **No physical Esc** (2170 px bars, auto-detected from bar length, overridable in config): the Esc zone is locked and the Esc item can be restyled but not deleted or moved. **Physical Esc present** (2008 px bars): the Esc zone is optional. |
 | Every item is touchable | Width below 80 px gets a warning; below 60 px is refused. |
 | A dark bar doesn't fire | The first touch on a dimmed-off bar only wakes it. |
-| Fn layer has F1–F12 | Validation: you can restyle, reorder, add F13–F24 or a group, but not delete F1–F12 (Q2). |
+| F1–F12 reachable | Validation: every layout reachable as Base or Fn is checked, and Base ∪ Fn must contain F1–F12 as top-level key buttons, not inside a group. That's dfr's default (F-keys on Base, media on Fn) and cedar's daemon escape floor. You can restyle, reorder, or add F13–F24, but not delete the last F-key copy (Q2). |
 | A broken config never reaches the bar | The settings app validates before writing. The agent re-validates and keeps the last good config. The daemon's safe layer is the final backstop. |
 | Scripts can't hang the bar | Each script has a timeout (default 2 s). On failure the item shows "!" and the error goes to Status. |
 | Undo | Every editor change goes on an undo stack for the session. "Revert to how it was at launch" is in the menu. |
