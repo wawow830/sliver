@@ -111,8 +111,53 @@ impl Preview {
         Some(Hit {
             zone,
             key,
+            rect: (rect.x, rect.w),
             before: keys,
         })
+    }
+
+    /// The cell whose right edge is within a few pixels of bar x-coordinate `x` (the width
+    /// handle), if it is a whole top-level module (not inside a group).
+    pub fn edge_at(&self, x: f32) -> Option<Hit> {
+        const GRAB: f32 = 10.0;
+        let f = self.agent.frame(self.slot)?;
+        let r = f
+            .layout
+            .items
+            .iter()
+            .find(|r| (r.x + r.w - x).abs() <= GRAB)?;
+        let h = self.hit(r.x + r.w / 2.0)?;
+        // A group's children are cells of one module; their widths are the group's business.
+        (!h.key.starts_with("group/")).then_some(h)
+    }
+
+    /// Where the caret goes for a drop at bar x-coordinate `x`: after the whole top-level module
+    /// left of it (a group's last child, not the middle of the group), or at the zone's start.
+    pub fn insertion_x(&self, x: f32) -> Option<f32> {
+        let (zone, left) = self.drop_target(x)?;
+        let f = self.agent.frame(self.slot)?;
+        let z = f.layout.zones[zone];
+        let Some(left) = left else {
+            return Some(z.x);
+        };
+        // A group's cells share the `group/<name>` prefix of their key.
+        let top = |k: &str| -> String {
+            match k.strip_prefix("group/") {
+                Some(rest) => format!("group/{}", rest.split('/').next().unwrap_or("")),
+                None => k.to_owned(),
+            }
+        };
+        let want = top(&left.key);
+        f.layout
+            .items
+            .iter()
+            .zip(&f.cells)
+            .filter(|(r, c)| {
+                let mid = r.x + r.w / 2.0;
+                mid >= z.x && mid <= z.x + z.w && top(&c.key) == want
+            })
+            .map(|(r, _)| r.x + r.w)
+            .reduce(f32::max)
     }
 
     /// Where a drop at bar x-coordinate `x` goes: the zone index, and the cell just left of `x` in
@@ -162,6 +207,8 @@ impl Preview {
 pub struct Hit {
     pub zone: usize,
     pub key: String,
+    /// The cell's left edge and width, in bar pixels.
+    pub rect: (f32, f32),
     before: Vec<String>,
 }
 

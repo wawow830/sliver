@@ -13,6 +13,24 @@ use crate::pages::{group, row, surface, width_text};
 use crate::preview::{BAR, Preview};
 use crate::{Ui, apply, edit};
 
+/// Feedback drawn on the preview while dragging (widget x coordinates).
+#[derive(Clone, Copy, Default)]
+enum Cue {
+    #[default]
+    None,
+    /// Where a moved or dropped module goes.
+    Insert(f64),
+    /// The module that leaves the bar when released here.
+    Remove(f64, f64),
+    /// The module's new extent while dragging its right edge.
+    Resize(f64, f64),
+}
+
+/// Dragged this far (px) above or below the preview, a module is removed on release.
+const OFF_BAR: f64 = 40.0;
+/// The narrowest width the edge handle sets (bar px).
+const MIN_WIDTH: f32 = 30.0;
+
 /// What the Library offers (ux.md §4). Anything else can be typed as a module reference.
 const LIBRARY: &[(&str, &str)] = &[
     ("clock", "Clock"),
@@ -104,7 +122,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
 
     // Drawn at half scale (1004x30) so it stays legible; narrower windows scroll sideways.
     let frame: Rc<RefCell<Option<gtk::cairo::ImageSurface>>> = Rc::default();
-    let caret: Rc<std::cell::Cell<Option<f64>>> = Rc::default();
+    let caret: Rc<std::cell::Cell<Cue>> = Rc::default();
     let picture = gtk::DrawingArea::builder()
         .content_width(BAR.0 as i32 / 2)
         .content_height(BAR.1 as i32 / 2)
@@ -124,11 +142,27 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 let _ = cr.paint();
                 cr.restore().ok();
             }
-            // Drop position while dragging a module (widget coordinates).
-            if let Some(x) = caret.get() {
-                cr.set_source_rgb(0.21, 0.52, 0.89);
-                cr.rectangle(x - 1.5, 0.0, 3.0, h as f64);
-                let _ = cr.fill();
+            // Feedback while dragging (widget coordinates).
+            match caret.get() {
+                Cue::None => {}
+                Cue::Insert(x) => {
+                    cr.set_source_rgb(0.21, 0.52, 0.89);
+                    cr.rectangle(x - 1.5, 0.0, 3.0, h as f64);
+                    let _ = cr.fill();
+                }
+                Cue::Remove(x0, x1) => {
+                    cr.set_source_rgba(0.88, 0.11, 0.14, 0.45);
+                    cr.rectangle(x0, 0.0, x1 - x0, h as f64);
+                    let _ = cr.fill();
+                }
+                Cue::Resize(x0, x1) => {
+                    cr.set_source_rgba(0.21, 0.52, 0.89, 0.25);
+                    cr.rectangle(x0, 0.0, x1 - x0, h as f64);
+                    let _ = cr.fill();
+                    cr.set_source_rgb(0.21, 0.52, 0.89);
+                    cr.rectangle(x1 - 1.5, 0.0, 3.0, h as f64);
+                    let _ = cr.fill();
+                }
             }
         });
     }
@@ -139,6 +173,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         .child(&picture)
         .build();
     page.append(&bar_scroll);
+    let shown_layout: Rc<RefCell<String>> = Rc::default();
 
     let why = gtk::Label::builder()
         .xalign(0.0)
@@ -160,7 +195,6 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         state.loaded.config.clone(),
         state.sheet.clone(),
     )));
-    let shown_layout: Rc<RefCell<String>> = Rc::default();
     let refresh = {
         let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
         let (layer_dd, app_entry, locked, picture, why, zones, layers) = (
@@ -283,26 +317,41 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         });
     }
     picture.add_controller(click);
-    // Drag a module along the preview to move it, also into another zone (GOAL: WYSIWYG
-    // drag and drop). The click above is cancelled once the pointer moves past the threshold.
-    let drag = gtk::GestureDrag::new();
-    let start: Rc<std::cell::Cell<Option<(f64, f64)>>> = Rc::default();
+    picture.set_cursor_from_name(Some("pointer"));
+    // The width handle shows as a resize cursor on a module's right edge.
+    let hover = gtk::EventControllerMotion::new();
     {
-        let start = start.clone();
-        drag.connect_drag_begin(move |_, x, y| start.set(Some((x, y))));
+        let (preview, picture2) = (preview.clone(), picture.clone());
+        hover.connect_motion(move |_, x, _| {
+            let edge = preview.borrow().edge_at(x as f32 * 2.0).is_some();
+            picture2.set_cursor_from_name(Some(if edge { "col-resize" } else { "pointer" }));
+        });
     }
+    picture.add_controller(hover);
+
+    // Library items dropped on the preview go where the caret shows.
+    let drop_target = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::COPY);
     {
-        let (start, caret, picture2) = (start.clone(), caret.clone(), picture.clone());
-        drag.connect_drag_update(move |_, dx, _| {
-            if let Some((x, _)) = start.get()
-                && dx.abs() > 8.0
-            {
-                caret.set(Some(x + dx));
-                picture2.queue_draw();
-            }
+        let (caret, picture2) = (caret.clone(), picture.clone());
+        let preview = preview.clone();
+        drop_target.connect_motion(move |_, x, _| {
+            caret.set(match preview.borrow().insertion_x(x as f32 * 2.0) {
+                Some(bx) => Cue::Insert(bx as f64 / 2.0),
+                None => Cue::None,
+            });
+            picture2.queue_draw();
+            gtk::gdk::DragAction::COPY
         });
     }
     {
+        let (caret, picture2) = (caret.clone(), picture.clone());
+        drop_target.connect_leave(move |_| {
+            caret.set(Cue::None);
+            picture2.queue_draw();
+        });
+    }
+    // Puts Library module `m` where the caret is: at preview x-coordinate `x` (widget px).
+    let drop_module: DropFn = {
         let (ui, preview, shown_layout, caret, picture2) = (
             ui.clone(),
             preview.clone(),
@@ -310,50 +359,180 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             caret.clone(),
             picture.clone(),
         );
-        drag.connect_drag_end(move |_, dx, _| {
-            caret.set(None);
+        Rc::new(move |module: String, x: f64| {
+            caret.set(Cue::None);
             picture2.queue_draw();
-            let Some((x0, _)) = start.take() else { return };
-            if dx.abs() <= 8.0 {
-                return;
-            }
-            // Bar coordinates: the preview is drawn at half scale.
-            let p = preview.borrow();
-            let (Some(from), Some((to_zone, left))) = (
-                p.hit(x0 as f32 * 2.0),
-                p.drop_target((x0 + dx) as f32 * 2.0),
-            ) else {
-                return;
+            let Some((zone, left)) = preview.borrow().drop_target(x as f32 * 2.0) else {
+                return false;
             };
-            drop(p);
             let state = ui.state();
             let layout = shown_layout.borrow().clone();
             let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
-                return;
+                return false;
             };
-            let ids = |z: usize| -> Vec<String> {
-                zones
-                    .get(z)
-                    .map(|z| z.modules.iter().map(|m| m.id().to_string()).collect())
-                    .unwrap_or_default()
+            let Some(z) = zones.get(zone) else {
+                return false;
             };
-            let (Some(fz), Some(tz)) = (zones.get(from.zone), zones.get(to_zone)) else {
-                return;
-            };
-            let Some(fi) = from.module_index(&ids(from.zone)) else {
-                return;
-            };
-            let ti = left
-                .and_then(|h| h.module_index(&ids(to_zone)))
-                .map_or(0, |i| i + 1);
-            let (layout, fz, tz) = (layout.clone(), fz.name.clone(), tz.name.clone());
+            let ids: Vec<String> = z.modules.iter().map(|m| m.id().to_string()).collect();
+            let at = left.and_then(|h| h.module_index(&ids)).map_or(0, |i| i + 1);
+            let zname = z.name.clone();
             apply(&ui, move |ed, merged| {
-                edit::move_module_to(ed, merged, &layout, &fz, fi, &tz, ti)
+                edit::insert_module(ed, merged, &layout, &zname, Some(at), &module)
             });
+            true
+        })
+    };
+    {
+        let drop_module = drop_module.clone();
+        drop_target
+            .connect_drop(move |_, v, x, _| v.get::<String>().is_ok_and(|m| drop_module(m, x)));
+    }
+    let lib = palette(ui, &shown_layout);
+    page.insert_child_after(&lib, Some(&bar_scroll));
+
+    // Dragging (GOAL: WYSIWYG drag/drop/resize): a Library chip onto the bar; a module along the
+    // bar to move it, also into another zone; a module off the bar (up or down) to remove it; a
+    // module's right edge to set its width. One gesture on the page, which holds both the chips
+    // and the preview, so it follows the pointer between them on every GDK backend (Broadway has
+    // no implicit grab). It claims the pointer only once it has really moved, so plain clicks
+    // still reach the chips and the preview.
+    let grab: Rc<RefCell<Option<Grab>>> = Rc::default();
+    let drag = gtk::GestureDrag::new();
+    drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let to_bar = {
+        let (page, picture) = (page.clone(), picture.clone());
+        move |x: f64, y: f64| {
+            page.compute_point(&picture, &gtk::graphene::Point::new(x as f32, y as f32))
+                .map(|p| (p.x() as f64, p.y() as f64))
+        }
+    };
+    let over_bar = {
+        let picture = picture.clone();
+        move |(x, y): (f64, f64)| {
+            let (w, h) = (picture.width() as f64, picture.height() as f64);
+            (y > -12.0 && y < h + 12.0 && x >= 0.0 && x <= w).then_some(x)
+        }
+    };
+    {
+        let (grab, page2, picture2, preview, to_bar) = (
+            grab.clone(),
+            page.clone(),
+            picture.clone(),
+            preview.clone(),
+            to_bar.clone(),
+        );
+        drag.connect_drag_begin(move |_, x, y| {
+            let mut found = None;
+            let mut w = page2.pick(x, y, gtk::PickFlags::DEFAULT);
+            while let Some(cur) = w {
+                if &cur == picture2.upcast_ref::<gtk::Widget>() {
+                    if let Some((bx, _)) = to_bar(x, y) {
+                        let resize = preview.borrow().edge_at(bx as f32 * 2.0).is_some();
+                        found = Some(Grab::Bar { x: bx, resize });
+                    }
+                    break;
+                }
+                if let Some(id) = cur.widget_name().strip_prefix("lib:") {
+                    found = Some(Grab::Chip(id.to_owned(), cur.clone()));
+                    break;
+                }
+                if &cur == page2.upcast_ref::<gtk::Widget>() {
+                    break;
+                }
+                w = cur.parent();
+            }
+            *grab.borrow_mut() = found;
         });
     }
-    picture.add_controller(drag);
-    picture.set_cursor_from_name(Some("pointer"));
+    {
+        let (grab, caret, picture2, preview, to_bar, over_bar) = (
+            grab.clone(),
+            caret.clone(),
+            picture.clone(),
+            preview.clone(),
+            to_bar.clone(),
+            over_bar.clone(),
+        );
+        // The caret where the module will really land (after a whole group, not inside it).
+        let snap = {
+            let preview = preview.clone();
+            move |x: f64| match preview.borrow().insertion_x(x as f32 * 2.0) {
+                Some(bx) => Cue::Insert(bx as f64 / 2.0),
+                None => Cue::None,
+            }
+        };
+        drag.connect_drag_update(move |g, dx, dy| {
+            let Some(kind) = grab.borrow().clone() else {
+                return;
+            };
+            if dx.abs() + dy.abs() < 8.0 {
+                return;
+            }
+            g.set_state(gtk::EventSequenceState::Claimed);
+            let Some(pos) = g.start_point().and_then(|(x, y)| to_bar(x + dx, y + dy)) else {
+                return;
+            };
+            let cue = match kind {
+                Grab::Chip(_, chip) => {
+                    chip.set_opacity(0.5);
+                    over_bar(pos).map_or(Cue::None, &snap)
+                }
+                Grab::Bar { x, resize: true } => match preview.borrow().edge_at(x as f32 * 2.0) {
+                    Some(h) => {
+                        let left = h.rect.0 as f64 / 2.0;
+                        Cue::Resize(left, pos.0.max(left + 8.0))
+                    }
+                    None => Cue::None,
+                },
+                Grab::Bar { x, resize: false } if dy.abs() > OFF_BAR => {
+                    match preview.borrow().hit(x as f32 * 2.0) {
+                        Some(h) => {
+                            Cue::Remove(h.rect.0 as f64 / 2.0, (h.rect.0 + h.rect.1) as f64 / 2.0)
+                        }
+                        None => Cue::None,
+                    }
+                }
+                Grab::Bar { .. } => snap(pos.0),
+            };
+            caret.set(cue);
+            picture2.queue_draw();
+        });
+    }
+    {
+        let (ui, grab, caret, picture2, preview, shown_layout, drop_module) = (
+            ui.clone(),
+            grab.clone(),
+            caret.clone(),
+            picture.clone(),
+            preview.clone(),
+            shown_layout.clone(),
+            drop_module.clone(),
+        );
+        drag.connect_drag_end(move |g, dx, dy| {
+            caret.set(Cue::None);
+            picture2.queue_draw();
+            let Some(kind) = grab.take() else { return };
+            if let Grab::Chip(_, chip) = &kind {
+                chip.set_opacity(1.0);
+            }
+            if dx.abs() + dy.abs() < 8.0 {
+                return;
+            }
+            match kind {
+                Grab::Chip(id, _) => {
+                    let pos = g.start_point().and_then(|(x, y)| to_bar(x + dx, y + dy));
+                    if let Some(x) = pos.and_then(&over_bar) {
+                        drop_module(id, x);
+                    }
+                }
+                Grab::Bar { x, resize } => {
+                    finish_bar_drag(&ui, &preview, &shown_layout, x, dx, dy, resize)
+                }
+            }
+        });
+    }
+    page.add_controller(drag);
+    picture.add_controller(drop_target);
     {
         let (ui, shown_layout) = (ui.clone(), shown_layout.clone());
         mirror.connect_active_notify(move |m| {
@@ -462,6 +641,174 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
         }
         container.append(&g);
     }
+}
+
+type DropFn = Rc<dyn Fn(String, f64) -> bool>;
+
+/// What a drag on the Bar page started on.
+#[derive(Clone)]
+enum Grab {
+    /// A Library chip (module reference, the chip widget).
+    Chip(String, gtk::Widget),
+    /// A module on the preview at x (widget px); `resize` when it was the module's right edge.
+    Bar { x: f64, resize: bool },
+}
+
+/// Applies a drag that started on the preview at `x0` (widget px) and moved by `dx`, `dy`: resize,
+/// remove (dragged off the bar) or move.
+fn finish_bar_drag(
+    ui: &Rc<Ui>,
+    preview: &Rc<RefCell<Preview>>,
+    shown_layout: &Rc<RefCell<String>>,
+    x0: f64,
+    dx: f64,
+    dy: f64,
+    resize: bool,
+) {
+    let ui = ui.clone();
+    let p = preview.borrow();
+    let state = ui.state();
+    let layout = shown_layout.borrow().clone();
+    let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
+        return;
+    };
+    let ids = |z: usize| -> Vec<String> {
+        zones
+            .get(z)
+            .map(|z| z.modules.iter().map(|m| m.id().to_string()).collect())
+            .unwrap_or_default()
+    };
+    if resize {
+        let Some(h) = p.edge_at(x0 as f32 * 2.0) else {
+            return;
+        };
+        let (Some(z), Some(i)) = (zones.get(h.zone), h.module_index(&ids(h.zone))) else {
+            return;
+        };
+        if dx.abs() < 2.0 {
+            return;
+        }
+        let px = (((x0 + dx) * 2.0) as f32 - h.rect.0).round().max(MIN_WIDTH) as i64;
+        let (layout, z) = (layout.clone(), z.name.clone());
+        drop(p);
+        apply(&ui, move |ed, merged| {
+            edit::set_module_key(
+                ed,
+                merged,
+                &layout,
+                &z,
+                i,
+                "width",
+                Some(toml::Value::Integer(px)),
+            )
+        });
+        return;
+    }
+    let Some(from) = p.hit(x0 as f32 * 2.0) else {
+        return;
+    };
+    let (Some(fz), Some(fi)) = (zones.get(from.zone), from.module_index(&ids(from.zone))) else {
+        return;
+    };
+    if dy.abs() > OFF_BAR {
+        let (layout, fz) = (layout.clone(), fz.name.clone());
+        drop(p);
+        apply(&ui, move |ed, merged| {
+            edit::remove_module(ed, merged, &layout, &fz, fi)
+        });
+        return;
+    }
+    if dx.abs() <= 8.0 {
+        return;
+    }
+    let Some((to_zone, left)) = p.drop_target((x0 + dx) as f32 * 2.0) else {
+        return;
+    };
+    drop(p);
+    let Some(tz) = zones.get(to_zone) else { return };
+    let ti = left
+        .and_then(|h| h.module_index(&ids(to_zone)))
+        .map_or(0, |i| i + 1);
+    let (layout, fz, tz) = (layout.clone(), fz.name.clone(), tz.name.clone());
+    apply(&ui, move |ed, merged| {
+        edit::move_module_to(ed, merged, &layout, &fz, fi, &tz, ti)
+    });
+}
+
+/// The Library as a palette under the preview, like macOS's Touch Bar customization: drag an item
+/// onto the bar (the page's drag gesture), or click to add it at the end of the main zone (or the
+/// last zone).
+fn palette(ui: &Rc<Ui>, shown_layout: &Rc<RefCell<String>>) -> gtk::Widget {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.set_margin_bottom(10);
+    for (id, label) in LIBRARY {
+        // "App controls (focused app's buttons)" → "App controls"; the tooltip has the rest.
+        let short = label.split(" (").next().unwrap_or(label);
+        // Not a GtkButton: its click gesture claims the pointer on press, which would cancel the
+        // drag. A card with our own click and drag gestures instead.
+        let chip = gtk::Box::builder()
+            .css_classes(["card"])
+            .tooltip_text(format!(
+                "{label} ({id}): drag onto the bar, or click to add it"
+            ))
+            .build();
+        chip.append(
+            &gtk::Label::builder()
+                .label(short)
+                .margin_top(6)
+                .margin_bottom(6)
+                .margin_start(12)
+                .margin_end(12)
+                .build(),
+        );
+        chip.set_cursor_from_name(Some("grab"));
+        // The page's drag gesture recognizes chips by this name.
+        chip.set_widget_name(&format!("lib:{id}"));
+        let (ui, shown_layout, id) = (ui.clone(), shown_layout.clone(), (*id).to_owned());
+        let click = gtk::GestureClick::new();
+        click.connect_released(move |g, _, x, y| {
+            // A drag that ended back on the chip isn't a click.
+            if !g.widget().is_some_and(|w| w.contains(x, y)) {
+                return;
+            }
+            let state = ui.state();
+            let layout = shown_layout.borrow().clone();
+            let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
+                return;
+            };
+            let Some(z) = zones
+                .iter()
+                .find(|z| z.name == "main")
+                .or_else(|| zones.last())
+            else {
+                return;
+            };
+            let (zone, id) = (z.name.clone(), id.clone());
+            apply(&ui, move |ed, merged| {
+                edit::add_module(ed, merged, &layout, &zone, &id)
+            });
+        });
+        chip.add_controller(click);
+        row.append(&chip);
+    }
+    let col = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let hint = gtk::Label::builder()
+        .label("Library: drag onto the bar. Drag a module off the bar to remove it, or its right edge to resize it.")
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    hint.add_css_class("dim-label");
+    hint.add_css_class("caption");
+    col.append(&hint);
+    col.append(
+        &gtk::ScrolledWindow::builder()
+            .child(&row)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .propagate_natural_height(true)
+            .build(),
+    );
+    col.upcast()
 }
 
 /// "+" on a zone: the Library (ux.md §4), plus a field for any module reference.

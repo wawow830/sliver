@@ -114,10 +114,23 @@ pub fn add_module(
     zone: &str,
     module: &str,
 ) -> Result<String, String> {
+    insert_module(ed, merged, layout, zone, None, module)
+}
+
+/// Adds `module` to `zone` at position `at` (`None` = last), as a Library drop does.
+pub fn insert_module(
+    ed: &mut Editor,
+    merged: &Table,
+    layout: &str,
+    zone: &str,
+    at: Option<usize>,
+    module: &str,
+) -> Result<String, String> {
     ModuleId::parse(module)?;
     let zi = ensure_zone(ed, merged, layout, zone)?;
     let mut m = modules(ed, layout, zi)?;
-    m.push(Value::String(module.to_owned()));
+    let at = at.unwrap_or(m.len()).min(m.len());
+    m.insert(at, Value::String(module.to_owned()));
     ed.set(&modules_path(layout, zi), &Value::Array(m))?;
     Ok(format!("Added {module} to {zone}"))
 }
@@ -456,6 +469,22 @@ mod tests {
         assert_eq!(&ids[1][..3], ["key/F3", "key/F2", "key/F4"]);
         let merged = ed.load().merged;
         assert!(move_module(&mut ed, &merged, "fkeys", "main", 0, -1).is_err());
+    }
+
+    #[test]
+    fn library_drop_inserts_at_the_caret() {
+        let (mut ed, merged) = fresh("version = 1\n");
+        insert_module(&mut ed, &merged, "fkeys", "main", Some(2), "clock").unwrap();
+        let ids = resolved_ids(&ed, "fn", &Context::new().with("physical_esc", true));
+        assert_eq!(&ids[1][..4], ["key/F1", "key/F2", "clock", "key/F3"]);
+        let merged = ed.load().merged;
+        insert_module(&mut ed, &merged, "fkeys", "main", Some(99), "battery").unwrap();
+        let ids = resolved_ids(&ed, "fn", &Context::new().with("physical_esc", true));
+        assert_eq!(
+            ids[1].last().map(String::as_str),
+            Some("battery"),
+            "past the end = last"
+        );
     }
 
     #[test]

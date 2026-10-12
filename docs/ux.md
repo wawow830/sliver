@@ -326,10 +326,17 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
 - **Onboarding** (T58): on first launch (no user config), a welcome dialog explains the safe
   hatch and offers Import tiny-dfr setup or the default bar. Either choice writes the config, so it
   shows once.
-- **Drag and drop** (T59): drag a module along the preview to move it, also into another zone.
-  A blue caret marks the drop position, and it's undoable like every edit. A plain click still
-  opens the inspector.
-- Next: resize handles on the preview, and the Library dragged onto the bar.
+- **Drag and drop** (T59, T82): everything happens on the preview itself.
+  - Drag a module along it to move it, also into another zone.
+  - Drag a module off the bar (up or down) to remove it; it turns red first.
+  - Drag a module's right edge (resize cursor) to set its `width` in pixels.
+  - Drag a chip from the **Library** palette under the preview onto the bar, or click a chip to
+    add it at the end of the main zone.
+
+  A blue caret shows where a module will really land: after a whole group, never inside it.
+  Every drop is an ordinary edit with Undo, and a plain click still opens the inspector. It's
+  one pointer gesture on the page, not toolkit DnD, so it behaves the same on every GDK backend,
+  including Broadway for headless tests.
 - **Testing headless** (never on the live session):
   - Run `gtk4-broadwayd :7 &`, then
     `XDG_CONFIG_HOME=$PWD/target/test-tmp/x GDK_DEBUG=no-portals GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 target/debug/sliver-settings`.
