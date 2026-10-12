@@ -1,0 +1,15 @@
+[package]
+name = "sliver-desktop"
+description = "Sliver desktop integration: what the compositor/session tells the agent (focus, workspace, layout, ...)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
