@@ -1,8 +1,8 @@
 //! What sliverd checks before trusting anything from the agent (`docs/api.md` §6).
 //!
 //! sliverd treats the agent as untrusted. A frame that fails [`validate_present`] is rejected
-//! (the previous frame stays up). A frame that fails only [`escape_floor`] is shown with the
-//! built-in fn layer swapped in.
+//! (the previous frame stays up). [`missing_safe_keys`] is advisory only. Layouts are fully
+//! editable (H4), and invariant 1 is guaranteed by the hatch ([`crate::hatch`]).
 
 use crate::keys;
 use crate::proto::{MAX_BUFFERS, PanelInfo, PixelFormat, Present, Region, RegionKind};
@@ -12,8 +12,8 @@ use std::fmt;
 pub const MAX_REGIONS: usize = 128;
 /// Keys per region or per `emit_keys` (combos like Ctrl+Alt+Shift+T).
 pub const MAX_KEYS_PER_COMBO: usize = 8;
-/// A key region counts toward the escape floor only if it's at least this wide.
-pub const MIN_FLOOR_KEY_WIDTH: u32 = 32;
+/// A key region counts as reachable for [`missing_safe_keys`] only if it's at least this wide.
+pub const MIN_SAFE_KEY_WIDTH: u32 = 32;
 pub const MAX_DAMAGE_SPANS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,17 +169,13 @@ pub fn validate_regions(panel: &PanelInfo, regions: &[Region]) -> Result<(), Inv
     Ok(())
 }
 
-/// Keys from `required` that aren't reachable as wide-enough single-key regions in either
-/// layer. Empty = the floor holds. Pass `fn_layer = None` when the built-in fn layer is in use
-/// (it always satisfies the floor).
-pub fn escape_floor(base: &[Region], fn_layer: Option<&[Region]>, required: &[u16]) -> Vec<u16> {
-    let Some(fn_layer) = fn_layer else {
-        return Vec::new();
-    };
-    let reachable: HashSet<u16> = base
+/// Keys from `required` that aren't reachable as wide-enough single-key regions in any of the
+/// layers. **Advisory**: the agent/validator use it to warn. sliverd never rejects on it.
+pub fn missing_safe_keys(layers: &[&[Region]], required: &[u16]) -> Vec<u16> {
+    let reachable: HashSet<u16> = layers
         .iter()
-        .chain(fn_layer)
-        .filter(|r| r.rect.w >= MIN_FLOOR_KEY_WIDTH)
+        .flat_map(|l| l.iter())
+        .filter(|r| r.rect.w >= MIN_SAFE_KEY_WIDTH)
         .filter_map(|r| match &r.kind {
             RegionKind::Key { keys } if keys.len() == 1 => Some(keys[0]),
             _ => None,
@@ -247,29 +243,24 @@ mod tests {
     }
 
     #[test]
-    fn fkeys_layer_is_valid_and_satisfies_floor() {
+    fn fkeys_layer_is_valid_and_has_safe_keys() {
         let l = fkeys_layer();
         validate_regions(&panel(), &l).unwrap();
-        assert!(escape_floor(&[], Some(&l), &ESCAPE_FLOOR).is_empty());
-        assert!(escape_floor(&l, Some(&[]), &ESCAPE_FLOOR).is_empty());
+        assert!(missing_safe_keys(&[&[], &l], &SAFE_KEYS).is_empty());
     }
 
     #[test]
-    fn floor_reports_missing_keys() {
+    fn reports_missing_safe_keys() {
         let base = vec![key(0, 0, 100, &[KEY_ESC]), agent(1, 100, 1908)];
-        let missing = escape_floor(&base, Some(&[]), &ESCAPE_FLOOR);
-        assert_eq!(missing, F_KEYS.to_vec());
-        // The built-in fn layer always satisfies it.
-        assert!(escape_floor(&base, None, &ESCAPE_FLOOR).is_empty());
-    }
-
-    #[test]
-    fn floor_ignores_combos_and_slivers() {
+        assert_eq!(
+            missing_safe_keys(&[&base, &[]], &SAFE_KEYS),
+            F_KEYS.to_vec()
+        );
         let mut l = fkeys_layer();
         l[0] = key(0, 0, 150, &[29, KEY_ESC]); // Ctrl+Esc isn't Esc
-        assert_eq!(escape_floor(&l, Some(&[]), &ESCAPE_FLOOR), vec![KEY_ESC]);
-        l[0] = key(0, 0, MIN_FLOOR_KEY_WIDTH - 1, &[KEY_ESC]); // too thin to hit
-        assert_eq!(escape_floor(&l, Some(&[]), &ESCAPE_FLOOR), vec![KEY_ESC]);
+        assert_eq!(missing_safe_keys(&[&l], &SAFE_KEYS), vec![KEY_ESC]);
+        l[0] = key(0, 0, MIN_SAFE_KEY_WIDTH - 1, &[KEY_ESC]); // too thin to hit
+        assert_eq!(missing_safe_keys(&[&l], &SAFE_KEYS), vec![KEY_ESC]);
     }
 
     #[test]

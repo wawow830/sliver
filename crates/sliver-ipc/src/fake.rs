@@ -13,6 +13,7 @@
 //! assert!(matches!(agent.recv::<DaemonMsg>().unwrap().unwrap().msg, Ok(DaemonMsg::Welcome { .. })));
 //! ```
 
+use crate::hatch::FnHatch;
 use crate::keys;
 use crate::proto::*;
 use crate::router::{Routed, TouchRouter};
@@ -35,8 +36,6 @@ pub struct Frame {
 pub struct FakeDaemon {
     conn: Conn,
     pub panel: PanelInfo,
-    /// Keys that must stay reachable (defaults to [`keys::floor_for_panel`]).
-    pub floor: Vec<u16>,
     /// `(negotiated version, agent name)` after a successful hello.
     pub hello: Option<(ProtoVersion, String)>,
     buffers: HashMap<u32, MappedBuffer>,
@@ -45,6 +44,8 @@ pub struct FakeDaemon {
     /// `None` = built-in fn layer.
     pub fn_layer: Option<Frame>,
     pub fn_held: bool,
+    hatch: FnHatch,
+    fn_clock_ms: u64,
     pub display: DisplayState,
     pub policy: DisplayPolicy,
     router: TouchRouter,
@@ -76,17 +77,17 @@ impl FakeDaemon {
     pub fn new(panel: PanelInfo) -> io::Result<(FakeDaemon, Conn)> {
         let (ours, agent) = Conn::pair()?;
         ours.set_nonblocking(true)?;
-        let floor = keys::floor_for_panel(panel.width).to_vec();
         Ok((
             FakeDaemon {
                 conn: ours,
                 panel,
-                floor,
                 hello: None,
                 buffers: HashMap::new(),
                 base: None,
                 fn_layer: None,
                 fn_held: false,
+                hatch: FnHatch::new(),
+                fn_clock_ms: 0,
                 display: DisplayState::On,
                 policy: DisplayPolicy::default(),
                 router: TouchRouter::new(),
@@ -124,8 +125,16 @@ impl FakeDaemon {
         self.base.is_none()
     }
 
+    /// Whether the safe hatch is showing the built-in layer.
+    pub fn hatch_active(&self) -> bool {
+        self.hatch.active()
+    }
+
     /// The regions a touch would hit right now (agent frame or built-in layer).
     pub fn visible_regions(&self) -> Vec<Region> {
+        if self.hatch.active() {
+            return builtin_layer(&self.panel);
+        }
         let frame = if self.fn_held {
             &self.fn_layer
         } else {
@@ -148,8 +157,24 @@ impl FakeDaemon {
         self.touch(0, TouchPhase::Up, x, y)
     }
 
+    /// A physical Fn event a second after the previous one (never a double press).
     pub fn set_fn(&mut self, held: bool) -> io::Result<()> {
+        let t = self.fn_clock_ms + 1_000;
+        self.fn_key(held, t)
+    }
+
+    /// A physical Fn event at `time_ms` (monotonic). Two quick presses open the hatch.
+    pub fn fn_key(&mut self, held: bool, time_ms: u64) -> io::Result<()> {
+        self.fn_clock_ms = time_ms;
+        let was = self.hatch.active();
+        let now = self.hatch.fn_key(held, time_ms);
         self.fn_held = held;
+        if was != now {
+            // The visible layer changes owner: nothing captured on the old one may stay pressed.
+            let out = self.router.cancel_all();
+            self.apply(out)?;
+            self.send(&DaemonMsg::Hatch { active: now })?;
+        }
         self.send(&DaemonMsg::FnKey { held })
     }
 
@@ -376,36 +401,18 @@ impl FakeDaemon {
             pressed,
             regions: p.regions,
         };
-        let (base, fn_regions) = match p.layer {
-            Layer::Base => (
-                frame.regions.as_slice(),
-                self.fn_layer.as_ref().map(|f| f.regions.as_slice()),
-            ),
-            Layer::Fn => (
-                self.base.as_ref().map_or(&[][..], |f| f.regions.as_slice()),
-                Some(frame.regions.as_slice()),
-            ),
-        };
-        let missing = validate::escape_floor(base, fn_regions, &self.floor);
         match p.layer {
             Layer::Base => self.base = Some(frame),
             Layer::Fn => self.fn_layer = Some(frame),
-        }
-        if !missing.is_empty() {
-            self.fn_layer = None;
-            self.error(
-                ErrorCode::EscapeFloor,
-                format!("unreachable keys {missing:?}; built-in fn layer in use"),
-                serial,
-            )?;
         }
         self.send(&DaemonMsg::Presented { serial: p.serial })
     }
 }
 
-/// The built-in safe layer's regions: Esc + F1–F12 in equal slots (pixels are sliverd's business).
+/// The built-in safe layer's regions: [`keys::safe_keys_for_panel`] in equal slots (pixels are
+/// sliverd's business).
 pub fn builtin_layer(panel: &PanelInfo) -> Vec<Region> {
-    let all = keys::ESCAPE_FLOOR;
+    let all = keys::safe_keys_for_panel(panel.width);
     let w = panel.width / all.len() as u32;
     all.iter()
         .enumerate()
@@ -500,46 +507,62 @@ mod tests {
     }
 
     #[test]
-    fn escape_floor_swaps_in_builtin_fn_layer() {
+    fn layouts_without_fkeys_are_fine_and_the_hatch_brings_them_back() {
         let (mut d, a, _buf) = connect();
-        // Base with Esc + an agent area but no F-keys, and an agent fn layer without them either.
-        let base = vec![
-            key(0, 0, 100, KEY_ESC),
-            Region {
-                id: 1,
-                rect: Rect::new(100, 0, 1908, 60),
-                kind: RegionKind::Agent,
-            },
-        ];
+        // Fully editable (H4): neither layer has F-keys. sliverd accepts that.
+        let base = vec![Region {
+            id: 1,
+            rect: Rect::new(0, 0, 2008, 60),
+            kind: RegionKind::Agent,
+        }];
         a.send(&present(Layer::Base, 1, base)).unwrap();
         a.send(&present(Layer::Fn, 2, vec![key(0, 0, 100, 113)]))
             .unwrap();
         d.pump().unwrap();
         assert_eq!(recv(&a), DaemonMsg::Presented { serial: 1 });
-        match recv(&a) {
-            DaemonMsg::Error {
-                code: ErrorCode::EscapeFloor,
-                serial: Some(2),
-                ..
-            } => {}
-            m => panic!("{m:?}"),
-        }
         assert_eq!(recv(&a), DaemonMsg::Presented { serial: 2 });
-        assert!(d.fn_layer.is_none(), "built-in fn layer must be in use");
-        // Holding Fn gives F-keys from the built-in layer.
-        d.set_fn(true).unwrap();
+        assert!(d.errors.is_empty());
+        // A finger resting on the agent area when the hatch opens gets cancelled.
+        d.touch(3, TouchPhase::Down, 500.0, 30.0).unwrap();
+        // Fn, Fn-and-hold: the built-in layer, with F5 where the safe layer puts it.
+        d.fn_key(true, 10_000).unwrap();
+        d.fn_key(false, 10_100).unwrap();
+        d.fn_key(true, 10_250).unwrap();
+        assert!(d.hatch_active());
         let f5 = builtin_layer(&d.panel)
             .into_iter()
             .find(|r| r.kind == RegionKind::Key { keys: vec![KEY_F5] })
             .unwrap();
         d.tap(f5.rect.x as f32 + 1.0, 30.0).unwrap();
         assert_eq!(d.keys, vec![(KEY_F5, true), (KEY_F5, false)]);
-        // An agent fn layer with F1–F12 is accepted.
-        a.send(&present(Layer::Fn, 3, fkeys())).unwrap();
-        d.pump().unwrap();
-        assert_eq!(recv(&a), DaemonMsg::FnKey { held: true });
-        assert_eq!(recv(&a), DaemonMsg::Presented { serial: 3 });
-        assert!(d.fn_layer.is_some());
+        d.fn_key(false, 12_000).unwrap();
+        assert!(!d.hatch_active());
+        let msgs: Vec<DaemonMsg> = (0..8).map(|_| recv(&a)).collect();
+        assert!(matches!(
+            msgs[0],
+            DaemonMsg::Touch {
+                phase: TouchPhase::Down,
+                ..
+            }
+        ));
+        assert_eq!(msgs[1], DaemonMsg::FnKey { held: true });
+        assert_eq!(msgs[2], DaemonMsg::FnKey { held: false });
+        assert!(matches!(
+            msgs[3],
+            DaemonMsg::Touch {
+                phase: TouchPhase::Cancel,
+                region: 1,
+                slot: 3,
+                ..
+            }
+        ));
+        assert_eq!(msgs[4], DaemonMsg::Hatch { active: true });
+        assert_eq!(msgs[5], DaemonMsg::FnKey { held: true });
+        assert_eq!(msgs[6], DaemonMsg::Hatch { active: false });
+        assert_eq!(msgs[7], DaemonMsg::FnKey { held: false });
+        // A plain Fn hold shows the agent's fn layer.
+        d.set_fn(true).unwrap();
+        assert_eq!(d.visible_regions(), vec![key(0, 0, 100, 113)]);
     }
 
     #[test]
