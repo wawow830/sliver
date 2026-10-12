@@ -35,6 +35,12 @@ pub enum Effect {
     Log(String),
     /// Change session state (volume, brightness, media, inhibitors). Run off the main loop.
     Session(SessionOp),
+    /// An action fired on a user module: re-run it (waybar `exec-on-event`).
+    ModuleFired(String),
+    /// Re-run user modules with `signal = N` (`{ signal = N }`, like `pkill -RTMIN+N waybar`).
+    Signal(u32),
+    /// Re-run one user module now (`{ update = "custom/x" }`).
+    Update(String),
 }
 
 /// Session-side changes the built-in modules make.
@@ -158,8 +164,7 @@ impl Agent {
         let mut ctx = match &self.fixed_ctx {
             Some(c) => c.clone(),
             None => crate::context::build(
-                &world.desktop,
-                &world.session,
+                world.context.clone(),
                 world.now,
                 self.physical_esc,
                 self.base_layer(),
@@ -391,6 +396,9 @@ impl Agent {
             (Some(a), _) => {
                 let layer_before = self.base_layer().to_owned();
                 self.execute(&a, None, Some(region), now, fx);
+                if cell.kind == "custom" {
+                    fx.push(Effect::ModuleFired(cell.id.clone()));
+                }
                 // A oneshot layer closes after the first action taken from it.
                 if self.oneshot.as_deref() == Some(layer_before.as_str())
                     && region <= FN_REGION_BASE
@@ -533,6 +541,8 @@ impl Agent {
                 c.interface.clone(),
                 c.method.clone(),
             ])),
+            Action::Signal(n) => fx.push(Effect::Signal(*n)),
+            Action::Update(m) => fx.push(Effect::Update(m.clone())),
             Action::ModuleAction(name) => {
                 let Some(cell) = region.and_then(|r| self.cell(r)).cloned() else {
                     return;

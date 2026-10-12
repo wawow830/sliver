@@ -55,12 +55,15 @@ Actions (`agent.rs` → `Effect`s run by main.rs):
   their trough, other modules the bar x.
 
 ## Context and data
-`sources.rs` runs the session source (sliver-session: logind, UPower, power-profiles, MPRIS,
-audio, notifications, brightness) and the desktop source (sliver-desktop, auto-detected
-compositor) on threads. They hand states to the main loop through a channel plus a wake pipe the
-loop polls. `context.rs` flattens them into the rule context (integration.md §1 keys). logind's
-`LockedHint` is only believed on Hyprland/sway/niri while a locker process runs, because it's
-verified stale on this machine, and believed as-is on GNOME/KDE.
+The live world comes from fir's `sliver-feeds` (desktop backend, session sources, and the user
+module runtime for `custom/*` with `exec`) through one wake fd the main loop polls. The rule
+context is `Aggregate::context()` plus the agent's own keys (`context.rs`: time, weekday,
+physical_esc, layer). logind's `LockedHint` is only believed on Hyprland/sway/niri while a locker
+process runs, because it's verified stale on this machine, and believed as-is on GNOME/KDE.
+
+User modules render through `sliver_modules::view`. An action on one re-runs it (waybar
+`exec-on-event`). `{ signal = N }` and `{ update = "custom/x" }` reach the runtime, and its timers
+stop while the display is off.
 
 Data modules: `battery` (tiny-dfr icons, states with lower-is-worse), `backlight`, `kbd-backlight`,
 `audio` (`node = "source"` for the mic), their `/slider` variants (`collapsed = true` shows just
@@ -85,5 +88,5 @@ module key, CSS id/classes and content, which is handy for debugging configs and
 Works: everything above, plus `--render` and the real sliverd loop.
 
 Not yet: the public D-Bus API (`sliver_api`: App controls/Status items placeholders, published
-items), `workspaces`/`taskbar`/`notifications`/`cpu`… modules, `layout`/`signal`/`update` actions,
-user modules runtime (T21), hot reload (T26).
+items), `workspaces`/`taskbar`/`notifications`/`cpu`… modules, the `layout` action, hot reload
+(T26).

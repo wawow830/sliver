@@ -10,18 +10,26 @@ use chrono::{DateTime, Local, Timelike};
 use sliver_config::{
     Action, FireOn, FmtValue, Gesture, ModuleInstance, State, ValueMap, Values, format_module,
 };
+use std::collections::HashMap;
+
+use sliver_config::Context;
 use sliver_desktop::DesktopState;
+use sliver_modules::Output;
 use sliver_render::{Content, Width};
 use sliver_session::{BatteryState, SessionState};
 
 use crate::icons::Icons;
 
-/// Everything modules can read.
+/// Everything modules and rules can read.
 #[derive(Debug, Clone)]
 pub struct World {
     pub now: DateTime<Local>,
     pub session: SessionState,
     pub desktop: DesktopState,
+    /// Rule context from the feeds (compositor + session keys); the agent adds its own.
+    pub context: Context,
+    /// Latest output of each user module (`custom/*` with `exec`), by module key.
+    pub outputs: HashMap<String, Output>,
 }
 
 impl World {
@@ -31,6 +39,8 @@ impl World {
             now,
             session: SessionState::default(),
             desktop: DesktopState::default(),
+            context: Context::new(),
+            outputs: HashMap::new(),
         }
     }
 }
@@ -60,6 +70,8 @@ pub enum Touch {
 pub struct Cell {
     /// Stable identity across frames: the module id plus its position in groups.
     pub key: String,
+    /// The module id (`custom/vpn#work`), as the user module runtime knows it.
+    pub id: String,
     /// The module type (`clock`, `audio/slider`, …), for module actions.
     pub kind: String,
     /// `audio` modules with `node = "source"`: the microphone.
@@ -173,6 +185,10 @@ struct Spec {
     checked: bool,
     /// Bindings used for gestures the user didn't bind (`ModuleAction`s the agent runs).
     defaults: Vec<(Gesture, Action)>,
+    /// Classes from the module's own output.
+    extra_classes: Vec<String>,
+    /// The text is already formatted (user modules): don't apply `format` again.
+    raw: bool,
 }
 
 impl Spec {
@@ -187,6 +203,8 @@ impl Spec {
             slider: None,
             checked: false,
             defaults: Vec::new(),
+            extra_classes: Vec::new(),
+            raw: false,
         }
     }
 
@@ -212,6 +230,27 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
     let kind = m.id.kind.as_str();
     let pct = |v: Option<u8>| v.map(f64::from);
     Some(match kind {
+        "custom" if world.outputs.contains_key(&m.id.to_string()) => {
+            let out = &world.outputs[&m.id.to_string()];
+            let v = sliver_modules::view(m, out, ui.show_alt);
+            if v.hidden {
+                return None;
+            }
+            // `view` already applied the module's format; pass the result through as-is.
+            let mut sp = Spec::new(ValueMap::new().with("", FmtValue::Text(v.text)), "{}");
+            sp.extra_classes = v.classes;
+            sp.default_icon = v.icon;
+            let slider = m
+                .config
+                .get("slider")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
+            if slider && let Some(value) = v.value {
+                sp.slider = Some((value / 100.0).clamp(0.0, 1.0) as f32);
+            }
+            sp.raw = true;
+            sp
+        }
         "key" | "custom" | "spacer" => Spec::new(ValueMap::new(), ""),
         "clock" => Spec::new(Clock(world.now), CLOCK_DEFAULT),
         "battery" => {
@@ -423,11 +462,15 @@ fn cell(
     let content = if m.id.kind == "spacer" {
         Content::Spacer
     } else {
-        let f = format_module(c, sp.default_format, &st, sp.values.as_ref());
+        // User module output is already formatted (`sliver_modules::view`): pass it through.
+        let plain = sliver_config::Common::default();
+        let fc = if sp.raw { &plain } else { c };
+        let f = format_module(fc, sp.default_format, &st, sp.values.as_ref());
         if f.hidden {
             return None;
         }
         classes.extend(f.classes);
+        classes.extend(sp.extra_classes.iter().cloned());
         let icon_name = f
             .icon
             .map(|i| i.0)
@@ -463,6 +506,7 @@ fn cell(
     }
     Some(Cell {
         key: key.clone(),
+        id: m.id.to_string(),
         kind: m.id.kind.clone(),
         mic: m.config.get("node").and_then(|v| v.as_str()) == Some("source"),
         css_id: m.css_id.clone(),
@@ -629,5 +673,90 @@ mod tests {
         );
         assert_eq!(cells[0].touch, Touch::Agent, "the handle opens the drawer");
         assert!(matches!(cells[1].content, Content::Icon(_)));
+    }
+}
+
+/// Runtime specs for every `custom/*` module with an `exec`, in any layout (including group
+/// members), for `sliver-feeds`' module runtime. Problems come back as messages.
+pub fn user_module_specs(
+    config: &sliver_config::Config,
+) -> (Vec<sliver_modules::Spec>, Vec<String>) {
+    use sliver_config::{ModuleId, ModuleRef};
+    let mut seen = std::collections::HashSet::new();
+    let (mut specs, mut errors) = (Vec::new(), Vec::new());
+    let mut todo: Vec<ModuleRef> = Vec::new();
+    for name in config.layouts.keys() {
+        if let Ok(zones) = config.layout_zones(name) {
+            todo.extend(zones.into_iter().flat_map(|z| z.modules));
+        }
+    }
+    while let Some(r) = todo.pop() {
+        let id = r.id().clone();
+        if !seen.insert(id.to_string()) {
+            continue;
+        }
+        let block = config.module_block(&r);
+        if id.kind == "group" {
+            let members = block
+                .get("modules")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            todo.extend(
+                members
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .filter_map(|s| ModuleId::parse(s).ok())
+                    .map(ModuleRef::Named),
+            );
+            continue;
+        }
+        if id.kind != "custom" || !block.contains_key("exec") {
+            continue;
+        }
+        let inst = ModuleInstance {
+            css_id: id.css_id(),
+            id: id.clone(),
+            classes: Vec::new(),
+            common: sliver_config::Common::default(),
+            config: block,
+            children: Vec::new(),
+        };
+        match sliver_modules::Spec::from_instance(&inst) {
+            Ok(s) => specs.push(s),
+            Err(e) => errors.push(format!("{id}: {e}")),
+        }
+    }
+    specs.sort_by(|a, b| a.key.cmp(&b.key));
+    (specs, errors)
+}
+
+#[cfg(test)]
+mod spec_tests {
+    use super::*;
+
+    #[test]
+    fn finds_exec_modules_everywhere() {
+        let l = sliver_config::load_str(
+            r#"
+            [[layouts.default.zones]]
+            name = "main"
+            modules = ["custom/a", "group/g", "custom/static"]
+            [modules."group/g"]
+            modules = ["custom/b"]
+            [modules."custom/a"]
+            exec = "echo a"
+            [modules."custom/b"]
+            exec = "echo b"
+            interval = 5
+            [modules."custom/static"]
+            format = "hi"
+            "#,
+            std::path::Path::new("."),
+        );
+        let (specs, errors) = user_module_specs(&l.config);
+        assert!(errors.is_empty(), "{errors:?}");
+        let keys: Vec<&str> = specs.iter().map(|s| s.key.as_str()).collect();
+        assert_eq!(keys, ["custom/a", "custom/b"]);
     }
 }

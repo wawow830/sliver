@@ -20,13 +20,13 @@ use sliver_agent::agent::{Effect, SessionOp};
 use sliver_agent::icons::Icons;
 use sliver_agent::link::{Event, Link};
 use sliver_agent::modules::World;
-use sliver_agent::sources::{Msg, Op, Sources};
+use sliver_agent::ops::{Op, start_ops};
 use sliver_config::{Config, Loaded};
-use sliver_desktop::DesktopState;
+use sliver_feeds::{Aggregate, Feed, Feeds};
 use sliver_ipc::proto::{DisplayState, Layer, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
 use sliver_render::{Fonts, Renderer, Stylesheet};
-use sliver_session::SessionState;
+use std::collections::HashMap;
 
 struct Args {
     render: Option<PathBuf>,
@@ -128,38 +128,83 @@ fn load_stylesheet(config: &Config, config_path: Option<&Path>) -> Stylesheet {
     sheet
 }
 
-/// What the sources told us so far.
-#[derive(Default)]
+/// The live world: sliver-feeds (desktop, session, user modules) plus the ops thread.
 struct Live {
-    session: SessionState,
-    desktop: DesktopState,
-    /// logind's raw `LockedHint`, before plausibility checks.
+    feeds: Feeds,
+    agg: Aggregate,
+    outputs: HashMap<String, sliver_modules::Output>,
+    /// logind's raw `LockedHint`, before the plausibility check.
     locked_hint: bool,
+    ops: Option<std::sync::mpsc::Sender<Op>>,
 }
 
 impl Live {
-    fn update(&mut self, msg: Msg) {
-        match msg {
-            Msg::Session(s) => {
-                self.locked_hint = s.locked;
-                self.session = s;
+    fn start(config: &Config) -> std::io::Result<Live> {
+        let mut feeds = Feeds::new()?;
+        feeds.start_desktop(|k| std::env::var(k).ok());
+        feeds.start_session();
+        let (specs, errors) = sliver_agent::modules::user_module_specs(config);
+        errors.iter().for_each(|e| eprintln!("sliver-agent: {e}"));
+        feeds.start_modules(specs);
+        let ops = feeds.session.clone().and_then(|h| match start_ops(h) {
+            Ok(tx) => Some(tx),
+            Err(e) => {
+                eprintln!("sliver-agent: session controls unavailable: {e}");
+                None
             }
-            Msg::Desktop(d) => self.desktop = d,
+        });
+        Ok(Live {
+            feeds,
+            agg: Aggregate::from_env(),
+            outputs: HashMap::new(),
+            locked_hint: false,
+            ops,
+        })
+    }
+
+    /// Takes in everything the feeds sent. Returns whether anything did.
+    fn pump(&mut self) -> bool {
+        let feeds = self.feeds.drain();
+        let any = !feeds.is_empty();
+        for f in feeds {
+            match &f {
+                Feed::Module(u) => {
+                    self.outputs.insert(u.module.clone(), u.output.clone());
+                }
+                Feed::Session(s) => self.locked_hint = s.locked,
+                Feed::Note(n) => eprintln!("sliver-agent: {n}"),
+                Feed::Desktop(_) => {}
+            }
+            self.agg.apply(f);
         }
-        // logind's LockedHint can be stale; see context::plausibly_locked.
-        self.session.locked = sliver_agent::context::plausibly_locked(
-            self.locked_hint,
-            self.desktop.backend,
-            sliver_agent::context::process_names,
-        );
+        any
     }
 
     fn world(&self) -> World {
+        use sliver_agent::context::{plausibly_locked, process_names};
+        // logind's LockedHint can be stale; see context::plausibly_locked.
+        let locked = plausibly_locked(self.locked_hint, self.agg.desktop.backend, process_names);
+        let mut session = self.agg.session.clone();
+        session.locked = locked;
+        let mut context = self.agg.context();
+        context.set("locked", locked);
         World {
             now: Local::now(),
-            session: self.session.clone(),
-            desktop: self.desktop.clone(),
+            session,
+            desktop: self.agg.desktop.clone(),
+            context,
+            outputs: self.outputs.clone(),
         }
+    }
+
+    fn op(&self, op: Op) {
+        if let Some(tx) = &self.ops {
+            let _ = tx.send(op);
+        }
+    }
+
+    fn modules(&self) -> Option<&sliver_modules::Runtime> {
+        self.feeds.modules.as_ref()
     }
 }
 
@@ -178,14 +223,15 @@ fn main() {
             a.size.1,
         );
         // Give the live sources a moment to report, so the preview shows real state.
-        let mut live = Live::default();
-        if let Ok(sources) = Sources::start() {
-            std::thread::sleep(Duration::from_millis(1500));
-            for msg in sources.drain() {
-                live.update(msg);
+        let world = match Live::start(&agent.config) {
+            Ok(mut live) => {
+                std::thread::sleep(Duration::from_millis(1500));
+                live.pump();
+                live.world()
             }
-        }
-        agent.render(&live.world());
+            Err(_) => World::at(Local::now()),
+        };
+        agent.render(&world);
         agent
             .errors
             .iter()
@@ -219,8 +265,7 @@ fn main() {
         return;
     }
 
-    let sources = Sources::start().unwrap_or_else(|e| die(&format!("starting sources: {e}")));
-    let mut live = Live::default();
+    let mut live = Live::start(&config).unwrap_or_else(|e| die(&format!("starting feeds: {e}")));
     let mut backoff = Duration::from_millis(250);
     loop {
         match Conn::connect(&a.socket)
@@ -240,7 +285,7 @@ fn main() {
                     "sliver-agent: connected to sliverd ({}, {}x{}, {:?})",
                     link.panel.model, link.panel.width, link.panel.height, link.role
                 );
-                if let Err(e) = run(agent, link, &sources, &mut live) {
+                if let Err(e) = run(agent, link, &mut live) {
                     eprintln!("sliver-agent: {e}");
                 }
                 eprintln!("sliver-agent: lost sliverd, reconnecting");
@@ -263,7 +308,6 @@ fn apply(
     effects: Vec<Effect>,
     link: &Link,
     children: &mut Vec<Child>,
-    sources: &Sources,
     live: &Live,
 ) -> std::io::Result<bool> {
     let mut redraw = false;
@@ -281,8 +325,8 @@ fn apply(
                     },
                     SessionOp::Volume { mic, pct } => Op::Volume { mic, pct },
                     SessionOp::ToggleMute { mic } => Op::Mute { mic },
-                    SessionOp::ToggleCaffeine => Op::Caffeine(!live.session.caffeine),
-                    SessionOp::Media(cmd) => match &live.session.media {
+                    SessionOp::ToggleCaffeine => Op::Caffeine(!live.agg.session.caffeine),
+                    SessionOp::Media(cmd) => match &live.agg.session.media {
                         Some(m) => Op::Media {
                             player: m.player.clone(),
                             cmd,
@@ -290,7 +334,22 @@ fn apply(
                         None => continue,
                     },
                 };
-                sources.op(op);
+                live.op(op);
+            }
+            Effect::ModuleFired(key) => {
+                if let Some(rt) = live.modules() {
+                    rt.action_fired(&key);
+                }
+            }
+            Effect::Signal(n) => {
+                if let Some(rt) = live.modules() {
+                    rt.signal(n.min(u8::MAX as u32) as u8);
+                }
+            }
+            Effect::Update(key) => {
+                if !live.modules().is_some_and(|rt| rt.trigger(&key)) {
+                    eprintln!("sliver-agent: update: no user module {key:?}");
+                }
             }
             Effect::Redraw => redraw = true,
             Effect::EmitKeys(keys, mode) => link.emit_keys(&keys, mode)?,
@@ -318,12 +377,7 @@ fn apply(
 }
 
 /// Drives one sliverd connection until it closes.
-fn run(
-    mut agent: Agent,
-    mut link: Link,
-    sources: &Sources,
-    live: &mut Live,
-) -> std::io::Result<()> {
+fn run(mut agent: Agent, mut link: Link, live: &mut Live) -> std::io::Result<()> {
     let mut dirty = true;
     let mut children = Vec::new();
     loop {
@@ -356,7 +410,7 @@ fn run(
                     tv_nsec: (ms % 1000) * 1_000_000,
                 });
         let (readable, world_changed) = {
-            let (fd, wake) = (link.fd(), sources.fd());
+            let (fd, wake) = (link.fd(), live.feeds.as_fd());
             let mut fds = [
                 PollFd::new(&fd, PollFlags::IN),
                 PollFd::new(&wake, PollFlags::IN),
@@ -368,13 +422,10 @@ fn run(
             (!fds[0].revents().is_empty(), !fds[1].revents().is_empty())
         };
         if world_changed {
-            for msg in sources.drain() {
-                live.update(msg);
-                dirty = true;
-            }
+            dirty |= live.pump();
         }
         let fx = agent.tick(now_us());
-        dirty |= apply(fx, &link, &mut children, sources, live)?;
+        dirty |= apply(fx, &link, &mut children, live)?;
         if world_changed && !readable {
             continue;
         }
@@ -401,6 +452,10 @@ fn run(
                     let was_off = agent.display == DisplayState::Off;
                     agent.display = state;
                     dirty |= was_off && state != DisplayState::Off;
+                    // User module timers stop while the bar is off (invariant 3).
+                    if let Some(rt) = live.modules() {
+                        rt.set_active(state != DisplayState::Off);
+                    }
                     if state == DisplayState::Off {
                         agent.cancel_touches()
                     } else {
@@ -428,7 +483,7 @@ fn run(
                     Vec::new()
                 }
             };
-            dirty |= apply(fx, &link, &mut children, sources, live)?;
+            dirty |= apply(fx, &link, &mut children, live)?;
         }
     }
 }

@@ -13,6 +13,8 @@ workspace = true
 [dependencies]
 sliver-config.workspace = true
 sliver-desktop.workspace = true
+sliver-feeds.workspace = true
+sliver-modules.workspace = true
 sliver-session.workspace = true
 sliver-icons.workspace = true
 sliver-ipc.workspace = true

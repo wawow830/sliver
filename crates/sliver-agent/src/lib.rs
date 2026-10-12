@@ -10,6 +10,6 @@ pub mod gesture;
 pub mod icons;
 pub mod link;
 pub mod modules;
-pub mod sources;
+pub mod ops;
 
 pub use agent::Agent;

@@ -276,7 +276,14 @@ fn touches_become_actions() {
     check("touchy-hello-pressed", &a.frame(Layer::Base).unwrap().image);
     present(&a, &mut link, &mut fake, &layers);
     let t = a.next_deadline().expect("hold timer");
-    assert_eq!(a.tick(t), [EmitKeys(vec![63], KeyMode::Tap)]);
+    // The key, and the user module re-runs after its action (waybar exec-on-event).
+    assert_eq!(
+        a.tick(t),
+        [
+            EmitKeys(vec![63], KeyMode::Tap),
+            ModuleFired("custom/hello".into())
+        ]
+    );
     fake.touch(0, TouchPhase::Up, x, 30.0).unwrap();
     let fx = deliver(&mut a, &mut link, &mut fake);
     assert!(
