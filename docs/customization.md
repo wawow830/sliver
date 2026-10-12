@@ -273,12 +273,16 @@ These are the selectors sliver guarantees, mirroring waybar:
   (`#battery.bat2`).
 - `.<class>` from `states`, module status (`.charging`, `.muted`, `.playing`), JSON `class`,
   static `class`, and `.drawer-child`.
-- `:active` while pressed, `:disabled`, and `.error` for a failed script.
+- `:active` while pressed, `:disabled`, `:first-child`/`:last-child`, and `.error` for a failed script.
+- The style tree is `bar > zone > module`. The agent passes `(type, id, classes)` and the renderer
+  does the cascade (ash, T22).
 - `.zone-<name>`, and `bar.layer-<name>`, `bar.layout-<name>`, `bar.<bar name>`, `bar.locked`,
   `bar.dimmed` on the strip root.
 - Properties (initial set): `color`, `background`/`background-color`, `border`, `border-radius`,
   `border-color`, `border-width`, `padding`, `margin`, `font-family`, `font-size`, `font-weight`,
-  `opacity`, `min-width`, `transition`. Themes are just stylesheets. The default `sliver` theme
+  `opacity`, `min-width`, `transition`. GTK-isms that waybar users paste are accepted: `@define-color`, `@import`, `alpha()`, `shade()`,
+  `mix()`. Unsupported properties or selectors warn with file:line and never fail the load.
+  Themes are just stylesheets. The default `sliver` theme
   (Q8/H10: macOS look plus the desktop accent) is a stylesheet using `@accent`, which the agent
   defines from the desktop.
 
