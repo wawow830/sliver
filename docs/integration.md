@@ -272,17 +272,6 @@ honours logind inhibitors only if `ignore_systemd_inhibit` is false (default).
 The caffeine toggle holds an inhibit; the state is "do we hold one". Listing others' inhibitors:
 logind `ListInhibitors`.
 
-### System tray: StatusNotifierItem (T27)
-**Implemented** (`sliver_session::tray`, `sliver_session::menu`): `Handle::start_tray(conn)` registers
-a host with the existing `org.kde.StatusNotifierWatcher` (quickshell owns it here **(verified)**,
-so it is an additional host), follows `RegisteredStatusNotifierItems` plus the watcher's
-Registered/Unregistered and the items' `New*` signals, and fills `SessionState.tray` (id, title,
-status, icon name + theme path, best pixmap converted ARGB to RGBA, tooltip, menu path).
-Controls: `tray::poke` (`Activate`, `SecondaryActivate`, `ContextMenu`), `tray::scroll`;
-`menu::layout` / `menu::click` decode and drive the dbusmenu for a sub-bar. Verified against
-this session (fcitx5's item and its menu). Not done: a host-owned fallback watcher when the
-bus has none (GNOME, bare sway), and `LayoutUpdated` live refresh of an open menu.
-
 ### Keyboard layout (outside the compositor)
 
 Compositor events win (§2). Input methods also change what the user is typing:

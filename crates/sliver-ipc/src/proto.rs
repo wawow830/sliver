@@ -265,6 +265,8 @@ pub enum ErrorCode {
     Malformed,
     InvalidBuffer,
     InvalidFrame,
+    /// The frame lacked Esc/F1–F12. The built-in fn layer replaced the agent's.
+    EscapeFloor,
     ForbiddenKey,
     RateLimited,
     NotActive,
@@ -300,11 +302,6 @@ pub enum DaemonMsg {
     FnKey {
         held: bool,
     },
-    /// The safe hatch (Fn double-press and hold) is showing the built-in layer instead of the
-    /// agent's frames. Touches don't reach the agent while active.
-    Hatch {
-        active: bool,
-    },
     Display {
         state: DisplayState,
     },
@@ -328,7 +325,6 @@ impl DaemonMsg {
         "presented",
         "touch",
         "fn",
-        "hatch",
         "display",
         "role",
         "ping",
@@ -561,7 +557,6 @@ mod tests {
                 features: vec!["x".into()],
             },
             DaemonMsg::FnKey { held: false },
-            DaemonMsg::Hatch { active: true },
             DaemonMsg::Ping { nonce: 2 },
             DaemonMsg::Presented { serial: 1 },
             DaemonMsg::Touch {
@@ -579,7 +574,7 @@ mod tests {
                 role: Role::Standby,
             },
             DaemonMsg::Error {
-                code: ErrorCode::InvalidFrame,
+                code: ErrorCode::EscapeFloor,
                 msg: "no esc".into(),
                 serial: Some(4),
             },

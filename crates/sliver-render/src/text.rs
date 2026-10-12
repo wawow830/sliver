@@ -14,7 +14,6 @@ pub struct Fonts {
     pub(crate) system: FontSystem,
     pub(crate) cache: SwashCache,
     labels: HashMap<LabelKey, Arc<Label>>,
-    families: HashMap<Vec<String>, String>,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -56,36 +55,7 @@ impl Fonts {
             system: FontSystem::new_with_locale_and_db(locale, db),
             cache: SwashCache::new(),
             labels: HashMap::new(),
-            families: HashMap::new(),
         }
-    }
-}
-
-impl Fonts {
-    /// The first family in a CSS `font-family` list that's available. Generic families and
-    /// anything missing fall back to the embedded font.
-    pub(crate) fn pick_family(&mut self, list: &[String]) -> String {
-        if let Some(f) = self.families.get(list) {
-            return f.clone();
-        }
-        let db = self.system.db();
-        let picked = list
-            .iter()
-            .find_map(|name| {
-                if matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "sans-serif" | "sans" | "system-ui" | "ui-sans-serif"
-                ) {
-                    return Some(EMBEDDED_FONT_FAMILY.to_string());
-                }
-                db.faces()
-                    .flat_map(|f| f.families.iter())
-                    .find(|(n, _)| n.eq_ignore_ascii_case(name))
-                    .map(|(n, _)| n.clone())
-            })
-            .unwrap_or_else(|| EMBEDDED_FONT_FAMILY.to_string());
-        self.families.insert(list.to_vec(), picked.clone());
-        picked
     }
 }
 

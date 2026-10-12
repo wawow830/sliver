@@ -5,13 +5,12 @@
 //! always renders (GOAL invariant 1).
 //!
 //! The pipeline:
-//! 1. A [`Stylesheet`] (waybar-style CSS, ADR-0004) styles the `bar > zone > module` tree.
-//! 2. [`Renderer::layout`] measures content and [`solve`]s zones and their `Auto`/`Fixed`/`Fill`
-//!    items into rectangles. Use the same rects for touch regions ([`hit_test`]), so what you see
-//!    is what you touch.
-//! 3. [`Renderer::render`] draws a [`Scene`] into a landscape [`Pixmap`] (e.g. 2008x60).
-//!    Headless callers write it out with [`Pixmap::encode_png`].
-//! 4. [`panel::damage`] finds what changed since the last frame, and [`panel::blit`] rotates it into
+//! 1. [`Renderer::layout`] measures content and [`solve`]s zones of `Auto`/`Fixed`/`Fill` items
+//!    into rectangles. Use the same rects for touch regions ([`hit_test`]), so what you see is what
+//!    you touch.
+//! 2. [`Renderer::render`] draws a [`Scene`] with a [`Theme`] into a landscape [`Pixmap`]
+//!    (e.g. 2008x60). Headless callers write it out with [`Pixmap::encode_png`].
+//! 3. [`panel::damage`] finds what changed since the last frame, and [`panel::blit`] rotates it into
 //!    the panel's native framebuffer layout.
 
 mod color;
@@ -20,14 +19,14 @@ mod icon;
 pub mod panel;
 mod render;
 mod scene;
-pub mod style;
 mod text;
+mod theme;
 
 pub use color::Color;
-pub use geometry::{Align, Rect, Sizing, Width, hit_test, solve};
+pub use geometry::{Rect, Sizing, Spacing, Width, hit_test, solve};
 pub use icon::{BUILTIN_ICONS, Icon, IconError};
-pub use render::{Layout, Renderer};
+pub use render::Renderer;
 pub use scene::{Content, Item, Scene, Zone};
-pub use style::{Diagnostic, Style, Stylesheet};
 pub use text::{EMBEDDED_FONT_FAMILY, Fonts};
+pub use theme::{FontSpec, Theme};
 pub use tiny_skia::Pixmap;

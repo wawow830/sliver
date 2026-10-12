@@ -29,16 +29,12 @@ because these are the only interfaces other people's code will depend on.
    hit-tested and emitted inside sliverd, and Fn swaps layers locally. So keys never wait on the agent
    and survive an agent hang. Everything else (sliders, gestures, widgets) is an `agent` region and gets
    raw touch events.
-6. **sliverd enforces invariant 1 itself:** hangup or a missed on-demand ping (2 s; no idle timers) → safe
-   layer. The **safe hatch** (double-press Fn and hold → built-in F1–F12, plus Esc on bars without a
-   physical Esc) can't be configured or blocked. Validation is strict, `KEY_SYSRQ` is refused, and only
-   the active seat0 session's uid can drive the bar.
-   *Amended:* this replaced an earlier "escape floor" that rejected frames without Esc/F-keys. The
-   human made layouts fully editable (H4 revised), and H14 left the hatch gesture to us, so we took elm's
-   pick (docs/customization.md §9).
+6. **sliverd enforces invariant 1 itself:** hangup or a missed on-demand ping (2 s; no idle timers) → safe layer; an "escape floor"
+   (F1–F12, plus Esc if there's no physical Esc, must exist as key regions in base ∪ fn, else the built-in fn layer is substituted);
+   strict validation; `KEY_SYSRQ` refused; only the active seat0 session's uid can drive the bar.
 
 7. **Published items are first-class modules** (GOAL.md design principle, added after the human's
-   waybar direction). Each one has a module id `app/<provider>#<item-id>` (grammar in docs/customization.md), is placeable anywhere,
+   waybar direction). Each one has a module id `dbus/<provider>/<item-id>`, is placeable anywhere,
    and is styled by the user's stylesheet (`classes`, states). Its content is reshaped by user `format`
    over app-supplied `values`, and user gesture bindings replace app events. `Control1` carries the
    waybar-style controls (`Signal`, `Refresh`, `Show`/`Hide`/`Toggle`, `Trigger`, `Update`).

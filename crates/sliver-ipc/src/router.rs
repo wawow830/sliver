@@ -159,6 +159,27 @@ impl TouchRouter {
         v
     }
 
+    /// Like [`Self::pressed_regions`], with the rect each was captured with. Region ids can repeat
+    /// across layers, so highlight a region only if both id and rect match what's on screen.
+    pub fn pressed_keys(&self) -> Vec<(u32, Rect)> {
+        let mut v: Vec<(u32, Rect)> = self
+            .slots
+            .values()
+            .filter_map(|c| match c {
+                Capture::Key {
+                    region,
+                    rect,
+                    pressed: true,
+                    ..
+                } => Some((*region, *rect)),
+                _ => None,
+            })
+            .collect();
+        v.sort_unstable_by_key(|(id, r)| (*id, r.x, r.y));
+        v.dedup();
+        v
+    }
+
     fn end(&mut self, slot: u8, phase: TouchPhase, x: f32, y: f32, out: &mut Vec<Routed>) {
         match self.slots.remove(&slot) {
             Some(Capture::Key {
@@ -241,6 +262,7 @@ mod tests {
         let rs = regions();
         assert_eq!(r.touch(&rs, 0, Down, 50.0, 30.0), vec![k(1, true)]);
         assert_eq!(r.pressed_regions(), vec![1]);
+        assert_eq!(r.pressed_keys(), vec![(1, Rect::new(0, 0, 100, 60))]);
         assert_eq!(r.touch(&rs, 0, Up, 50.0, 30.0), vec![k(1, false)]);
         assert!(r.pressed_regions().is_empty());
     }

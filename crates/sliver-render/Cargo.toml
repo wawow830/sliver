@@ -13,6 +13,5 @@ workspace = true
 [dependencies]
 cosmic-text.workspace = true
 resvg.workspace = true
-svgtypes.workspace = true
 thiserror.workspace = true
 tiny-skia.workspace = true

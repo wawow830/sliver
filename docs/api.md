@@ -57,8 +57,7 @@ Rules, layers and layout resolution all happen in the agent. sliverd only knows 
 - **Items** are declarative (button, toggle, slider, …). The agent renders them, does hit-testing and
   gesture recognition, and sends **events** back to the owner. Apps never draw pixels.
 - **Published items are modules** (GOAL.md design principle, waybar model). Each item is a module
-  instance `app/<provider>#<item-id>`, and a whole context is the group module `app/<provider>`
-  (grammar owned by docs/customization.md).
+  instance `dbus/<provider>/<item-id>`, and a whole context is the group module `dbus/<provider>`.
   The user treats them **exactly like built-ins**: place them in any zone of any layout (not just
   the placeholders), style them from the stylesheet, bind any gesture to their own actions, and
   reshape them with `format`. The placeholders are just the zero-config default. They hold
@@ -174,7 +173,7 @@ with the config schema (T11/T20/T21/T22, owned by elm and the config peers). Thi
 
 | waybar-style feature | for a published item |
 |---|---|
-| module id | `app/<provider>#<item-id>` (the group module `app/<provider>` is the whole context). Configure it under that id like any module. |
+| module id | `dbus/<provider>/<item-id>` (the group module `dbus/<provider>` is the whole context). Configure it under that id like any module. |
 | placement | the user can put the id in any zone or layer. Placed items leave the placeholders. Not placed → App controls / Status items. |
 | `format`, `format-icons`, `states` | applied to the item's `values`. The defaults are `text` (= `label`), `icon`, `percentage` (0–100), `alt`, `tooltip`, and any app-defined key. With no user `format`, `label`/`icon` render as published. |
 | stylesheet | selectors match the module id, the type class (`.button`, `.slider`, …), `.dbus`, `.app`/`.status`, the item's `classes`, and states `:active` (pressed), `:checked` (toggle on), `:disabled`, `:focused-app`. |
@@ -241,7 +240,7 @@ SetVariable(s name, v value)        user variables usable in context conditions 
 ListContexts() -> (aa{sv})          provider, title, scope, on-screen; for the settings app
 
 # Modules (waybar parity: `pkill -RTMIN+N waybar` and friends). `module` = any module id, built-in,
-# config-defined (`custom/vpn`, `clock#2`) or published (`app/<provider>#<item>`).
+# config-defined (`custom/vpn`, `clock#2`) or published (`dbus/<provider>/<item>`).
 Signal(u n)                         like RTMIN+n: re-run every module with `signal = n`
 Refresh(s module)                   re-run/re-read one module now
 Show(s module)  Hide(s module)  Toggle(s module)    runtime visibility, not persisted; ResetVisibility()
@@ -322,7 +321,6 @@ highlight if absent.
 | `presented` | `serial` | buffer copied; also implies the frame is on screen (or will be when the display wakes) |
 | `touch` | `region` u32, `slot` u8, `phase` (`down`/`move`/`up`/`cancel`), `x`, `y` (f32 logical px), `time_us` u64 | only for touches that **started** in an `agent` region; captured until up even if they leave it |
 | `fn` | `held` b | |
-| `hatch` | `active` b | the safe hatch is showing the built-in layer. Touches don't reach the agent, and its presents are kept for later |
 | `display` | `state` (`on`/`dimmed`/`off`) | agent stops rendering and widget timers while `off` |
 | `role` | `role` (`active`/`standby`/`revoked`) | session switches; non-active agents' presents are dropped |
 | `ping` | `nonce` | |
@@ -341,17 +339,15 @@ highlight if absent.
   | malformed/oversized packet, wrong fd count, anything before `hello` | `error{malformed}` | close → safe layer |
   | major version mismatch | `error{proto}` | close → safe layer |
   | invalid buffer/frame/keys | `error{invalid_buffer/invalid_frame/forbidden_key}` | previous frame stays |
+  | escape floor not met | `error{escape_floor}` | frame shown, `fn` := built-in |
 
   Every switch to the safe layer releases held keys first.
-- **Safe hatch (invariant 1):** layouts and the fn layer are **fully editable** (H4 revised), so sliverd
-  never rejects a frame for lacking Esc/F-keys. Instead, **double-press Fn and hold** (two key-downs
-  ≤ 400 ms apart) and sliverd shows its built-in layer for as long as Fn stays down. That's F1–F12,
-  plus Esc first on bars with no physical Esc (≥ 2170 px, tiny-dfr's heuristic; this 2008 px Mac14,7
-  has one, H2). It's hard-wired: no config, agent or app can change or block it. Touches captured
-  on the agent's layer are cancelled when it opens, and the agent gets `hatch{active}`. The same
-  built-in layer is the safe layer when no agent is connected, and the fn layer when the agent never
-  presented one. `sliver_ipc::hatch::FnHatch` is the shared state machine.
-  `validate::missing_safe_keys` lets the agent and config validator *warn*.
+- **Escape floor:** a frame is accepted only if `base ∪ fn` (with the built-in fn layer standing in
+  for a cleared one) contains single-key regions for `KEY_F1`–`KEY_F12`, plus `KEY_ESC` on machines
+  without a physical Esc. Each must be ≥ 32 px wide and fully on screen. Physical Esc follows tiny-dfr's
+  heuristic: bars ≥ 2170 px (2016–19) have none, and the 2008 px bars (this Mac14,7, confirmed in H2)
+  have one. `/etc/sliver/sliverd.toml` can override it. Otherwise sliverd replaces the `fn` layer with
+  its built-in one and sends `error{code:"escape_floor"}`. The settings editor is stricter (docs/ux.md §7).
 - **Validation:** geometry in bounds, ≤ 128 regions, no overlapping key regions, keycodes in range.
   **`KEY_SYSRQ` is refused** in regions and `emit_keys` (a same-uid process must not get kernel SysRq).
 - **No trust in the buffer:** sealed memfds only, copied before use, mmap failures and short sizes → reject.
@@ -391,7 +387,7 @@ sliverctl publish --scope status --provider org.example.Hello button:hi:Hello |
   while read -r item kind _; do notify-send "$item $kind"; done
 sliverctl signal 8                       # waybar: pkill -RTMIN+8 waybar
 sliverctl refresh custom/vpn
-sliverctl toggle 'app/org.example.Hello#hi'
+sliverctl toggle dbus/org.example.Hello/hi
 sliverctl trigger clock tap
 sliverctl update custom/status text='build ✓' class=ok
 sliverctl layer media | reload | var set focus_mode true | modules

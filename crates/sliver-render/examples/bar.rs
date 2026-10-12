@@ -8,29 +8,12 @@
 //! button). Items are `Auto` width; prefix `xN:` for `Fill(N)` or `pN:` for `Fixed(N px)`. A `!`
 //! suffix shows it pressed. `|` splits Esc | Main | Controls zones. `--system-fonts` uses
 //! installed fonts (with fallback) instead of only the embedded one. `--size WxH` sets the bar size.
-//! `--style FILE.css` uses a stylesheet (default: the built-in classic theme). An item may be
-//! followed by `#id` and `.class`es, e.g. `icon:bolt#battery.charging`.
 
 use std::time::Instant;
 
-use sliver_render::{Content, Fonts, Icon, Item, Renderer, Scene, Stylesheet, Width};
+use sliver_render::{Content, Fonts, Icon, Item, Renderer, Scene, Theme, Width};
 
 fn parse_item(arg: &str) -> Item {
-    // Trailing `#id.class.class` selectors (not inside paths).
-    let (arg, sel) = match arg.rfind('#').filter(|&i| !arg[i..].contains('/') && i > 0) {
-        Some(i) => (&arg[..i], &arg[i + 1..]),
-        None => (arg, ""),
-    };
-    let mut sel = sel.split('.');
-    let id = sel.next().filter(|s| !s.is_empty());
-    let classes: Vec<&str> = sel.collect();
-    let mut item = parse_content(arg);
-    item.id = id.map(str::to_string);
-    item.classes = classes.into_iter().map(str::to_string).collect();
-    item
-}
-
-fn parse_content(arg: &str) -> Item {
     let (width, rest) = match arg.split_once(':') {
         Some((n, rest)) if n.starts_with('x') && n[1..].parse::<u32>().is_ok() => {
             (Width::Fill(n[1..].parse().unwrap()), rest)
@@ -67,14 +50,6 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let system = args.iter().any(|a| a == "--system-fonts");
     args.retain(|a| a != "--system-fonts");
-    let mut sheet = Stylesheet::classic();
-    if let Some(i) = args.iter().position(|a| a == "--style") {
-        let path = args.remove(i + 1);
-        args.remove(i);
-        let (s, diags) = Stylesheet::load(path.as_ref()).expect("reading stylesheet");
-        diags.iter().for_each(|d| eprintln!("{d}"));
-        sheet = s;
-    }
     let (mut w, mut h) = (2008, 60);
     if let Some(i) = args.iter().position(|a| a == "--size") {
         let size = args.remove(i + 1);
@@ -101,11 +76,12 @@ fn main() {
         Fonts::embedded()
     };
     let mut renderer = Renderer::new(fonts);
+    let theme = Theme::default();
     let t = Instant::now();
-    let pixmap = renderer.render_new(&scene, &sheet, w, h);
+    let pixmap = renderer.render_new(&scene, &theme, w, h);
     let first = t.elapsed();
     let t = Instant::now();
-    let pixmap2 = renderer.render_new(&scene, &sheet, w, h);
+    let pixmap2 = renderer.render_new(&scene, &theme, w, h);
     let cached = t.elapsed();
     assert_eq!(pixmap.data(), pixmap2.data());
     pixmap.save_png(out).expect("writing PNG");
