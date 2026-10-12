@@ -29,6 +29,11 @@ fi
 if command -v rpmspec >/dev/null; then
   rpmspec -P packaging/rpm/sliver.spec >/dev/null
 fi
+# A bare file path in %install (a %files line put in the wrong section) runs as a command and breaks
+# the build only after a 10-minute compile, so catch it here.
+if awk '/^%install/{i=1;next} /^%(check|files|post|pre|changelog)/{i=0} i && /^%\{_[a-z]+\}\//{print FILENAME": "FNR": "$0; bad=1} END{exit bad}' packaging/rpm/sliver.spec; then :; else
+  echo "packaging/rpm/sliver.spec: %files entries inside %install (see above)"; exit 1
+fi
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate packaging/desktop/*.desktop
 fi
