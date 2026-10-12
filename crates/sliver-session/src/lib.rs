@@ -9,6 +9,7 @@
 //! Testing: [`fake::ScriptedSession`] replays states; the real sources are tested against mock
 //! services on a private `dbus-daemon` (see `tests/`).
 
+pub mod appearance;
 pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
@@ -113,6 +114,7 @@ pub struct SessionState {
     pub caffeine: bool,
     pub audio: audio::Audio,
     pub notifications: notifications::Notifications,
+    pub appearance: appearance::Appearance,
     /// StatusNotifierItem tray, in registration order (empty until `Handle::start_tray`).
     pub tray: Vec<tray::TrayItem>,
     pub brightness: brightness::Levels,

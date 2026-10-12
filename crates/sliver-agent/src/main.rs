@@ -193,6 +193,25 @@ impl Reloader {
         outcome.is_some_and(|o| self.handle(o, Some(agent), live))
     }
 
+    /// The desktop's accent colour changed (portal or KDE): rebuild the stylesheet with it.
+    /// Returns whether something changed on screen.
+    fn sync_accent(&mut self, agent: &mut Agent, live: &mut Live) -> bool {
+        let accent = live
+            .agg
+            .session
+            .appearance
+            .accent
+            .map(|[r, g, b]| sliver_render::Color::rgb(r, g, b));
+        let Some(inner) = self.inner.as_mut() else {
+            return false;
+        };
+        if !inner.set_accent(accent) {
+            return false;
+        }
+        let outcome = inner.reload_now();
+        self.handle(outcome, Some(agent), live)
+    }
+
     /// Reloads now (`sliverctl reload`). Returns the errors (empty = the file's config is live).
     fn reload(&mut self, agent: Option<&mut Agent>, live: &mut Live) -> Vec<String> {
         match self.inner.as_mut().map(sliver_reload::Reloader::reload_now) {
@@ -886,6 +905,7 @@ fn run(
         dirty |= reloader.on_wake(watch_ready, usr2_ready, &mut agent, live);
         if world_changed {
             dirty |= live.pump();
+            dirty |= reloader.sync_accent(&mut agent, live);
         }
         if api_woke && let Some(api) = &live.api {
             let (changed, requests) = api.drain();

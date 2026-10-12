@@ -31,6 +31,8 @@ pub enum Outcome {
 }
 
 pub struct Reloader {
+    /// The desktop's accent colour (`@accent` in the default theme), once known.
+    accent: Option<sliver_render::Color>,
     explicit: Option<PathBuf>,
     applied: Applied,
     fingerprint: u64,
@@ -51,8 +53,12 @@ fn fingerprint(files: &[PathBuf]) -> u64 {
 fn load_sheet(
     config: &Config,
     config_path: Option<&Path>,
+    accent: Option<sliver_render::Color>,
 ) -> Result<(Stylesheet, Vec<String>), String> {
-    let mut sheet = Stylesheet::sliver();
+    let mut sheet = match accent {
+        Some(c) => Stylesheet::sliver_with_accent(c),
+        None => Stylesheet::sliver(),
+    };
     let dir = config_path.and_then(Path::parent);
     let user = match (&config.stylesheet, dir) {
         (Some(s), Some(d)) => Some(d.join(s)),
@@ -118,7 +124,7 @@ impl Reloader {
         } else {
             sliver_config::load_str("", Path::new(".")).config
         };
-        let (sheet, sheet_warnings) = match load_sheet(&config, r.config_path.as_deref()) {
+        let (sheet, sheet_warnings) = match load_sheet(&config, r.config_path.as_deref(), None) {
             Ok(s) => s,
             Err(e) => {
                 errors.push(e);
@@ -134,6 +140,7 @@ impl Reloader {
             errors,
         };
         let mut me = Reloader {
+            accent: None,
             explicit: explicit.map(Path::to_path_buf),
             fingerprint: 0,
             watcher: Watcher::new()?,
@@ -158,8 +165,21 @@ impl Reloader {
         ) {
             files.push(dir.join(cfg));
         }
-        self.fingerprint = fingerprint(&files);
+        let mut fp = fingerprint(&files);
+        // The accent changes the parsed sheet without any file changing.
+        fp ^= self
+            .accent
+            .map_or(0, |c| u64::from_be_bytes([0, 1, c.r, c.g, c.b, 0, 0, 0]));
+        self.fingerprint = fp;
         self.watcher.set_files(files.iter().map(PathBuf::as_path));
+    }
+
+    /// Use the desktop's accent colour for `@accent` in the default theme. Returns whether it
+    /// changed; if so, call [`Reloader::reload_now`] to rebuild the stylesheet with it.
+    pub fn set_accent(&mut self, accent: Option<sliver_render::Color>) -> bool {
+        let changed = self.accent != accent;
+        self.accent = accent;
+        changed
     }
 
     pub fn current(&self) -> &Applied {
@@ -196,10 +216,11 @@ impl Reloader {
             self.watcher.set_files(files.iter().map(PathBuf::as_path));
             return Outcome::Rejected(errors_of(&r.loaded));
         }
-        let (sheet, sheet_warnings) = match load_sheet(&r.loaded.config, r.config_path.as_deref()) {
-            Ok(s) => s,
-            Err(e) => return Outcome::Rejected(vec![e]),
-        };
+        let (sheet, sheet_warnings) =
+            match load_sheet(&r.loaded.config, r.config_path.as_deref(), self.accent) {
+                Ok(s) => s,
+                Err(e) => return Outcome::Rejected(vec![e]),
+            };
         let mut warnings: Vec<String> = r
             .loaded
             .diagnostics

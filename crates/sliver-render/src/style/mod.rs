@@ -232,6 +232,21 @@ impl Stylesheet {
         Stylesheet::builtin("sliver").expect("sliver theme exists")
     }
 
+    /// The default theme with `@accent` set to the desktop's accent colour. The accent has to be
+    /// known when the theme is parsed, so a changed accent means building the sheet again.
+    pub fn sliver_with_accent(accent: Color) -> Stylesheet {
+        let (_, text) = BUILTIN_THEMES
+            .iter()
+            .find(|(n, _)| *n == "sliver")
+            .expect("sliver theme exists");
+        let mut sheet = Stylesheet::empty();
+        sheet.define_color("accent", accent);
+        let mut diags = Vec::new();
+        sheet.add_str("sliver:sliver", text, None, &mut diags);
+        debug_assert!(diags.is_empty(), "built-in theme: {diags:?}");
+        sheet
+    }
+
     /// A built-in theme by name (see [`BUILTIN_THEMES`]).
     pub fn builtin(name: &str) -> Option<Stylesheet> {
         let (_, text) = BUILTIN_THEMES.iter().find(|(n, _)| *n == name)?;

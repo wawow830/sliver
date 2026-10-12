@@ -42,6 +42,8 @@ pub struct SessionOptions {
     pub sysfs: Option<sliver_session::brightness::Sysfs>,
     pub notifications: bool,
     pub tray: bool,
+    /// Accent colour and colour scheme from the settings portal (and `kdeglobals`).
+    pub appearance: bool,
 }
 
 impl Default for SessionOptions {
@@ -51,6 +53,7 @@ impl Default for SessionOptions {
             sysfs: Some(sliver_session::brightness::Sysfs::default()),
             notifications: true,
             tray: true,
+            appearance: true,
         }
     }
 }
@@ -63,6 +66,7 @@ impl SessionOptions {
             sysfs: None,
             notifications: false,
             tray: false,
+            appearance: false,
         }
     }
 }
@@ -267,6 +271,17 @@ impl Feeds {
         if opts.tray {
             if let Ok(c) = session() {
                 handle.start_tray(c);
+            }
+        }
+        if opts.appearance {
+            if let Ok(c) = session() {
+                let kde = std::env::var_os("XDG_CONFIG_HOME")
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config"))
+                    })
+                    .map(|d| d.join("kdeglobals"));
+                handle.start_appearance(c, kde);
             }
         }
         self.session = Some(handle);

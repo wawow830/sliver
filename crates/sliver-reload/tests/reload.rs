@@ -216,3 +216,27 @@ fn describe(o: &Option<Outcome>) -> &'static str {
         Some(Outcome::Unchanged) => "Unchanged",
     }
 }
+
+#[test]
+fn a_new_accent_rebuilds_the_stylesheet_and_unchanged_is_unchanged() {
+    let d = Dir::new("accent");
+    d.write("config.toml", "[bar]\nname = \"x\"\n");
+    let (mut r, _) = Reloader::start(Some(&d.path("config.toml"))).unwrap();
+    assert!(matches!(r.reload_now(), Outcome::Unchanged));
+    let c = sliver_render::Color::rgb(200, 30, 90);
+    assert!(r.set_accent(Some(c)));
+    assert!(!r.set_accent(Some(c)), "same accent: nothing to do");
+    assert!(
+        matches!(r.reload_now(), Outcome::Applied(_)),
+        "the accent changes the sheet"
+    );
+    assert!(matches!(r.reload_now(), Outcome::Unchanged));
+    // the theme really uses it: a checked module is drawn in the accent colour
+    use sliver_render::{Fonts, Item, Pixmap, Renderer, Scene};
+    let mut item = Item::text("x").fill(1);
+    item.checked = true;
+    let mut px = Pixmap::new(120, 60).unwrap();
+    Renderer::new(Fonts::embedded()).render(&Scene::new(vec![item]), &r.current().sheet, &mut px);
+    let at = (5 * 120 + 8) * 4;
+    assert_eq!(&px.data()[at..at + 3], &[200, 30, 90], "accent background");
+}
