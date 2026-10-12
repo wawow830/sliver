@@ -312,6 +312,9 @@ struct Live {
     /// The public D-Bus API, if the session bus is there.
     api: Option<ApiLink>,
     published: Published,
+    /// The registry changed since `published` was copied: copy it before the next frame (T99:
+    /// not on every change, which an app may make hundreds of times a second).
+    published_stale: bool,
     /// cpu/memory/... sampler, kept across frames for CPU deltas.
     stats: sliver_agent::modules::Stats,
     /// Installed applications (taskbar icons).
@@ -356,6 +359,7 @@ impl Live {
             ops,
             api,
             published: Published::default(),
+            published_stale: false,
             stats: Default::default(),
             emoji: sliver_agent::modules::EmojiHandle::persistent(),
             apps: std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::from_paths(
@@ -397,7 +401,7 @@ impl Live {
                 workspace: d.workspace.as_ref().map(|w| w.name.clone()),
                 locked: self.world_locked(),
             });
-            self.published = Published::snapshot(&api.api);
+            self.published_stale = true;
         }
     }
 
@@ -409,7 +413,14 @@ impl Live {
         )
     }
 
-    fn world(&self) -> World {
+    /// The world for a frame. Copies the API registry first if it changed since the last copy.
+    fn world(&mut self) -> World {
+        if self.published_stale
+            && let Some(api) = &self.api
+        {
+            self.published = Published::snapshot(&api.api);
+            self.published_stale = false;
+        }
         // logind's LockedHint can be stale; see context::plausibly_locked.
         let locked = self.world_locked();
         let mut session = self.agg.session.clone();
@@ -968,7 +979,13 @@ fn run(
     // The display policy sliverd has from us (T68). Resent whenever the config or the power
     // source changes it, and after a role change (sliverd ignores it from a standby agent).
     let mut sent_policy: Option<DisplayPolicy> = None;
+    // Content changes (published items, feeds) redraw at most 30 times a second (T99), and
+    // the registry is only copied out when a frame is actually drawn.
+    let mut pacer = sliver_agent::pace::Pacer::default();
     loop {
+        if pacer.due(std::time::Instant::now()) {
+            dirty = true;
+        }
         let policy = sliver_agent::display::policy(
             &agent.config.display,
             live.agg.session.power.on_battery,
@@ -986,6 +1003,7 @@ fn run(
         }
         press_dirty = false;
         if dirty && agent.display != DisplayState::Off {
+            pacer.drawn(std::time::Instant::now());
             for layer in agent.render(&live.world()) {
                 let f = agent.frame(layer).expect("just rendered");
                 link.present(layer, &f.image, &f.pressed, &f.regions)?;
@@ -1035,10 +1053,16 @@ fn run(
                 .as_millis() as i64
                 + 1
         });
+        // A held-back content change (never while the bar is off: turning on redraws anyway).
+        let pace_ms = pacer
+            .wait(std::time::Instant::now())
+            .filter(|_| agent.display != DisplayState::Off)
+            .map(|d| d.as_millis() as i64 + 1);
         let timeout = change_ms
             .into_iter()
             .chain(deadline_ms)
             .chain(animation_ms)
+            .chain(pace_ms)
             .chain(reloader.timeout_ms())
             .min()
             .map(|ms| rustix::event::Timespec {
@@ -1082,15 +1106,17 @@ fn run(
         };
         dirty |= reloader.on_wake(watch_ready, usr2_ready, &mut agent, live);
         if world_changed {
-            dirty |= live.pump();
+            if live.pump() {
+                pacer.changed();
+            }
             dirty |= reloader.sync_accent(&mut agent, live);
             agent.set_reduce_motion(reduce_motion(live));
         }
         if api_woke && let Some(api) = &live.api {
             let (changed, requests) = api.drain();
             if changed {
-                live.published = Published::snapshot(&api.api);
-                dirty = true;
+                live.published_stale = true;
+                pacer.changed();
             }
             for (req, reply) in requests {
                 let (answer, fx) = control(&mut agent, live, reloader, req);

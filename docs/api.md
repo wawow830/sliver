@@ -242,8 +242,10 @@ is sliverd (§6).
 
 ### Abuse limits (per connection; exceeding returns `NS.Error.LimitExceeded`)
 16 contexts, 128 items per context, 512 KiB of icon data per context. Updates are coalesced, never
-queued: the agent renders at most once per panel refresh and only on change, so a client calling
-`Update` in a loop costs one render per frame, and sustained abuse (> 120 calls/s) is throttled.
+queued: changes from apps and scripts redraw the bar at most 30 times a second (the last change
+always gets drawn; touches and animations aren't held back), so a client calling `Update` in a
+loop costs at most 30 renders a second, and sustained abuse (> 120 calls/s) is throttled. The same
+cap applies to `custom/*` scripts that print in a tight loop (`sliver_agent::pace`, T99).
 Clients can't emit key presses, read other clients' items, or force the bar on.
 
 ## 5. `NS.Control1` and `NS.Desktop1` at `root`
