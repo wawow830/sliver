@@ -277,8 +277,8 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   validity, every problem with its key path, the hardware/Esc situation, and the safe hatch.
   Reload re-reads the config. The other pages say what will go there.
 - The preview runs the agent's own pipeline (`sliver_agent::Agent`, offline) for the chosen layer
-  and simulated context, so it's pixel-identical to the bar. Sample values for data-backed
-  modules and dashed empty placeholders depend on ash's `World.preview` (asked).
+  and simulated context, so it's pixel-identical to the bar. It uses `World::sample` (T44): data-backed modules show
+  sample values, and empty App controls / Status items draw as outlined placeholders.
 - **Slice 2 (T39), editing:** each zone has a **+** Library popover (or type any module reference).
   Modules can be moved, removed, and opened in an **inspector** (format, icon, width, on-tap,
   on-hold, when; each field applies on its own). **Customize for app…** creates

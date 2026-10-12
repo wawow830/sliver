@@ -59,7 +59,8 @@ impl Preview {
             "base" | "fn" => Vec::new(),
             custom => vec![custom.to_owned()],
         };
-        self.agent.render(&World::at(Local::now()));
+        // Sample values for data modules, and outlined placeholders for empty app slots (T44).
+        self.agent.render(&World::sample(Local::now()));
         if let Some(e) = self.agent.errors.first() {
             return Err(e.clone());
         }
