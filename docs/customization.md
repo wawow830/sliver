@@ -158,7 +158,7 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
 | `format-<state>` / `format-<status>` / `format-<status>-<state>` | string | same | E.g. `format-charging`, `format-critical`. |
 | `format-icons` | array / table / string | same | An array is indexed by `percentage` from low to high. A table is keyed by `alt` or state and can contain nested arrays. **Sliver extension:** an entry can be text (a glyph) or `{ icon = "name-or-path" }` for a themed/SVG/PNG image. |
 | `states` | table name → number | same | Thresholds on `percentage`. They add a class and select `format-<state>`. |
-| `icon` | string | ≈ `image-name`/`image-path` | XDG icon name, file path, or `tiny-dfr:<name>` (the dfr icon dirs). Paths can be absolute, `~/…`, or relative to the config file's directory (`icons/x.png`, or a bare `logo.svg`: a name ending in `.png`/`.svg`/`.svgz` is a file). |
+| `icon` | string | ≈ `image-name`/`image-path` | XDG icon name, file path, or `tiny-dfr:<name>` (the dfr icon dirs). Paths can be absolute, `~/…`, or relative to the main config file's directory (`icons/x.png`, or a bare `logo.svg`: a name ending in `.png`/`.svg`/`.svgz` is a file). Note: in an `include`d file a relative icon path still starts from the main config's directory, not the include's; use `~/` or absolute paths there. |
 | `icon-theme` | string | (none) | Overrides the theme for this module. |
 | `icon-size` | int | same | px |
 | `width` | `"auto"` \| px int \| `"fill"` \| `{ fill = N }` | ≈ `expand` | Q4/H6. `expand = true` is accepted as `"fill"`. |
