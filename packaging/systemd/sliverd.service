@@ -1,0 +1,63 @@
+# sliverd: owns the Touch Bar (display, touch, backlight, key output). See docs/sliverd.md and
+# docs/decisions/0005-sliverd-system-integration.md.
+#
+# Started by udev (99-z-sliverd.rules) when the bar's digitizer appears, like tiny-dfr.
+# Invariant 1: if sliverd keeps failing, systemd hands the bar back to tiny-dfr.
+
+[Unit]
+Description=Sliver Touch Bar daemon
+Documentation=https://github.com/wawow830/sliver/blob/main/docs/sliverd.md
+Requires=sliverd.socket
+After=sliverd.socket systemd-user-sessions.service systemd-logind.service plymouth-quit.service dev-sliver_display.device
+BindsTo=dev-sliver_display.device
+# Exactly one daemon drives the bar. Ordering after tiny-dfr means its DRM master is released
+# before we open the card.
+Conflicts=tiny-dfr.service
+After=tiny-dfr.service
+# Restart=always retries quickly. If that hits the start limit, fall back to tiny-dfr (which
+# Conflicts= stops us for, so the two never fight). Clear it with `systemctl reset-failed sliverd`.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+OnFailure=tiny-dfr.service
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/sliverd
+Sockets=sliverd.socket
+Restart=always
+RestartSec=500ms
+# Restart without passing through 'failed', so OnFailure= (tiny-dfr) fires only once the start
+# limit is hit, not on every crash (systemd >= 254).
+RestartMode=direct
+# No root at all: card (video), input devices + /dev/uinput (input), and a backlight that udev
+# made group-writable for video. Session ownership comes from /run/systemd/seats (world-readable).
+DynamicUser=yes
+SupplementaryGroups=video input
+DevicePolicy=closed
+DeviceAllow=char-drm rw
+DeviceAllow=char-input rw
+DeviceAllow=/dev/uinput rw
+# Same hardening as tiny-dfr's unit (backlight writes are known to work under it).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateIPC=yes
+PrivateNetwork=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=strict
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+MemoryMax=256M
+TasksMax=16

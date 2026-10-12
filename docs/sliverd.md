@@ -33,6 +33,12 @@ conn per wakeup. A conn whose socket won't take a reply is dropped. Received fds
 - **Dev mode**: `sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH]` serves the real
   IPC with fake hardware. Point an agent at it, and `--frame-png` is rewritten on every panel flush.
 
+## System integration (ADR-0005)
+`packaging/systemd/sliverd.{service,socket}` and `packaging/udev/99-z-sliverd.rules`. udev starts sliverd
+in place of tiny-dfr. It runs with `DynamicUser` (video + input groups, no root), and udev makes the bar
+backlight group-writable. Recovery: restart in 0.5 s, then after 5 crashes in 60 s `OnFailure=tiny-dfr`.
+The socket conflicts with tiny-dfr. Test: `packaging/itest-units.sh` (user manager, no root).
+
 ## Backends (`backend.rs`)
 | trait | real impl (birch, `sliver-hw`) | fake (`fake.rs`) |
 |---|---|---|
@@ -86,6 +92,6 @@ Tests: `crates/sliverd/tests/daemon.rs` (core), `tests/server.rs` (real socket +
 
 ## Not yet
 - First full `sliverd` run on the real bar through the safe-swap harness (real mode exists, needs `SLIVER_SAFESWAP=1`).
-- systemd units, udev and tiny-dfr coexistence (packaging).
+- RPM spec/COPR, SELinux policy (units + udev rules are in `packaging/`, ADR-0005).
 - Merge cedar's `FakeDaemon` into `sliverd::Daemon` + fake hardware (agreed, once this is stable).
 - Pixel shift, `follow_screen` reading the main backlight on change (it's read on activity now).

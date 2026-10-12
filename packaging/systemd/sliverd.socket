@@ -1,0 +1,18 @@
+# The sliverd <-> sliver-agent IPC socket (docs/api.md §6). sliverd authorises each connection
+# itself (SO_PEERCRED uid must own the active seat0 session), hence mode 0666.
+#
+# Not WantedBy=sockets.target: on a Mac without a Touch Bar nothing should start sliverd. The
+# socket comes up with sliverd.service (Requires=). It conflicts with tiny-dfr, so a reconnecting
+# agent can't reactivate sliverd after the fallback to tiny-dfr.
+
+[Unit]
+Description=Sliver Touch Bar daemon IPC socket
+Documentation=https://github.com/wawow830/sliver/blob/main/docs/api.md
+Conflicts=tiny-dfr.service
+
+[Socket]
+ListenSequentialPacket=/run/sliver/sliverd.sock
+SocketMode=0666
+DirectoryMode=0755
+FileDescriptorName=ipc
+RemoveOnStop=yes

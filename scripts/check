@@ -15,4 +15,16 @@ if [[ -f Cargo.toml ]]; then
   echo "== cargo test";  cargo test --workspace --quiet
 fi
 
+# sliverd units + udev rules (ADR-0005). Skipped where the tools are missing. Full behaviour test:
+# packaging/itest-units.sh (needs a user systemd manager, ~10 s).
+if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then
+  echo "== packaging"
+  d=target/check-units && rm -rf "$d" && mkdir -p "$d"
+  sed 's|^ExecStart=.*|ExecStart=/usr/bin/true|' packaging/systemd/sliverd.service > "$d/sliverd.service"
+  cp packaging/systemd/sliverd.socket "$d/"
+  out=$(systemd-analyze verify "$d/sliverd.socket" "$d/sliverd.service" 2>&1) || { echo "$out"; exit 1; }
+  [[ -z "$out" ]] || { echo "$out"; exit 1; }
+  udevadm verify --no-summary packaging/udev/*.rules
+fi
+
 echo "check: ok"

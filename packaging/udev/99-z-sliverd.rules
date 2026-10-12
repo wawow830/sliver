@@ -1,0 +1,15 @@
+# sliverd replaces tiny-dfr as the Touch Bar daemon (docs/decisions/0005-sliverd-system-integration.md).
+#
+# Sorts after 99-touchbar-tiny-dfr.rules on purpose. We override only its SYSTEMD_WANTS on the
+# digitizers and keep its T2 USB config switch and /dev/tiny_dfr_* aliases, so tiny-dfr can still
+# start as sliverd's OnFailure= fallback. Removing this file gives the bar back to tiny-dfr.
+
+# Start sliverd when the digitizer appears (T2, M1, M2).
+SUBSYSTEM=="input", ATTR{name}=="Apple Inc. Touch Bar Display Touchpad|MacBookPro17,1 Touch Bar|Mac14,7 Touch Bar", TAG+="systemd", ENV{SYSTEMD_WANTS}="sliverd.service"
+
+# The bar's DRM card, for BindsTo= in sliverd.service.
+SUBSYSTEM=="drm", KERNEL=="card[0-9]*", DRIVERS=="adp|appletbdrm", TAG+="systemd", ENV{SYSTEMD_ALIAS}+="/dev/sliver_display"
+
+# sliverd runs unprivileged: let group video write the bar backlight (nothing else).
+ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="appletb_backlight", DRIVERS=="hid-appletb-bl", RUN+="/usr/bin/chgrp video /sys%p/brightness", RUN+="/usr/bin/chmod g+w /sys%p/brightness"
+ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="228200000.display-pipe.0|228600000.dsi.0", DRIVERS=="panel-summit", RUN+="/usr/bin/chgrp video /sys%p/brightness", RUN+="/usr/bin/chmod g+w /sys%p/brightness"
