@@ -1032,3 +1032,167 @@ fn app_controls_width_is_a_slot() {
     assert_eq!(ids.len(), 6, "{ids:?}");
     assert!(end > 1500.0, "{end}");
 }
+
+/// T121: a published item placed by the layout (`app/<provider>#<item>`) is a module like any
+/// other: it leaves Status items, takes the user's format over its values, and a user binding
+/// replaces the app's event (unless pass-through).
+#[test]
+fn pinned_published_item_is_a_module() {
+    let Some(bus) = bus() else {
+        eprintln!("dbus-daemon not installed; skipping");
+        return;
+    };
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.addr.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let api = ApiLink::serve(conn, true).unwrap();
+    let app = zbus::blocking::connection::Builder::address(bus.addr.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let app_events = events(&app);
+    let path: OwnedObjectPath = app
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_TOUCHBAR),
+            "CreateContext",
+            &(opts(&[
+                ("provider", Value::from("org.example.Pomo")),
+                ("scope", Value::from("status")),
+            ]),),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    let items = vec![
+        opts(&[
+            ("id", Value::from("timer")),
+            ("type", Value::from("button")),
+            ("label", Value::from("▶ 25:00")),
+            (
+                "values",
+                Value::from(opts(&[("minutes", Value::from(25i32))])),
+            ),
+        ]),
+        opts(&[
+            ("id", Value::from("skip")),
+            ("type", Value::from("button")),
+            ("label", Value::from("Skip")),
+        ]),
+    ];
+    let _: Vec<String> = app
+        .call_method(
+            Some(BUS_NAME),
+            path.as_str(),
+            Some(IFACE_CONTEXT),
+            "SetItems",
+            &(items,),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    let mut world = World::at(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 0).unwrap());
+    world.published = Published::snapshot(&api.api);
+    let config = |extra: &str| {
+        let l = sliver_config::load_str(
+            &format!(
+                r#"
+version = 1
+[[layouts.default.zones]]
+name = "main"
+modules = ["app/org.example.Pomo#timer"]
+[[layouts.default.zones]]
+name = "controls"
+modules = ["status-items"]
+[modules."app/org.example.Pomo#timer"]
+format = "{{minutes}}m left"
+class = "pomo"
+on-hold = {{ key = "F5" }}
+{extra}
+"#
+            ),
+            std::path::Path::new("."),
+        );
+        assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
+        Agent::new(
+            l.config,
+            Stylesheet::sliver(),
+            Renderer::new(Fonts::embedded()),
+            Icons::builtin_only(),
+            2008,
+            60,
+        )
+    };
+    let mut a = config("");
+    a.render(&world);
+    let f = a.frame(Layer::Base).unwrap();
+    let shown: Vec<(String, String)> = f
+        .cells
+        .iter()
+        .filter(|c| c.published.is_some())
+        .map(|c| {
+            let t = match &c.content {
+                sliver_render::Content::Markup(t) | sliver_render::Content::Text(t) => t.clone(),
+                other => format!("{other:?}"),
+            };
+            (c.id.clone(), t)
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (
+                "app/org.example.Pomo#timer".to_owned(),
+                "25m left".to_owned()
+            ),
+            ("app/org.example.Pomo#skip".to_owned(), "Skip".to_owned()),
+        ],
+        "timer pinned in main with the user's format; only skip left in Status items"
+    );
+    let timer = &f.cells[f
+        .cells
+        .iter()
+        .position(|c| c.id.ends_with("#timer"))
+        .unwrap()];
+    assert!(timer.classes.contains(&"pomo".to_owned()));
+
+    // A tap still reaches the app; the user's on-hold replaces the app's hold.
+    let r = f
+        .cells
+        .iter()
+        .position(|c| c.id.ends_with("#timer"))
+        .unwrap() as u32
+        + 1;
+    let mut fx = a.touch(r, 0, TouchPhase::Down, 1.0, 1_000);
+    fx.extend(a.touch(r, 0, TouchPhase::Up, 1.0, 40_000));
+    fx.extend(a.tick(500_000));
+    for e in &fx {
+        if let Effect::Api {
+            context,
+            item,
+            what,
+        } = e
+        {
+            api.interact(*context, item, *what);
+        }
+    }
+    let (item, kind, _) = app_events.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!((item.as_str(), kind.as_str()), ("timer", "tap"));
+    let mut fx = a.touch(r, 0, TouchPhase::Down, 1.0, 2_000_000);
+    fx.extend(a.tick(3_000_000));
+    fx.extend(a.touch(r, 0, TouchPhase::Up, 1.0, 3_100_000));
+    assert!(
+        fx.iter().any(|e| matches!(e, Effect::EmitKeys(..))),
+        "user on-hold: {fx:?}"
+    );
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Api { .. })),
+        "the app doesn't hear the hold: {fx:?}"
+    );
+}

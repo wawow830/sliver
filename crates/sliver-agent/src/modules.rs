@@ -419,16 +419,24 @@ fn cells_in(
             }
             continue;
         }
+        // A published item (or a whole context) placed by the layout: `app/<provider>#<item>`
+        // (api.md §3.1). It's styled, bound and formatted like any module.
+        if m.id.kind == "app" {
+            pinned_app(m, &key, world, icons, icon_size, out);
+            continue;
+        }
         if m.id.kind == "app-controls" || m.id.kind == "status-items" {
             let start = out.len();
             let p = &world.published;
             if m.id.kind == "app-controls" {
                 if let Some(ctx) = &p.app {
-                    crate::published::cells(ctx, "app", true, icons, icon_size, out);
+                    let skip = |id: &str| p.is_pinned(&ctx.provider, id);
+                    crate::published::cells(ctx, "app", true, icons, icon_size, &skip, out);
                 }
             } else {
                 for ctx in &p.status {
-                    crate::published::cells(ctx, "status", false, icons, icon_size, out);
+                    let skip = |id: &str| p.is_pinned(&ctx.provider, id);
+                    crate::published::cells(ctx, "status", false, icons, icon_size, &skip, out);
                 }
             }
             let class = if m.id.kind == "app-controls" {
@@ -2549,6 +2557,99 @@ fn width(w: sliver_config::Width) -> Width {
 
 /// An empty App controls / Status items placeholder, drawn only in previews. It takes the
 /// module's `width`, so the settings editor's resize handle shows what it does.
+/// The cells of a pinned `app/<provider>[#item]` module: the app's own cells (touches still go
+/// to the app), with the module's classes, `on-*` bindings (`pass-through`), `width` and
+/// `format` (over the item's values) applied on top. Nothing while it isn't published; an
+/// outlined placeholder in the settings preview.
+fn pinned_app(
+    m: &ModuleInstance,
+    key: &str,
+    world: &World,
+    icons: &mut Icons,
+    icon_size: u32,
+    out: &mut Vec<Cell>,
+) {
+    let Some(provider) = m.id.name.as_deref() else {
+        return;
+    };
+    let item = m.id.instance.as_deref();
+    let Some((ctx, class)) = world.published.find(provider) else {
+        if world.preview {
+            out.push(placeholder(m, key, &m.id.to_string(), "app"));
+        }
+        return;
+    };
+    let start = out.len();
+    crate::published::pinned_cells(ctx, item, class, icons, icon_size, out);
+    let c = &m.common;
+    let on: Vec<(Gesture, Action)> = c.on.iter().map(|(g, a)| (*g, a.clone())).collect();
+    let mut keep = Vec::new();
+    for mut cell in out.drain(start..) {
+        cell.classes.extend(m.classes.iter().cloned());
+        cell.on = on.clone();
+        cell.pass_through = c.pass_through;
+        if c.width != sliver_config::Width::Auto {
+            cell.width = match c.width {
+                sliver_config::Width::Auto => Width::Auto,
+                sliver_config::Width::Fixed(px) => Width::Fixed(px as f32),
+                sliver_config::Width::Fill(n) => Width::Fill(n),
+            };
+        }
+        // `format` and friends apply to the item's values (sliders keep their track).
+        let it = cell.published.as_ref().and_then(|p| {
+            let id = p.item.as_str();
+            ctx.items.iter().find(|i| i.id == id).or_else(|| {
+                ctx.items.iter().find_map(|i| match &i.kind {
+                    sliver_api::item::ItemKind::Group { items } => {
+                        items.iter().find(|c| c.id == id)
+                    }
+                    _ => None,
+                })
+            })
+        });
+        if (c.format.is_some() || c.format_alt.is_some() || c.format_icons.is_some())
+            && let Some(it) = it
+            && !matches!(cell.content, Content::Slider { .. })
+        {
+            let (values, pct) = crate::published::item_values(it);
+            let st = State {
+                percentage: pct,
+                ..State::default()
+            };
+            let f = format_module(c, "{text}", &st, &values);
+            if f.hidden {
+                continue;
+            }
+            cell.classes.extend(f.classes);
+            let icon = f
+                .icon
+                .map(|i| i.0)
+                .or_else(|| c.icon.clone())
+                .and_then(|n| {
+                    icons.get(
+                        &n,
+                        c.icon_theme.as_deref(),
+                        c.icon_size.unwrap_or(icon_size),
+                    )
+                })
+                .or(match &cell.content {
+                    Content::Icon(i) | Content::IconText(i, _) | Content::IconMarkup(i, _) => {
+                        Some(i.clone())
+                    }
+                    _ => None,
+                });
+            cell.content = match (icon, f.text.is_empty()) {
+                (Some(i), true) => Content::Icon(i),
+                (Some(i), false) => Content::IconMarkup(i, f.text),
+                (None, false) => Content::Markup(f.text),
+                (None, true) => Content::Blank,
+            };
+        }
+        keep.push(cell);
+    }
+    out.extend(keep);
+}
+
 fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell {
     Cell {
         key: key.to_owned(),

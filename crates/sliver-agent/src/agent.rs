@@ -385,8 +385,24 @@ impl Agent {
         if self.panic_in_build {
             panic!("test panic in build");
         }
+        // Published items the layout places itself (`app/<provider>#<item>`) leave the
+        // App controls / Status items placeholders (api.md §3.1).
+        fn pinned(ms: &[sliver_config::ModuleInstance], out: &mut Vec<(String, Option<String>)>) {
+            for m in ms {
+                if m.id.kind == "app"
+                    && let Some(p) = &m.id.name
+                {
+                    out.push((p.clone(), m.id.instance.clone()));
+                }
+                pinned(&m.children, out);
+            }
+        }
+        let mut pins = Vec::new();
+        for z in &r.zones {
+            pinned(&z.modules, &mut pins);
+        }
         let mut world_pushed;
-        let world = if self.pushed.is_empty() {
+        let world = if self.pushed.is_empty() && pins.is_empty() {
             world
         } else {
             world_pushed = world.clone();
@@ -396,6 +412,7 @@ impl Agent {
                     .entry(k.clone())
                     .or_insert_with(|| v.clone());
             }
+            world_pushed.published.pinned = pins.into_iter().collect();
             &world_pushed
         };
         // A modal app context covers everything but the user's first zone (api.md §4).
@@ -517,6 +534,7 @@ impl Agent {
                         true,
                         &mut self.icons,
                         ICON_LOOKUP_SIZE,
+                        &|_| false,
                         &mut cells,
                     );
                     cells.push(crate::published::close_cell(

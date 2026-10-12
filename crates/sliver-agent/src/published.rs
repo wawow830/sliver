@@ -24,6 +24,9 @@ pub struct Published {
     /// The app context may cover Main + Controls (api.md §4).
     pub modal: bool,
     pub status: Vec<PubContext>,
+    /// Items the layout places itself (`app/<provider>#<item>`, or `app/<provider>` for a whole
+    /// context): they leave App controls / Status items (api.md §3.1). `None` = every item.
+    pub pinned: std::collections::HashSet<(String, Option<String>)>,
 }
 
 impl Published {
@@ -42,11 +45,36 @@ impl Published {
             app: r.app.and_then(get),
             modal: r.modal,
             status: r.status.into_iter().filter_map(get).collect(),
+            pinned: Default::default(),
         }
     }
 
     pub fn contexts(&self) -> impl Iterator<Item = &PubContext> {
         self.app.iter().chain(&self.status)
+    }
+
+    /// Is this item placed by the layout itself (so the placeholders skip it)?
+    pub fn is_pinned(&self, provider: &str, item: &str) -> bool {
+        !self.pinned.is_empty()
+            && (self.pinned.contains(&(provider.to_owned(), None))
+                || self
+                    .pinned
+                    .contains(&(provider.to_owned(), Some(item.to_owned()))))
+    }
+
+    /// Where a pinned `app/<provider>` module finds its items: the focused app's context, else a
+    /// status context, with the placeholder class it would have had (`app` / `status`).
+    pub fn find(&self, provider: &str) -> Option<(&PubContext, &'static str)> {
+        self.app
+            .iter()
+            .find(|c| c.provider == provider)
+            .map(|c| (c, "app"))
+            .or_else(|| {
+                self.status
+                    .iter()
+                    .find(|c| c.provider == provider)
+                    .map(|c| (c, "status"))
+            })
     }
 }
 
@@ -218,16 +246,81 @@ pub fn popover_cells(
 }
 
 /// Cells for a context's items. `class` is `app` or `status`; `focused` adds `.focused-app`.
+/// Items in `skip` (placed elsewhere by the layout) are left out.
+#[allow(clippy::too_many_arguments)]
 pub fn cells(
     ctx: &PubContext,
     class: &str,
     focused: bool,
     icons: &mut Icons,
     icon_size: u32,
+    skip: &dyn Fn(&str) -> bool,
     out: &mut Vec<Cell>,
 ) {
-    for item in &ctx.items {
+    for item in ctx.items.iter().filter(|i| !skip(&i.id)) {
         push(ctx, item, None, class, focused, icons, icon_size, out);
+    }
+}
+
+/// The format values of a published item (api.md §3.1): `text` (= `label`), `icon`,
+/// `percentage` (a slider's or progress's position, 0–100; a toggle is 0 or 100), and every
+/// app-defined key in `values`. Text is escaped: formats are markup.
+pub fn item_values(item: &Item) -> (sliver_config::ValueMap, Option<f64>) {
+    use sliver_api::item::Scalar;
+    use sliver_config::FmtValue;
+    let esc = |s: &str| FmtValue::Text(sliver_render::markup::escape(s));
+    let mut v = sliver_config::ValueMap::new();
+    let label = item.label.clone().unwrap_or_default();
+    v.0.insert(String::new(), esc(&label));
+    v.0.insert("text".into(), esc(&label));
+    if let Some(i) = &item.icon {
+        v.0.insert("icon".into(), esc(i));
+    }
+    let own = match &item.kind {
+        ItemKind::Slider {
+            value, min, max, ..
+        } if max > min => Some(((value - min) / (max - min)).clamp(0.0, 1.0) * 100.0),
+        ItemKind::Progress { value, .. } => Some(value.clamp(0.0, 1.0) * 100.0),
+        ItemKind::Toggle { state } => Some(if *state { 100.0 } else { 0.0 }),
+        _ => None,
+    };
+    for (k, s) in &item.values {
+        let fv = match s {
+            Scalar::Bool(b) => esc(if *b { "true" } else { "false" }),
+            Scalar::Int(i) => FmtValue::Num(*i as f64),
+            Scalar::Num(n) => FmtValue::Num(*n),
+            Scalar::Str(t) => esc(t),
+        };
+        v.0.insert(k.clone(), fv);
+    }
+    let pct = match item.values.get("percentage") {
+        Some(Scalar::Int(i)) => Some(*i as f64),
+        Some(Scalar::Num(n)) => Some(*n),
+        _ => own,
+    };
+    if let Some(p) = pct {
+        v.0.entry("percentage".into())
+            .or_insert(FmtValue::Num(p.round()));
+    }
+    (v, pct)
+}
+
+/// A pinned `app/<provider>[#item]` module (api.md §3.1): that item's cells, or the whole
+/// context's. Empty when it isn't published (or not shown right now).
+pub fn pinned_cells(
+    ctx: &PubContext,
+    item: Option<&str>,
+    class: &str,
+    icons: &mut Icons,
+    icon_size: u32,
+    out: &mut Vec<Cell>,
+) {
+    for it in ctx
+        .items
+        .iter()
+        .filter(|i| item.is_none_or(|id| i.id == id))
+    {
+        push(ctx, it, None, class, class == "app", icons, icon_size, out);
     }
 }
 
