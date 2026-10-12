@@ -113,7 +113,7 @@ Drive the bar like waybar: `sliverctl signal 8`, `sliverctl hide clock`, `sliver
 `sliverctl bar toggle`. See `man sliverctl` and `examples/shell/README.md`.
 
 Apps (any language, plain D-Bus) publish items for their own windows. See `docs/api.md`,
-`examples/python/pomodoro.py`, and the Rust crate `sliver-client`. Whatever apps publish is yours
+`examples/python/pomodoro.py`, and the Rust crate `sliver-client`. Recipes for GTK/GJS, Qt and Electron/Node are in `docs/integrating-apps.md`. Whatever apps publish is yours
 to move, restyle, rebind or hide (`app/<provider>#<item>` in your config).
 
 ## 7. Troubleshooting

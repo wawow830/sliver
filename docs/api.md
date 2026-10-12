@@ -426,7 +426,7 @@ deliberate change: combos are released in **reverse** order (modifiers last). T8
 
 Clients: **`crates/sliver-client`** (Rust: builders, an event channel, and automatic re-publishing
 when the agent restarts or starts late), **`sliverctl`** (every `Control1` method, plus `publish`), and
-**`examples/`** (`python/pomodoro.py` in plain Gio, `shell/README.md`). All three are tested end to end
+**`examples/`** (`python/pomodoro.py` in plain Gio, `node/counter.js`, `gjs/counter.js`, `qt/counter.cpp`, `shell/README.md`). Per-toolkit recipes (GTK/GJS, Qt, Electron/Node) are in `docs/integrating-apps.md`. All three are tested end to end
 against the real server on a private bus, the Python example included.
 
 Shell (`busctl`):

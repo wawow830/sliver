@@ -206,3 +206,75 @@ fn browser_native_host() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+fn counter_label(api: &Api) -> Option<String> {
+    let s = api.state();
+    s.reg.contexts().next()?.find("count")?.label.clone()
+}
+
+/// `examples/node/counter.js` (dbus-next): publish, count taps, reset on hold. Skipped without
+/// `node` and the `dbus-next` package (`npm install dbus-next`, or NODE_PATH pointing at it).
+#[test]
+fn node_counter() {
+    let has = Command::new("node")
+        .args(["-e", "require('dbus-next')"])
+        .output();
+    if !has.is_ok_and(|o| o.status.success()) {
+        eprintln!("node with dbus-next not available; skipping");
+        return;
+    }
+    let Some(bus) = sliver_testbus::TestBus::start() else {
+        return;
+    };
+    let addr = bus.address().to_owned();
+    let api = zbus::block_on(async {
+        let conn = zbus::connection::Builder::address(addr.as_str())
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        Api::serve(conn, Arc::new(NoHost), Arc::new(RealProc))
+            .await
+            .unwrap()
+    });
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/node/counter.js"
+    );
+    let _node = Kill(bus.command("node").arg(script).spawn().unwrap());
+    let wait = |f: &dyn Fn() -> bool| {
+        let end = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < end {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    };
+    assert!(
+        wait(&|| counter_label(&api).as_deref() == Some("Clicked 0")),
+        "not published: {:?}",
+        counter_label(&api)
+    );
+    let id = api.state().reg.contexts().next().unwrap().id;
+    assert_eq!(
+        api.state().reg.context(id).unwrap().provider,
+        "org.example.NodeCounter"
+    );
+    for n in 1..=2 {
+        zbus::block_on(api.interact(id, "count", Interaction::Gesture(Gesture::Tap))).unwrap();
+        let want = format!("Clicked {n}");
+        assert!(
+            wait(&|| counter_label(&api).as_deref() == Some(want.as_str())),
+            "tap {n} not handled: {:?}",
+            counter_label(&api)
+        );
+    }
+    zbus::block_on(api.interact(id, "count", Interaction::Gesture(Gesture::Hold))).unwrap();
+    assert!(
+        wait(&|| counter_label(&api).as_deref() == Some("Clicked 0")),
+        "hold not handled: {:?}",
+        counter_label(&api)
+    );
+}
