@@ -28,6 +28,7 @@ resvg = { version = "0.48", default-features = false }
 tiny-skia = "0.12"
 
 thiserror = "2"
+toml = "1"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

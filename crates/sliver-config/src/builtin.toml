@@ -1,0 +1,73 @@
+# Sliver's built-in defaults. Always merged *underneath* the user's config, so every key here
+# can be overridden and every layout redefined (customization.md §1, §6).
+# The default bar is Q1/H3 option B (macOS-like): Esc · app controls · control strip, Fn → F-keys.
+version = 1
+
+[layers]
+base = "default"
+fn = "fkeys"
+media = "media"
+
+# --- default (base) ----------------------------------------------------------------------------
+[[layouts.default.zones]]
+name = "esc"
+modules = ["key/Esc#auto"]
+
+[[layouts.default.zones]]
+name = "main"
+width = "fill"
+modules = ["app-controls"]
+
+[[layouts.default.zones]]
+name = "controls"
+modules = ["status-items", "mpris", "group/control-strip", "backlight/slider", "audio/slider", "key/Mute"]
+
+# --- fkeys (fn): tiny-dfr's primary layer ------------------------------------------------------
+[[layouts.fkeys.zones]]
+name = "esc"
+modules = ["key/Esc#auto"]
+
+[[layouts.fkeys.zones]]
+name = "main"
+width = "fill"
+module-width = "fill"
+modules = ["key/F1", "key/F2", "key/F3", "key/F4", "key/F5", "key/F6",
+           "key/F7", "key/F8", "key/F9", "key/F10", "key/F11", "key/F12"]
+
+# --- media: tiny-dfr's media layer --------------------------------------------------------------
+[[layouts.media.zones]]
+name = "esc"
+modules = ["key/Esc#auto"]
+
+[[layouts.media.zones]]
+name = "main"
+width = "fill"
+module-width = "fill"
+modules = ["key/BrightnessDown", "key/BrightnessUp", "key/MicMute", "key/Search",
+           "key/IllumDown", "key/IllumUp", "key/PreviousSong", "key/PlayPause",
+           "key/NextSong", "key/Mute", "key/VolumeDown", "key/VolumeUp"]
+
+# --- modules ------------------------------------------------------------------------------------
+# Esc on the bar only where the Mac has no physical Esc key (2170 px bars), as tiny-dfr does.
+# Written as "not physical" so that an unknown answer fails safe and shows Esc.
+[modules."key/Esc#auto"]
+when = { not = { physical-esc = true } }
+
+[modules."group/control-strip"]
+modules = ["custom/expand", "kbd-backlight/slider", "key/MicMute",
+           "key/PreviousSong", "key/PlayPause", "key/NextSong"]
+drawer = { reveal = "tap", mode = "inline", collapse-after = "5s", transition-left-to-right = false }
+
+[modules."custom/expand"]
+format = "‹"
+
+[modules."backlight/slider"]
+collapsed = true
+
+[modules."audio/slider"]
+collapsed = true
+
+[modules.mpris]
+format = "{status_icon} {title}"
+max-length = 24
+hide-empty-text = true

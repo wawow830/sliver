@@ -1,6 +1,6 @@
 # Customization reference (waybar model)
 
-Owner: elm (T20 + T11). Status: **spec v1**. sliver-config (T11), the module runtime (T21), the
+Owner: elm (T20 + T11). Status: **spec v1**, implemented by `crates/sliver-config` (ADR-0004). sliver-config (T11), the module runtime (T21), the
 stylesheet (T22), sliverctl and the D-Bus API all follow this doc. Change it via a PR to this doc
 plus a message to the owners of the parts it touches.
 
@@ -15,7 +15,8 @@ are the invariants in §9.
 |---|---|
 | `$XDG_CONFIG_HOME/sliver/config.toml` (default `~/.config/sliver/config.toml`) | User config. **The first file found wins**, as in waybar. |
 | `/etc/xdg/sliver/config.toml` | System-wide config, used only if there's no user file. |
-| `/usr/share/sliver/config.toml` | Shipped defaults, used only if neither file above exists. Users can `include` it and override. |
+| `/usr/share/sliver/config.toml` | Packaged config, used only if neither file above exists. |
+| built-in defaults (`crates/sliver-config/src/builtin.toml`) | **Always merged underneath** whichever file is used, so the `base`/`fn`/`media` layers, the `default`/`fkeys`/`media` layouts and the control strip exist even with an empty config. Any of them can be redefined. |
 | `style.css` next to the active config (or `stylesheet = "..."`) | Stylesheet (T22). `style-dark.css` and `style-light.css` follow the desktop color scheme when present. |
 
 - The format is **TOML** (ADR-0001). Comments are allowed. Keys are **kebab-case** and use waybar's
@@ -34,7 +35,7 @@ are the invariants in §9.
 
 ```toml
 version = 1
-include = ["/usr/share/sliver/config.toml"]   # start from the defaults, override below
+include = ["modules.toml"]   # optional; the built-in defaults are always underneath
 stylesheet = "style.css"
 
 [bar]                     # bar-wide options (waybar's per-bar options that make sense here)
@@ -116,7 +117,9 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
   A `[modules."key/F1"]` block, if present, is merged on top.
 - **Inline modules:** a zone's `modules` list may contain an inline table instead of a name, for
   example `{ type = "custom", format = "TTY1", on-tap = { keys = ["LeftCtrl","LeftAlt","F1"] } }`.
-  It gets a generated id (`<type>#<layout>-<zone>-<n>`). The tiny-dfr importer uses this.
+  `type` is a module reference without an instance (`"key/F1"`, `"clock"`, `"custom"`). It gets a
+  generated instance (`<type>#<layout>-<zone>-<n>`). The tiny-dfr importer uses this. An empty
+  `icon = ""` or `format = ""` clears a default.
 - **Built-ins have no special powers.** Every built-in uses the same runtime interface as
   `custom/*`: it produces the same output fields (§4), has the same common keys, and can be
   styled, gesture-bound and placed the same way.
@@ -243,7 +246,8 @@ so on, with the same action forms.
 
 - **Zones** are user-defined per layout: an ordered `zones` array, where each zone has `name`,
   `modules`, `width` (`"auto"`/px/`"fill"`), `align` (`start`/`center`/`end`, like waybar's
-  `fixed-center`), and `class`. Any number and any names are allowed. The shipped default uses
+  `fixed-center`), `module-width` (the default width for its modules, e.g. `"fill"` for
+  tiny-dfr-style equal keys), and `class`. Any number and any names are allowed. The shipped default uses
   `esc`/`main`/`controls`, which is a convention, not a rule. A zone becomes a stylesheet class
   `.zone-<name>` (waybar's `.modules-left`).
 - **Layouts:** `[layouts.<name>]` with optional `extends`. A child's zone **overrides the

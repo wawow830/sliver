@@ -1,6 +1,6 @@
 [package]
 name = "sliver-config"
-description = "Sliver layout model and TOML config schema (user + system), incl. tiny-dfr import"
+description = "Sliver config language (waybar model): modules, zones, layers, rules, validation, tiny-dfr import"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+toml.workspace = true
+regex-lite = "0.1"

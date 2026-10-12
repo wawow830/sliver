@@ -1,0 +1,61 @@
+# Imported from tiny-dfr by sliver. Edit freely; see docs/customization.md.
+# As in tiny-dfr, the bar shows F-keys and holding Fn shows media keys.
+version = 1
+stylesheet = "style.css"
+
+[display]
+brightness = "adaptive"
+max-brightness = 128
+pixel-shift = false
+
+[layers]
+base = "tiny-dfr"
+fn = "tiny-dfr-media"
+
+# tiny-dfr PrimaryLayerKeys
+[[layouts.tiny-dfr.zones]]
+name = "esc"
+modules = ["key/Esc#auto"]   # only shown on Macs without a physical Esc, like tiny-dfr
+
+[[layouts.tiny-dfr.zones]]
+name = "main"
+width = "fill"
+module-width = "fill"
+modules = [
+    "key/F1",
+    "key/F2",
+    "key/F3",
+    "key/F4",
+    "key/F5",
+    "key/F6",
+    "key/F7",
+    "key/F8",
+    "key/F9",
+    "key/F10",
+    "key/F11",
+    "key/F12",
+]
+
+# tiny-dfr MediaLayerKeys
+[[layouts.tiny-dfr-media.zones]]
+name = "esc"
+modules = ["key/Esc#auto"]   # only shown on Macs without a physical Esc, like tiny-dfr
+
+[[layouts.tiny-dfr-media.zones]]
+name = "main"
+width = "fill"
+module-width = "fill"
+modules = [
+    { type = "key/BrightnessDown", format = "", icon = "tiny-dfr:brightness_low" },
+    { type = "key/BrightnessUp", format = "", icon = "tiny-dfr:brightness_high" },
+    { type = "key/MicMute", format = "", icon = "tiny-dfr:mic_off" },
+    { type = "key/Search", format = "", icon = "tiny-dfr:search" },
+    { type = "key/IllumDown", format = "", icon = "tiny-dfr:backlight_low" },
+    { type = "key/IllumUp", format = "", icon = "tiny-dfr:backlight_high" },
+    { type = "key/PreviousSong", format = "", icon = "tiny-dfr:fast_rewind" },
+    { type = "key/PlayPause", format = "", icon = "tiny-dfr:play_pause" },
+    { type = "key/NextSong", format = "", icon = "tiny-dfr:fast_forward" },
+    { type = "key/Mute", format = "", icon = "tiny-dfr:volume_off" },
+    { type = "key/VolumeDown", format = "", icon = "tiny-dfr:volume_down" },
+    { type = "key/VolumeUp", format = "", icon = "tiny-dfr:volume_up" },
+]
