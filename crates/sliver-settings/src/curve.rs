@@ -1,13 +1,14 @@
 //! The brightness-curve editor (T75, GOAL Appearance): how bright the bar is for each brightness
 //! of the main display, in adaptive mode. It edits `[display] curve = [[screen, bar], …]`
-//! (percent; bar is a percentage of max-brightness). Without a curve, sliverd uses tiny-dfr's
-//! square root, drawn dashed for reference.
+//! (fractions 0–1; bar is a fraction of max-brightness; T74). The editor works in percent and
+//! writes hundredths. Without a curve, sliverd uses tiny-dfr's square root, drawn dashed.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use toml::{Table, Value};
+use sliver_config::Display;
+use toml::Value;
 
 use crate::{Ui, apply};
 
@@ -20,6 +21,8 @@ const TOP: f64 = 10.0;
 const RIGHT: f64 = 20.0;
 /// How close (px) a press must be to grab a point.
 const GRAB: f64 = 12.0;
+/// sliver-config accepts 2 to 16 points.
+const MAX_POINTS: usize = 16;
 
 type Points = Vec<(f64, f64)>;
 
@@ -49,18 +52,15 @@ fn curve_at(pts: &[(f64, f64)], screen: f64) -> f64 {
     pts.last().map_or(0.0, |p| p.1)
 }
 
-/// `display.curve` from the merged config, if set and well-formed.
-pub fn read(merged: &Table) -> Option<Points> {
-    let arr = merged.get("display")?.get("curve")?.as_array()?;
-    let num = |v: &Value| v.as_float().or_else(|| v.as_integer().map(|i| i as f64));
-    let pts: Option<Points> = arr
-        .iter()
-        .map(|p| {
-            let p = p.as_array()?;
-            Some((num(p.first()?)?, num(p.get(1)?)?))
-        })
-        .collect();
-    pts.filter(|p| p.len() >= 2)
+/// The config's curve in percent, if one is set (an invalid one is reported by the validator and
+/// means the default).
+pub fn read(d: &Display) -> Option<Points> {
+    (d.curve.len() >= 2).then(|| {
+        d.curve
+            .iter()
+            .map(|&(s, b)| ((s as f64 * 100.0).round(), (b as f64 * 100.0).round()))
+            .collect()
+    })
 }
 
 /// Where to start editing when there's no curve: the default, sampled.
@@ -84,7 +84,7 @@ fn normalized(mut pts: Points) -> Points {
 fn to_value(pts: &[(f64, f64)]) -> Value {
     Value::Array(
         pts.iter()
-            .map(|&(x, y)| Value::Array(vec![Value::Integer(x as i64), Value::Integer(y as i64)]))
+            .map(|&(x, y)| Value::Array(vec![Value::Float(x / 100.0), Value::Float(y / 100.0)]))
             .collect(),
     )
 }
@@ -198,8 +198,9 @@ fn draw(cr: &gtk::cairo::Context, pts: &[(f64, f64)], custom: bool, fg: &gtk::gd
 }
 
 /// The editor row: the graph, plus a Reset button when a curve is set.
-pub fn editor(ui: &Rc<Ui>, merged: &Table, adaptive: bool) -> gtk::Widget {
-    let set = read(merged);
+pub fn editor(ui: &Rc<Ui>, display: &Display) -> gtk::Widget {
+    let adaptive = display.adaptive;
+    let set = read(display);
     let custom = set.is_some();
     let pts: Rc<RefCell<Points>> = Rc::new(RefCell::new(set.unwrap_or_else(starting_points)));
     let dragging: Rc<Cell<Option<usize>>> = Rc::default();
@@ -265,6 +266,9 @@ pub fn editor(ui: &Rc<Ui>, merged: &Table, adaptive: bool) -> gtk::Widget {
                     save(&ui, Some(p));
                 }
             } else if n == 2 && nearest(&p, x, y).is_none() {
+                if p.len() >= MAX_POINTS {
+                    return ui.toast(&format!("A curve has at most {MAX_POINTS} points"));
+                }
                 let (sx, _) = unpx(x, y);
                 p.push((sx, curve_at(&p, sx)));
                 save(&ui, Some(p));
@@ -340,11 +344,26 @@ mod tests {
         assert_eq!(curve_at(&[], 25.0), 50.0, "no curve: sqrt");
         let n = normalized(vec![(60.4, 101.0), (10.0, -3.0), (60.0, 7.0)]);
         assert_eq!(n, [(10.0, 0.0), (60.0, 100.0)]);
-        let t: Table = "[display]\ncurve = [[0, 5], [100, 90.5]]\n"
-            .parse()
-            .unwrap();
-        assert_eq!(read(&t), Some(vec![(0.0, 5.0), (100.0, 90.5)]));
-        let t: Table = "[display]\ncurve = [[0, 5]]\n".parse().unwrap();
-        assert_eq!(read(&t), None, "one point isn't a curve");
+        let c = sliver_config::load_str(
+            "[display]\ncurve = [[0, 0.05], [1, 0.9]]\n",
+            std::path::Path::new("."),
+        );
+        assert!(c.diagnostics.ok(), "{:?}", c.diagnostics);
+        assert_eq!(
+            read(&c.config.display),
+            Some(vec![(0.0, 5.0), (100.0, 90.0)])
+        );
+        // What the editor writes loads (fractions, strictly increasing).
+        let text = format!(
+            "[display]\ncurve = {}\n",
+            to_value(&normalized(vec![(51.0, 26.0), (0.0, 0.0), (100.0, 100.0)]))
+        );
+        let c = sliver_config::load_str(&text, std::path::Path::new("."));
+        assert!(c.diagnostics.ok(), "{text}: {:?}", c.diagnostics);
+        assert_eq!(
+            read(&c.config.display),
+            Some(vec![(0.0, 0.0), (51.0, 26.0), (100.0, 100.0)])
+        );
+        assert_eq!(read(&Display::default()), None);
     }
 }
