@@ -123,3 +123,57 @@ fn missing_tools_give_unknown_not_errors() {
     assert_eq!(audio::read(&tools), audio::Audio::default());
     assert!(audio::set_volume(&tools, 10).is_err());
 }
+
+/// A wpctl that never answers must not block the caller (the agent's startup), and is killed
+/// after its deadline.
+#[test]
+fn a_hung_wpctl_does_not_block_start_audio() {
+    let Some(bus) = Bus::start() else {
+        eprintln!("SKIP: dbus-daemon not installed");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("sliver-audio-hang-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pidfile = dir.join("pid");
+    script(
+        &dir.join("wpctl"),
+        &format!("echo $$ > {}; exec sleep 60", pidfile.display()),
+    );
+    script(&dir.join("pactl"), "exec sleep 60");
+    let tools = Tools {
+        wpctl: dir.join("wpctl"),
+        pactl: dir.join("pactl"),
+    };
+    let client = bus.connect();
+    let session = Session::start(client.clone(), client);
+    let t0 = std::time::Instant::now();
+    session.handle().start_audio(tools);
+    assert!(
+        t0.elapsed() < Duration::from_millis(500),
+        "start_audio returned at once: {:?}",
+        t0.elapsed()
+    );
+    // the first stuck wpctl is the one in the pid file now; after the 3 s deadline it is gone
+    // (the next read starts another one, which is why the pid is taken first)
+    std::thread::sleep(Duration::from_millis(500));
+    let pid: i32 = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(3300));
+    // SAFETY: signal 0 only checks that the process exists.
+    assert!(unsafe { libc_kill(pid) } != 0, "the hung wpctl was killed");
+    drop(session);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+unsafe extern "C" {
+    #[link_name = "kill"]
+    fn libc_kill_raw(pid: i32, sig: i32) -> i32;
+}
+
+unsafe fn libc_kill(pid: i32) -> i32 {
+    // SAFETY: forwarded to kill(2) with signal 0 (existence check).
+    unsafe { libc_kill_raw(pid, 0) }
+}

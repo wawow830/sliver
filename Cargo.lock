@@ -1658,6 +1658,7 @@ dependencies = [
 name = "sliver-session"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "serde",
  "sliver-proc",
  "sliver-testbus",

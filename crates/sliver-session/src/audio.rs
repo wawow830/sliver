@@ -62,12 +62,38 @@ pub fn is_device_event(line: &str) -> bool {
     matches!(kind, "sink" | "source" | "server" | "card")
 }
 
+/// A `wpctl` that does not answer (WirePlumber stuck or absent) must not wedge the audio thread
+/// or startup: give it this long, then kill it.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// `cmd.output()` with a deadline. Returns `None` on spawn failure or timeout (the child is killed).
+fn output_with_timeout(mut cmd: Command, limit: Duration) -> Option<std::process::Output> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // Tied to this process: a stuck tool never outlives the agent.
+    let child = sliver_proc::spawn_tied(cmd).ok()?;
+    let pid = child.id();
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(limit) {
+        Ok(r) => r.ok(),
+        Err(_) => {
+            // Stuck: kill it so the waiting thread (and its pipe) end too.
+            if let Some(pid) = rustix::process::Pid::from_raw(pid as i32) {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
+            None
+        }
+    }
+}
+
 fn get(tools: &Tools, target: &str) -> Option<(u8, bool)> {
-    let out = Command::new(&tools.wpctl)
-        .args(["get-volume", target])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let mut cmd = Command::new(&tools.wpctl);
+    cmd.args(["get-volume", target]);
+    let out = output_with_timeout(cmd, TOOL_TIMEOUT)?;
     out.status
         .success()
         .then(|| parse_volume(&String::from_utf8_lossy(&out.stdout)))?
@@ -144,11 +170,15 @@ impl Handle {
     /// pipewire-pulse restarts) and re-reads on every device event, coalescing bursts.
     pub fn start_audio(&self, tools: Tools) {
         let hub = self.hub.clone();
-        let first = read(&tools);
-        hub.update(|s| s.audio = first);
+        // The first read happens on the audio thread, so a wpctl that never answers cannot hold
+        // up the caller (the agent's startup).
         std::thread::Builder::new()
             .name("sliver-session-audio".into())
             .spawn(move || {
+                let first = read(&tools);
+                if !hub.update(|s| s.audio = first) {
+                    return;
+                }
                 let mut backoff = Duration::from_millis(500);
                 loop {
                     // Tied to this process (T47): `pactl subscribe` never runs on as an orphan
