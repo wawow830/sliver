@@ -17,6 +17,36 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     let c = &state.loaded.config;
     let page = adw::PreferencesPage::new();
 
+    // "Active now": asked of the running agent, filled in when it answers.
+    let now = group("Active now", None);
+    let now_row = row("Checking…", "");
+    now.add(&now_row);
+    page.add(&now);
+    let rule_rows: Rc<std::cell::RefCell<Vec<adw::ActionRow>>> = Rc::default();
+    {
+        let (now_row, rule_rows) = (now_row.clone(), rule_rows.clone());
+        crate::live::active(move |r| match r {
+            Ok(a) => {
+                let (title, why) = crate::live::explain(&a);
+                now_row.set_title(&title);
+                now_row.set_subtitle(&why);
+                if a.source == "rule"
+                    && a.rule >= 0
+                    && let Some(rw) = rule_rows.borrow().get(a.rule as usize)
+                {
+                    let tag = gtk::Label::new(Some("active now"));
+                    tag.add_css_class("accent");
+                    tag.add_css_class("caption");
+                    rw.add_prefix(&tag);
+                }
+            }
+            Err(e) => {
+                now_row.set_title("The agent isn't answering");
+                now_row.set_subtitle(&format!("Start it to see what the bar shows ({e})."));
+            }
+        });
+    }
+
     let layers = group(
         "Layers",
         Some("Each layer's default layout. Fn shows the fn layer; other layers open from actions."),
@@ -111,6 +141,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             del.connect_clicked(move |_| apply(&ui, |ed, merged| edit::remove_rule(ed, merged, i)));
         }
         rw.add_suffix(&del);
+        rule_rows.borrow_mut().push(rw.clone());
         rules.add(&rw);
     }
     page.add(&rules);
