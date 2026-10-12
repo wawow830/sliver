@@ -508,7 +508,12 @@ fn transitions_wake_the_loop_only_while_animating() {
     let (id, x) = region(&a, "custom/b");
     a.touch(id, 0, TouchPhase::Down, x, 1_000);
     a.render(&w);
-    assert!(a.animation_deadline().is_some(), "the press fades in");
+    // The sliver theme shows presses at once (`module:active { transition: none }`)…
+    assert!(a.animation_deadline().is_none(), "the press is instant");
+    // …and fades the release.
+    a.touch(id, 0, TouchPhase::Up, x, 50_000);
+    a.render(&w);
+    assert!(a.animation_deadline().is_some(), "the release fades out");
     std::thread::sleep(Duration::from_millis(250));
     a.render(&w);
     assert!(

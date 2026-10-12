@@ -406,13 +406,15 @@ impl Renderer {
         for ((zone, zs), zrect) in scene.zones.iter().zip(&st.zones).zip(&layout.zones) {
             let zone_opacity = bar_opacity * zs.opacity;
             draw_box(pixmap, *zrect, zs, None, zone_opacity);
-            for (ii, _) in zone.items.iter().enumerate() {
+            // Several items can share an id (an app's items, two clocks): number repeats so each
+            // element keeps its own transition state.
+            let mut seen_ids: HashMap<String, usize> = HashMap::new();
+            for (ii, zone_item) in zone.items.iter().enumerate() {
                 let ((((item, rect), s), parts), track) = items.next().expect("one rect per item");
-                let key = format!(
-                    "{}/{}",
-                    zone.name.as_deref().unwrap_or(""),
-                    item.id.clone().unwrap_or_else(|| ii.to_string())
-                );
+                let id = zone_item.id.clone().unwrap_or_else(|| ii.to_string());
+                let n = seen_ids.entry(id.clone()).or_insert(0);
+                *n += 1;
+                let key = format!("{}/{id}#{n}", zone.name.as_deref().unwrap_or(""));
                 let animated = self.anim.apply(&scene_id, &key, s, now);
                 let s = &animated;
                 let opacity = zone_opacity * s.opacity;

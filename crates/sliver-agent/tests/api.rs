@@ -104,6 +104,13 @@ fn check(name: &str, p: &Pixmap) {
         .zip(p.data().chunks(4))
         .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
         .count();
+    if bad > 20 {
+        p.save_png(format!(
+            "{}/../../target/{name}-actual.png",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+    }
     assert!(bad <= 20, "{name}: {bad} pixels differ");
 }
 
