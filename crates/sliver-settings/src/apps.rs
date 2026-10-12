@@ -39,6 +39,46 @@ fn switch_row(
     s
 }
 
+/// A published item (or a whole provider) with "Place on the bar": appends `module` to the main
+/// zone of the base layer's default layout (or its last zone), where it renders like a module.
+fn place_row(ui: &Rc<Ui>, title: &str, module: &str) -> adw::ActionRow {
+    let r = adw::ActionRow::builder()
+        .title(glib::markup_escape_text(title))
+        .subtitle(glib::markup_escape_text(module))
+        .build();
+    let b = gtk::Button::builder()
+        .label("Place on the bar")
+        .valign(gtk::Align::Center)
+        .build();
+    let (ui, module) = (ui.clone(), module.to_owned());
+    b.connect_clicked(move |_| {
+        let state = ui.state();
+        let c = &state.loaded.config;
+        let layout = c
+            .layers
+            .get("base")
+            .cloned()
+            .unwrap_or_else(|| "default".into());
+        let Ok(zones) = c.layout_zones(&layout) else {
+            return ui.toast(&format!("Layout {layout} can't be read"));
+        };
+        let Some(zone) = zones
+            .iter()
+            .find(|z| z.name == "main")
+            .or_else(|| zones.last())
+            .map(|z| z.name.clone())
+        else {
+            return ui.toast(&format!("Layout {layout} has no zones"));
+        };
+        let module = module.clone();
+        apply(&ui, move |ed, merged| {
+            crate::edit::add_module(ed, merged, &layout, &zone, &module)
+        });
+    });
+    r.add_suffix(&b);
+    r
+}
+
 pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     let state = ui.state();
     let c = &state.loaded.config;
@@ -96,7 +136,12 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                                         &c.title
                                     },
                                     c.scope,
-                                    c.items,
+                                    // The id list when the agent sends one: the count can lag behind it.
+                                    if c.item_ids.is_empty() {
+                                        c.items
+                                    } else {
+                                        c.item_ids.len() as i64
+                                    },
                                     if c.on_screen { ", on screen" } else { "" }
                                 )
                             })
@@ -116,6 +161,21 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                                 format!("providers.{}.allow", q(&p)),
                                 state.loaded.config.provider_prefs(&p).allow,
                             ));
+                        }
+                        // Pin its items into a layout like any module (api.md §2, T121).
+                        let mut seen = BTreeSet::new();
+                        for c in &mine {
+                            for (i, id) in c.item_ids.iter().enumerate() {
+                                if !seen.insert(id.clone()) {
+                                    continue;
+                                }
+                                let label =
+                                    c.item_labels.get(i).filter(|l| !l.is_empty()).unwrap_or(id);
+                                live.add(&place_row(&ui, label, &format!("app/{p}#{id}")));
+                            }
+                        }
+                        if !seen.is_empty() {
+                            live.add(&place_row(&ui, &format!("All of {p}"), &format!("app/{p}")));
                         }
                     }
                 }

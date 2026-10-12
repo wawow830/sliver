@@ -17,6 +17,8 @@
 #   SANDBOX   config sandbox (default target/test-tmp/xdg-ui); put sliver/config.toml there first
 #   OPEN      a file to open (e.g. a .sliver preset)
 #   SESSION   agent-browser session name (default: $USER-settings)
+#   WITH_AGENT=1  also run sliverd --fake-hardware and sliver-agent on the private bus
+#   PUBLISH   with WITH_AGENT: arguments for `sliverctl publish` (an app publishing items)
 #
 # Broadway has no implicit pointer grab: a drag that leaves the widget it started on is lost unless
 # a common ancestor handles it (see crates/sliver-settings/src/bar.rs, the page-level drag).
@@ -40,6 +42,24 @@ trap cleanup EXIT
 dbus-daemon --config-file="$root/integration/kwin/session.conf" --nofork \
     --address="unix:path=$tmp/bus" >/dev/null 2>&1 &
 pids+=($!)
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$tmp/bus"
+if [ -n "${WITH_AGENT:-}" ]; then
+    # A fake bar and the agent, on the private bus and the sandboxed config.
+    "$root/target/debug/sliverd" --fake-hardware --socket "$tmp/sliverd.sock" \
+        --exit-after 600 >"$tmp/sliverd.log" 2>&1 &
+    pids+=($!)
+    sleep 1
+    XDG_CONFIG_HOME="$sandbox" "$root/target/debug/sliver-agent" --socket "$tmp/sliverd.sock" \
+        >"$tmp/agent.log" 2>&1 &
+    pids+=($!)
+    sleep 2
+    if [ -n "${PUBLISH:-}" ]; then
+        # shellcheck disable=SC2086 # PUBLISH is a word list on purpose
+        "$root/target/debug/sliverctl" publish $PUBLISH >"$tmp/publish.log" 2>&1 &
+        pids+=($!)
+        sleep 1
+    fi
+fi
 display=$((20 + $$ % 50))
 gtk4-broadwayd ":$display" >/dev/null 2>&1 &
 pids+=($!)

@@ -223,6 +223,9 @@ pub struct ContextInfo {
     pub on_screen: bool,
     /// A Flatpak/Snap client (verified by the agent): needs `allow` for status items.
     pub sandboxed: bool,
+    /// Top-level item ids and their labels (same order): what `app/<provider>#<id>` places.
+    pub item_ids: Vec<String>,
+    pub item_labels: Vec<String>,
 }
 
 fn list_contexts() -> Result<Vec<ContextInfo>, String> {
@@ -244,6 +247,12 @@ fn list_contexts() -> Result<Vec<ContextInfo>, String> {
             .and_then(|v| String::try_from(v.try_clone().ok()?).ok())
             .unwrap_or_default()
     };
+    // An older agent doesn't send the lists: empty.
+    let strings = |d: &HashMap<String, OwnedValue>, k: &str| -> Vec<String> {
+        d.get(k)
+            .and_then(|v| Vec::<String>::try_from(v.try_clone().ok()?).ok())
+            .unwrap_or_default()
+    };
     Ok(list
         .iter()
         .map(|d| ContextInfo {
@@ -262,6 +271,8 @@ fn list_contexts() -> Result<Vec<ContextInfo>, String> {
                 .get("sandboxed")
                 .and_then(|v| bool::try_from(v.try_clone().ok()?).ok())
                 .unwrap_or(false),
+            item_ids: strings(d, "item-ids"),
+            item_labels: strings(d, "item-labels"),
         })
         .collect())
 }

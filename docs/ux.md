@@ -370,10 +370,15 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   held, for one tap), close the layer, switch layout or profile, or a D-Bus call (fir's presets).
   Anything else (macros, argv `exec`, signals) stays editable under Advanced as TOML and is never
   rewritten.
+- **Apps → Publishing now** lists each running provider's items (`ListContexts` `item-ids`/
+  `item-labels`) with **Place on the bar**, which adds `app/<provider>#<id>` (or the whole
+  `app/<provider>`) to the base layout's main zone, where it renders like any module (T121).
 - **Testing headless** (never on the live session): `scripts/settings-headless OUT.png [STEP...]`.
   It runs the app on GTK's Broadway backend with a sandboxed `XDG_CONFIG_HOME`
   (`target/test-tmp/xdg-ui`), on a **private D-Bus**, and drives it through agent-browser: clicks
-  `X,Y`, `drag=…`, `key=…`, `shot=FILE`, `sleep=N`. See the script's header.
+  `X,Y`, `drag=…`, `key=…`, `shot=FILE`, `sleep=N`, `wheel=…`. `WITH_AGENT=1` also runs a fake
+  sliverd and the agent on the private bus, and `PUBLISH="…"` has `sliverctl publish` put items
+  up. See the script's header.
   - **Always use a private bus.** On this machine an installed `sliver-agent` runs on the session
     bus. The settings app talks to it (live status, Active now, Apps), and **Mirror is on by
     default**, so a test window on the real bus asks the real bar to show its layout. Before the
