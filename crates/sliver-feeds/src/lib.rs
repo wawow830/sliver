@@ -77,6 +77,10 @@ pub struct Feeds {
     pub session: Option<Handle>,
     /// Module controls (`trigger`, `signal`, `set_active`) once [`Feeds::start_modules`] ran.
     pub modules: Option<Runtime>,
+    /// What the realtime-signal thread forwards to. It's installed once; reloads swap the target,
+    /// so a replaced runtime is really dropped (and its scripts stopped).
+    signal_target: Option<Arc<std::sync::Mutex<Option<Runtime>>>>,
+    specs: Vec<Spec>,
 }
 
 impl Feeds {
@@ -94,6 +98,8 @@ impl Feeds {
             wake_rx,
             session: None,
             modules: None,
+            signal_target: None,
+            specs: Vec::new(),
         })
     }
 
@@ -213,10 +219,36 @@ impl Feeds {
     }
 
     /// Start the user modules and forward their updates. Also routes `pkill -RTMIN+N`.
+    /// Starts the user modules, or restarts them with new `specs` (config reload). Unchanged specs
+    /// keep the running modules and their last output.
     pub fn start_modules(&mut self, specs: Vec<Spec>) {
+        if self.modules.is_some() && specs == self.specs {
+            return;
+        }
+        self.specs = specs.clone();
+        // Stop the old runtime first: dropping the last handle stops its scripts.
+        if let Some(t) = &self.signal_target {
+            *t.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+        self.modules = None;
         let (rt, rx) = Runtime::start(specs);
-        if let Err(e) = sliver_modules::forward_realtime_signals(rt.clone()) {
-            self.out.send(Feed::Note(format!("realtime signals: {e}")));
+        match &self.signal_target {
+            Some(t) => *t.lock().unwrap_or_else(|e| e.into_inner()) = Some(rt.clone()),
+            None => {
+                let target = Arc::new(std::sync::Mutex::new(Some(rt.clone())));
+                let t = target.clone();
+                let forwarded = sliver_modules::forward_realtime_signals_to(move |n| {
+                    if let Some(rt) = t.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                        rt.signal(n);
+                    }
+                });
+                match forwarded {
+                    Ok(()) => self.signal_target = Some(target),
+                    Err(e) => {
+                        self.out.send(Feed::Note(format!("realtime signals: {e}")));
+                    }
+                }
+            }
         }
         let out = self.out.clone();
         std::thread::Builder::new()

@@ -13,5 +13,6 @@ pub mod link;
 pub mod modules;
 pub mod ops;
 pub mod published;
+pub mod reload;
 
 pub use agent::Agent;

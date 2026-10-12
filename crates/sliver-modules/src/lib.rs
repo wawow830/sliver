@@ -19,7 +19,7 @@ mod view;
 
 pub use output::{Output, escape_markup, parse_json, parse_text};
 pub use runtime::Runtime;
-pub use signals::forward_realtime_signals;
+pub use signals::{forward_realtime_signals, forward_realtime_signals_to};
 pub use spec::{DEFAULT_TIMEOUT, MAX_SIGNAL, MIN_RESTART, Mode, Spec};
 pub use view::{View, view};
 

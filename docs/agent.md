@@ -25,8 +25,8 @@ agent.rs: the sans-IO core that ties it together. main.rs: config/stylesheet loa
   hasn't confirmed the last one, and sends damage spans.
 - **Stylesheet:** the built-in `sliver` theme, then `style.css` next to the config (or
   `stylesheet = "…"`) on top.
-- **Config errors** fall back to the built-in defaults (last-good fallback comes with hot
-  reload, T26).
+- **Config errors** at startup fall back to the built-in defaults. After that, a broken save
+  keeps the last good config (see Hot reload).
 
 ## Running
 ```
@@ -103,7 +103,7 @@ waits up to 2 s for the answer, so the core stays single-threaded.
   variables, preview PNGs, config validation, the module list, `SetLayout` (also the `layout`
   action: a config copy whose current layer shows that layout; empty name = back to rules),
   per-module show/hide/toggle/reset (runtime only), and `Update` (output pushed to exec-less
-  custom modules). Not yet: profiles, reload (T26).
+  custom modules). Not yet: profiles. `ReloadConfig` re-reads the config at once and answers with its errors (T26).
 - Modal app contexts cover every zone but the user's first and get a × that sends `CloseModal`
   (`bar.modal`, `zone.zone-modal`, `#modal-close`).
 
@@ -117,5 +117,15 @@ Works: everything above, plus `--render` and the real sliverd loop. Verified end
 Previews: `World::sample(now)` (sample battery, volume, brightness, now playing, window) with
 `preview = true` draws empty App controls / Status items as outlined `.placeholder` cells.
 
-Not yet: `workspaces`/`taskbar`/`notifications`/`cpu`…
-modules, the `layout` action, hot reload (T26).
+Not yet: `workspaces`/`taskbar`/`notifications`/`cpu`… modules.
+
+## Hot reload (T26)
+`main.rs` `Reloader` + `reload.rs` `Watcher`. inotify watches the *directories* of the config, its
+includes, the stylesheets (`Stylesheet::files`, including `@import`s), and the user config path
+even if it doesn't exist yet (through its nearest existing ancestor). Watching directories catches
+atomic rename-saves. Events settle for 200 ms, then the agent reloads. `sliverctl reload` (Control1
+`ReloadConfig`) and SIGUSR2 reload at once.
+A config with parse **or validation** errors is never applied: the last good config stays, the
+errors are logged, and `healthy` goes false until a good save. User modules restart only if
+their specs changed (`Feeds::start_modules`). The realtime-signal forwarder is installed once and
+retargeted, so replaced runtimes really stop.

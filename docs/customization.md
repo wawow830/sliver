@@ -371,6 +371,6 @@ These are the selectors sliver guarantees, mirroring waybar:
 | G4 Markup subset in format strings (`<b>`, `<i>`, `<span color=…>`) | done: `sliver_render::markup` + `Content::Markup` / `IconMarkup` (T28) |
 | G5 `format` engine: placeholders, `{name:spec}`, format-icons/states/alt/status resolution, shared by all modules | done: `sliver_config::format` (T25) |
 | G6 StatusNotifierItem host → `status-items`/`tray` | new |
-| G7 Hot reload watcher + last-good fallback + `sliverctl reload`/SIGUSR2 | new |
+| G7 Hot reload watcher + last-good fallback + `sliverctl reload`/SIGUSR2 | done (T26, docs/agent.md) |
 | G8 waybar module-block importer (JSONC → TOML, alias names) | done: `crates/sliver-waybar` (`import_path`, example `waybar-import`) (T29) |
 | G9 Settings app writes these exact files with comments preserved (toml_edit), and shows unknown-key warnings | settings (later) |
