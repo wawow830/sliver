@@ -117,7 +117,10 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("sliver-hw-{tag}-{}", std::process::id()));
+        // Under target/, not /tmp: /tmp is a quota'd tmpfs on the dev machine.
+        let d = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("sliver-hw-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
