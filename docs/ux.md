@@ -311,6 +311,9 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   providers publishing right now (live `ListContexts`) with a Show switch, per-app App controls
   switches, and adding an app to block. It writes `[apps]`/`[providers]`/`[api]`
   (customization.md §6b). The agent enforces them (cedar).
+- **Onboarding** (T58): on first launch (no user config), a welcome dialog explains the safe
+  hatch and offers Import tiny-dfr setup or the default bar. Either choice writes the config, so it
+  shows once.
 - Next: drag and drop on the preview.
 - **Testing headless** (never on the live session):
   - Run `gtk4-broadwayd :7 &`, then

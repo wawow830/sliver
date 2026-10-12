@@ -187,6 +187,7 @@ fn main() -> glib::ExitCode {
         }
         rebuild(&ui);
         win.present();
+        onboarding(&ui);
     });
     app.run()
 }
@@ -364,6 +365,72 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     split.set_content(Some(&content_page));
     split.set_min_sidebar_width(220.0);
     ui.toasts.set_child(Some(&split));
+}
+
+/// First launch (ux.md §8): no config file of the user's yet. Explains the safe hatch and offers a
+/// starting point. Either choice writes the user's config, so this shows only once.
+fn onboarding(ui: &Rc<Ui>) {
+    let state = ui.state();
+    if state.edit_target().0.exists() || state.path.is_some() {
+        return;
+    }
+    let dfr = std::path::Path::new(sliver_config::tinydfr::SYSTEM_BASE).exists();
+    let body = format!(
+        "Sliver draws your Touch Bar. Whatever you change, double-press Fn and hold to get the built-in \
+         F-keys{}. Edits apply instantly and can be undone.\n\n{}",
+        if state.hw.physical_esc {
+            ""
+        } else {
+            " and Esc"
+        },
+        if dfr {
+            "You have a tiny-dfr setup. Keep its keys and look, or start from Sliver's default bar (F-keys until an app adds its own buttons, plus brightness, volume and now playing)?"
+        } else {
+            "You start from Sliver's default bar: F-keys until an app adds its own buttons, plus brightness, volume and now playing."
+        }
+    );
+    let dialog = adw::AlertDialog::builder()
+        .heading("Welcome to Sliver")
+        .body(body)
+        .build();
+    if dfr {
+        dialog.add_responses(&[
+            ("default", "Use the default bar"),
+            ("dfr", "Import tiny-dfr setup"),
+        ]);
+        dialog.set_response_appearance("dfr", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("dfr"));
+    } else {
+        dialog.add_responses(&[("default", "Start")]);
+        dialog.set_response_appearance("default", adw::ResponseAppearance::Suggested);
+    }
+    let ui2 = ui.clone();
+    dialog.connect_response(None, move |_, r| {
+        let imported = (r == "dfr")
+            .then(sliver_config::tinydfr::import_system)
+            .and_then(Result::ok)
+            .flatten();
+        apply(&ui2, move |ed, _| match imported {
+            Some(imp) => {
+                ed.replace_text(&imp.config)?;
+                Ok("Imported your tiny-dfr setup".into())
+            }
+            None => {
+                ed.set("version", &toml::Value::Integer(1))?;
+                Ok("Your config lives in ~/.config/sliver/config.toml".into())
+            }
+        });
+        if r == "dfr" {
+            // tiny-dfr's font/outline overrides; the look itself is theme = "classic".
+            if let Ok(Some(imp)) = sliver_config::tinydfr::import_system() {
+                let css = ui2.state().edit_target().0.with_file_name("style.css");
+                if !css.exists() {
+                    let _ = std::fs::write(&css, imp.stylesheet);
+                }
+            }
+        }
+    });
+    dialog.present(Some(&ui.win_widget()));
 }
 
 /// Refreshes the window when the config changes on disk from outside the app (an editor,
