@@ -227,7 +227,7 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 | `timer` | (none) | P2 | Done. Countdown (`duration`, default 25m; `{remaining}` `{minutes}` `{seconds}`, `percentage` for `states`); tap starts/pauses, hold resets; `notify-send` at zero. Status classes `.idle` `.running` `.paused` `.finished`. |
 | `image` | `image` | P1 | `path` or `exec` → path, `interval`/`signal`. |
 | `group/<name>` | `group/<name>` | P1 | §3.1. |
-| `app-controls`, `status-items` | (none) / `tray` | P1 | Placeholders for D-Bus-published items (api.md). `tray` is accepted as an alias, so StatusNotifierItems show here (gap G6). |
+| `app-controls`, `status-items` | (none) / `tray` | P1 | Placeholders for D-Bus-published items (api.md). `tray` is accepted as an alias, so StatusNotifierItems show here (gap G6). `width` sizes the **slot**: `auto` (default) is as wide as its items. A px value is a fixed slot: items lay out inside it, the rest stays empty (reserved even with no items), and when they don't fit the lowest-priority item gives way first. `fill` / `{ fill = N }` adds a share of the zone's leftover after the items. Each item keeps its own width inside the slot. |
 | `app/<provider>#<item-id>` | (none) | P1 | **Pin** one D-Bus-published item anywhere, like any module (the stable key from api.md). |
 | `custom/<name>` | `custom/<name>` | P1 | §4. Static text when only `format` is set, which is the "button" of other tools. |
 

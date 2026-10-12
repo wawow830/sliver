@@ -378,7 +378,12 @@ and
 .B status\-items
 (where items published by apps go;
 .B tray
-is an alias),
+is an alias; their
+.B width
+sizes the slot: a pixel width reserves that much, even when empty, and drops the lowest\-priority
+items that don't fit, while
+.B fill
+adds a share of the zone's leftover after the items),
 .B app
 .RB ( app/ \fIprovider\fP # \fIitem\fP
 pins one published item), and
