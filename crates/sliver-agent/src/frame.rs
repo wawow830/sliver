@@ -111,7 +111,36 @@ pub fn render(
     }
 }
 
+/// A running layer change: the old image leaves while the new one arrives.
+pub struct LayerAnim {
+    pub from: Pixmap,
+    pub start: std::time::Instant,
+    pub t: sliver_render::LayerTransition,
+    /// Slide direction: `1.0` forward (new from the right), `-1.0` back. Ignored for fades.
+    pub dir: f32,
+}
+
+impl LayerAnim {
+    /// Eased progress at `now`, `None` once it has finished.
+    pub fn progress(&self, now: std::time::Instant) -> Option<f32> {
+        let p =
+            now.saturating_duration_since(self.start).as_secs_f32() / self.t.duration.as_secs_f32();
+        (p < 1.0).then(|| self.t.timing.at(p))
+    }
+
+    /// Draws the in-between frame into `to` (which holds the new layer's image).
+    pub fn composite(&self, to: &mut Pixmap, e: f32) {
+        sliver_render::composite_layers(&self.from, to, self.t.effect, e, self.dir);
+    }
+}
+
 impl Frame {
+    /// Which layer and layout this frame shows (its `layer-*`/`layout-*` classes).
+    pub fn identity(&self) -> (Option<&str>, Option<&str>) {
+        let find = |p: &str| self.scene.classes.iter().find_map(|c| c.strip_prefix(p));
+        (find("layer-"), find("layout-"))
+    }
+
     /// Re-renders only the image with these cells pressed: the fast path for touch feedback on
     /// agent regions (regions, layout and the pressed twin can't change from a press). Returns
     /// whether anything changed.

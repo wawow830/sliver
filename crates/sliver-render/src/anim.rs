@@ -266,6 +266,15 @@ impl Animator {
         self.geo.retain(|k, a| a.seen || !in_scene(k, scene));
     }
 
+    /// Drop all state for scenes other than `keep` (scene ids): they're no longer drawn, so a
+    /// fade still pending on one must not keep asking for frames.
+    pub fn retain_scenes(&mut self, keep: &[String]) {
+        let kept = |k: &str| keep.iter().any(|s| in_scene(k, s));
+        self.items.retain(|k, _| kept(k));
+        self.geo.retain(|k, _| kept(k));
+        self.next.retain(|s, _| keep.contains(s));
+    }
+
     /// When the next animation frame is due; `None` when everything is at rest.
     pub fn deadline(&self) -> Option<Instant> {
         self.next.values().min().copied()

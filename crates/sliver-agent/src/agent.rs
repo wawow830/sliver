@@ -116,6 +116,10 @@ pub struct Agent {
     /// Fn is held: sliverd shows our `fn` frame.
     pub fn_held: bool,
     frames: [Option<Frame>; 2],
+    /// A base-layer change animating (`-sliver-layer-transition`), and the layer depth the base
+    /// frame was last drawn at (deeper = slide forward).
+    layer_anim: Option<frame::LayerAnim>,
+    base_depth: usize,
     recognizer: Recognizer,
     /// Cell keys being touched (agent regions).
     pressed: HashSet<String>,
@@ -194,6 +198,8 @@ impl Agent {
             hatch: false,
             fn_held: false,
             frames: [None, None],
+            layer_anim: None,
+            base_depth: 0,
             recognizer: Recognizer::new(),
             pressed: HashSet::new(),
             hold_layer: None,
@@ -261,14 +267,56 @@ impl Agent {
                     } else {
                         0
                     };
-                    let f = self.build(&r, world, id_base);
+                    let mut f = self.build(&r, world, id_base);
+                    if layer == Layer::Base {
+                        self.animate_layer_change(&mut f);
+                    }
                     self.frames[slot(layer)] = Some(f);
                     out.push(layer);
                 }
                 Err(e) => self.errors.push(format!("layer {name}: {e}")),
             }
         }
+        // Scenes no longer shown (a layer left mid-fade) must not keep the loop awake.
+        let shown: Vec<&sliver_render::Scene> =
+            self.frames.iter().flatten().map(|f| &f.scene).collect();
+        self.renderer.retain_scenes(&shown);
         out
+    }
+
+    /// Starts, continues or ends a layer-change animation on the new base frame `f`.
+    fn animate_layer_change(&mut self, f: &mut Frame) {
+        let now = std::time::Instant::now();
+        let depth = self.layers.len();
+        let old_depth = std::mem::replace(&mut self.base_depth, depth);
+        if let Some(old) = &self.frames[0]
+            && old.identity() != f.identity()
+            && self.display != DisplayState::Off
+            && let Some(t) = f.layout.layer_transition
+        {
+            let layer_changed = old.identity().0 != f.identity().0;
+            let t = if layer_changed {
+                t
+            } else {
+                // Only the layout changed (app/context rules): a cross-fade, not navigation.
+                sliver_render::LayerTransition {
+                    effect: sliver_render::LayerEffect::Fade,
+                    ..t
+                }
+            };
+            self.layer_anim = Some(frame::LayerAnim {
+                // What's on the panel now, so an interrupted change continues smoothly.
+                from: old.image.clone(),
+                start: now,
+                t,
+                dir: if depth < old_depth { -1.0 } else { 1.0 },
+            });
+        }
+        match self.layer_anim.as_ref().map(|a| (a, a.progress(now))) {
+            Some((a, Some(e))) => a.composite(&mut f.image, e),
+            Some((_, None)) => self.layer_anim = None,
+            None => {}
+        }
     }
 
     fn build(&mut self, r: &Resolved, world: &World, id_base: u32) -> Frame {
@@ -409,6 +457,8 @@ impl Agent {
     /// Re-renders just the images of frames whose pressed cells changed (after
     /// [`Effect::RedrawPress`]). Returns the layers to present.
     pub fn render_press(&mut self) -> Vec<Layer> {
+        // A touch ends a layer change at once: the press draws on the settled layer.
+        self.layer_anim = None;
         let pressed = &self.pressed;
         let is_pressed = |c: &Cell| pressed.contains(&c.key);
         let mut out = Vec::new();
@@ -443,7 +493,15 @@ impl Agent {
         if self.display == DisplayState::Off {
             return None;
         }
-        self.renderer.animation_deadline()
+        let layer = self
+            .layer_anim
+            .as_ref()
+            .map(|_| std::time::Instant::now() + sliver_render::FRAME);
+        self.renderer
+            .animation_deadline()
+            .into_iter()
+            .chain(layer)
+            .min()
     }
 
     pub fn next_deadline(&self) -> Option<u64> {

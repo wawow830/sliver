@@ -39,6 +39,39 @@ fn track_rect(item: Rect, s: &Style, trough: &Style, has_icon: bool) -> Rect {
     r.inset([0.0, trough.margin[1], 0.0, trough.margin[3]])
 }
 
+/// One in-between frame of a layer change: `to` holds the new layer's image and receives the
+/// mix, `e` is the eased progress (0 = all old, 1 = all new), `dir` the slide direction (`1.0`:
+/// the new layer comes from the right).
+pub fn composite_layers(
+    from: &Pixmap,
+    to: &mut Pixmap,
+    effect: crate::LayerEffect,
+    e: f32,
+    dir: f32,
+) {
+    use tiny_skia::{PixmapPaint, Transform};
+    let new = to.clone();
+    let id = Transform::identity();
+    match effect {
+        crate::LayerEffect::Slide => {
+            let w = to.width() as f32;
+            to.fill(tiny_skia::Color::BLACK);
+            let old_x = (-dir * e * w).round() as i32;
+            let new_x = (dir * (1.0 - e) * w).round() as i32;
+            to.draw_pixmap(old_x, 0, from.as_ref(), &PixmapPaint::default(), id, None);
+            to.draw_pixmap(new_x, 0, new.as_ref(), &PixmapPaint::default(), id, None);
+        }
+        crate::LayerEffect::Fade => {
+            to.data_mut().copy_from_slice(from.data());
+            let paint = PixmapPaint {
+                opacity: e.clamp(0.0, 1.0),
+                ..PixmapPaint::default()
+            };
+            to.draw_pixmap(0, 0, new.as_ref(), &paint, id, None);
+        }
+    }
+}
+
 /// Where everything in a scene goes. All rects are in bar pixels, rounded to whole pixels.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
@@ -47,6 +80,9 @@ pub struct Layout {
     pub items: Vec<Rect>,
     /// Per item: for sliders, the trough rect. Map a touch's x across it to the value.
     pub tracks: Vec<Option<Rect>>,
+    /// The bar's `-sliver-layer-transition` (`None` with reduce-motion): what the caller
+    /// should do when this scene replaces one of another layer.
+    pub layer_transition: Option<crate::LayerTransition>,
 }
 
 /// Computed styles for one scene.
@@ -314,6 +350,7 @@ impl Renderer {
             zones,
             items,
             tracks,
+            layer_transition: st.bar.layer_transition.filter(|_| !self.anim.reduce_motion),
         }
     }
 
@@ -357,6 +394,14 @@ impl Renderer {
     /// layout it used.
     pub fn render(&mut self, scene: &Scene, sheet: &Stylesheet, pixmap: &mut Pixmap) -> Layout {
         self.render_at(scene, sheet, pixmap, std::time::Instant::now())
+    }
+
+    /// Forget transition state for every scene but these (the ones on screen now). Call it
+    /// after drawing a set of scenes that replaced others (a layer change), or a fade left
+    /// running on a scene that's no longer drawn would keep requesting frames.
+    pub fn retain_scenes(&mut self, keep: &[&Scene]) {
+        let ids: Vec<String> = keep.iter().map(|s| s.classes.join(".")).collect();
+        self.anim.retain_scenes(&ids);
     }
 
     /// Honour the desktop's "reduce motion": every transition jumps to its end.

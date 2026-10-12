@@ -3,6 +3,8 @@
    on power as the default. Import it with  @import "sliver:high-contrast";  and override. */
 
 bar {
+  /* Going into a layer (media, a group) and back. */
+  -sliver-layer-transition: fade 120ms ease-out;
   background-color: #000;
   color: #fff;
   font-family: "Adwaita Sans", "Inter", "Noto Sans", sans-serif;

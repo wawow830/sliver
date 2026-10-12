@@ -166,3 +166,36 @@ fn width_transition_glides_boxes() {
     r.render_at(&scene(150.0), &all, &mut p, t0 + Duration::from_secs(1));
     assert!(r.animation_deadline().is_none());
 }
+
+/// Layer changes: slide pushes the old image out on one side and the new in from the other
+/// (direction by `dir`); fade mixes them.
+#[test]
+fn layer_change_composites() {
+    use sliver_render::{LayerEffect, composite_layers};
+    let solid = |r: u8, g: u8| {
+        let mut p = Pixmap::new(100, 10).unwrap();
+        p.fill(tiny_skia::Color::from_rgba8(r, g, 0, 255));
+        p
+    };
+    let px = |p: &Pixmap, x: usize| {
+        let d = p.data();
+        [d[(5 * 100 + x) * 4], d[(5 * 100 + x) * 4 + 1]]
+    };
+    let (old, new) = (solid(255, 0), solid(0, 255));
+    // Forward, a quarter in: the new layer covers the right quarter.
+    let mut to = new.clone();
+    composite_layers(&old, &mut to, LayerEffect::Slide, 0.25, 1.0);
+    assert_eq!((px(&to, 70), px(&to, 80)), ([255, 0], [0, 255]));
+    // Back: from the left.
+    let mut to = new.clone();
+    composite_layers(&old, &mut to, LayerEffect::Slide, 0.25, -1.0);
+    assert_eq!((px(&to, 20), px(&to, 30)), ([0, 255], [255, 0]));
+    // Fade halfway.
+    let mut to = new.clone();
+    composite_layers(&old, &mut to, LayerEffect::Fade, 0.5, 1.0);
+    let [r, g] = px(&to, 50);
+    assert!(
+        (120..=136).contains(&r) && (120..=136).contains(&g),
+        "{r} {g}"
+    );
+}

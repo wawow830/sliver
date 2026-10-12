@@ -221,6 +221,20 @@ fn region(a: &Agent, key: &str) -> (u32, f32) {
 }
 
 /// Delivers what sliverd forwarded to the agent; returns the effects.
+/// Renders at the agent's animation deadlines until it's at rest, like the real loop. Returns
+/// the base images drawn, each with when it was drawn.
+fn settle(a: &mut Agent, w: &World) -> Vec<(std::time::Instant, Pixmap)> {
+    let mut images = Vec::new();
+    while let Some(due) = a.animation_deadline() {
+        std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
+        let t = std::time::Instant::now();
+        a.render(w);
+        images.push((t, a.frame(Layer::Base).unwrap().image.clone()));
+        assert!(images.len() < 30, "animations end");
+    }
+    images
+}
+
 fn deliver(
     a: &mut Agent,
     link: &mut Link,
@@ -351,9 +365,27 @@ fn touches_become_actions() {
     fake.tap(x, 30.0).unwrap();
     assert!(deliver(&mut a, &mut link, &mut fake).contains(&Redraw));
     assert_eq!(a.base_layer(), "media");
+    let before = a.frame(Layer::Base).unwrap().image.clone();
+    let start = std::time::Instant::now();
     let layers = a.render(&world(9, 41));
     present(&a, &mut link, &mut fake, &layers);
-    check("touchy-media-layer", &a.frame(Layer::Base).unwrap().image);
+    // The theme slides the media layer in: the first frame still shows the old layer, the
+    // middle one a mix, and the loop goes idle once it's in.
+    assert_eq!(a.frame(Layer::Base).unwrap().image.data(), before.data());
+    let frames = settle(&mut a, &world(9, 41));
+    assert!(!frames.is_empty(), "slid");
+    let settled = a.frame(Layer::Base).unwrap().image.clone();
+    // A frame drawn well inside the 200 ms slide is a mix (a loaded machine may draw none
+    // that early; then there's nothing to check).
+    for (t, img) in &frames {
+        if t.duration_since(start) < std::time::Duration::from_millis(120) {
+            assert!(
+                img.data() != before.data() && img.data() != settled.data(),
+                "in between"
+            );
+        }
+    }
+    check("touchy-media-layer", &settled);
     let keys = fake
         .base
         .as_ref()
@@ -449,14 +481,8 @@ fn session_modules() {
     let layers = a.render(&w);
     present(&a, &mut link, &mut fake, &layers);
     // It glides open (the theme's `transition: width`): frames until it lands, then none.
-    let mut frames = 0;
-    while let Some(due) = a.animation_deadline() {
-        std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
-        a.render(&w);
-        frames += 1;
-        assert!(frames < 20, "the glide ends");
-    }
-    assert!(frames >= 3, "it animated: {frames} frames");
+    let frames = settle(&mut a, &w).len();
+    assert!(frames >= 1, "it animated: {frames} frames");
     check("session-slider-open", &a.frame(Layer::Base).unwrap().image);
 
     // Dragging the open volume slider sets the volume along its trough.

@@ -59,7 +59,7 @@ pub const BUILTIN_THEMES: &[(&str, &str)] = &[
 ];
 
 mod transition;
-pub use transition::{Timing, Transition, TransitionProp};
+pub use transition::{LayerEffect, LayerTransition, Timing, Transition, TransitionProp};
 
 /// The computed style of one element.
 #[derive(Clone, Debug, PartialEq)]
@@ -88,6 +88,8 @@ pub struct Style {
     pub gap: f32,
     /// `transition`: which paint properties animate when this element's style changes.
     pub transitions: Vec<Transition>,
+    /// `-sliver-layer-transition` (on `bar`): how a layer change animates.
+    pub layer_transition: Option<LayerTransition>,
 }
 
 impl Style {
@@ -110,6 +112,7 @@ impl Style {
             min_height: 0.0,
             gap: 0.0,
             transitions: Vec::new(),
+            layer_transition: None,
         }
     }
 
@@ -136,6 +139,7 @@ enum Prop {
     MinHeight,
     Gap,
     Transition,
+    LayerTransition,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -147,6 +151,7 @@ enum Value {
     Weight(u16),
     Number(f32),
     Transitions(Vec<Transition>),
+    Layer(Option<LayerTransition>),
     Inherit,
     Initial,
 }
@@ -491,6 +496,7 @@ impl Stylesheet {
             "min-height" => vec![Prop::MinHeight],
             "gap" | "column-gap" => vec![Prop::Gap],
             "transition" => vec![Prop::Transition],
+            "-sliver-layer-transition" => vec![Prop::LayerTransition],
             _ => {
                 let side = ["top", "right", "bottom", "left"];
                 let sided = |prefix: &str| {
@@ -532,6 +538,9 @@ impl Stylesheet {
             "font-weight" => one(Prop::FontWeight, value::font_weight(raw).map(Value::Weight)),
             "transition" => transition::parse(raw)
                 .map(|t| vec![(Prop::Transition, Value::Transitions(t))])
+                .map_err(ctx),
+            "-sliver-layer-transition" => transition::parse_layer(raw)
+                .map(|t| vec![(Prop::LayerTransition, Value::Layer(t))])
                 .map_err(ctx),
             "opacity" => one(
                 Prop::Opacity,
@@ -700,6 +709,9 @@ impl Stylesheet {
         s.gap = inherit_if(Prop::Gap, len(get(Prop::Gap), 0.0, 0.0), parent.gap);
         if let Some(Value::Transitions(t)) = get(Prop::Transition) {
             s.transitions = t.clone();
+        }
+        if let Some(Value::Layer(t)) = get(Prop::LayerTransition) {
+            s.layer_transition = *t;
         }
         s
     }

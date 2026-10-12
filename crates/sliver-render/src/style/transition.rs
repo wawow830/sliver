@@ -71,6 +71,56 @@ pub struct Transition {
     pub timing: Timing,
 }
 
+/// How the bar changes when its layer changes (`-sliver-layer-transition` on `bar`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerEffect {
+    /// The new layer pushes the old one out sideways: from the right when going into a layer
+    /// (a media layer, a group), from the left when coming back.
+    Slide,
+    /// Cross-fade.
+    Fade,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerTransition {
+    pub effect: LayerEffect,
+    pub duration: Duration,
+    pub timing: Timing,
+}
+
+/// `none` or `slide|fade <time> [timing]` (any order).
+pub(crate) fn parse_layer(raw: &str) -> Result<Option<LayerTransition>, String> {
+    if raw.trim().eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    let (mut effect, mut duration, mut tf) = (None, None, Timing::EASE_OUT);
+    for t in value::tokens(raw) {
+        let tl = t.to_ascii_lowercase();
+        match tl.as_str() {
+            "slide" => effect = Some(LayerEffect::Slide),
+            "fade" => effect = Some(LayerEffect::Fade),
+            _ => {
+                if let Some(d) = time(&tl) {
+                    duration = Some(d);
+                } else if let Some(f) = timing(&tl) {
+                    tf = f;
+                } else {
+                    return Err(format!(
+                        "unexpected '{t}': want none, or slide|fade <time> [timing]"
+                    ));
+                }
+            }
+        }
+    }
+    let effect = effect.ok_or("needs 'slide' or 'fade' (or 'none')")?;
+    let duration = duration.ok_or("needs a duration like 200ms")?;
+    Ok((!duration.is_zero()).then_some(LayerTransition {
+        effect,
+        duration,
+        timing: tf,
+    }))
+}
+
 /// A time: `200ms`, `0.2s`, `.5s`.
 fn time(s: &str) -> Option<Duration> {
     let (num, scale) = match (s.strip_suffix("ms"), s.strip_suffix('s')) {
@@ -220,6 +270,26 @@ mod tests {
             Timing::Bezier(0.1, 0.2, 0.3, 1.0)
         );
         assert!(parse("none").unwrap().is_empty());
+    }
+
+    #[test]
+    fn layer_transitions() {
+        assert_eq!(
+            parse_layer("slide 200ms").unwrap(),
+            Some(LayerTransition {
+                effect: LayerEffect::Slide,
+                duration: ms(200),
+                timing: Timing::EASE_OUT
+            })
+        );
+        assert_eq!(
+            parse_layer("linear .1s fade").unwrap().unwrap().timing,
+            Timing::Linear
+        );
+        assert_eq!(parse_layer("none").unwrap(), None);
+        assert_eq!(parse_layer("fade 0s").unwrap(), None);
+        assert!(parse_layer("spin 1s").is_err());
+        assert!(parse_layer("slide").is_err());
     }
 
     #[test]

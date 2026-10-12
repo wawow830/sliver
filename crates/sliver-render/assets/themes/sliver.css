@@ -3,6 +3,8 @@
    @define-color accent …; in your own style.css. */
 
 bar {
+  /* Going into a layer (media, a group) and back. */
+  -sliver-layer-transition: slide 200ms ease-out;
   background-color: #000;
   color: #fff;
   font-family: "Adwaita Sans", "Inter", "Noto Sans", sans-serif;

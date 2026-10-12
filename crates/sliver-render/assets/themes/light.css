@@ -3,6 +3,8 @@
    ones, and is brighter in a dark room. Import it with  @import "sliver:light";  and override. */
 
 bar {
+  /* Going into a layer (media, a group) and back. */
+  -sliver-layer-transition: slide 200ms ease-out;
   background-color: #d8d8dd;
   color: #1c1c1e;
   font-family: "Adwaita Sans", "Inter", "Noto Sans", sans-serif;

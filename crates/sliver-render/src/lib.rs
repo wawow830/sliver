@@ -26,11 +26,14 @@ mod scene;
 pub mod style;
 mod text;
 
+pub use anim::FRAME;
 pub use color::Color;
 pub use geometry::{Align, Rect, Sizing, Width, hit_test, solve};
 pub use icon::{BUILTIN_ICONS, Icon, IconError};
-pub use render::{Layout, Renderer};
+pub use render::{Layout, Renderer, composite_layers};
 pub use scene::{Content, Item, Scene, Zone};
-pub use style::{Diagnostic, Style, Stylesheet, Timing, Transition, TransitionProp};
+pub use style::{
+    Diagnostic, LayerEffect, LayerTransition, Style, Stylesheet, Timing, Transition, TransitionProp,
+};
 pub use text::{EMBEDDED_FONT_FAMILY, Fonts};
 pub use tiny_skia::Pixmap;
