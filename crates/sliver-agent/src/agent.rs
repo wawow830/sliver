@@ -1109,6 +1109,13 @@ impl Agent {
             (PubKind::Close, AG::Tap) => send(I::CloseModal, fx),
             (PubKind::Close, _) => {}
             (PubKind::Segment(i), AG::Tap) => send(I::Select(i), fx),
+            (PubKind::Candidate { index, .. }, AG::Tap) => send(I::Select(index), fx),
+            // Swiping left brings the candidates to the right into view.
+            (PubKind::Candidate { next, .. }, AG::SwipeLeft) => send(I::Scroll(next), fx),
+            (PubKind::Candidate { prev, .. }, AG::SwipeRight) => send(I::Scroll(prev), fx),
+            (PubKind::Candidate { .. }, _) => {}
+            (PubKind::ScrollTo(to), AG::Tap) => send(I::Scroll(to), fx),
+            (PubKind::ScrollTo(_), _) => {}
             (PubKind::Slider { .. }, AG::Tap) => {}
             _ => send(I::Gesture(ag), fx),
         }
@@ -1367,13 +1374,15 @@ fn bindings(c: &Cell) -> Bindings {
         use sliver_api::item::Gesture as AG;
         let has = |g: AG| p.gestures.contains(&g);
         let slider = matches!(p.kind, crate::published::PubKind::Slider { .. });
+        let scrubber = matches!(p.kind, crate::published::PubKind::Candidate { .. });
         let user = |g: CGesture| c.on.iter().any(|(x, _)| *x == g);
         return Bindings {
             tap: !slider,
             double_tap: has(AG::DoubleTap) || user(CGesture::DoubleTap),
             hold: has(AG::Hold) || user(CGesture::Hold),
             release: slider,
-            swipe: has(AG::SwipeLeft)
+            swipe: scrubber
+                || has(AG::SwipeLeft)
                 || has(AG::SwipeRight)
                 || user(CGesture::SwipeLeft)
                 || user(CGesture::SwipeRight),

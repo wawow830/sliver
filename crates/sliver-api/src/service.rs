@@ -325,7 +325,9 @@ impl Api {
         match out {
             Some(o) => {
                 self.emit(&o).await?;
-                if what == Interaction::CloseModal {
+                // Optimistic state (a picked segment or candidate, a scroll, a closed modal):
+                // redraw now rather than wait for the app. Slider drags draw locally already.
+                if !matches!(what, Interaction::Slider { .. }) {
                     self.inner.host.changed();
                 }
                 Ok(true)
@@ -445,6 +447,7 @@ impl TouchBar {
             "item:label",
             "item:slider",
             "item:segmented",
+            "item:scrubber",
             "item:progress",
         ]
         .into_iter()

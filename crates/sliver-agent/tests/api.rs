@@ -414,3 +414,184 @@ fn modal_context_covers_the_bar_and_closes() {
     world.published = Published::snapshot(&api.api);
     assert!(world.published.app.is_none() || !world.published.modal);
 }
+
+/// T77: a scrubber shows a page of candidates; a swipe scrolls it (optimistically, at once), the
+/// arrows page, and a tap picks. The app hears `scrolled` and `selected`.
+#[test]
+fn scrubber_scrolls_and_picks() {
+    let Some(bus) = bus() else {
+        eprintln!("dbus-daemon not installed; skipping");
+        return;
+    };
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.addr.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let api = ApiLink::serve(conn, true).unwrap();
+    let app = zbus::blocking::connection::Builder::address(bus.addr.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let app_events = events(&app);
+    let path: OwnedObjectPath = app
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_TOUCHBAR),
+            "CreateContext",
+            &(opts(&[
+                ("provider", Value::from("org.example.Tabs")),
+                ("modal", Value::from(true)),
+            ]),),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    let labels: Vec<String> = (0..10).map(|i| format!("Tab {i}")).collect();
+    let items = vec![opts(&[
+        ("id", Value::from("tabs")),
+        ("type", Value::from("scrubber")),
+        (
+            "candidates",
+            Value::from(
+                labels
+                    .iter()
+                    .map(|l| opts(&[("label", Value::from(l.clone()))]))
+                    .collect::<Vec<_>>(),
+            ),
+        ),
+        ("visible-count", Value::from(4i32)),
+        ("selected", Value::from(1i32)),
+    ])];
+    let warnings: Vec<String> = app
+        .call_method(
+            Some(BUS_NAME),
+            path.as_str(),
+            Some(IFACE_CONTEXT),
+            "SetItems",
+            &(items,),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    api.set_focus(Focus {
+        window: Some(Window {
+            class: "browser".into(),
+            pid: Some(std::process::id()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut world = World::at(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 0).unwrap());
+    world.published = Published::snapshot(&api.api);
+    let loaded = sliver_config::load_str("", std::path::Path::new("."));
+    let mut a = Agent::new(
+        loaded.config,
+        Stylesheet::sliver(),
+        Renderer::new(Fonts::embedded()),
+        Icons::builtin_only(),
+        2008,
+        60,
+    );
+    let shown = |a: &mut Agent, world: &World| {
+        a.render(world);
+        let f = a.frame(Layer::Base).unwrap();
+        f.cells
+            .iter()
+            .filter(|c| !c.key.ends_with("#close"))
+            .map(|c| {
+                let t = match &c.content {
+                    sliver_render::Content::Text(t) => t.clone(),
+                    other => format!("{other:?}"),
+                };
+                if c.checked { format!("[{t}]") } else { t }
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        shown(&mut a, &world),
+        ["Tab 0", "[Tab 1]", "Tab 2", "Tab 3", "›"]
+    );
+
+    // Feed the agent's effects to the API, as the main loop does.
+    let apply = |fx: &[Effect]| {
+        for e in fx {
+            if let Effect::Api {
+                context,
+                item,
+                what,
+            } = e
+            {
+                api.interact(*context, item, *what);
+            }
+        }
+    };
+    let region = |a: &Agent, key_end: &str| {
+        let f = a.frame(Layer::Base).unwrap();
+        f.cells
+            .iter()
+            .position(|c| c.key.ends_with(key_end))
+            .unwrap() as u32
+            + 1
+    };
+    // Swipe left on a candidate: the next page.
+    let r = region(&a, "#tabs.2");
+    let mut fx = a.touch(r, 0, TouchPhase::Down, 600.0, 1_000);
+    fx.extend(a.touch(r, 0, TouchPhase::Move, 560.0, 30_000));
+    fx.extend(a.touch(r, 0, TouchPhase::Move, 480.0, 60_000));
+    fx.extend(a.touch(r, 0, TouchPhase::Up, 480.0, 90_000));
+    fx.extend(a.tick(500_000));
+    apply(&fx);
+    let (item, kind, data) = app_events.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!((item.as_str(), kind.as_str()), ("tabs", "scrolled"));
+    assert_eq!(i32::try_from(&data["offset"]).unwrap(), 4);
+    world.published = Published::snapshot(&api.api);
+    assert_eq!(
+        shown(&mut a, &world),
+        ["‹", "Tab 4", "Tab 5", "Tab 6", "Tab 7", "›"]
+    );
+    // The snapshot from a fresh agent: the live one is mid-transition (cells animate).
+    let mut fresh = Agent::new(
+        sliver_config::load_str("", std::path::Path::new(".")).config,
+        Stylesheet::sliver(),
+        Renderer::new(Fonts::embedded()),
+        Icons::builtin_only(),
+        2008,
+        60,
+    );
+    fresh.render(&world);
+    check("api-scrubber", &fresh.frame(Layer::Base).unwrap().image);
+    // The › arrow: the last page is full, so it stops at 6.
+    let r = region(&a, "#tabs.next");
+    let mut fx = a.touch(r, 0, TouchPhase::Down, 1.0, 1_000_000);
+    fx.extend(a.touch(r, 0, TouchPhase::Up, 1.0, 1_040_000));
+    fx.extend(a.tick(1_500_000));
+    apply(&fx);
+    let (_, kind, data) = app_events.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(kind, "scrolled");
+    assert_eq!(i32::try_from(&data["offset"]).unwrap(), 6);
+    world.published = Published::snapshot(&api.api);
+    assert_eq!(
+        shown(&mut a, &world),
+        ["‹", "Tab 6", "Tab 7", "Tab 8", "Tab 9"]
+    );
+    // Tap a candidate: picked, shown checked at once.
+    let r = region(&a, "#tabs.8");
+    let mut fx = a.touch(r, 0, TouchPhase::Down, 1.0, 2_000_000);
+    fx.extend(a.touch(r, 0, TouchPhase::Up, 1.0, 2_040_000));
+    fx.extend(a.tick(2_500_000));
+    apply(&fx);
+    let (_, kind, data) = app_events.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(kind, "selected");
+    assert_eq!(i32::try_from(&data["index"]).unwrap(), 8);
+    world.published = Published::snapshot(&api.api);
+    assert_eq!(
+        shown(&mut a, &world),
+        ["‹", "Tab 6", "Tab 7", "[Tab 8]", "Tab 9"]
+    );
+}

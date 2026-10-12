@@ -135,11 +135,12 @@ Event(s item, s kind, a{sv} data)
 | `swipe-left` / `swipe-right` | `{}` | only if listed in `gestures` |
 | `double-tap` | `{}` | only if listed in `gestures` (otherwise taps aren't delayed) |
 | `value` | `value` d, `phase` s (`begin`/`change`/`end`) | slider dragged (agent moves it immediately; changes coalesced to ≤ 60/s) |
-| `selected` | `index` i | segmented control |
+| `selected` | `index` i | segmented control, or a scrubber candidate tapped |
+| `scrolled` | `offset` i | scrubber scrolled (swipe or ‹/›); `offset` = first visible candidate. Load more when it nears the end |
 | `popover` | `open` b | popover opened/closed |
 | `closed` | `{}` | modal context dismissed by the user (item is `""`) |
 
-Optimistic state: the agent updates toggles/sliders/segments locally at once. The app is the source
+Optimistic state: the agent updates toggles/sliders/segments/scrubbers locally at once. The app is the source
 of truth and may correct it with `Update`.
 
 Within one client, among visible contexts with the same scope and binding, the **most recently**
@@ -164,13 +165,14 @@ default true).
 | `toggle` | `state` b |
 | `label` | `label` only; not interactive |
 | `slider` | `value` d, `min` d (0), `max` d (1), `step` d (0 = continuous), `label`/`icon` as leading glyph |
-| `segmented` | `segments` aa{sv} (each `label`/`icon`), `selected` i (-1 = none) |
+| `segmented` | `segments` aa{sv} (each `label`/`icon`, ≤ 32), `selected` i (-1 = none) |
+| `scrubber` | `candidates` aa{sv} (each `label`/`icon`, ≤ 256), `selected` i (-1 = none), `offset` i (first visible; the agent clamps it so the last page is full), `visible-count` i (1–24, default 5). A scrollable strip (NSScrubber): browser tabs, text suggestions, emoji. Swiping scrolls a page, ‹/› arrows appear at the ends, a tap picks. Classes `.scrubber-candidate` (`:checked` when selected), `.scrubber-prev`, `.scrubber-next` |
 | `progress` | `value` d in [0,1], or `indeterminate` b |
 | `spacer` | `size` s: `small`, `large`, `flexible` |
 | `group` | `items` aa{sv} (one level of nesting, laid out together, overflow as a unit) |
 | `popover` | `items` aa{sv}; tapping shows them full-width with a close button (NSPopoverTouchBarItem) |
 
-Reserved for later minors: `scrubber`, `color-picker`, `image`. Unknown types are skipped with a warning.
+Reserved for later minors: `color-picker`, `image`. Unknown types are skipped with a warning.
 
 Labels are plain text (no markup), control characters stripped, truncated to 64 chars.
 Emoji are just text.

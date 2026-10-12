@@ -39,6 +39,7 @@ Publish (stays connected; prints `ITEM KIND [KEY=VALUE...]` per event)
   publish [--scope app|status|target] [--provider ID] [--title T] [--target-app APP_ID]
           [--modal] [--stdin] ITEM...
       ITEM  = TYPE:ID[:LABEL]   TYPE = button toggle label slider progress spacer
+                                       segmented scrubber (LABEL = a|b|c, the choices)
       -p ID.KEY=VALUE           set an extra property (repeatable)
       --stdin                   read `ID KEY=VALUE...` lines and apply them as updates
 
@@ -107,6 +108,7 @@ const TYPES: &[&str] = &[
     "progress",
     "spacer",
     "segmented",
+    "scrubber",
 ];
 
 pub fn parse_item(s: &str) -> Result<ItemSpec, String> {

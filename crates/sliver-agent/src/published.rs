@@ -72,6 +72,15 @@ pub enum PubKind {
     },
     /// One segment of a segmented control.
     Segment(i32),
+    /// One visible scrubber candidate: tap picks `index`; a swipe scrolls to `prev`/`next`
+    /// (the offsets one page back/forward).
+    Candidate {
+        index: i32,
+        prev: i32,
+        next: i32,
+    },
+    /// A scrubber's ‹ / › arrow: scroll to this offset.
+    ScrollTo(i32),
     /// The ✕ that closes a modal context.
     Close,
 }
@@ -271,6 +280,56 @@ fn push(
                     *selected == i as i32,
                     &format!("{}.{i}", item.id),
                 ));
+            }
+        }
+        ItemKind::Scrubber {
+            candidates,
+            selected,
+            offset,
+            visible_count,
+        } => {
+            let page = (*visible_count).max(1) as i32;
+            let max = sliver_api::item::scrubber_max_offset(candidates.len(), *visible_count);
+            let offset = (*offset).clamp(0, max);
+            let (prev, next) = ((offset - page).max(0), (offset + page).min(max));
+            let arrow = |text: &str, to: i32, which: &str| {
+                let mut c = base(
+                    Content::Text(text.into()),
+                    Some(PubKind::ScrollTo(to)),
+                    false,
+                    &format!("{}.{which}", item.id),
+                );
+                c.classes.push(format!("scrubber-{which}"));
+                c
+            };
+            if offset > 0 {
+                out.push(arrow("‹", prev, "prev"));
+            }
+            for (i, cand) in candidates
+                .iter()
+                .enumerate()
+                .skip(offset as usize)
+                .take(page as usize)
+            {
+                let icon = cand
+                    .icon
+                    .as_deref()
+                    .and_then(|n| icons.get(n, None, icon_size));
+                let mut c = base(
+                    label_content(icon, cand.label.clone().unwrap_or_default()),
+                    Some(PubKind::Candidate {
+                        index: i as i32,
+                        prev,
+                        next,
+                    }),
+                    *selected == i as i32,
+                    &format!("{}.{i}", item.id),
+                );
+                c.classes.push("scrubber-candidate".into());
+                out.push(c);
+            }
+            if offset < max {
+                out.push(arrow("›", next, "next"));
             }
         }
         ItemKind::Group { items } => {

@@ -338,7 +338,10 @@ pub enum Interaction {
         value: f64,
         phase: Phase,
     },
+    /// A segment or scrubber candidate picked.
     Select(i32),
+    /// A scrubber scrolled so its first visible candidate is this one (clamped).
+    Scroll(i32),
     Popover(bool),
     /// The ✕ on a modal context.
     CloseModal,
@@ -773,6 +776,39 @@ impl Registry {
                 *selected = i;
                 out(item_id, "selected", one("index", Prop::Int(i.into())))
             }
+            (
+                Interaction::Select(i),
+                ItemKind::Scrubber {
+                    candidates,
+                    selected,
+                    ..
+                },
+            ) => {
+                if i < -1 || i >= candidates.len() as i32 {
+                    return None;
+                }
+                *selected = i;
+                out(item_id, "selected", one("index", Prop::Int(i.into())))
+            }
+            (
+                Interaction::Scroll(to),
+                ItemKind::Scrubber {
+                    candidates,
+                    offset,
+                    visible_count,
+                    ..
+                },
+            ) => {
+                let to = to.clamp(
+                    0,
+                    crate::item::scrubber_max_offset(candidates.len(), *visible_count),
+                );
+                if to == *offset {
+                    return None;
+                }
+                *offset = to;
+                out(item_id, "scrolled", one("offset", Prop::Int(to.into())))
+            }
             (Interaction::Popover(open), ItemKind::Popover { .. }) => {
                 out(item_id, "popover", one("open", Prop::Bool(open)))
             }
@@ -1184,6 +1220,57 @@ mod tests {
         let ctx = w.reg.context(c).unwrap();
         assert_eq!(ctx.find("a").unwrap().label.as_deref(), Some("New"));
         assert!(ctx.find("b").unwrap().icon_data.is_none());
+    }
+
+    #[test]
+    fn scrubber_picks_and_scrolls() {
+        let mut w = World::new();
+        w.client(":1.1", 100, ProcIdentity::default());
+        let c = w
+            .reg
+            .create_context(":1.1", &Props::new(), w.now)
+            .unwrap()
+            .0;
+        let cands = (0..12)
+            .map(|i| Prop::Map(props(&[("label", s(&format!("tab {i}")))])))
+            .collect();
+        let items = [props(&[
+            ("id", s("tabs")),
+            ("type", s("scrubber")),
+            ("candidates", Prop::List(cands)),
+            ("visible-count", Prop::Int(5)),
+            ("offset", Prop::Int(99)),
+        ])];
+        w.reg.set_items(":1.1", c, &items, w.now).unwrap();
+        let scrub = |w: &World| match &w.reg.context(c).unwrap().items[0].kind {
+            ItemKind::Scrubber {
+                selected, offset, ..
+            } => (*selected, *offset),
+            k => panic!("{k:?}"),
+        };
+        assert_eq!(
+            scrub(&w),
+            (-1, 7),
+            "offset clamped so the last page is full"
+        );
+        let ev = w.reg.interact(c, "tabs", Interaction::Select(9)).unwrap();
+        assert_eq!(
+            (ev.kind, ev.data.get("index")),
+            ("selected", Some(&Prop::Int(9)))
+        );
+        assert!(w.reg.interact(c, "tabs", Interaction::Select(12)).is_none());
+        let ev = w.reg.interact(c, "tabs", Interaction::Scroll(2)).unwrap();
+        assert_eq!(
+            (ev.kind, ev.data.get("offset")),
+            ("scrolled", Some(&Prop::Int(2)))
+        );
+        assert_eq!(scrub(&w), (9, 2));
+        // Past the end clamps; no change, no event.
+        assert!(w.reg.interact(c, "tabs", Interaction::Scroll(-4)).is_some());
+        assert!(w.reg.interact(c, "tabs", Interaction::Scroll(-1)).is_none());
+        assert_eq!(scrub(&w), (9, 0));
+        w.reg.interact(c, "tabs", Interaction::Scroll(50)).unwrap();
+        assert_eq!(scrub(&w), (9, 7));
     }
 
     #[test]

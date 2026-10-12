@@ -32,6 +32,12 @@ pub mod limits {
     pub const ICON_BYTES: usize = 256 * 1024;
     pub const ICON_BYTES_PER_CONTEXT: usize = 512 * 1024;
     pub const LABEL_CHARS: usize = 64;
+    /// Segments of a `segmented` item.
+    pub const SEGMENTS: usize = 32;
+    /// Candidates of a `scrubber` item.
+    pub const CANDIDATES: usize = 256;
+    /// A scrubber shows at most this many candidates at once.
+    pub const SCRUBBER_VISIBLE: u32 = 24;
     /// Sustained calls per second before a client is throttled.
     pub const CALLS_PER_SEC: u32 = 120;
 }

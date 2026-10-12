@@ -86,13 +86,23 @@ impl Item {
         Self::typed("spacer", id).set("size", size)
     }
     pub fn segmented(id: &str, labels: &[&str], selected: i32) -> Item {
-        let segs: Vec<HashMap<String, OwnedValue>> = labels
+        Self::typed("segmented", id)
+            .set("segments", Self::labels(labels))
+            .set("selected", selected)
+    }
+    /// A scrollable strip of candidates (tabs, suggestions): swipe scrolls, tap picks
+    /// (`selected` event); `scrolled` events report the first visible one.
+    pub fn scrubber(id: &str, labels: &[&str], selected: i32) -> Item {
+        Self::typed("scrubber", id)
+            .set("candidates", Self::labels(labels))
+            .set("selected", selected)
+    }
+    /// `[{label}, …]`, the shape of `segments` and `candidates`.
+    pub fn labels(labels: &[&str]) -> Vec<HashMap<String, OwnedValue>> {
+        labels
             .iter()
             .map(|l| HashMap::from([("label".to_owned(), ov(Value::from(*l)))]))
-            .collect();
-        Self::typed("segmented", id)
-            .set("segments", segs)
-            .set("selected", selected)
+            .collect()
     }
     pub fn group(id: &str, items: Vec<Item>) -> Item {
         Self::typed("group", id).set("items", items.into_iter().map(|i| i.0).collect::<Vec<_>>())

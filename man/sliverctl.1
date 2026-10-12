@@ -179,7 +179,32 @@ one of
 .BR slider ,
 .BR progress ,
 .BR spacer ,
-.BR segmented .
+.BR segmented ,
+.BR scrubber .
+For
+.B segmented
+and
+.BR scrubber ,
+.I label
+lists the choices separated by
+.BR | ,
+for example
+.BR "scrubber:tabs:Inbox|Drafts|Sent" ;
+the same goes for
+.B segments=
+and
+.B candidates=
+in
+.B \-p
+and
+.B \-\-stdin
+updates.
+A scrubber shows a few candidates at a time
+.RB ( visible\-count ,
+default 5): swiping it scrolls (event
+.BR "scrolled offset=" \fIn\fP ),
+\(fo and \(fc arrows page, and a tap picks one (event
+.BR "selected index=" \fIn\fP ).
 .TP
 .BR \-\-scope " " app | status | target
 Where the items show.

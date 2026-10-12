@@ -76,6 +76,16 @@ fn value(v: &Val) -> Value<'static> {
     }
 }
 
+/// A property value; `segments`/`candidates` take `a|b|c` (one label each).
+fn prop_value(key: &str, v: &Val) -> Value<'static> {
+    match (key, v) {
+        ("segments" | "candidates", Val::Str(s)) => {
+            Value::from(Item::labels(&s.split('|').collect::<Vec<_>>()))
+        }
+        _ => value(v),
+    }
+}
+
 fn owned(v: Value<'_>) -> OwnedValue {
     OwnedValue::try_from(v).expect("plain values")
 }
@@ -258,14 +268,29 @@ fn item(spec: &ItemSpec) -> Item {
         "slider" => Item::slider(&spec.id, 0.0, 1.0, 0.0),
         "progress" => Item::progress(&spec.id, 0.0),
         "spacer" => Item::spacer(&spec.id, "small"),
-        "segmented" => Item::segmented(&spec.id, &[], -1),
+        // The LABEL lists the segments / candidates: `scrubber:tabs:one|two|three`.
+        "segmented" | "scrubber" => {
+            let labels: Vec<&str> = spec
+                .label
+                .as_deref()
+                .map_or_else(Vec::new, |l| l.split('|').collect());
+            if spec.ty == "scrubber" {
+                Item::scrubber(&spec.id, &labels, -1)
+            } else {
+                Item::segmented(&spec.id, &labels, -1)
+            }
+        }
         _ => Item::button(&spec.id),
     };
-    if let Some(l) = &spec.label {
+    if let Some(l) = spec
+        .label
+        .as_ref()
+        .filter(|_| !matches!(spec.ty.as_str(), "segmented" | "scrubber"))
+    {
         it = it.label(l);
     }
     for (k, v) in &spec.props {
-        it = it.set(k, value(v));
+        it = it.set(k, prop_value(k, v));
     }
     it
 }
@@ -307,7 +332,7 @@ fn publish(conn: Connection, p: Publish) -> Result<ExitCode, String> {
                     Ok(Some((id, kv))) => {
                         let mut props = Item::props();
                         for (k, v) in &kv {
-                            props = props.set(k, value(v));
+                            props = props.set(k, prop_value(k, v));
                         }
                         match ctx.update(&id, props) {
                             Ok(ws) => ws.iter().for_each(|w| eprintln!("sliverctl: warning: {w}")),

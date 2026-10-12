@@ -93,6 +93,14 @@ pub enum ItemKind {
         segments: Vec<Segment>,
         selected: i32,
     },
+    /// A scrollable strip of candidates (NSScrubber): tabs, text suggestions. The agent shows
+    /// `visible_count` of them from `offset`; swiping scrolls, tapping picks.
+    Scrubber {
+        candidates: Vec<Segment>,
+        selected: i32,
+        offset: i32,
+        visible_count: u32,
+    },
     Progress {
         value: f64,
         indeterminate: bool,
@@ -116,6 +124,7 @@ impl ItemKind {
             ItemKind::Label => "label",
             ItemKind::Slider { .. } => "slider",
             ItemKind::Segmented { .. } => "segmented",
+            ItemKind::Scrubber { .. } => "scrubber",
             ItemKind::Progress { .. } => "progress",
             ItemKind::Spacer { .. } => "spacer",
             ItemKind::Group { .. } => "group",
@@ -320,6 +329,7 @@ fn type_keys(t: &str) -> &'static [&'static str] {
         "toggle" => &["state"],
         "slider" => &["value", "min", "max", "step"],
         "segmented" => &["segments", "selected"],
+        "scrubber" => &["candidates", "selected", "offset", "visible-count"],
         "progress" => &["value", "indeterminate"],
         "spacer" => &["size"],
         "group" | "popover" => &["items"],
@@ -357,6 +367,12 @@ fn parse_item(p: &Props, depth: u8, w: &mut Warnings) -> Result<Option<Item>, Pa
         "segmented" => ItemKind::Segmented {
             segments: Vec::new(),
             selected: -1,
+        },
+        "scrubber" => ItemKind::Scrubber {
+            candidates: Vec::new(),
+            selected: -1,
+            offset: 0,
+            visible_count: DEFAULT_SCRUBBER_VISIBLE,
         },
         "progress" => ItemKind::Progress {
             value: 0.0,
@@ -634,24 +650,35 @@ fn apply_kind_prop(item: &mut Item, k: &str, v: &Prop, w: &mut Warnings) {
             None => bad(w),
         },
         (ItemKind::Segmented { segments, .. }, "segments") => match v {
-            Prop::List(l) if l.len() <= 32 => {
-                *segments =
-                    l.iter()
-                        .map(|s| match s {
-                            Prop::Map(m) => Segment {
-                                label: m.get("label").and_then(Prop::as_str).map(|s| {
-                                    sanitize(s, limits::LABEL_CHARS, "segment label", &id, w)
-                                }),
-                                icon: m.get("icon").and_then(Prop::as_str).map(str::to_owned),
-                            },
-                            _ => Segment::default(),
-                        })
-                        .collect()
+            Prop::List(l) if l.len() <= limits::SEGMENTS => {
+                *segments = segment_list(l, "segment label", &id, w);
             }
             _ => bad(w),
         },
         (ItemKind::Segmented { selected, .. }, "selected") => match v.as_i64() {
-            Some(i) => *selected = i.clamp(-1, 31) as i32,
+            Some(i) => *selected = i.clamp(-1, limits::SEGMENTS as i64 - 1) as i32,
+            None => bad(w),
+        },
+        (ItemKind::Scrubber { candidates, .. }, "candidates") => match v {
+            Prop::List(l) if l.len() <= limits::CANDIDATES => {
+                *candidates = segment_list(l, "candidate label", &id, w);
+            }
+            Prop::List(_) => w.push(format!(
+                "item {id:?}: more than {} candidates, ignored",
+                limits::CANDIDATES
+            )),
+            _ => bad(w),
+        },
+        (ItemKind::Scrubber { selected, .. }, "selected") => match v.as_i64() {
+            Some(i) => *selected = i.clamp(-1, limits::CANDIDATES as i64 - 1) as i32,
+            None => bad(w),
+        },
+        (ItemKind::Scrubber { offset, .. }, "offset") => match v.as_i64() {
+            Some(i) => *offset = i.clamp(0, limits::CANDIDATES as i64) as i32,
+            None => bad(w),
+        },
+        (ItemKind::Scrubber { visible_count, .. }, "visible-count") => match v.as_i64() {
+            Some(i) => *visible_count = i.clamp(1, limits::SCRUBBER_VISIBLE.into()) as u32,
             None => bad(w),
         },
         (ItemKind::Progress { value, .. }, "value") => match v.as_f64() {
@@ -672,11 +699,46 @@ fn apply_kind_prop(item: &mut Item, k: &str, v: &Prop, w: &mut Warnings) {
         },
         _ => w.push(format!("item {id:?}: {k:?} ignored")),
     }
-    if let ItemKind::Segmented { segments, selected } = &mut item.kind
-        && *selected >= segments.len() as i32
-    {
-        *selected = -1;
+    match &mut item.kind {
+        ItemKind::Segmented { segments, selected } if *selected >= segments.len() as i32 => {
+            *selected = -1;
+        }
+        ItemKind::Scrubber {
+            candidates,
+            selected,
+            offset,
+            visible_count,
+        } => {
+            if *selected >= candidates.len() as i32 {
+                *selected = -1;
+            }
+            *offset = (*offset).min(scrubber_max_offset(candidates.len(), *visible_count));
+        }
+        _ => {}
     }
+}
+
+/// How many candidates a scrubber shows when the app doesn't say (`visible-count`).
+pub const DEFAULT_SCRUBBER_VISIBLE: u32 = 5;
+
+/// The largest useful `offset`: the last page is full.
+pub fn scrubber_max_offset(candidates: usize, visible: u32) -> i32 {
+    candidates.saturating_sub(visible as usize) as i32
+}
+
+fn segment_list(l: &[Prop], what: &str, id: &str, w: &mut Warnings) -> Vec<Segment> {
+    l.iter()
+        .map(|s| match s {
+            Prop::Map(m) => Segment {
+                label: m
+                    .get("label")
+                    .and_then(Prop::as_str)
+                    .map(|s| sanitize(s, limits::LABEL_CHARS, what, id, w)),
+                icon: m.get("icon").and_then(Prop::as_str).map(str::to_owned),
+            },
+            _ => Segment::default(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
