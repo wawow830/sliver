@@ -8,43 +8,53 @@ use std::time::{Duration, Instant};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fs::inotify;
 
-/// Returns once `path` exists, or after `max` (a safety net in case a watch misses something).
-pub fn wait_for_path(path: &Path, max: Duration) {
-    let deadline = Instant::now() + max;
+/// Returns once `path` exists, or after `max` if given (`None`: wait as long as it takes, with
+/// no wakeups at all while nothing changes).
+///
+/// It can't miss the path: the watch is on the nearest existing ancestor and is re-armed every
+/// time something changes there (a directory on the way appeared), the path is re-checked
+/// after each arming, and a watched directory being deleted or moved (`DELETE_SELF`,
+/// `MOVE_SELF`) also wakes us to re-arm on whatever exists now.
+pub fn wait_for_path(path: &Path, max: Option<Duration>) {
+    let deadline = max.map(|m| Instant::now() + m);
     while !path.exists() {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
+        let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        if left.is_some_and(|l| l.is_zero()) {
             return;
         }
-        // Watch the nearest existing ancestor: the socket's directory may not exist yet
-        // (`/run/sliver` is created when sliverd.socket starts).
+        // Only if inotify itself fails (not expected): retry slowly.
+        let fallback = left
+            .unwrap_or(Duration::from_secs(60))
+            .min(Duration::from_secs(60));
         let Some(dir) = nearest_existing_dir(path) else {
-            std::thread::sleep(left.min(Duration::from_secs(60)));
+            std::thread::sleep(fallback);
             continue;
         };
         let Ok(fd) = inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK)
         else {
-            std::thread::sleep(left.min(Duration::from_secs(60)));
+            std::thread::sleep(fallback);
             continue;
         };
         let flags = inotify::WatchFlags::CREATE
             | inotify::WatchFlags::MOVED_TO
-            | inotify::WatchFlags::ATTRIB;
+            | inotify::WatchFlags::ATTRIB
+            | inotify::WatchFlags::DELETE_SELF
+            | inotify::WatchFlags::MOVE_SELF;
         if inotify::add_watch(&fd, &dir, flags).is_err() {
-            std::thread::sleep(left.min(Duration::from_secs(60)));
+            std::thread::sleep(fallback);
             continue;
         }
         // Re-check after arming the watch, so a creation in between isn't missed.
         if path.exists() {
             return;
         }
-        let timeout = Timespec {
-            tv_sec: left.as_secs() as i64,
-            tv_nsec: left.subsec_nanos() as i64,
-        };
+        let timeout = left.map(|l| Timespec {
+            tv_sec: l.as_secs() as i64,
+            tv_nsec: l.subsec_nanos() as i64,
+        });
         let mut fds = [PollFd::new(&fd, PollFlags::IN)];
-        let _ = poll(&mut fds, Some(&timeout));
-        // Something changed in `dir` (or time's up): loop and look again.
+        let _ = poll(&mut fds, timeout.as_ref());
+        // Something changed in or to `dir` (or time's up): look again and re-arm.
     }
 }
 
@@ -76,7 +86,7 @@ mod tests {
             std::fs::write(&t, b"").unwrap();
         });
         let start = Instant::now();
-        wait_for_path(&target, Duration::from_secs(10));
+        wait_for_path(&target, Some(Duration::from_secs(10)));
         let took = start.elapsed();
         maker.join().unwrap();
         assert!(target.exists());
@@ -87,7 +97,33 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         // Times out when nothing comes.
         let start = Instant::now();
-        wait_for_path(&root.join("never/there"), Duration::from_millis(150));
+        wait_for_path(&root.join("never/there"), Some(Duration::from_millis(150)));
         assert!(start.elapsed() >= Duration::from_millis(150));
+    }
+
+    #[test]
+    fn survives_the_watched_directory_being_replaced() {
+        let root = std::env::temp_dir().join(format!("sliver-wait2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("run")).unwrap();
+        let target = root.join("run/sliverd.sock");
+        let (r, t) = (root.clone(), target.clone());
+        let maker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            std::fs::remove_dir(r.join("run")).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            std::fs::create_dir(r.join("run")).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            std::fs::write(&t, b"").unwrap();
+        });
+        let start = Instant::now();
+        wait_for_path(&target, Some(Duration::from_secs(10)));
+        maker.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

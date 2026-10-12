@@ -520,8 +520,8 @@ fn main() {
                 }
                 if e.kind() == std::io::ErrorKind::NotFound {
                     // No socket at all (tiny-dfr drives the bar): sleep on inotify until it
-                    // appears, with a rare safety re-check. No polling timer (invariant 3).
-                    sliver_agent::wait::wait_for_path(&a.socket, Duration::from_secs(300));
+                    // appears. Zero wakeups while idle (invariant 3).
+                    sliver_agent::wait::wait_for_path(&a.socket, None);
                     backoff = Duration::from_millis(250);
                     continue;
                 }
