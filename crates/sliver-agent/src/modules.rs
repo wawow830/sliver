@@ -463,6 +463,25 @@ fn cells_in(
                 c.pass_through = m.common.pass_through;
                 c.key = format!("{prefix}{}", c.key);
             }
+            // `[modules."app/<provider>#<item>"]` applies here too (api.md §3.1).
+            if !world.published.configured.is_empty() {
+                let cells: Vec<Cell> = out.drain(start..).collect();
+                for cell in cells {
+                    let conf = world.published.configured.get(&cell.id);
+                    let ctx = cell
+                        .id
+                        .strip_prefix("app/")
+                        .and_then(|r| r.split('#').next())
+                        .and_then(|p| world.published.find(p))
+                        .map(|(c, _)| c);
+                    match (conf, ctx) {
+                        (Some(conf), Some(ctx)) => {
+                            out.extend(decorate_published(conf, ctx, cell, icons, icon_size))
+                        }
+                        _ => out.push(cell),
+                    }
+                }
+            }
             // A sized slot (`width` = px or fill): the items lay out inside it and a trailing
             // spacer reserves the rest. The agent measures a px slot and trims the spacer, or
             // drops the lowest-priority items if they don't fit (`Agent::fit_slots`).
@@ -2581,73 +2600,83 @@ fn pinned_app(
     };
     let start = out.len();
     crate::published::pinned_cells(ctx, item, class, icons, icon_size, out);
-    let c = &m.common;
-    let on: Vec<(Gesture, Action)> = c.on.iter().map(|(g, a)| (*g, a.clone())).collect();
-    let mut keep = Vec::new();
-    for mut cell in out.drain(start..) {
-        cell.classes.extend(m.classes.iter().cloned());
-        cell.on = on.clone();
-        cell.pass_through = c.pass_through;
-        if c.width != sliver_config::Width::Auto {
-            cell.width = match c.width {
-                sliver_config::Width::Auto => Width::Auto,
-                sliver_config::Width::Fixed(px) => Width::Fixed(px as f32),
-                sliver_config::Width::Fill(n) => Width::Fill(n),
-            };
-        }
-        // `format` and friends apply to the item's values (sliders keep their track).
-        let it = cell.published.as_ref().and_then(|p| {
-            let id = p.item.as_str();
-            ctx.items.iter().find(|i| i.id == id).or_else(|| {
-                ctx.items.iter().find_map(|i| match &i.kind {
-                    sliver_api::item::ItemKind::Group { items } => {
-                        items.iter().find(|c| c.id == id)
-                    }
-                    _ => None,
-                })
-            })
-        });
-        if (c.format.is_some() || c.format_alt.is_some() || c.format_icons.is_some())
-            && let Some(it) = it
-            && !matches!(cell.content, Content::Slider { .. })
-        {
-            let (values, pct) = crate::published::item_values(it);
-            let st = State {
-                percentage: pct,
-                ..State::default()
-            };
-            let f = format_module(c, "{text}", &st, &values);
-            if f.hidden {
-                continue;
-            }
-            cell.classes.extend(f.classes);
-            let icon = f
-                .icon
-                .map(|i| i.0)
-                .or_else(|| c.icon.clone())
-                .and_then(|n| {
-                    icons.get(
-                        &n,
-                        c.icon_theme.as_deref(),
-                        c.icon_size.unwrap_or(icon_size),
-                    )
-                })
-                .or(match &cell.content {
-                    Content::Icon(i) | Content::IconText(i, _) | Content::IconMarkup(i, _) => {
-                        Some(i.clone())
-                    }
-                    _ => None,
-                });
-            cell.content = match (icon, f.text.is_empty()) {
-                (Some(i), true) => Content::Icon(i),
-                (Some(i), false) => Content::IconMarkup(i, f.text),
-                (None, false) => Content::Markup(f.text),
-                (None, true) => Content::Blank,
-            };
-        }
-        keep.push(cell);
+    let cells: Vec<Cell> = out.drain(start..).collect();
+    for cell in cells {
+        out.extend(decorate_published(m, ctx, cell, icons, icon_size));
     }
-    out.extend(keep);
+}
+
+/// A published item's cell with a module's config on top: classes, `on-*` bindings
+/// (`pass-through`), `width`, and `format`/`format-icons`/`states` over the item's values
+/// (sliders keep their track). `None` when the format hides it.
+fn decorate_published(
+    m: &ModuleInstance,
+    ctx: &crate::published::PubContext,
+    mut cell: Cell,
+    icons: &mut Icons,
+    icon_size: u32,
+) -> Option<Cell> {
+    let c = &m.common;
+    cell.classes.extend(m.classes.iter().cloned());
+    if !c.on.is_empty() {
+        cell.on = c.on.iter().map(|(g, a)| (*g, a.clone())).collect();
+        cell.pass_through = c.pass_through;
+    }
+    if c.width != sliver_config::Width::Auto {
+        cell.width = match c.width {
+            sliver_config::Width::Auto => Width::Auto,
+            sliver_config::Width::Fixed(px) => Width::Fixed(px as f32),
+            sliver_config::Width::Fill(n) => Width::Fill(n),
+        };
+    }
+    let it = cell.published.as_ref().and_then(|p| {
+        let id = p.item.as_str();
+        ctx.items.iter().find(|i| i.id == id).or_else(|| {
+            ctx.items.iter().find_map(|i| match &i.kind {
+                sliver_api::item::ItemKind::Group { items } => items.iter().find(|c| c.id == id),
+                _ => None,
+            })
+        })
+    });
+    if (c.format.is_some() || c.format_alt.is_some() || c.format_icons.is_some())
+        && let Some(it) = it
+        && !matches!(cell.content, Content::Slider { .. })
+    {
+        let (values, pct) = crate::published::item_values(it);
+        let st = State {
+            percentage: pct,
+            ..State::default()
+        };
+        let f = format_module(c, "{text}", &st, &values);
+        if f.hidden {
+            return None;
+        }
+        cell.classes.extend(f.classes);
+        let icon = f
+            .icon
+            .map(|i| i.0)
+            .or_else(|| c.icon.clone())
+            .and_then(|n| {
+                icons.get(
+                    &n,
+                    c.icon_theme.as_deref(),
+                    c.icon_size.unwrap_or(icon_size),
+                )
+            })
+            .or(match &cell.content {
+                Content::Icon(i) | Content::IconText(i, _) | Content::IconMarkup(i, _) => {
+                    Some(i.clone())
+                }
+                _ => None,
+            });
+        cell.content = match (icon, f.text.is_empty()) {
+            (Some(i), true) => Content::Icon(i),
+            (Some(i), false) => Content::IconMarkup(i, f.text),
+            (None, false) => Content::Markup(f.text),
+            (None, true) => Content::Blank,
+        };
+    }
+    Some(cell)
 }
 
 fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell {

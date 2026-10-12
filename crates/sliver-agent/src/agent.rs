@@ -401,8 +401,22 @@ impl Agent {
         for z in &r.zones {
             pinned(&z.modules, &mut pins);
         }
+        // Items configured by id (`[modules."app/…#…"]`) but shown in a placeholder.
+        let configured: std::collections::HashMap<String, sliver_config::ModuleInstance> = self
+            .config
+            .modules
+            .keys()
+            .filter(|id| id.kind == "app" && id.instance.is_some())
+            .filter(|id| {
+                !pins.iter().any(|(p, i)| {
+                    Some(p) == id.name.as_ref()
+                        && i.as_ref().is_none_or(|i| Some(i) == id.instance.as_ref())
+                })
+            })
+            .filter_map(|id| Some((id.to_string(), self.config.instance(id, &self.ctx)?)))
+            .collect();
         let mut world_pushed;
-        let world = if self.pushed.is_empty() && pins.is_empty() {
+        let world = if self.pushed.is_empty() && pins.is_empty() && configured.is_empty() {
             world
         } else {
             world_pushed = world.clone();
@@ -413,6 +427,7 @@ impl Agent {
                     .or_insert_with(|| v.clone());
             }
             world_pushed.published.pinned = pins.into_iter().collect();
+            world_pushed.published.configured = configured;
             &world_pushed
         };
         // A modal app context covers everything but the user's first zone (api.md §4).

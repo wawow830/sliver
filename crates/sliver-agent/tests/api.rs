@@ -1114,6 +1114,8 @@ modules = ["status-items"]
 format = "{{minutes}}m left"
 class = "pomo"
 on-hold = {{ key = "F5" }}
+[modules."app/org.example.Pomo#skip"]   # not placed: still applies inside Status items
+format = "⏭ {{text}}"
 {extra}
 "#
             ),
@@ -1151,9 +1153,9 @@ on-hold = {{ key = "F5" }}
                 "app/org.example.Pomo#timer".to_owned(),
                 "25m left".to_owned()
             ),
-            ("app/org.example.Pomo#skip".to_owned(), "Skip".to_owned()),
+            ("app/org.example.Pomo#skip".to_owned(), "⏭ Skip".to_owned()),
         ],
-        "timer pinned in main with the user's format; only skip left in Status items"
+        "timer pinned in main with the user's format; skip left in Status items, with its own format"
     );
     let timer = &f.cells[f
         .cells

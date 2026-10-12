@@ -27,6 +27,9 @@ pub struct Published {
     /// Items the layout places itself (`app/<provider>#<item>`, or `app/<provider>` for a whole
     /// context): they leave App controls / Status items (api.md §3.1). `None` = every item.
     pub pinned: std::collections::HashSet<(String, Option<String>)>,
+    /// `[modules."app/<provider>#<item>"]` blocks for items that show in a placeholder: their
+    /// format, classes and bindings still apply (api.md §3.1). Keyed by module id.
+    pub configured: std::collections::HashMap<String, sliver_config::ModuleInstance>,
 }
 
 impl Published {
@@ -46,6 +49,7 @@ impl Published {
             modal: r.modal,
             status: r.status.into_iter().filter_map(get).collect(),
             pinned: Default::default(),
+            configured: Default::default(),
         }
     }
 
