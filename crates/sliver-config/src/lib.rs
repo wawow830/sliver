@@ -22,6 +22,7 @@
 mod action;
 mod condition;
 mod diag;
+pub mod format;
 mod keys;
 mod keys_table;
 mod load;
@@ -35,6 +36,7 @@ mod values;
 pub use action::{Action, DBusCall, LayerMode, MAX_MACRO_STEPS, MAX_MACRO_TIME};
 pub use condition::{CONTEXT_KEYS, Condition, Context, CtxValue, Matcher, canonical_key};
 pub use diag::{Diagnostics, Issue};
+pub use format::{FmtValue, Formatted, IconRef, State, Template, ValueMap, Values, format_module};
 pub use keys::Key;
 pub use load::{Loaded, find_config, load, load_file, load_str, search_path};
 pub use model::{

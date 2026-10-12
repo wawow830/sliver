@@ -152,6 +152,18 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
 | `pass-through` | bool | (none) | App-published modules (`app/<provider>#<id>`): also send the gesture to the app when a user `on-*` binding exists. Default false: the user binding replaces the app's event (api.md §5). |
 | `interval` | duration or `"once"` | same | For modules that poll. The floor is 100 ms and anything under 1 s gets a warning (invariant 3). |
 
+**Format semantics** (`sliver_config::format`, same as waybar):
+- The format is chosen in this order: `format-alt` (if toggled), `format-<status>-<state>`,
+  `format-<status>`, `format-<state>`, `format`, then the module default.
+- `states` use *lower is worse* for battery-like modules (`warning = 30` means ≤ 30%) and *higher
+  is worse* for cpu, memory and temperature.
+- An array `format-icons` is indexed by `floor(pct / (100 / n))`. A table is looked up by alt,
+  then status, then state, then `default`.
+- `{icon}` that resolves to an image renders as empty text, and the image goes to the renderer.
+- Specs: the module's own first (strftime for the clock), else `[[fill]align][0][width][.precision]`.
+- Unknown placeholders render literally. `max-length` cuts with `…`, and a bad format string is a
+  validation error.
+
 Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar compat).
 
 ### Built-in module types (v1 target set)
@@ -348,7 +360,7 @@ These are the selectors sliver guarantees, mirroring waybar:
 | G2 Module runtime for `custom/*` with the shared output contract for built-ins | T21 |
 | G3 Stylesheet engine and selectors from §7 | T22 |
 | G4 Markup subset in format strings (`<b>`, `<i>`, `<span color=…>`) | new |
-| G5 `format` engine: placeholders, `{name:spec}`, format-icons/states/alt/status resolution, shared by all modules | new |
+| G5 `format` engine: placeholders, `{name:spec}`, format-icons/states/alt/status resolution, shared by all modules | done: `sliver_config::format` (T25) |
 | G6 StatusNotifierItem host → `status-items`/`tray` | new |
 | G7 Hot reload watcher + last-good fallback + `sliverctl reload`/SIGUSR2 | new |
 | G8 waybar module-block importer (JSONC → TOML, alias names) | new, P3 |

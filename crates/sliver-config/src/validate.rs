@@ -161,6 +161,25 @@ impl Config {
         let block = self.module_block(m);
         let (common, rest) = Common::parse(&block, path, d);
         check_type_keys(id, &rest, path, d);
+        let formats = [
+            ("format", common.format.as_ref()),
+            ("format-alt", common.format_alt.as_ref()),
+            ("detail-format", common.detail_format.as_ref()),
+        ];
+        let variants = common
+            .format_variants
+            .iter()
+            .map(|(k, v)| (k.as_str(), Some(v)));
+        for (key, f) in formats.into_iter().chain(variants) {
+            if let Some(Err(e)) = f.map(|f| crate::format::Template::parse(f)) {
+                let key = if common.format_variants.contains_key(key) {
+                    format!("format-{key}")
+                } else {
+                    key.to_owned()
+                };
+                d.error(join(path, &key), e);
+            }
+        }
         let width = if block.contains_key("width") {
             common.width
         } else {
@@ -409,6 +428,16 @@ mod tests {
         ] {
             assert!(paths.contains(&p), "{p} in {paths:?}");
         }
+    }
+
+    #[test]
+    fn bad_format_strings_are_errors() {
+        let d = check(
+            "[modules.battery]\nformat-charging = \"{capacity\"\n[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"battery\"]",
+            HERE,
+        );
+        assert_eq!(d.errors.len(), 1, "{d:#?}");
+        assert_eq!(d.errors[0].path, "modules.battery.format-charging");
     }
 
     #[test]
