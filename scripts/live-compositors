@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Run the checks against real compositors (sway, labwc, niri, gnome-shell), all headless, none
+# Run the checks against real compositors (sway, labwc, river-classic, niri, gnome-shell), all headless, none
 # needing root. Fetches what is missing into PREFIX (default target/test-compositors) with
-# `dnf download --resolve` + rpm2cpio, then runs integration/{sway,labwc,niri,gnome-shell}/test.sh.
+# `dnf download --resolve` + rpm2cpio, then runs integration/{sway,labwc,river,niri,gnome-shell}/test.sh.
 # About 400 MB of rpms the first time; later runs reuse them. Not part of scripts/check (slow,
 # needs network the first time).
 #
-#   scripts/live-compositors [--fetch-only] [sway|labwc|niri|gnome-shell ...]
+#   scripts/live-compositors [--fetch-only] [sway|labwc|river|niri|gnome-shell ...]
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 prefix=${SLIVER_TEST_ROOT:-$root/target/test-compositors}
@@ -17,7 +17,7 @@ for a in "$@"; do
         *) want+=("$a") ;;
     esac
 done
-[ ${#want[@]} -gt 0 ] || want=(sway labwc niri gnome-shell)
+[ ${#want[@]} -gt 0 ] || want=(sway labwc river niri gnome-shell)
 
 fetch() { # name, packages...
     local name=$1; shift
@@ -35,6 +35,7 @@ for c in "${want[@]}"; do
     case $c in
         sway)        fetch sway sway foot wlroots0.19 ;;
         labwc)       fetch labwc labwc foot wlroots0.19 ;;
+        river)       fetch river river-classic foot ;;
         niri)        fetch niri niri sway foot wlroots0.19 ;;
         gnome-shell) fetch gnome-shell gnome-shell mutter gjs gsettings-desktop-schemas ;;
         *) echo "unknown compositor $c"; exit 2 ;;

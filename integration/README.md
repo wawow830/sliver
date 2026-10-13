@@ -73,7 +73,7 @@ The agent's taskbar actions go back like this:
 `target/test-compositors/` without root (`dnf download --resolve` + `rpm2cpio`) and runs
 `integration/<name>/test.sh` against it, headless, on private runtime dirs and buses. About 400 MB
 the first time; not part of `scripts/check`. Covered this way: the sway backend (sway 1.11), the
-generic Wayland backend (labwc 0.9), niri 26.04 (nested in a headless sway) and the GNOME
+generic Wayland backend (labwc 0.9; river-classic 0.3 for windows and focus, without workspaces), niri 26.04 (nested in a headless sway) and the GNOME
 extension (gnome-shell 50.5). KWin has its own nested test (`integration/kwin/test.sh`).
 
 ## Portal check

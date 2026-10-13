@@ -138,6 +138,9 @@ in `poll(2)` on it and on a wake pipe; actions (focus, close, switch workspace) 
 that same connection, which `control::run` hands over through a channel, because the protocols
 give no ids a second connection could use (ids are numbers handed out by the watcher). The
 protocols don't say which workspace a window is on, so all windows show on the active workspace.
+Verified against real headless labwc (workspaces too) and river-classic 0.3 (windows and focus; river has no
+`ext-workspace`: its tags are the private `river-status` protocol, not implemented, so no workspaces there). river 0.4
+manages no windows without a separate window-manager client, so it shows nothing.
 There is no pid, floating or keyboard-layout info. A compositor without
 `wlr-foreign-toplevel-management` makes the watcher stop at once (no retry loop). The test
 (`crates/sliver-desktop/tests/wlr.rs`) runs a mock compositor (wayland-server) speaking both
