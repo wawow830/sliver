@@ -286,6 +286,8 @@ fn item(spec: &ItemSpec) -> Item {
         "slider" => Item::slider(&spec.id, 0.0, 1.0, 0.0),
         "progress" => Item::progress(&spec.id, 0.0),
         "spacer" => Item::spacer(&spec.id, "small"),
+        // The picture: `-p ID.icon=PATH` (PNG, JPEG, SVG) or an icon name.
+        "image" => Item::image(&spec.id),
         // The LABEL lists the segments / candidates: `scrubber:tabs:one|two|three`.
         "segmented" | "scrubber" => {
             let labels: Vec<&str> = spec

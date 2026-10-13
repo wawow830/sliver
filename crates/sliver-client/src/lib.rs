@@ -104,6 +104,12 @@ impl Item {
             .map(|l| HashMap::from([("label".to_owned(), ov(Value::from(*l)))]))
             .collect()
     }
+    /// A picture filling the cell at its aspect ratio (album art, a thumbnail): set
+    /// [`Item::icon_data`] (PNG, JPEG or SVG) or [`Item::icon`] (a name or a file). Taps like
+    /// a button. Needs API minor 4 (feature `item:image`).
+    pub fn image(id: &str) -> Item {
+        Self::typed("image", id)
+    }
     pub fn group(id: &str, items: Vec<Item>) -> Item {
         Self::typed("group", id).set("items", items.into_iter().map(|i| i.0).collect::<Vec<_>>())
     }
@@ -122,6 +128,7 @@ impl Item {
     pub fn icon(self, name: &str) -> Item {
         self.set("icon", name)
     }
+    /// The picture's bytes: PNG or SVG, and JPEG for [`Item::image`].
     pub fn icon_data(self, png_or_svg: Vec<u8>) -> Item {
         self.set("icon-data", png_or_svg)
     }

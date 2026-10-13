@@ -109,6 +109,7 @@ const TYPES: &[&str] = &[
     "spacer",
     "segmented",
     "scrubber",
+    "image",
 ];
 
 pub fn parse_item(s: &str) -> Result<ItemSpec, String> {
@@ -448,6 +449,11 @@ mod tests {
         assert_eq!(pb.items[1].label, None);
         assert!(p("publish").is_err());
         assert!(p("publish hologram:x").is_err());
+        let Cmd::Publish(pb) = p("publish image:art -p art.icon=/home/me/cover.jpg").unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(pb.items[0].ty, "image");
         assert!(p("publish --scope target button:x").is_err());
         assert!(p("publish button:x -p y.label=z").is_err());
         // Labels may contain colons.
