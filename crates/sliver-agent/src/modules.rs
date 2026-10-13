@@ -313,6 +313,39 @@ pub fn cells(
     cells_in(modules, "", world, icons, icon_size, ui, out);
 }
 
+/// Which of a zone's modules a cell shows: `zone_ids` are the zone's top-level module ids in
+/// order, `zone_keys` the keys of the zone's cells in order, and `pos` the cell's position in
+/// them. Repeated modules are told apart by counting; a group's children are consecutive cells
+/// of one module. (The settings preview and Mirror's `HeldPressed` both use it.)
+pub fn module_index(zone_ids: &[String], zone_keys: &[String], pos: usize) -> Option<usize> {
+    let top = |key: &str| {
+        zone_ids
+            .iter()
+            .find(|id| key == id.as_str() || key.starts_with(&format!("{id}/")))
+            .cloned()
+    };
+    let mut count: HashMap<String, usize> = HashMap::new();
+    let mut prev: Option<String> = None;
+    for (p, k) in zone_keys.iter().enumerate() {
+        let t = top(k)?;
+        let group_child = *k != t;
+        if !(group_child && prev.as_ref() == Some(&t)) {
+            *count.entry(t.clone()).or_default() += 1;
+        }
+        if p == pos {
+            let nth = count[&t] - 1;
+            return zone_ids
+                .iter()
+                .enumerate()
+                .filter(|(_, id)| **id == t)
+                .map(|(i, _)| i)
+                .nth(nth);
+        }
+        prev = Some(t);
+    }
+    None
+}
+
 /// Is this group a `drawer = { mode = "bar" }` one?
 fn is_bar_drawer(m: &ModuleInstance) -> bool {
     m.config

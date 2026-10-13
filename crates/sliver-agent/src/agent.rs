@@ -55,6 +55,12 @@ pub enum Effect {
         item: String,
         what: sliver_api::registry::Interaction,
     },
+    /// Mirror: the user touched this module of the held layout (`Control1.HeldPressed`).
+    HeldPressed {
+        module: String,
+        zone: String,
+        index: u32,
+    },
 }
 
 /// Session-side changes the built-in modules make.
@@ -160,6 +166,9 @@ pub struct Agent {
     pub hidden_modules: std::collections::BTreeSet<String>,
     /// `sliverctl layout NAME`: a copy of the config whose current layers show that layout.
     layout_override: Option<(String, Config)>,
+    /// That override is held (`Control1.HoldLayout…`, Mirror to Touch Bar): touches on it go to
+    /// the holder as `HeldPressed`. `Some(true)`: select only, nothing fires.
+    held: Option<bool>,
     /// What the base layer resolved to last: its layout and the rule (index) that picked it.
     active: Option<(String, Option<usize>)>,
     /// `sliverctl update MODULE …`: output pushed to exec-less custom modules.
@@ -229,6 +238,7 @@ impl Agent {
             hidden: false,
             hidden_modules: Default::default(),
             layout_override: None,
+            held: None,
             active: None,
             pushed: HashMap::new(),
             errors: Vec::new(),
@@ -596,6 +606,13 @@ impl Agent {
                 *keys = self.keymap.map_all(keys);
             }
         }
+        // Mirror: every item of the held layout reports its touches (`HeldPressed`), so none
+        // stays sliverd-only (keys then fire from the agent) or untouchable.
+        if self.held.is_some() && id_base == 0 {
+            for c in per_zone.iter_mut().flatten() {
+                c.touch = crate::modules::Touch::Agent;
+            }
+        }
         if self.ctx.flag("locked") {
             for cells in &mut per_zone {
                 cells.retain(crate::privacy::allowed);
@@ -846,6 +863,37 @@ impl Agent {
         time_us: u64,
     ) -> Vec<Effect> {
         let mut fx = Vec::new();
+        let Some(cell) = self.cell(region) else {
+            return fx;
+        };
+        // Mirror: the editor selects what was touched (ux.md §4); select only fires nothing.
+        if let Some(select_only) = self.held
+            && self.on_held(region)
+        {
+            let key = cell.key.clone();
+            if phase == TouchPhase::Down
+                && let Some((module, zone, index)) = self.held_target(region)
+            {
+                fx.push(Effect::HeldPressed {
+                    module,
+                    zone,
+                    index,
+                });
+            }
+            if select_only {
+                let changed = if phase == TouchPhase::Down {
+                    self.pressed.insert(key)
+                } else if matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
+                    self.pressed.remove(&key)
+                } else {
+                    false
+                };
+                if changed {
+                    fx.push(Effect::RedrawPress);
+                }
+                return fx;
+            }
+        }
         let Some(cell) = self.cell(region) else {
             return fx;
         };
@@ -1186,6 +1234,7 @@ impl Agent {
     /// `Control1.SetLayout`: show `layout` on the current base layer until the next call (an
     /// empty name goes back to the rules).
     pub fn set_layout(&mut self, layout: &str) -> Result<(), String> {
+        self.held = None;
         if layout.is_empty() {
             self.layout_override = None;
             return Ok(());
@@ -1199,6 +1248,57 @@ impl Agent {
         c.rules.retain(|r| r.layer != layer);
         self.layout_override = Some((layout.to_owned(), c));
         Ok(())
+    }
+
+    /// `Control1.HoldLayout…` (Mirror): [`Agent::set_layout`], and every touch on it is reported
+    /// as [`Effect::HeldPressed`]. With `select_only`, touching only selects (nothing fires).
+    pub fn hold_layout(&mut self, layout: &str, select_only: bool) -> Result<(), String> {
+        self.set_layout(layout)?;
+        if !layout.is_empty() {
+            self.held = Some(select_only);
+        }
+        Ok(())
+    }
+
+    /// Is `region` an item of the held layout as the bar shows it now (not another layout, a
+    /// sub-bar, a popover or the Fn layer)?
+    fn on_held(&self, region: u32) -> bool {
+        self.held.is_some()
+            && region <= FN_REGION_BASE
+            && self.menu.is_none()
+            && self.popover.is_none()
+            && self.subbar.is_none()
+            && self.layout_override.as_ref().map(|o| &o.0) == self.active.as_ref().map(|a| &a.0)
+    }
+
+    /// What a touch on `region` selects in the held layout (`HeldPressed`): the cell's key, its
+    /// zone's name, and the module's index in that zone's `modules`. `None` when nothing is
+    /// held, or the bar shows something else (another layout, a sub-bar, a popover, Fn).
+    fn held_target(&self, region: u32) -> Option<(String, String, u32)> {
+        if !self.on_held(region) {
+            return None;
+        }
+        let (name, config) = self.layout_override.as_ref()?;
+        let f = self.frames[0].as_ref()?;
+        let i = f.cell_index(region)?;
+        let center = |j: usize| f.layout.items.get(j).map(|r| r.x + r.w / 2.0);
+        let c = center(i)?;
+        let zone = f
+            .layout
+            .zones
+            .iter()
+            .position(|z| c >= z.x && c <= z.x + z.w)?;
+        let z = &f.layout.zones[zone];
+        let in_zone: Vec<usize> = (0..f.cells.len())
+            .filter(|j| center(*j).is_some_and(|c| c >= z.x && c <= z.x + z.w))
+            .collect();
+        let keys: Vec<String> = in_zone.iter().map(|j| f.cells[*j].key.clone()).collect();
+        let pos = in_zone.iter().position(|j| *j == i)?;
+        let zones = config.layout_zones(name).ok()?;
+        let zc = zones.get(zone)?;
+        let ids: Vec<String> = zc.modules.iter().map(|m| m.id().to_string()).collect();
+        let index = crate::modules::module_index(&ids, &keys, pos)?;
+        Some((f.cells[i].key.clone(), zc.name.clone(), index as u32))
     }
 
     /// What the base layer shows and why: `(layout, rule index, rule name, source)`, the source

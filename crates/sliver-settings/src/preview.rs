@@ -111,15 +111,14 @@ impl Preview {
                 c >= z.x && c <= z.x + z.w
             })
         };
-        let keys: Vec<String> = (0..f.cells.len())
-            .filter(|j| in_zone(*j))
-            .map(|j| f.cells[j].key.clone())
-            .collect();
+        let cells: Vec<usize> = (0..f.cells.len()).filter(|j| in_zone(*j)).collect();
+        let keys: Vec<String> = cells.iter().map(|j| f.cells[*j].key.clone()).collect();
         let key = f.cells.get(i)?.key.clone();
         Some(Hit {
             zone,
             key,
             rect: (rect.x, rect.w),
+            pos: cells.iter().position(|j| *j == i)?,
             before: keys,
         })
     }
@@ -360,40 +359,15 @@ pub struct Hit {
     pub key: String,
     /// The cell's left edge and width, in bar pixels.
     pub rect: (f32, f32),
+    /// The zone's cell keys, and this cell's position among them.
     before: Vec<String>,
+    pos: usize,
 }
 
 impl Hit {
     /// The index of the clicked module among `zone_ids` (the zone's top-level module ids, in order).
     pub fn module_index(&self, zone_ids: &[String]) -> Option<usize> {
-        let top = |key: &str| {
-            zone_ids
-                .iter()
-                .find(|id| key == id.as_str() || key.starts_with(&format!("{id}/")))
-                .cloned()
-        };
-        // Count occurrences of each top-level id as we walk the zone's cells. A group's children
-        // are consecutive cells that belong to one occurrence.
-        let mut count: std::collections::HashMap<String, usize> = Default::default();
-        let mut prev: Option<String> = None;
-        for k in &self.before {
-            let t = top(k)?;
-            let group_child = *k != t;
-            if !(group_child && prev.as_ref() == Some(&t)) {
-                *count.entry(t.clone()).or_default() += 1;
-            }
-            if *k == self.key {
-                let nth = count[&t] - 1;
-                return zone_ids
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, id)| **id == t)
-                    .map(|(i, _)| i)
-                    .nth(nth);
-            }
-            prev = Some(t);
-        }
-        None
+        sliver_agent::modules::module_index(zone_ids, &self.before, self.pos)
     }
 }
 
@@ -407,6 +381,40 @@ mod tests {
         let mut p = Preview::new(loaded.config, Stylesheet::sliver(), (2008, 60));
         p.render("base", Context::new()).unwrap();
         p
+    }
+
+    /// Clicking the second of two identical modules selects the second (it used to pick the
+    /// first: their cell keys are the same).
+    #[test]
+    fn repeated_modules_hit_their_own_index() {
+        let p = preview(
+            r#"
+            [[layouts.default.zones]]
+            name = "main"
+            width = "fill"
+            modules = ["custom/a", "group/g", "custom/a"]
+            [modules."group/g"]
+            modules = ["custom/b", "custom/c"]
+            [modules."custom/a"]
+            format = "A"
+            width = 200
+            [modules."custom/b"]
+            format = "B"
+            width = 200
+            [modules."custom/c"]
+            format = "C"
+            width = 200
+            "#,
+        );
+        let ids: Vec<String> = ["custom/a", "group/g", "custom/a"].map(String::from).into();
+        let f = p.agent.frame(p.slot).unwrap();
+        let got: Vec<Option<usize>> = f
+            .layout
+            .items
+            .iter()
+            .map(|r| p.hit(r.x + r.w / 2.0).unwrap().module_index(&ids))
+            .collect();
+        assert_eq!(got, [Some(0), Some(1), Some(1), Some(2)]);
     }
 
     #[test]

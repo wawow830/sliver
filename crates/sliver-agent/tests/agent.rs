@@ -1784,3 +1784,106 @@ fn key_combos_follow_the_bar_keyboard_layout() {
         );
     }
 }
+
+/// T127 Mirror touch-to-select: while a layout is held, touching an item reports which module of
+/// which zone it is (`HeldPressed`), key items included (no sliverd-only fast path then), and
+/// `select_only` stops them from firing. A plain `SetLayout` reports nothing.
+#[test]
+fn held_layout_reports_touches() {
+    use sliver_agent::agent::Effect;
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        modules = ["clock"]
+        [[layouts.edit.zones]]
+        name = "left"
+        modules = ["clock"]
+        [[layouts.edit.zones]]
+        name = "right"
+        width = "fill"
+        modules = ["custom/a", "group/tools", "custom/a"]
+        [modules."group/tools"]
+        modules = ["custom/b", "custom/fast"]
+        [modules."custom/fast"]
+        format = "F"
+        fire-on = "press"
+        on-tap = { key = "F5" }
+        [modules."custom/a"]
+        format = "A"
+        on-tap = { key = "F6" }
+        [modules."custom/b"]
+        format = "B"
+        "#,
+    );
+    let w = world(9, 41);
+    let mut t = 1_000u64;
+    let mut tap = |a: &mut Agent, cell: usize| -> Vec<Effect> {
+        let r = a.frame(Layer::Base).unwrap().id_base + cell as u32 + 1;
+        t += 1_000_000;
+        let mut fx = a.touch(r, 0, TouchPhase::Down, 1.0, t);
+        fx.extend(a.touch(r, 0, TouchPhase::Up, 1.0, t + 40_000));
+        fx.extend(a.tick(t + 600_000));
+        fx
+    };
+    let held = |fx: &[Effect]| -> Vec<(String, String, u32)> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::HeldPressed {
+                    module,
+                    zone,
+                    index,
+                } => Some((module.clone(), zone.clone(), *index)),
+                _ => None,
+            })
+            .collect()
+    };
+    let fired = |fx: &[Effect]| fx.iter().any(|e| matches!(e, Effect::EmitKeys(..)));
+
+    a.hold_layout("edit", false).unwrap();
+    a.render(&w);
+    let f = a.frame(Layer::Base).unwrap();
+    let keys: Vec<&str> = f.cells.iter().map(|c| c.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "clock",
+            "custom/a",
+            "group/tools/custom/b",
+            "group/tools/custom/fast",
+            "custom/a"
+        ]
+    );
+    assert!(
+        !f.regions
+            .iter()
+            .any(|r| matches!(r.kind, RegionKind::Key { .. })),
+        "no sliverd-only key regions while held"
+    );
+    let s = |m: &str, z: &str, i: u32| (m.to_owned(), z.to_owned(), i);
+    assert_eq!(held(&tap(&mut a, 0)), [s("clock", "left", 0)]);
+    assert_eq!(held(&tap(&mut a, 4)), [s("custom/a", "right", 2)]);
+    let fx = tap(&mut a, 3);
+    assert_eq!(held(&fx), [s("group/tools/custom/fast", "right", 1)]);
+    assert!(fired(&fx), "not select-only: the key still fires: {fx:?}");
+
+    a.hold_layout("edit", true).unwrap();
+    a.render(&w);
+    let fx = tap(&mut a, 1);
+    assert_eq!(held(&fx), [s("custom/a", "right", 0)]);
+    assert!(!fired(&fx), "select only: {fx:?}");
+
+    // A persistent SetLayout isn't a hold: no reports, the fast path is back.
+    a.set_layout("edit").unwrap();
+    a.render(&w);
+    let fx = tap(&mut a, 1);
+    assert!(held(&fx).is_empty() && fired(&fx), "{fx:?}");
+    assert!(
+        a.frame(Layer::Base)
+            .unwrap()
+            .regions
+            .iter()
+            .any(|r| matches!(r.kind, RegionKind::Key { .. }))
+    );
+}

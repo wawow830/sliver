@@ -54,6 +54,12 @@ pub enum Control {
     PopLayer,
     ToggleLayer(String),
     SetLayout(String),
+    /// `HoldLayout`/`HoldLayoutWith` (non-empty name): like `SetLayout`, and touches on it are
+    /// reported to the holder (`HeldPressed`); `select_only` stops them from firing.
+    HoldLayout {
+        layout: String,
+        select_only: bool,
+    },
     SetProfile(String),
     ReloadConfig,
     ValidateConfig(String),
@@ -409,6 +415,17 @@ impl Api {
         i.healthy_changed(e).await
     }
 
+    /// The user touched `module` (zone `zone`, `index` in its `modules`) on the held layout:
+    /// tell the holder (`Control1.HeldPressed`, unicast). Nothing if no one holds it.
+    pub async fn held_pressed(&self, module: &str, zone: &str, index: u32) -> zbus::Result<()> {
+        let Some(owner) = self.inner.lock().layout_owner.clone() else {
+            return Ok(());
+        };
+        let dest = BusName::try_from(owner.as_str())?;
+        let e = SignalEmitter::new(&self.conn, ROOT_PATH)?.set_destination(dest);
+        ControlIface::held_pressed(&e, module, zone, index).await
+    }
+
     /// `Control1.Signal(n)` reached published contexts whose user config sets `signal = n`.
     pub async fn signal_contexts(&self, contexts: &[ContextId], n: u32) -> zbus::Result<()> {
         let outs = self.inner.lock().reg.signal(contexts, n);
@@ -629,6 +646,31 @@ impl ControlIface {
     }
 }
 
+impl ControlIface {
+    async fn hold(
+        &self,
+        c: &Connection,
+        h: &Header<'_>,
+        name: String,
+        select_only: bool,
+    ) -> Result<()> {
+        let owner = (!name.is_empty())
+            .then(|| h.sender().map(|s| s.to_string()))
+            .flatten();
+        let req = if name.is_empty() {
+            Control::SetLayout(name)
+        } else {
+            Control::HoldLayout {
+                layout: name,
+                select_only,
+            }
+        };
+        self.unit(c, h, req).await?;
+        self.inner.lock().layout_owner = owner;
+        Ok(())
+    }
+}
+
 #[interface(name = "io.github.wawow830.Sliver.Control1")]
 impl ControlIface {
     async fn switch_layer(
@@ -682,13 +724,34 @@ impl ControlIface {
         #[zbus(connection)] c: &Connection,
         name: String,
     ) -> Result<()> {
-        let owner = (!name.is_empty())
-            .then(|| h.sender().map(|s| s.to_string()))
-            .flatten();
-        self.unit(c, &h, Control::SetLayout(name)).await?;
-        self.inner.lock().layout_owner = owner;
-        Ok(())
+        self.hold(c, &h, name, false).await
     }
+    /// `HoldLayout` with options: `select-only` (b) reports touches (`HeldPressed`) without
+    /// firing the items. Calling it again while holding changes the options.
+    async fn hold_layout_with(
+        &self,
+        #[zbus(header)] h: Header<'_>,
+        #[zbus(connection)] c: &Connection,
+        name: String,
+        options: HashMap<String, OwnedValue>,
+    ) -> Result<()> {
+        let select_only = match options.get("select-only") {
+            None => false,
+            Some(v) => bool::try_from(v)
+                .map_err(|_| Error::InvalidArgs("select-only must be a boolean".into()))?,
+        };
+        self.hold(c, &h, name, select_only).await
+    }
+    /// A touch on the held layout (`HoldLayout`), sent to the holder only: the touched
+    /// module's key (`clock`, `group/tools/key/Mute`), its zone, and its index in that zone's
+    /// `modules` list in the config. Settings selects it (ux.md §4 Mirror).
+    #[zbus(signal)]
+    async fn held_pressed(
+        emitter: &SignalEmitter<'_>,
+        module: &str,
+        zone: &str,
+        index: u32,
+    ) -> zbus::Result<()>;
     async fn set_profile(
         &self,
         #[zbus(header)] h: Header<'_>,

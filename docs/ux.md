@@ -145,6 +145,10 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 - The bar Esc (if present) and Fn keep working during mirroring. Pressing an item on the real bar while mirroring
   selects it **and** fires it, unless "Select only" is toggled.
 - It's implemented as an agent "preview override". It never touches the daemon's safe layer.
+- Touch-to-select: the agent sends the holder `Control1.HeldPressed(module, zone, index)` for each
+  touch on the held layout (`HoldLayoutWith(name, {select-only})` for "Select only"). While held,
+  every item reports touches, so key items fire from the agent on release rather than from
+  sliverd's fast path on press.
 
 ### Inspector sections
 1. **Look**: label, icon (an icon picker with search over the XDG theme, plus emoji tab and

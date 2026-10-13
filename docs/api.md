@@ -29,6 +29,7 @@ Additive changes bump the `Version` property (minor).
 |---|---|
 | 0 | the first published interface |
 | 1 | `Control1.HoldLayout`, `ActiveLayout`/`ActiveLayoutSource`/`ActiveRule`/`ActiveRuleName`; item types `scrubber` (events `scrolled`) and working `popover`s; `ListContexts` `sandboxed`, `item-ids`, `item-labels`; `Desktop1.SetWindows`/`SetWindowsV` |
+| 2 | `Control1.HoldLayoutWith` (`select-only`) and signal `HeldPressed` (Mirror touch-to-select) |
 
 ---
 
@@ -266,6 +267,12 @@ SetLayout(s name)                   force a layout until the context changes or 
 HoldLayout(s name)                  the same, but held by the caller's connection: released when it
                                     disconnects or calls HoldLayout(""). Use it for live previews
                                     (settings' Mirror to Touch Bar) so a crash never pins the bar
+HoldLayoutWith(s name, a{sv} options)   HoldLayout with options (call again to change them):
+                                    select-only b: touches only select (HeldPressed), nothing fires
+signal HeldPressed(s module, s zone, u index)   to the holder only: the user touched this module of
+                                    the held layout (key path like `group/tools/key/Mute`, its zone's
+                                    name, its index in that zone's `modules`). Not sent for sub-bars,
+                                    popovers, the Fn layer, or after the bar switched layouts
 SetProfile(s name)                  ReloadConfig() -> (as errors)
 Bar(s action)                       show | hide | toggle the whole bar (the hatch keeps working)
 ValidateConfig(s toml) -> (as errors)

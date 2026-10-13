@@ -477,7 +477,10 @@ fn held_layout_dies_with_its_caller() {
         .unwrap();
     assert_eq!(
         host.requests.lock().unwrap().last(),
-        Some(&Control::SetLayout("fkeys".into()))
+        Some(&Control::HoldLayout {
+            layout: "fkeys".into(),
+            select_only: false
+        })
     );
     // Another client coming and going doesn't touch it.
     let other = bus.client();
@@ -493,6 +496,76 @@ fn held_layout_dies_with_its_caller() {
         "override not cleared: {:?}",
         host.requests.lock().unwrap()
     );
+}
+
+/// T127: touches on a held layout reach the holder only (`HeldPressed`), and `select-only`
+/// gets to the core.
+#[test]
+fn held_pressed_goes_to_the_holder() {
+    let Some((bus, api, host)) = setup() else {
+        return;
+    };
+    let editor = bus.client();
+    let other = bus.client();
+    let signals = |c: &Connection| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let rule = zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface(IFACE_CONTROL)
+            .unwrap()
+            .member("HeldPressed")
+            .unwrap()
+            .build();
+        let it = zbus::blocking::MessageIterator::for_match_rule(rule, c, None).unwrap();
+        std::thread::spawn(move || {
+            for m in it {
+                let Ok(m) = m else { break };
+                if let Ok(s) = m.body().deserialize::<(String, String, u32)>()
+                    && tx.send(s).is_err()
+                {
+                    break;
+                }
+            }
+        });
+        rx
+    };
+    let (mine, theirs) = (signals(&editor), signals(&other));
+    // Nobody holds yet: nothing is sent.
+    zbus::block_on(api.held_pressed("clock", "main", 0)).unwrap();
+    let bad = editor.call_method(
+        Some(BUS_NAME),
+        ROOT_PATH,
+        Some(IFACE_CONTROL),
+        "HoldLayoutWith",
+        &("fkeys", opts(&[("select-only", Value::from("yes"))])),
+    );
+    assert_eq!(error_name(bad.unwrap_err()), error::INVALID_ARGS);
+    editor
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_CONTROL),
+            "HoldLayoutWith",
+            &("fkeys", opts(&[("select-only", Value::from(true))])),
+        )
+        .unwrap();
+    assert_eq!(
+        host.requests.lock().unwrap().last(),
+        Some(&Control::HoldLayout {
+            layout: "fkeys".into(),
+            select_only: true
+        })
+    );
+    zbus::block_on(api.held_pressed("group/tools/key/Mute", "main", 2)).unwrap();
+    assert_eq!(
+        mine.recv_timeout(Duration::from_secs(3)).unwrap(),
+        ("group/tools/key/Mute".to_owned(), "main".to_owned(), 2)
+    );
+    assert!(
+        theirs.recv_timeout(Duration::from_millis(300)).is_err(),
+        "unicast to the holder"
+    );
+    assert!(mine.try_recv().is_err(), "nothing was sent before the hold");
 }
 
 #[test]

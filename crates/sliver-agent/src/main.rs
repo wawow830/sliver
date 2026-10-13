@@ -782,6 +782,15 @@ fn apply(
                     api.interact(context, &item, what);
                 }
             }
+            Effect::HeldPressed {
+                module,
+                zone,
+                index,
+            } => {
+                if let Some(api) = &live.api {
+                    api.held_pressed(&module, &zone, index);
+                }
+            }
             Effect::Desktop(action) => {
                 // A compositor round trip: keep it off the main loop.
                 std::thread::spawn(move || {
@@ -901,6 +910,16 @@ fn control(
             ))
         }
         Control::ListModules => Ok(ControlReply::Modules(agent.list_modules())),
+        Control::HoldLayout {
+            layout,
+            select_only,
+        } => match agent.hold_layout(&layout, select_only) {
+            Ok(()) => {
+                fx.push(Effect::Redraw);
+                done
+            }
+            Err(e) => Err(e),
+        },
         Control::SetLayout(name) => match agent.set_layout(&name) {
             Ok(()) => {
                 fx.push(Effect::Redraw);

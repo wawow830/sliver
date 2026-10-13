@@ -51,6 +51,24 @@
     <method name="HoldLayout">
       <arg name="name" type="s" direction="in"/>
     </method>
+    <!--
+    `HoldLayout` with options: `select-only` (b) reports touches (`HeldPressed`) without
+    firing the items. Calling it again while holding changes the options.
+    -->
+    <method name="HoldLayoutWith">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="options" type="a{sv}" direction="in"/>
+    </method>
+    <!--
+    A touch on the held layout (`HoldLayout`), sent to the holder only: the touched
+    module's key (`clock`, `group/tools/key/Mute`), its zone, and its index in that zone's
+    `modules` list in the config. Settings selects it (ux.md §4 Mirror).
+    -->
+    <signal name="HeldPressed">
+      <arg name="module" type="s"/>
+      <arg name="zone" type="s"/>
+      <arg name="index" type="u"/>
+    </signal>
     <method name="SetProfile">
       <arg name="name" type="s" direction="in"/>
     </method>
