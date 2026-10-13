@@ -52,6 +52,8 @@ const LIBRARY: &[(&str, &str)] = &[
     ("window", "Window title"),
     ("cpu", "CPU"),
     ("memory", "Memory"),
+    ("graph#cpu", "CPU graph"),
+    ("graph#memory", "Memory graph"),
     ("network", "Network"),
     ("spacer", "Spacer"),
     ("app-controls", "App controls (focused app's buttons)"),
@@ -1880,10 +1882,22 @@ fn inspector(
             .map(|id| id.kind)
             .unwrap_or_default();
     let mut update_fields: Vec<(&str, &str)> = Vec::new();
-    if kind == "custom" {
+    let graph = kind == "graph" || kind == "custom-graph";
+    if graph {
+        update_fields.push((
+            "source",
+            "Graph of: cpu, memory, battery, custom/x… (empty: its own command)",
+        ));
+    }
+    if kind == "custom" || kind == "custom-graph" {
         update_fields.push(("exec", "Command whose output it shows"));
     }
-    if kind == "custom" || block.contains_key("interval") {
+    if graph {
+        update_fields.push(("samples", "Samples kept (default 30, newest at the right)"));
+        update_fields.push(("min", "Bottom of the scale (default 0)"));
+        update_fields.push(("max", "Top of the scale (default 100)"));
+    }
+    if kind == "custom" || graph || block.contains_key("interval") {
         update_fields.push(("interval", "Refresh every: seconds, \"5s\", \"1m\"…"));
     }
     if kind == "custom" {
@@ -1909,7 +1923,7 @@ fn inspector(
             entry.connect_apply(move |e| {
                 let text = e.text().trim().to_owned();
                 let value = (!text.is_empty()).then(|| match key {
-                    "exec" => Value::String(text.clone()),
+                    "exec" | "source" => Value::String(text.clone()),
                     _ => parse_cli_value(&text),
                 });
                 let target = target.clone();

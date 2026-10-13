@@ -114,6 +114,13 @@ hide-empty-text = true
 [modules."emoji#strip"]
 mode = "strip"
 
+# Ready-made sparklines (T137) for the settings Library: CPU and memory load over the last minute.
+[modules."graph#cpu"]
+source = "cpu"
+
+[modules."graph#memory"]
+source = "memory"
+
 # Notification text stays off the bar while the screen is shared: a camera or the person next to
 # you can see the bar (ux.md §5). Remove it with `when = {}` in your [modules.notifications].
 [modules.notifications]
