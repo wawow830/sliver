@@ -611,6 +611,10 @@ fn main() {
                 if live.api.as_ref().is_none_or(ApiLink::owns_name) {
                     eprintln!("sliver-agent: lost sliverd, reconnecting");
                 }
+                // Not driving the bar until we're back (sliverd shows its safe layer).
+                if let Some(api) = &live.api {
+                    api.set_disconnected();
+                }
             }
             Err(e) => {
                 if !failing {
@@ -1057,6 +1061,24 @@ fn wait_for_name(api: &ApiLink) {
     }
 }
 
+/// The `Control1` properties while connected to sliverd: `Healthy` is connected and driving the
+/// bar with no config or module errors (api.md §7).
+fn control_state(agent: &Agent, reloader: &Reloader) -> ControlState {
+    let (active_layout, rule, active_rule_name, source) = agent.active_layout().unwrap_or_default();
+    ControlState {
+        active_layer: agent.base_layer().to_owned(),
+        active_layout,
+        active_rule: rule.map_or(-1, |i| i as i32),
+        active_rule_name,
+        layout_source: source.to_owned(),
+        layers: agent.config.layers.keys().cloned().collect(),
+        active_profile: reloader.profile.0.clone(),
+        profiles: reloader.profile.1.clone(),
+        variables: Default::default(),
+        healthy: agent.errors.is_empty() && reloader.errors.is_empty(),
+    }
+}
+
 fn run(
     mut agent: Agent,
     mut link: Link,
@@ -1115,21 +1137,12 @@ fn run(
                     })
                     .collect();
                 api.set_on_screen(drawn);
-                let (active_layout, rule, active_rule_name, source) =
-                    agent.active_layout().unwrap_or_default();
-                api.set_control_state(ControlState {
-                    active_layer: agent.base_layer().to_owned(),
-                    active_layout,
-                    active_rule: rule.map_or(-1, |i| i as i32),
-                    active_rule_name,
-                    layout_source: source.to_owned(),
-                    layers: agent.config.layers.keys().cloned().collect(),
-                    active_profile: reloader.profile.0.clone(),
-                    profiles: reloader.profile.1.clone(),
-                    variables: Default::default(),
-                    healthy: agent.errors.is_empty() && reloader.errors.is_empty(),
-                });
             }
+        }
+        // Not only after a render: with the bar off nothing renders, and the state (layer,
+        // profile, health) must still be right (T132). Sent only when it changed.
+        if let Some(api) = &live.api {
+            api.set_control_state(control_state(&agent, reloader));
         }
         // Sleep until sliverd says something, a gesture/macro deadline, or a module's content
         // changes on its own. Nothing else wakes us (invariant 3).

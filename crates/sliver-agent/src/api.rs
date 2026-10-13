@@ -155,6 +155,20 @@ impl ApiLink {
         }
     }
 
+    /// Lost sliverd: `Healthy` goes false (the rest stays as it was) until the next state.
+    pub fn set_disconnected(&self) {
+        let mut s = self
+            .host
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if s.healthy {
+            s.healthy = false;
+            self.set_control_state(s);
+        }
+    }
+
     /// Which contexts the last frame drew (`OnScreen`). Sent only when it changes.
     pub fn set_on_screen(&mut self, drawn: HashSet<ContextId>) {
         if drawn != self.on_screen {
