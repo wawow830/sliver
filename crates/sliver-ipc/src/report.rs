@@ -43,7 +43,16 @@ pub fn ask(path: impl AsRef<Path>, client: &str, timeout: Duration) -> io::Resul
     match conn.recv::<DaemonMsg>()? {
         Some(p) => match p.msg {
             Ok(DaemonMsg::HwReport(r)) => Ok(Reply::Report(r)),
-            Ok(DaemonMsg::Error { msg, .. }) => Ok(Reply::TooOld(msg)),
+            // Only `unknown_message` means "older than 1.1". Anything else (a different major
+            // version, a rate limit, a newer code) is a real refusal, with its reason.
+            Ok(DaemonMsg::Error {
+                code: crate::proto::ErrorCode::UnknownMessage,
+                msg,
+                ..
+            }) => Ok(Reply::TooOld(msg)),
+            Ok(DaemonMsg::Error { code, msg, .. }) => Err(io::Error::other(format!(
+                "sliverd refused the report ({code:?}): {msg}"
+            ))),
             Ok(other) => Err(io::Error::other(format!("unexpected answer: {other:?}"))),
             Err(e) => Err(io::Error::other(format!("{e:?}"))),
         },
@@ -101,6 +110,19 @@ mod tests {
             ask(&p2, "test", Duration::from_secs(2)).unwrap(),
             Reply::TooOld("unknown message type \"report\"".into())
         );
+
+        let refused = DaemonMsg::Error {
+            code: ErrorCode::Proto,
+            msg: "sliverd speaks 2.0".into(),
+            serial: None,
+        };
+        let p4 = serve_once("refused", Some(refused));
+        let e = ask(&p4, "test", Duration::from_secs(2)).unwrap_err();
+        assert!(
+            e.to_string().contains("Proto") && e.to_string().contains("2.0"),
+            "{e}"
+        );
+        let _ = std::fs::remove_file(&p4);
 
         let p3 = serve_once("hung", None);
         let e = ask(&p3, "test", Duration::from_millis(50)).unwrap_err();
