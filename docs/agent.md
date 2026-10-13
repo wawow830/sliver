@@ -214,6 +214,7 @@ config, its includes, the stylesheets (including `@import`s) and where a user co
 appear, so atomic rename-saves and a config created later both work. Changes are debounced.
 `sliverctl reload` (Control1 `ReloadConfig`) and SIGUSR2 reload at once.
 A config with parse **or validation** errors is never applied: the last good config stays, the
-errors are logged, and `healthy` goes false until a good save (or a revert). User modules restart
+errors are logged and listed in Control1 `Errors` (`sliverctl status`) until a good save (or a
+revert). User modules restart
 only if their specs changed (`Feeds::start_modules`). The realtime-signal forwarder is installed
 once and retargeted, so replaced runtimes really stop.

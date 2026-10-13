@@ -210,9 +210,10 @@ Hyprland, sway, niri and other wlroots compositors need nothing.
 
 ## 11. Troubleshooting
 
-`sliverctl status` answers most questions: is the agent healthy, which layer and layout are on the
-bar and **why** (`ActiveLayoutSource`: a rule, the layer's default, or forced), the active profile,
-and whether the display is on, dimmed or off.
+`sliverctl status` answers most questions: is the agent driving the bar (`Healthy`), which layer
+and layout are on the bar and **why** (`ActiveLayoutSource`: a rule, the layer's default, or
+forced), the active profile, whether the display is on, dimmed or off, and what's wrong right now
+(`Errors`: a rejected config, a stylesheet or module problem, with the file and line).
 
 | Symptom | Try |
 |---|---|
