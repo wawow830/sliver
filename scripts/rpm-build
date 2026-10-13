@@ -4,6 +4,7 @@
 #   scripts/rpm-build            # SRPM only (fast): target/rpmbuild/SRPMS/
 #   scripts/rpm-build --binary   # SRPM + RPMs (full release build, ~10+ min): target/rpmbuild/RPMS/
 #   scripts/rpm-build --binary --nocheck
+#   SLIVER_RPM_JOBS=N scripts/rpm-build --binary   # build jobs (default 3)
 #
 # Sources: a snapshot of the working tree (tracked + untracked, minus .gitignore'd) and a
 # `cargo vendor` tarball, so the build runs offline (mock/COPR). Nothing is installed.
@@ -41,7 +42,11 @@ cargo vendor --locked --quiet "$vdir/vendor" >/dev/null
 tar -C "$vdir" -cJf "$top/SOURCES/$name-$version-vendor.tar.xz" vendor
 
 cp packaging/rpm/sliver.spec "$top/SPECS/"
-common=(--define "_topdir $top" --define "snapshot $snapshot")
+# Cap the jobs: rpmbuild otherwise passes -j$(nproc) to cargo (%cargo_build/%cargo_test use
+# RPM_BUILD_NCPUS), which ignores the peers' cargo jobs cap and swapped this 7.3 GB machine hard.
+# Local builds only: the SRPM carries no such define, so COPR/mock builds are unaffected.
+jobs=${SLIVER_RPM_JOBS:-3}
+common=(--define "_topdir $top" --define "snapshot $snapshot" --define "_smp_build_ncpus $jobs")
 
 echo "== srpm"
 rpmbuild "${common[@]}" -bs "$top/SPECS/sliver.spec"
