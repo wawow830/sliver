@@ -130,6 +130,8 @@ pub struct Feeds {
     /// so a replaced runtime is really dropped (and its scripts stopped).
     signal_target: Option<Arc<std::sync::Mutex<Option<Runtime>>>>,
     specs: Vec<Spec>,
+    /// Starts the failed-units watcher on the real buses ([`Feeds::watch_failed_units`]).
+    failed_units: Option<Box<dyn Fn() + Send>>,
 }
 
 impl Feeds {
@@ -149,6 +151,7 @@ impl Feeds {
             modules: None,
             signal_target: None,
             specs: Vec::new(),
+            failed_units: None,
         })
     }
 
@@ -243,7 +246,17 @@ impl Feeds {
         let system = sliver_bus::system();
         match system {
             Ok(system) => {
-                self.start_session_on(system, sliver_bus::session, SessionOptions::default())
+                self.start_session_on(system, sliver_bus::session, SessionOptions::default());
+                if let Some(h) = self.session.clone() {
+                    // Its own connections: a shared one would also wake it for every logind or
+                    // NetworkManager signal.
+                    self.failed_units = Some(Box::new(move || {
+                        match (sliver_bus::system(), sliver_bus::session()) {
+                            (Ok(s), Ok(u)) => h.start_failed_units(s, u),
+                            _ => eprintln!("sliver-agent: failed units: no D-Bus"),
+                        }
+                    }));
+                }
             }
             Err(e) => {
                 self.out
@@ -314,6 +327,14 @@ impl Feeds {
         }
         self.session = Some(handle);
         self.spawn_session(s);
+    }
+
+    /// A layout uses `systemd-failed-units`: watch the system and user managers (once; later
+    /// calls do nothing). Not started otherwise, because it asks systemd to send signals.
+    pub fn watch_failed_units(&self) {
+        if let Some(f) = &self.failed_units {
+            f();
+        }
     }
 
     /// The bar is on or off: sources that only matter while something is on screen sleep while

@@ -1611,6 +1611,74 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             sp.fallback_text = Some("📷");
             sp
         }
+        // waybar's: failed units of the system and user managers. Hidden while none failed,
+        // unless `hide-on-ok = false`. Tap lists them; an entry shows its status in a terminal.
+        "systemd-failed-units" => {
+            let f = &s.failed_units;
+            let want = |k: &str| m.config.get(k).and_then(|v| v.as_bool()) != Some(false);
+            let sys = f.system.as_ref().filter(|_| want("system"));
+            let user = f.user.as_ref().filter(|_| want("user"));
+            if sys.is_none() && user.is_none() {
+                return None;
+            }
+            let n = |x: Option<&sliver_session::failed::Manager>| x.map_or(0, |m| m.count);
+            let total = n(sys) + n(user);
+            if total == 0 && want("hide-on-ok") {
+                return None;
+            }
+            let names: Vec<(bool, &String)> = sys
+                .iter()
+                .flat_map(|m| m.units.iter().map(|u| (false, u)))
+                .chain(user.iter().flat_map(|m| m.units.iter().map(|u| (true, u))))
+                .collect();
+            let list = names
+                .iter()
+                .map(|(_, u)| u.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let status = if total == 0 { "ok" } else { "degraded" };
+            let v = ValueMap::new()
+                .with("nr_failed", total as i64)
+                .with("nr_failed_system", n(sys) as i64)
+                .with("nr_failed_user", n(user) as i64)
+                .with("units", esc(&list))
+                .with("status", status)
+                .with("", total as i64);
+            let mut sp = Spec::new(
+                v,
+                if total == 0 {
+                    "✓"
+                } else {
+                    "{nr_failed} failed"
+                },
+            );
+            if total > 0 {
+                sp = sp
+                    .icon("dialog-warning-symbolic")
+                    .on(Gesture::Tap, "menu:open");
+            }
+            sp.status = Some(status);
+            sp.menu = names
+                .iter()
+                .map(|(is_user, u)| {
+                    let mut argv = vec!["xdg-terminal-exec".to_owned(), "systemctl".to_owned()];
+                    if *is_user {
+                        argv.push("--user".into());
+                    }
+                    argv.extend(["status".to_owned(), (*u).clone()]);
+                    sliver_config::MenuEntry {
+                        label: if *is_user {
+                            format!("{u} (user)")
+                        } else {
+                            (*u).clone()
+                        },
+                        icon: None,
+                        on_tap: Action::Exec(argv),
+                    }
+                })
+                .collect();
+            sp
+        }
         "lock" => {
             let mut sp = Spec::new(ValueMap::new(), "")
                 .icon("system-lock-screen-symbolic")
@@ -2578,6 +2646,101 @@ mod tests {
         assert_eq!(labels, ["timer", "Pomodoro"]);
     }
 
+    /// T136: waybar's systemd-failed-units: counts from both managers, hidden while none failed
+    /// (unless `hide-on-ok = false`), `system`/`user` filters, and a tap lists the units.
+    #[test]
+    fn systemd_failed_units() {
+        use sliver_session::failed::{FailedUnits, Manager};
+        let run = |toml: &str, f: &FailedUnits| -> Vec<Cell> {
+            let l = load_str(
+                &format!(
+                    "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"systemd-failed-units\"]\n\
+                     [modules.systemd-failed-units]\n{toml}"
+                ),
+                std::path::Path::new("."),
+            );
+            assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
+            let r = l.config.resolve("base", &Context::new()).unwrap();
+            let mut w = World::at(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
+            w.session.failed_units = f.clone();
+            let mut out = Vec::new();
+            let mut icons = Icons::builtin_only();
+            for z in &r.zones {
+                cells(
+                    &z.modules,
+                    &w,
+                    &mut icons,
+                    36,
+                    &|_| UiState::default(),
+                    &mut out,
+                );
+            }
+            out
+        };
+        let text = |c: &Cell| match &c.content {
+            Content::Markup(t) | Content::IconMarkup(_, t) => t.clone(),
+            other => format!("{other:?}"),
+        };
+        let mgr = |u: &[&str]| {
+            Some(Manager {
+                count: u.len() as u32,
+                units: u.iter().map(|s| s.to_string()).collect(),
+            })
+        };
+        let none = FailedUnits {
+            watched: true,
+            system: mgr(&[]),
+            user: mgr(&[]),
+        };
+        assert!(run("", &none).is_empty(), "hidden while all is well");
+        assert!(
+            run("", &FailedUnits::default()).is_empty(),
+            "unknown: hidden"
+        );
+        let ok = run("hide-on-ok = false", &none);
+        assert_eq!(text(&ok[0]), "✓");
+        assert!(
+            ok[0].classes.contains(&"ok".to_owned()),
+            "{:?}",
+            ok[0].classes
+        );
+
+        let some = FailedUnits {
+            watched: true,
+            system: mgr(&["nfs.mount"]),
+            user: mgr(&["pipewire.service"]),
+        };
+        let c = run("", &some);
+        assert_eq!(text(&c[0]), "2 failed");
+        assert!(c[0].classes.contains(&"degraded".to_owned()));
+        let labels: Vec<&str> = c[0].menu.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["nfs.mount", "pipewire.service (user)"]);
+        assert_eq!(
+            c[0].menu[1].on_tap,
+            Action::Exec(
+                [
+                    "xdg-terminal-exec",
+                    "systemctl",
+                    "--user",
+                    "status",
+                    "pipewire.service"
+                ]
+                .map(String::from)
+                .into()
+            )
+        );
+        assert!(
+            c[0].on
+                .iter()
+                .any(|(g, a)| *g == Gesture::Tap && *a == Action::ModuleAction("menu:open".into()))
+        );
+        let c = run(
+            "user = false\nformat = \"{nr_failed_system}/{nr_failed_user}: {units}\"",
+            &some,
+        );
+        assert_eq!(text(&c[0]), "1/0: nfs.mount");
+    }
+
     #[test]
     fn placeholders_take_the_module_width() {
         let l = load_str(
@@ -2777,14 +2940,14 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
     }
 }
 
-/// Runtime specs for every `custom/*` module with an `exec`, in any layout (including group
-/// members), for `sliver-feeds`' module runtime. Problems come back as messages.
-pub fn user_module_specs(
+/// Every module some layout places (group members included, each id once), with its config
+/// block.
+pub fn placed_modules(
     config: &sliver_config::Config,
-) -> (Vec<sliver_modules::Spec>, Vec<String>) {
+) -> Vec<(sliver_config::ModuleId, toml::Table)> {
     use sliver_config::{ModuleId, ModuleRef};
     let mut seen = std::collections::HashSet::new();
-    let (mut specs, mut errors) = (Vec::new(), Vec::new());
+    let mut out = Vec::new();
     let mut todo: Vec<ModuleRef> = Vec::new();
     for name in config.layouts.keys() {
         if let Ok(zones) = config.layout_zones(name) {
@@ -2812,6 +2975,24 @@ pub fn user_module_specs(
             );
             continue;
         }
+        out.push((id, block));
+    }
+    out
+}
+
+/// Does some layout place a module of this `kind`? (Sources that cost something to watch,
+/// such as failed systemd units, start only then.)
+pub fn uses_kind(config: &sliver_config::Config, kind: &str) -> bool {
+    placed_modules(config).iter().any(|(id, _)| id.kind == kind)
+}
+
+/// Runtime specs for every `custom/*` module with an `exec`, in any layout (including group
+/// members), for `sliver-feeds`' module runtime. Problems come back as messages.
+pub fn user_module_specs(
+    config: &sliver_config::Config,
+) -> (Vec<sliver_modules::Spec>, Vec<String>) {
+    let (mut specs, mut errors) = (Vec::new(), Vec::new());
+    for (id, block) in placed_modules(config) {
         if id.kind != "custom" || !block.contains_key("exec") {
             continue;
         }

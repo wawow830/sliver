@@ -14,6 +14,7 @@ pub mod art;
 pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
+pub mod failed;
 pub mod fake;
 pub mod logind;
 pub mod menu;
@@ -133,6 +134,9 @@ pub struct SessionState {
     pub media: Option<Media>,
     /// Every real player, the chosen one first (for a player picker).
     pub players: Vec<Media>,
+    /// Failed systemd units (only watched once [`Handle::start_failed_units`] ran).
+    #[serde(default)]
+    pub failed_units: failed::FailedUnits,
 }
 
 /// A blocking stream of session state changes.
@@ -200,6 +204,8 @@ pub struct Handle {
     chatty_on: Arc<std::sync::atomic::AtomicBool>,
     /// KDE's `Inhibit` cookie while Do Not Disturb is on (see [`Handle::set_dnd`]).
     dnd_cookie: Arc<Mutex<Option<u32>>>,
+    /// [`Handle::start_failed_units`] ran.
+    failed_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Handle {
@@ -300,6 +306,7 @@ impl Session {
             awake_gate: Arc::default(),
             chatty_on: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dnd_cookie: Arc::default(),
+            failed_started: Arc::default(),
         };
         let h = hub.clone();
         std::thread::Builder::new()
