@@ -188,6 +188,12 @@ Built\-in layers: show media keys normally and the F\-keys while Fn is held.
 .TP
 .I /run/sliver/sliverd.sock
 The agent socket.
+Any user may also ask it, read\-only, what
+.B sliverd
+found and opened (the bar's device, backlight, digitizer, uinput, and why it may drive the bar)
+and what it shows now; this never takes the bar from the agent.
+.B sliverctl doctor
+uses it.
 .TP
 .I /etc/sliver/sliverd.toml
 Daemon configuration.
