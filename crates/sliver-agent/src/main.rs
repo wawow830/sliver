@@ -365,6 +365,9 @@ impl Live {
         if sliver_agent::modules::uses_kind(config, "systemd-failed-units") {
             feeds.watch_failed_units();
         }
+        if sliver_agent::modules::uses_kind(config, "privacy") {
+            feeds.watch_capture();
+        }
         let ops = feeds.session.clone().and_then(|h| match start_ops(h) {
             Ok(tx) => Some(tx),
             Err(e) => {
@@ -505,6 +508,9 @@ impl Live {
         self.feeds.start_modules(specs);
         if sliver_agent::modules::uses_kind(config, "systemd-failed-units") {
             self.feeds.watch_failed_units();
+        }
+        if sliver_agent::modules::uses_kind(config, "privacy") {
+            self.feeds.watch_capture();
         }
         if let Some(rt) = &self.feeds.modules {
             let keys: std::collections::HashSet<String> = rt.keys().into_iter().collect();

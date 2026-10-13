@@ -530,8 +530,14 @@ fn wait_for_entry(dir: &Path, name: &std::ffi::OsStr) {
 impl Handle {
     /// Follow who is capturing the microphone, camera or screen, from the PipeWire socket at
     /// `socket`, into [`SessionState::capture`](crate::SessionState). A missing PipeWire is waited
-    /// for (inotify), not retried on a timer. See the module docs.
+    /// for (inotify), not retried on a timer. Starts once; later calls do nothing. See the module docs.
     pub fn start_capture(&self, socket: PathBuf) {
+        if self
+            .capture_started
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
         let hub = self.hub.clone();
         let gate = self.capture_gate.clone();
         std::thread::Builder::new()

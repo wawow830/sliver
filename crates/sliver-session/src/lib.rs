@@ -211,6 +211,7 @@ pub struct Handle {
     failed_started: Arc<std::sync::atomic::AtomicBool>,
     /// The PipeWire capture follower's on/off switch ([`Handle::start_capture`]).
     capture_gate: Arc<capture::Gate>,
+    capture_started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Handle {
@@ -314,6 +315,7 @@ impl Session {
             dnd_cookie: Arc::default(),
             failed_started: Arc::default(),
             capture_gate: capture::Gate::new(),
+            capture_started: Arc::default(),
         };
         let h = hub.clone();
         std::thread::Builder::new()

@@ -136,6 +136,8 @@ pub struct Feeds {
     specs: Vec<Spec>,
     /// Starts the failed-units watcher on the real buses ([`Feeds::watch_failed_units`]).
     failed_units: Option<Box<dyn Fn() + Send>>,
+    /// Starts the PipeWire capture follower ([`Feeds::watch_capture`]).
+    capture: Option<Box<dyn Fn() + Send>>,
 }
 
 impl Feeds {
@@ -156,6 +158,7 @@ impl Feeds {
             signal_target: None,
             specs: Vec::new(),
             failed_units: None,
+            capture: None,
         })
     }
 
@@ -294,7 +297,8 @@ impl Feeds {
         if opts.capture
             && let Some(socket) = sliver_session::capture::socket_path(|k| std::env::var(k).ok())
         {
-            handle.start_capture(socket);
+            let h = handle.clone();
+            self.capture = Some(Box::new(move || h.start_capture(socket.clone())));
         }
         if let Some(sysfs) = &opts.sysfs {
             handle.refresh_brightness(sysfs);
@@ -342,6 +346,15 @@ impl Feeds {
     /// calls do nothing). Not started otherwise, because it asks systemd to send signals.
     pub fn watch_failed_units(&self) {
         if let Some(f) = &self.failed_units {
+            f();
+        }
+    }
+
+    /// A layout uses `privacy`: follow who is capturing the microphone, camera or screen (once;
+    /// later calls do nothing). Not started otherwise: every registry change in PipeWire would
+    /// wake the agent for nothing.
+    pub fn watch_capture(&self) {
+        if let Some(f) = &self.capture {
             f();
         }
     }
