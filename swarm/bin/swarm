@@ -1025,10 +1025,18 @@ def cmd_pulse(a):
                 elif kind == "blocked":
                     notify(f"sliver: {name} is blocked", f"{name} is waiting at an approval/question UI. Look at its pane.")
                 elif kind == "revive":
-                    channel("peer", f"{name}'s agent is gone; reviving", by="pulse")
                     with state() as s:
                         pane = s["peers"][name].get("pane")
-                    if pane and herdr("pane", "get", pane):
+                    pj = herdr("pane", "get", pane) if pane else None
+                    pinfo = (pj or {}).get("result", {}).get("pane", {})
+                    if pinfo.get("agent"):
+                        # the agent is alive in its pane; herdr just dropped its name
+                        herdr("agent", "rename", pane, name)
+                        if agent_status(name):
+                            channel("peer", f"{name}'s agent was alive but unnamed; re-attached the name", by="pulse")
+                            continue
+                    channel("peer", f"{name}'s agent is gone; reviving", by="pulse")
+                    if pj:
                         sh("herdr", "agent", "start", name, "--kind", "pi", "--pane", pane, "--timeout", "60000", "--",
                            "-c", "--model", s["peers"][name].get("model", DEFAULT_MODEL), "--thinking", DEFAULT_THINKING, "-a", check=False)
                         time.sleep(5)
