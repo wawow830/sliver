@@ -26,6 +26,10 @@ grep -qx 'Environment=SLIVER_SYSTEM_UNIT=1' packaging/systemd/sliverd.service \
 # bar dead once). The handover is ExecStartPre= in both directions; itest-units.sh tests it.
 ! grep -q '^Conflicts=.*tiny-dfr' packaging/systemd/sliverd.service packaging/systemd/sliverd.socket \
   || { echo "sliverd units must not use Conflicts=tiny-dfr (see sliverd.service)"; exit 1; }
+# sliverd must start where tiny-dfr isn't installed (systemctl stop exits 5 for an unknown unit).
+grep -qF "ExecStartPre=+/bin/sh -c '/usr/bin/systemctl stop tiny-dfr.service; r=\$\$?; [ \$\$r -eq 0 ] || [ \$\$r -eq 5 ]'" \
+  packaging/systemd/sliverd.service \
+  || { echo "sliverd.service must stop tiny-dfr, tolerating only its absence (exit 5)"; exit 1; }
 grep -q '^ExecStartPre=+-/usr/bin/systemctl stop sliverd.socket sliverd.service' \
   packaging/systemd/tiny-dfr.service.d/50-sliver.conf \
   || { echo "tiny-dfr drop-in must stop sliverd"; exit 1; }

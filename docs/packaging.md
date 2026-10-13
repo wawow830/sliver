@@ -65,6 +65,20 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full rel
   If it fails, the fallback hands the bar to tiny-dfr. That happened on the .256 upgrade: the
   cgroup gate didn't know about the unit's private cgroup namespace (fixed in 59a1eb4).
 
+## Testing the packaging
+- `scripts/check` (always): unit/rule syntax, and the lines that must not regress (no
+  `Conflicts=tiny-dfr`, the handover commands, no udev trigger on the digitizers).
+- `packaging/itest-units.sh` (~10 s, a user systemd manager): the units' handover and fallback
+  logic with stand-in services: crash loop → tiny-dfr, preemption both ways, the refused-start hole,
+  both started at once, no tiny-dfr installed.
+- `packaging/itest-rpm.sh [RPM_DIR]` (~1 min, podman; T131): the real RPMs in a Fedora container
+  with systemd as PID 1. Install starts nothing and leaves tiny-dfr alone, the agent's user preset
+  enables it, an upgrade doesn't take the bar from tiny-dfr but does restart a running sliverd,
+  uninstalling a running sliverd hands the bar to tiny-dfr and removes our drop-in and rule, and all
+  of it works without tiny-dfr. Only sliverd's `[Service]` is a stand-in (no bar in a container).
+  Run it after changing the spec's scriptlets or the units. It found that sliverd couldn't start
+  where tiny-dfr isn't installed (the handover's `systemctl stop` failed; fixed).
+
 ## SELinux and polkit (T76, checked on the installed Mac14,7, enforcing)
 - **SELinux: clean, no policy module needed.** sliverd runs as `unconfined_service_t` (a `bin_t`
   binary started by systemd, the same domain tiny-dfr gets). The agent and apps run as the user's

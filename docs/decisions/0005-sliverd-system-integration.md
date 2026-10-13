@@ -22,6 +22,9 @@ package, and hand the bar back when it can't run.
   tiny-dfr as soon as a start was queued, even one the start limit then refused, and `OnFailure=`
   doesn't fire again for an already-failed unit. A second `systemctl start sliverd` after the
   fallback left the bar with no daemon. ExecStartPre only runs for starts that really happen.
+  *Amended again (T131):* the stop tolerates exit 5 ("no such unit"), via `/bin/sh -c`. A plain
+  `systemctl stop tiny-dfr.service` fails where tiny-dfr isn't installed, so sliverd never started
+  there; `packaging/itest-rpm.sh` found it. Other stop failures still fail the start.
 - **Recovery ladder.** `Restart=always`, `RestartSec=500ms`, `RestartMode=direct` (no trip through
   `failed`), then `StartLimitBurst=5` in 60 s, then `OnFailure=tiny-dfr.service`. A crash costs
   ~0.5 s of bar. A crash loop costs ~3 s, then tiny-dfr. `systemctl reset-failed sliverd &&

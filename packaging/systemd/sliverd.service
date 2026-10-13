@@ -27,8 +27,11 @@ Type=exec
 # unit sets it: OnFailure=tiny-dfr above is the safety net here.
 Environment=SLIVER_SYSTEM_UNIT=1
 # Blocking, so tiny-dfr has released DRM master before we open the card. Runs on every (re)start
-# that the start limit lets through, never on a refused one.
-ExecStartPre=+/usr/bin/systemctl stop tiny-dfr.service
+# that the start limit lets through, never on a refused one. Exit 5 is "tiny-dfr isn't installed":
+# fine (a plain stop fails then, and sliverd never started on machines without tiny-dfr, found by
+# packaging/itest-rpm.sh). Any other failure to stop it still fails the start, so the two never
+# fight over the bar.
+ExecStartPre=+/bin/sh -c '/usr/bin/systemctl stop tiny-dfr.service; r=$$?; [ $$r -eq 0 ] || [ $$r -eq 5 ]'
 ExecStart=/usr/libexec/sliverd
 Sockets=sliverd.socket
 Restart=always
