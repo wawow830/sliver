@@ -417,6 +417,18 @@ on the sandbox buses each of those is silent except audio without a PulseAudio s
 Snap of tiny-dfr through the harness: correct orientation (F1 on the left, text upright), so
 `snap`'s ioctl layouts and un-rotation are confirmed.
 
+### Guided check 2026-10-13 (human, `hwcheck pixel-shift suspend`, files in `target/hw/checks/`)
+- **Pixel shift on the real panel (T79/T95):** the lit area moved x 2→4→6, y 4→2→0 (top) over about 60 s:
+  1 px per 15 s along the path, so the stride and DRM path are fine with shifted frames. Nothing was
+  clipped at either end (content keeps 11 px clear, and the shift is at most 11 px). The human
+  didn't notice any movement. Touch reached sliverd while shifted.
+- **Fn held → the agent's Fn layer:** `fn down` → `view=Agent(Fn)` in 5–13 ms, back to `Agent(Base)` on release.
+- **Suspend (s2idle, lid open, 12–13 s, .313 with T120):** the bar came back lit at the same brightness
+  (128) with a correct picture. Touch after wake wasn't tested.
+- **Lesson: test agents must not share the session bus.** A second sliver-agent takes
+  `io.github.wawow830.Sliver` from the installed one. When it exits, systemd stops the installed agent
+  (`Type=dbus`, `BusName=`). hwcheck runs its agent under `dbus-run-session` (d7e6c25).
+
 ## Open questions (need hardware or the human)
 1. ~~Physical Esc?~~ **Yes** (H2).
 2. ~~DRM caps~~: measured above. ~~Does `ACTIVE=0` blank the panel?~~ **No** (T48, H30): the
