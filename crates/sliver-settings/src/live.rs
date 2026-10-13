@@ -11,7 +11,11 @@ use zbus::zvariant::OwnedValue;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Agent {
     Running {
+        /// Connected to sliverd and driving the bar.
         healthy: bool,
+        /// `Control1.Errors` (API 3): config, stylesheet and module problems, one per line, file
+        /// and line first when known. Empty from an older agent.
+        errors: Vec<String>,
         layer: String,
         display: String,
         version: String,
@@ -58,6 +62,10 @@ fn query() -> Agent {
     };
     Agent::Running {
         healthy,
+        errors: get(&conn, IFACE_CONTROL, "Errors")
+            .ok()
+            .and_then(|v| Vec::<String>::try_from(v).ok())
+            .unwrap_or_default(),
         layer: s(IFACE_CONTROL, "ActiveLayer").unwrap_or_default(),
         display: s(IFACE_TOUCHBAR, "DisplayState").unwrap_or_default(),
         // A number today (API version); a string would work too.

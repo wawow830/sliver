@@ -158,13 +158,44 @@ pub(crate) fn status_page(state: &State) -> gtk::Widget {
     svc.add(&agent_row);
     svc.add(&daemon_row);
     page.add(&svc);
+    // The agent's own list of problems (Control1.Errors), when it has any.
+    let reported = group(
+        "The agent reports",
+        Some("Problems the running agent found. It keeps showing the last good setup meanwhile."),
+    );
+    reported.set_visible(false);
+    page.add(&reported);
+    // Config and stylesheet problems are already under Problems (this app checks the same
+    // files): only the agent's own (modules, runtime) are new here.
+    let ours: Vec<String> = state
+        .loaded
+        .files
+        .iter()
+        .map(|f| f.display().to_string())
+        .collect();
+    let already_shown = move |e: &str| {
+        let head = e.split(':').next().unwrap_or("");
+        ours.iter().any(|f| e.starts_with(f.as_str())) || head.ends_with(".css")
+    };
     crate::live::agent_status(move |a| match a {
         crate::live::Agent::Running {
             healthy,
+            errors,
             layer,
             display,
             version,
         } => {
+            let all = errors.len();
+            let errors: Vec<&String> = errors.iter().filter(|e| !already_shown(e)).collect();
+            for e in &errors {
+                let r = adw::ActionRow::builder()
+                    .title(glib::markup_escape_text(e))
+                    .title_lines(0)
+                    .build();
+                r.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+                reported.add(&r);
+            }
+            reported.set_visible(!errors.is_empty());
             agent_row.set_subtitle(&glib::markup_escape_text(&format!(
                 "running{} · {} · showing the {layer} layer",
                 if version.is_empty() {
@@ -172,10 +203,15 @@ pub(crate) fn status_page(state: &State) -> gtk::Widget {
                 } else {
                     format!(" ({version})")
                 },
-                if healthy {
-                    "healthy"
-                } else {
-                    "problems (the last good config is live; see above)"
+                {
+                    let driving = if healthy { "driving the bar · " } else { "" };
+                    match (all, errors.len()) {
+                        (0, _) if !healthy => "not driving the bar yet".to_owned(),
+                        (0, _) => "driving the bar, no problems".to_owned(),
+                        (_, 0) => format!("{driving}see Problems above"),
+                        (_, 1) => format!("{driving}1 problem (below)"),
+                        (_, n) => format!("{driving}{n} problems (below)"),
+                    }
                 }
             )));
             daemon_row.set_subtitle(&glib::markup_escape_text(&format!(

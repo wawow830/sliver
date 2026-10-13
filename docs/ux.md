@@ -396,6 +396,10 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   `WITH_AGENT=1 scripts/settings-headless OUT.png sleep=3 "touch=tap 168"` taps the fake bar through
   sliverd's real touch path (hazel's `--touch-socket`), and the preview rings that item; with Select
   only on, its command doesn't run.
+- **Status → The agent reports** (cedar's `Control1.Errors`, API 3): problems only the running
+  agent knows (modules, runtime) are listed under Services. Config and stylesheet errors are
+  already under Problems, so they aren't repeated. The agent row says whether it's driving the bar
+  and how many problems it has.
 - **Apps → Publishing now** lists each running provider's items (`ListContexts` `item-ids`/
   `item-labels`) with **Place on the bar**, which adds `app/<provider>#<id>` (or the whole
   `app/<provider>`) to the base layout's main zone, where it renders like any module (T121).
