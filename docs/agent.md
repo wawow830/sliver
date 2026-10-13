@@ -99,8 +99,8 @@ bar, whatever the layout says (ux.md §5). `privacy.rs` does this in two layers:
    output, and nothing published by apps (so no App controls, Status items or modal context
    either).
 2. `privacy::allowed` drops whole kinds: `custom/*` (arbitrary output, and commands run from a
-   locked bar), published items and their slots, `window`, `taskbar`, and `emoji` (recents are
-   a history).
+   locked bar), `image` (a picture a script or the config picked: album art, a photo),
+   published items and their slots, `window`, `taskbar`, and `emoji` (recents are a history).
 
 Keys, sliders, toggles, the clock, battery, workspaces, the keyboard layout, the notification
 count and media play/pause (status glyph only) stay. Both layers apply to the base and Fn

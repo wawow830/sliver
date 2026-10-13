@@ -280,7 +280,12 @@ impl Renderer {
                 .map(|item| {
                     let (s, parts) = styles.next().expect("one style per item");
                     let chrome = s.padding[1] + s.padding[3] + 2.0 * s.border_width;
-                    let content = self.content_width(&item.content, s, parts.as_ref());
+                    let content_h = bar.h
+                        - (zs.margin[0] + zs.margin[2] + zs.padding[0] + zs.padding[2])
+                        - 2.0 * zs.border_width
+                        - (s.margin[0] + s.margin[2] + s.padding[0] + s.padding[2])
+                        - 2.0 * s.border_width;
+                    let content = self.content_width(&item.content, s, parts.as_ref(), content_h);
                     let mut natural = (content + chrome).max(s.min_width);
                     let margins = s.margin[1] + s.margin[3];
                     let width = match item.width {
@@ -395,6 +400,7 @@ impl Renderer {
         content: &Content,
         s: &Style,
         parts: Option<&[Arc<Style>; 3]>,
+        content_h: f32,
     ) -> f32 {
         let family = self.fonts.pick_family(&s.font_family);
         let mut label = |t: &str, markup: bool| {
@@ -410,6 +416,11 @@ impl Renderer {
             Content::Text(t) => label(t, false).ceil(),
             Content::Markup(t) => label(t, true).ceil(),
             Content::Icon(_) => s.icon_size,
+            // As tall as the item's content box, as wide as its aspect ratio makes it.
+            Content::Image(icon) => match icon.size() {
+                (w, h) if w > 0.0 && h > 0.0 => (content_h.max(0.0) * w / h).ceil(),
+                _ => 0.0,
+            },
             Content::IconText(_, t) => s.icon_size + s.gap + label(t, false).ceil(),
             Content::IconMarkup(_, t) => s.icon_size + s.gap + label(t, true).ceil(),
             Content::Slider { icon, .. } => {
@@ -573,6 +584,22 @@ impl Renderer {
                 let x = (cx - icon_size / 2.0).round();
                 let y = (cy - icon_size / 2.0).round();
                 draw_icon(icon, x, y, icon_size, fg, opacity, pixmap);
+            }
+            Content::Image(icon) => {
+                let (x, y) = (content.x.round(), content.y.round());
+                let (w, h) = (content.w.floor(), content.h.floor());
+                // Clipped to the item's rounded box (inside its border), so a picture with no
+                // padding (album art) keeps the button's corners.
+                let inner = rect.inset([s.border_width; 4]);
+                let mask = (s.radius > s.border_width)
+                    .then(|| rounded_rect(inner, s.radius - s.border_width))
+                    .flatten()
+                    .and_then(|path| {
+                        let mut m = tiny_skia::Mask::new(pixmap.width(), pixmap.height())?;
+                        m.fill_path(&path, FillRule::Winding, true, Transform::identity());
+                        Some(m)
+                    });
+                draw_icon_in(icon, x, y, w, h, fg, opacity, mask.as_ref(), pixmap);
             }
             Content::Slider { icon, .. } => {
                 if let Some(icon) = icon {
@@ -812,14 +839,29 @@ fn draw_slider(
 }
 
 fn draw_icon(icon: &Icon, x: f32, y: f32, size: f32, fg: Color, opacity: f32, pixmap: &mut Pixmap) {
+    draw_icon_in(icon, x, y, size, size, fg, opacity, None, pixmap);
+}
+
+/// Draws `icon` fitted inside the `bw` x `bh` box at `x`, `y` (aspect ratio kept, centered).
+#[allow(clippy::too_many_arguments)]
+fn draw_icon_in(
+    icon: &Icon,
+    x: f32,
+    y: f32,
+    bw: f32,
+    bh: f32,
+    fg: Color,
+    opacity: f32,
+    mask: Option<&tiny_skia::Mask>,
+    pixmap: &mut Pixmap,
+) {
     let (w, h) = icon.size();
-    if w <= 0.0 || h <= 0.0 || size <= 0.0 {
+    if w <= 0.0 || h <= 0.0 || bw <= 0.0 || bh <= 0.0 {
         return;
     }
-    // Fit inside size x size, keeping the aspect ratio, centered.
-    let scale = (size / w).min(size / h);
-    let dx = (size - w * scale) / 2.0;
-    let dy = (size - h * scale) / 2.0;
+    let scale = (bw / w).min(bh / h);
+    let dx = (bw - w * scale) / 2.0;
+    let dy = (bh - h * scale) / 2.0;
     let draw = |target: &mut Pixmap, ox: f32, oy: f32| {
         let transform = Transform::from_row(scale, 0.0, 0.0, scale, ox + dx, oy + dy);
         match &icon.image {
@@ -833,13 +875,12 @@ fn draw_icon(icon: &Icon, x: f32, y: f32, size: f32, fg: Color, opacity: f32, pi
             }
         }
     };
-    if !icon.symbolic && opacity >= 1.0 {
+    if !icon.symbolic && opacity >= 1.0 && mask.is_none() {
         draw(pixmap, x, y);
         return;
     }
     // Draw offscreen, then either recolor (symbolic: keep only coverage, paint in `fg`) or fade.
-    let side = size.ceil() as u32;
-    let Some(mut scratch) = Pixmap::new(side, side) else {
+    let Some(mut scratch) = Pixmap::new(bw.ceil() as u32, bh.ceil() as u32) else {
         return;
     };
     draw(&mut scratch, 0.0, 0.0);
@@ -859,7 +900,7 @@ fn draw_icon(icon: &Icon, x: f32, y: f32, size: f32, fg: Color, opacity: f32, pi
         scratch.as_ref(),
         &paint,
         Transform::identity(),
-        None,
+        mask,
     );
 }
 

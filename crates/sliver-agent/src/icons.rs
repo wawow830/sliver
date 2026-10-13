@@ -43,7 +43,19 @@ pub struct Icons {
     cache: HashMap<(String, Option<String>, u32), Option<Icon>>,
     /// Relative icon paths are relative to the config file's directory.
     base: Option<std::path::PathBuf>,
+    /// Pictures for `image` modules and published `image` items, by file (see [`Icons::image`]).
+    images: HashMap<std::path::PathBuf, (ImageStamp, Option<Icon>)>,
+    /// Published `icon-data`, by a hash of the bytes and the size limit: published cells are
+    /// rebuilt on every frame, and a 256 KiB picture shouldn't be decoded each time.
+    decoded: HashMap<(u64, Option<u32>), Option<Icon>>,
 }
+
+/// What a cached picture was read from: re-read when the file changes (scripts rewrite the
+/// same file), or at another size.
+type ImageStamp = (Option<std::time::SystemTime>, u64, u32);
+
+/// Pictures kept at once. A script that names a new file every time can't grow the cache.
+const MAX_IMAGES: usize = 16;
 
 impl Icons {
     /// The user's icon theme, with built-in fallbacks.
@@ -52,6 +64,8 @@ impl Icons {
             loader: Some(IconLoader::from_env()),
             cache: HashMap::new(),
             base: None,
+            images: HashMap::new(),
+            decoded: HashMap::new(),
         }
     }
 
@@ -61,6 +75,8 @@ impl Icons {
             loader: None,
             cache: HashMap::new(),
             base: None,
+            images: HashMap::new(),
+            decoded: HashMap::new(),
         }
     }
 
@@ -70,12 +86,66 @@ impl Icons {
         if self.base.as_deref() != dir {
             self.base = dir.map(Into::into);
             self.cache.clear();
+            self.images.clear();
         }
+    }
+
+    /// A picture for an `image` module: a file path (`~/`, or relative to the config file, like
+    /// icon paths), or else an icon name. Rasters are kept at most `max_h` pixels tall. A file
+    /// is read again when its modification time or size changes. `None`: no such picture.
+    pub fn image(&mut self, name: &str, max_h: u32) -> Option<Icon> {
+        if !is_path(name) {
+            return self.get(name, None, max_h);
+        }
+        let path = expand_home(name);
+        let path = match &self.base {
+            Some(base) if path.is_relative() => base.join(path),
+            _ => path,
+        };
+        let meta = std::fs::metadata(&path).ok()?;
+        let stamp = (meta.modified().ok(), meta.len(), max_h);
+        if let Some((s, icon)) = self.images.get(&path)
+            && *s == stamp
+        {
+            return icon.clone();
+        }
+        if self.images.len() >= MAX_IMAGES {
+            self.images.clear();
+        }
+        let icon = Icon::load(&path).ok().map(|i| i.fit_height(max_h));
+        self.images.insert(path, (stamp, icon.clone()));
+        icon
+    }
+
+    /// Decodes published `icon-data` (PNG, JPEG or SVG), cached by content. With `max_h`, a
+    /// raster is kept at most that tall (pictures; see [`Icon::fit_height`]).
+    pub fn from_bytes(&mut self, data: &[u8], max_h: Option<u32>) -> Option<Icon> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        data.hash(&mut h);
+        let key = (h.finish(), max_h);
+        if let Some(hit) = self.decoded.get(&key) {
+            return hit.clone();
+        }
+        if self.decoded.len() >= 4 * MAX_IMAGES {
+            self.decoded.clear();
+        }
+        let icon = Icon::from_png(data)
+            .or_else(|_| Icon::from_jpeg(data))
+            .or_else(|_| Icon::from_svg(data))
+            .ok()
+            .map(|i| match max_h {
+                Some(h) => i.fit_height(h),
+                None => i,
+            });
+        self.decoded.insert(key, icon.clone());
+        icon
     }
 
     /// Forget everything (theme or config changed).
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.images.clear();
         if let Some(l) = &self.loader {
             l.clear_cache();
         }
@@ -126,7 +196,10 @@ impl Icons {
 /// bare file name with an image extension (`logo.svg` next to the config).
 fn is_path(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    name.contains('/') || [".png", ".svg", ".svgz"].iter().any(|e| lower.ends_with(e))
+    name.contains('/')
+        || [".png", ".svg", ".svgz", ".jpg", ".jpeg"]
+            .iter()
+            .any(|e| lower.ends_with(e))
 }
 
 fn expand_home(p: &str) -> std::path::PathBuf {

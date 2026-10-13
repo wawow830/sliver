@@ -37,6 +37,7 @@ Additive changes bump the `Version` property (minor).
 | 1 | `Control1.HoldLayout`, `ActiveLayout`/`ActiveLayoutSource`/`ActiveRule`/`ActiveRuleName`; item types `scrubber` (events `scrolled`) and working `popover`s; `ListContexts` `sandboxed`, `item-ids`, `item-labels`; `Desktop1.SetWindows`/`SetWindowsV` |
 | 2 | `Control1.HoldLayoutWith` (`select-only`) and signal `HeldPressed` (Mirror touch-to-select) |
 | 3 | `Control1.Errors` |
+| 4 | item type `image` (feature `item:image`); `icon-data` may also be JPEG |
 
 ---
 
@@ -166,7 +167,7 @@ created/shown one wins (responder-chain analogue: swap contexts as your internal
 Each item is an `a{sv}` with required `id` (s, unique in the context) and `type` (s).
 
 Common props: `label` s · `icon` s (XDG icon name; `-symbolic` icons are recoloured) ·
-`icon-data` ay (PNG or SVG bytes, ≤ 256 KiB) · `enabled` b · `visible` b ·
+`icon-data` ay (PNG, JPEG or SVG bytes, ≤ 256 KiB) · `enabled` b · `visible` b ·
 `classes` as (stylesheet classes, like waybar's `class` output: `["connected"]`) ·
 `values` a{sv} (named values for the user's `format` string, see §3.1) ·
 `fg` / `bg` s (`#rrggbb[aa]`, **hints** that the user's stylesheet overrides) · `width` a{sv} (`min`, `max` in
@@ -185,10 +186,11 @@ default true).
 | `scrubber` | `candidates` aa{sv} (each `label`/`icon`, ≤ 256), `selected` i (-1 = none), `offset` i (first visible; the agent clamps it so the last page is full), `visible-count` i (1–24, default 5). A scrollable strip (NSScrubber): browser tabs, text suggestions, emoji. Swiping scrolls a page, ‹/› arrows appear at the ends, a tap picks. Classes `.scrubber-candidate` (`:checked` when selected), `.scrubber-prev`, `.scrubber-next` |
 | `progress` | `value` d in [0,1], or `indeterminate` b (drawn as a full track with the `.indeterminate` class; no animation, to keep the bar idle) |
 | `spacer` | `size` s: `small` (16 px), `large` (64 px), `flexible` (takes the leftover space) |
+| `image` | none: the picture is `icon-data` (or `icon`, a name or path). It fills the cell's content box at its aspect ratio (album art, a thumbnail), clipped to the item's rounded corners, and is kept at most 120 px tall. Taps like a button. Without a picture it shows its `label` |
 | `group` | `items` aa{sv} (one level of nesting, laid out together, overflow as a unit) |
 | `popover` | `items` aa{sv}; tapping shows them full-width with a close button (NSPopoverTouchBarItem). Only the user's first zone stays, over a modal context too. Taps inside reach the child items and the popover stays open until its ✕ (or until the item or context goes away). Events `popover open=true/false`. Classes `.popover-item`, `.popover-close`, zone `.menu.popover` |
 
-Reserved for later minors: `color-picker`, `image`. Unknown types are skipped with a warning.
+Reserved for later minors: `color-picker`. Unknown types are skipped with a warning.
 
 Labels are plain text (no markup), control characters stripped, truncated to 64 chars.
 Emoji are just text.

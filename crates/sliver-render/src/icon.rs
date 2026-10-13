@@ -201,6 +201,46 @@ impl Icon {
         builtin_svg(name)
     }
 
+    /// The same picture at most `max_h` pixels tall (aspect kept), so a photo or album cover
+    /// isn't kept at full size for a 60 px bar. SVGs, and rasters already that small, are
+    /// returned as they are. Halves first, then one bicubic step, so big reductions don't alias.
+    pub fn fit_height(self, max_h: u32) -> Icon {
+        let Image::Raster(src) = &self.image else {
+            return self;
+        };
+        if max_h == 0 || src.height() <= max_h {
+            return self;
+        }
+        let scaled = |p: &Pixmap, w: u32, h: u32| -> Option<Pixmap> {
+            let mut out = Pixmap::new(w.max(1), h.max(1))?;
+            let paint = tiny_skia::PixmapPaint {
+                quality: tiny_skia::FilterQuality::Bicubic,
+                ..Default::default()
+            };
+            let t = tiny_skia::Transform::from_scale(
+                w.max(1) as f32 / p.width() as f32,
+                h.max(1) as f32 / p.height() as f32,
+            );
+            out.draw_pixmap(0, 0, p.as_ref(), &paint, t, None);
+            Some(out)
+        };
+        let mut cur = std::borrow::Cow::Borrowed(&**src);
+        while cur.height() >= max_h * 2 {
+            match scaled(&cur, cur.width() / 2, cur.height() / 2) {
+                Some(p) => cur = std::borrow::Cow::Owned(p),
+                None => return self,
+            }
+        }
+        let w = (cur.width() as f32 * max_h as f32 / cur.height() as f32).round() as u32;
+        match scaled(&cur, w, max_h) {
+            Some(p) => Icon {
+                image: Image::Raster(Arc::new(p)),
+                symbolic: self.symbolic,
+            },
+            None => self,
+        }
+    }
+
     /// Intrinsic size in pixels.
     pub fn size(&self) -> (f32, f32) {
         match &self.image {

@@ -12,7 +12,7 @@ use sliver_agent::modules::World;
 use sliver_agent::{Agent, icons::Icons};
 use sliver_config::load_str;
 use sliver_ipc::proto::{Layer, RegionKind};
-use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};
+use sliver_render::{Content, Fonts, Pixmap, Renderer, Stylesheet};
 use sliverd::testing::TestDaemon as FakeDaemon;
 
 fn world(h: u32, m: u32) -> World {
@@ -1885,5 +1885,103 @@ fn held_layout_reports_touches() {
             .regions
             .iter()
             .any(|r| matches!(r.kind, RegionKind::Key { .. }))
+    );
+}
+
+/// A solid `w` x `h` PNG with a darker left half, written under the test tmp dir.
+fn picture(name: &str, w: u32, h: u32, rgb: [u8; 3]) -> PathBuf {
+    let mut p = Pixmap::new(w, h).unwrap();
+    for (i, px) in p.data_mut().chunks_exact_mut(4).enumerate() {
+        let dark = (i as u32 % w) < w / 2;
+        let c = |v: u8| if dark { v / 2 } else { v };
+        px.copy_from_slice(&[c(rgb[0]), c(rgb[1]), c(rgb[2]), 255]);
+    }
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    p.save_png(&path).unwrap();
+    path
+}
+
+/// waybar's `image`: a path, or a script printing one; it fills the item's height at its aspect
+/// ratio, hides when there's no picture, follows the file when it changes, and is private when
+/// locked.
+#[test]
+fn image_module() {
+    let wide = picture("image-wide.png", 200, 100, [200, 80, 40]);
+    let big = picture("image-big.png", 1600, 1600, [40, 120, 220]);
+    let mut a = agent(&format!(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        modules = ["image#wide", "image#missing", "image#script", "image#big", "clock"]
+        [modules."image#wide"]
+        path = "{}"
+        [modules."image#missing"]
+        path = "/nonexistent/cover.png"
+        [modules."image#script"]
+        exec = "echo something"
+        [modules."image#big"]
+        path = "{}"
+        "#,
+        wide.display(),
+        big.display()
+    ));
+    let mut w = world(9, 41);
+    a.render(&w);
+    let f = a.frame(Layer::Base).unwrap();
+    let ids: Vec<&str> = f.cells.iter().map(|c| c.id.as_str()).collect();
+    // No file, and a script that hasn't printed yet: hidden.
+    assert_eq!(ids, ["image#wide", "image#big", "clock"]);
+    assert!(matches!(f.cells[0].content, Content::Image(_)));
+    // 2:1, as tall as the item's content box.
+    let r = f.layout.items[0];
+    assert!(r.w > r.h, "a 2:1 picture is wider than tall: {r:?}");
+    // The big photo is kept small (120 px tall at most), not 1600x1600.
+    let Content::Image(icon) = &f.cells[1].content else {
+        panic!("{:?}", f.cells[1].content)
+    };
+    assert_eq!(icon.size(), (120.0, 120.0));
+    check("image-module", &f.image);
+
+    // The script prints a path: shown.
+    w.outputs.insert(
+        "image#script".into(),
+        sliver_modules::Output {
+            text: format!("{}\n", wide.display()),
+            ..Default::default()
+        },
+    );
+    a.render(&w);
+    let ids: Vec<String> = a
+        .frame(Layer::Base)
+        .unwrap()
+        .cells
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    assert_eq!(ids, ["image#wide", "image#script", "image#big", "clock"]);
+
+    // The file changes in place (a script rewrites the cover): the new picture shows.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    picture("image-wide.png", 100, 100, [10, 200, 10]);
+    a.render(&w);
+    let Content::Image(icon) = &a.frame(Layer::Base).unwrap().cells[0].content else {
+        panic!()
+    };
+    assert_eq!(
+        icon.size(),
+        (100.0, 100.0),
+        "re-read after the file changed"
+    );
+
+    // Locked: no pictures.
+    w.context.set("locked", true);
+    a.render(&w);
+    assert!(
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .all(|c| !c.id.starts_with("image")),
+        "images are private while locked"
     );
 }

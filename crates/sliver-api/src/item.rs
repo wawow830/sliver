@@ -114,6 +114,9 @@ pub enum ItemKind {
     Popover {
         items: Vec<Item>,
     },
+    /// A picture (`icon-data` PNG/JPEG/SVG, or `icon`) filling the cell with its aspect ratio:
+    /// album art, a thumbnail. Taps like a button.
+    Image,
 }
 
 impl ItemKind {
@@ -129,6 +132,7 @@ impl ItemKind {
             ItemKind::Spacer { .. } => "spacer",
             ItemKind::Group { .. } => "group",
             ItemKind::Popover { .. } => "popover",
+            ItemKind::Image => "image",
         }
     }
     fn children(&self) -> Option<&Vec<Item>> {
@@ -358,6 +362,7 @@ fn parse_item(p: &Props, depth: u8, w: &mut Warnings) -> Result<Option<Item>, Pa
         "button" => ItemKind::Button,
         "toggle" => ItemKind::Toggle { state: false },
         "label" => ItemKind::Label,
+        "image" => ItemKind::Image,
         "slider" => ItemKind::Slider {
             value: 0.0,
             min: 0.0,

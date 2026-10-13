@@ -1198,3 +1198,110 @@ format = "⏭ {{text}}"
         "the app doesn't hear the hold: {fx:?}"
     );
 }
+
+/// A published `image` item (API 4): its `icon-data` picture fills the cell at its aspect ratio,
+/// kept at most 120 px tall; without a picture it shows its label.
+#[test]
+fn published_image_item() {
+    let Some(bus) = bus() else {
+        eprintln!("dbus-daemon not installed; skipping");
+        return;
+    };
+    let conn = zbus::block_on(
+        zbus::connection::Builder::address(bus.addr.as_str())
+            .unwrap()
+            .build(),
+    )
+    .unwrap();
+    let api = ApiLink::serve(conn, true).unwrap();
+    let app = zbus::blocking::connection::Builder::address(bus.addr.as_str())
+        .unwrap()
+        .build()
+        .unwrap();
+    let path: OwnedObjectPath = app
+        .call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_TOUCHBAR),
+            "CreateContext",
+            &(opts(&[
+                ("provider", Value::from("org.example.Player")),
+                ("scope", Value::from("status")),
+            ]),),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    let mut art = Pixmap::new(1000, 500).unwrap();
+    for px in art.data_mut().chunks_exact_mut(4) {
+        px.copy_from_slice(&[200, 60, 30, 255]);
+    }
+    let png = art.encode_png().unwrap();
+    let items = vec![
+        opts(&[
+            ("id", Value::from("cover")),
+            ("type", Value::from("image")),
+            ("label", Value::from("Album")),
+            ("icon-data", Value::from(png)),
+        ]),
+        opts(&[
+            ("id", Value::from("nopic")),
+            ("type", Value::from("image")),
+            ("label", Value::from("No art")),
+        ]),
+    ];
+    let warnings: Vec<String> = app
+        .call_method(
+            Some(BUS_NAME),
+            path.as_str(),
+            Some(IFACE_CONTEXT),
+            "SetItems",
+            &(items,),
+        )
+        .unwrap()
+        .body()
+        .deserialize()
+        .unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(api.drain().0);
+
+    let mut world = World::at(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 0).unwrap());
+    world.published = Published::snapshot(&api.api);
+    let loaded = sliver_config::load_str(
+        "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"status-items\"]\n",
+        std::path::Path::new("."),
+    );
+    assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
+    let mut a = Agent::new(
+        loaded.config,
+        Stylesheet::sliver(),
+        Renderer::new(Fonts::embedded()),
+        Icons::builtin_only(),
+        2008,
+        60,
+    );
+    a.render(&world);
+    let f = a.frame(Layer::Base).unwrap();
+    let cell = |suffix: &str| {
+        let i = f
+            .cells
+            .iter()
+            .position(|c| c.key.ends_with(suffix))
+            .unwrap_or_else(|| panic!("{suffix} not drawn"));
+        (&f.cells[i], f.layout.items[i])
+    };
+    let (cover, r) = cell("#cover");
+    let sliver_render::Content::Image(icon) = &cover.content else {
+        panic!("{:?}", cover.content)
+    };
+    assert_eq!(icon.size(), (240.0, 120.0), "kept at most 120 px tall");
+    assert!(r.w > 1.5 * r.h, "2:1 picture: {r:?}");
+    assert!(cover.published.is_some(), "taps reach the app");
+    let (nopic, _) = cell("#nopic");
+    assert!(
+        matches!(&nopic.content, sliver_render::Content::Text(t) if t == "No art"),
+        "{:?}",
+        nopic.content
+    );
+}

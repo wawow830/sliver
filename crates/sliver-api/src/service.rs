@@ -529,6 +529,7 @@ impl TouchBar {
             "item:spacer",
             "item:group",
             "item:popover",
+            "item:image",
             "gesture:hold",
             "gesture:swipe",
             "gesture:double-tap",

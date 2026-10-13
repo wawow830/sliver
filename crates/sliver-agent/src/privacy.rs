@@ -17,6 +17,8 @@ use crate::modules::{Cell, World};
 /// Module kinds never shown while locked.
 const HIDDEN_KINDS: &[&str] = &[
     "custom",
+    // A picture a script picked (album art, a photo).
+    "image",
     "app-controls",
     "status-items",
     "slot",

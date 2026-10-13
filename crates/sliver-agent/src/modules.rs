@@ -1103,6 +1103,8 @@ struct Spec {
     menu: Vec<sliver_config::MenuEntry>,
     /// Shown when there is no icon (and no text), instead of an empty cell.
     fallback_text: Option<&'static str>,
+    /// The `image` module: a picture (path or icon name) that fills the cell.
+    image: Option<String>,
 }
 
 impl Spec {
@@ -1124,6 +1126,7 @@ impl Spec {
             timer_total: None,
             menu: Vec::new(),
             fallback_text: None,
+            image: None,
         }
     }
 
@@ -1142,6 +1145,9 @@ impl Spec {
 fn esc(s: &str) -> FmtValue {
     FmtValue::Text(sliver_render::markup::escape(s))
 }
+
+/// `image` pictures are kept at most this tall: twice the 60 px bar, so scaling down stays sharp.
+pub(crate) const IMAGE_MAX_HEIGHT: u32 = 120;
 
 /// The module's spec for this world, or `None` to hide it (no data, nothing to show).
 fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) -> Option<Spec> {
@@ -1171,6 +1177,34 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             sp
         }
         "key" | "custom" | "spacer" => Spec::new(ValueMap::new(), ""),
+        // waybar's `image`: `exec` prints the path (first line), else `path`. Hidden without
+        // one, like waybar.
+        "image" => {
+            let path = match world.outputs.get(&m.id.to_string()) {
+                Some(out) if out.hidden => return None,
+                Some(out) => out.text.lines().next().unwrap_or("").trim().to_owned(),
+                None => m
+                    .config
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_owned(),
+            };
+            if path.is_empty() {
+                return None;
+            }
+            let mut sp = Spec::new(ValueMap::new(), "");
+            sp.image = Some(path);
+            // A fixed `path` with an `interval` is read again then (a script rewrites the file);
+            // with `exec`, the script's runs rebuild the cell.
+            if !m.config.contains_key("exec")
+                && let Some(sliver_config::Interval::Every(d)) = m.common.interval
+            {
+                sp.refresh = Some(d);
+            }
+            sp
+        }
         "clock" => Spec::new(Clock(world.now), CLOCK_DEFAULT),
         "battery" => {
             let p = &s.power;
@@ -1987,6 +2021,9 @@ fn cell(
     let mut classes = m.classes.clone();
     let content = if m.id.kind == "spacer" {
         Content::Spacer
+    } else if let Some(name) = sp.image.take() {
+        // A missing or unreadable picture hides the module (it may not exist yet).
+        Content::Image(icons.image(&name, IMAGE_MAX_HEIGHT)?)
     } else {
         // User module output is already formatted (`sliver_modules::view`): pass it through.
         let plain = sliver_config::Common::default();
@@ -2986,14 +3023,14 @@ pub fn uses_kind(config: &sliver_config::Config, kind: &str) -> bool {
     placed_modules(config).iter().any(|(id, _)| id.kind == kind)
 }
 
-/// Runtime specs for every `custom/*` module with an `exec`, in any layout (including group
+/// Runtime specs for every `custom/*` and `image` module with an `exec`, in any layout (including group
 /// members), for `sliver-feeds`' module runtime. Problems come back as messages.
 pub fn user_module_specs(
     config: &sliver_config::Config,
 ) -> (Vec<sliver_modules::Spec>, Vec<String>) {
     let (mut specs, mut errors) = (Vec::new(), Vec::new());
     for (id, block) in placed_modules(config) {
-        if id.kind != "custom" || !block.contains_key("exec") {
+        if !matches!(id.kind.as_str(), "custom" | "image") || !block.contains_key("exec") {
             continue;
         }
         let inst = ModuleInstance {

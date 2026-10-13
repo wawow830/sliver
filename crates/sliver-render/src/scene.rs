@@ -17,6 +17,10 @@ pub enum Content {
     IconText(Icon, String),
     /// An icon followed by markup text.
     IconMarkup(Icon, String),
+    /// A picture (the `image` module, a published `image` item): fills the content box, keeping
+    /// its aspect ratio, and its natural width follows that ratio. Never recolored, unlike a
+    /// symbolic icon.
+    Image(Icon),
     /// A horizontal slider, `value` in `0.0..=1.0`, with an optional icon on its left. Styled
     /// with child nodes like GTK/waybar: `module > trough > highlight` (the filled part) and
     /// `trough > slider` (the knob).

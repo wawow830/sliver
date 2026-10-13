@@ -7,7 +7,7 @@ use sliver_api::service::Api;
 use sliver_render::{Color, Content, Icon, Width};
 
 use crate::icons::Icons;
-use crate::modules::{Cell, Touch};
+use crate::modules::{Cell, IMAGE_MAX_HEIGHT, Touch};
 
 /// One published context, copied out of the registry for this frame.
 #[derive(Debug, Clone)]
@@ -342,11 +342,17 @@ fn push(
     if !item.visible {
         return;
     }
-    // `icon-data` is PNG or SVG bytes (api.md §3).
+    // `icon-data` is PNG, JPEG or SVG bytes (api.md §3). An `image` item's picture is kept at
+    // most 120 px tall; it fills the cell instead of sitting at icon size.
+    let picture = match (&item.kind, &item.icon_data, &item.icon) {
+        (ItemKind::Image, Some(data), _) => icons.from_bytes(data, Some(IMAGE_MAX_HEIGHT)),
+        (ItemKind::Image, None, Some(name)) => icons.image(name, IMAGE_MAX_HEIGHT),
+        _ => None,
+    };
     let icon = item
         .icon_data
         .as_deref()
-        .and_then(|data| Icon::from_png(data).or_else(|_| Icon::from_svg(data)).ok())
+        .and_then(|data| icons.from_bytes(data, None))
         .or_else(|| {
             item.icon
                 .as_deref()
@@ -435,6 +441,13 @@ fn push(
             &item.id,
         )),
         ItemKind::Label => out.push(base(label_content(icon, label), None, false, &item.id)),
+        // Without a picture (yet): its label. Taps like a button.
+        ItemKind::Image => out.push(base(
+            picture.map_or_else(|| label_content(icon, label), Content::Image),
+            Some(PubKind::Button),
+            false,
+            &item.id,
+        )),
         ItemKind::Slider {
             value,
             min,

@@ -503,3 +503,29 @@ fn indeterminate_progress_is_muted_in_every_theme() {
         );
     }
 }
+
+/// Pictures (`image` modules and items) fill the content height at their aspect ratio, and are
+/// clipped to the item's rounded corners when it has no padding (album art).
+#[test]
+fn images() {
+    let art = || {
+        Icon::load(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/art-48x32.jpg"))
+            .unwrap()
+    };
+    let scene = Scene::new(vec![
+        Item::new(Content::Image(art())).id("padded"),
+        Item::new(Content::Image(art())).id("flush"),
+        Item::new(Content::Image(art()))
+            .id("narrow")
+            .width(Width::Fixed(40.0)),
+        Item::text("after"),
+    ]);
+    check(
+        "images",
+        &scene,
+        &css(
+            "module { background: #444; border-radius: 8px; padding: 4px 10px; margin: 4px 3px; }
+             #flush { padding: 0; border-radius: 14px; }",
+        ),
+    );
+}
