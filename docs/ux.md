@@ -399,7 +399,7 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
 - **Status → The agent reports** (cedar's `Control1.Errors`, API 3): problems only the running
   agent knows (modules, runtime) are listed under Services. Config and stylesheet errors are
   already under Problems, so they aren't repeated. The agent row says whether it's driving the bar
-  and how many problems it has.
+  (`Healthy`, which since e34d1fc means only that) and how many problems `Errors` lists.
 - **Apps → Publishing now** lists each running provider's items (`ListContexts` `item-ids`/
   `item-labels`) with **Place on the bar**, which adds `app/<provider>#<id>` (or the whole
   `app/<provider>`) to the base layout's main zone, where it renders like any module (T121).

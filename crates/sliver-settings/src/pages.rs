@@ -204,13 +204,18 @@ pub(crate) fn status_page(state: &State) -> gtk::Widget {
                     format!(" ({version})")
                 },
                 {
-                    let driving = if healthy { "driving the bar · " } else { "" };
+                    // Healthy = connected and driving the bar (ash, e34d1fc); problems come
+                    // from Control1.Errors.
+                    let driving = if healthy {
+                        "driving the bar"
+                    } else {
+                        "not driving the bar (standby, or another seat)"
+                    };
                     match (all, errors.len()) {
-                        (0, _) if !healthy => "not driving the bar yet".to_owned(),
-                        (0, _) => "driving the bar, no problems".to_owned(),
-                        (_, 0) => format!("{driving}see Problems above"),
-                        (_, 1) => format!("{driving}1 problem (below)"),
-                        (_, n) => format!("{driving}{n} problems (below)"),
+                        (0, _) => format!("{driving}, no problems"),
+                        (_, 0) => format!("{driving}, see Problems above"),
+                        (_, 1) => format!("{driving}, 1 problem (below)"),
+                        (_, n) => format!("{driving}, {n} problems (below)"),
                     }
                 }
             )));
