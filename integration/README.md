@@ -75,3 +75,11 @@ The agent's taskbar actions go back like this:
 the first time; not part of `scripts/check`. Covered this way: the sway backend (sway 1.11), the
 generic Wayland backend (labwc 0.9), niri 26.04 (nested in a headless sway) and the GNOME
 extension (gnome-shell 50.5). KWin has its own nested test (`integration/kwin/test.sh`).
+
+## Portal check
+
+`integration/portal/test.sh` runs the real xdg-desktop-portal on a private bus with a mock backend
+(`mock-backend.py`) and makes the `screenshot` module's call through the agent's own code
+(`sliver-agent/examples/oneshot.rs`). It needs only the installed portal and python3-gobject, so it
+needs no compositor. Skips when they're missing. A real backend (xdpw in headless sway) accepted the
+call too but never answered, so grabbing pixels is unverified.
