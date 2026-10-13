@@ -72,6 +72,10 @@ if command -v node >/dev/null; then
   done
 fi
 
+# The agent must come back from a stray SIGTERM (systemd counts it as a clean exit).
+grep -qx 'Restart=always' packaging/systemd/user/sliver-agent.service \
+  || { echo "sliver-agent.service needs Restart=always"; exit 1; }
+
 # The RPM must not send udev events to the digitizers: SYSTEMD_WANTS=sliverd.service fires on
 # 'change' too, so that would take the bar over at every install/upgrade (measured).
 ! grep -E '^\s*udevadm trigger.*subsystem-match=input' packaging/rpm/sliver.spec \

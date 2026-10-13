@@ -18,7 +18,11 @@ ConditionPathExists=/usr/libexec/sliverd
 Type=dbus
 BusName=io.github.wawow830.Sliver
 ExecStart=/usr/bin/sliver-agent
-Restart=on-failure
+# always, not on-failure: a stray SIGTERM (pkill, a script) counts as a clean exit, and with
+# on-failure the bar then stays on sliverd's built-in layer for the rest of the session (seen on
+# the Mac14,7, T122 follow-up). The agent never exits 0 on its own (losing sliverd reconnects), so
+# this can't loop; 'systemctl --user stop' and the session ending still stop it for good.
+Restart=always
 RestartSec=1s
 # The agent is user code. It needs the session bus and the compositor socket, nothing special.
 NoNewPrivileges=yes
