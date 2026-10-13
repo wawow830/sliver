@@ -36,6 +36,7 @@ Additive changes bump the `Version` property (minor).
 | 0 | the first published interface |
 | 1 | `Control1.HoldLayout`, `ActiveLayout`/`ActiveLayoutSource`/`ActiveRule`/`ActiveRuleName`; item types `scrubber` (events `scrolled`) and working `popover`s; `ListContexts` `sandboxed`, `item-ids`, `item-labels`; `Desktop1.SetWindows`/`SetWindowsV` |
 | 2 | `Control1.HoldLayoutWith` (`select-only`) and signal `HeldPressed` (Mirror touch-to-select) |
+| 3 | `Control1.Errors` |
 
 ---
 
@@ -304,8 +305,10 @@ Properties: `ActiveLayer` s, `ActiveLayout` s (what the base layer shows now),
 empty before the first frame), `ActiveRule` i (index into the config's `rules`, -1 if none),
 `ActiveRuleName` s (that rule's `name`, may be empty), `Layers` as, `ActiveProfile` s, `Profiles` as, `Variables` a{sv}, `Healthy` b
 (agent connected to sliverd and driving the bar, and the config and modules have no errors: false
-while sliverd is gone, or a saved config was rejected and the last good one is live). All of these
-stay current while the bar is off.
+while sliverd is gone, or a saved config was rejected and the last good one is live), `Errors` as
+(those problems: config, stylesheet and module errors, one line each with the file and line first
+when known; empty when all is well. `sliverctl status` prints them). All of these stay current
+while the bar is off.
 
 `SetProfile` writes `~/.config/sliver/active-profile` and reloads. It fails, leaving the old profile
 active, if the name is unknown or the profile doesn't validate. `default` is `config.toml`.

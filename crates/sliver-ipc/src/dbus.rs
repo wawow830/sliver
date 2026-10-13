@@ -15,7 +15,7 @@ pub const IFACE_CONTROL: &str = "io.github.wawow830.Sliver.Control1";
 pub const IFACE_DESKTOP: &str = "io.github.wawow830.Sliver.Desktop1";
 
 /// Minor version reported in the `Version` property. Bump it for additive changes.
-pub const API_MINOR: u32 = 2;
+pub const API_MINOR: u32 = 3;
 
 /// D-Bus error names.
 pub mod error {

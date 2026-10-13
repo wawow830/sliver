@@ -40,6 +40,7 @@ impl Host for Rec {
         ControlState {
             active_layer: "base".into(),
             healthy: true,
+            errors: vec!["config.toml:7: modules.\"custom/vpn\": exec: no such file".into()],
             ..Default::default()
         }
     }
@@ -98,6 +99,10 @@ fn control_publish_and_events() {
     assert!(
         success && out.contains("ActiveLayer: base") && out.contains("Healthy: true"),
         "{out}"
+    );
+    assert!(
+        out.contains("Errors: 1\n  config.toml:7: modules.\"custom/vpn\": exec: no such file"),
+        "status lists the agent's current errors: {out}"
     );
     let (success, _, err) = ok(&["frobnicate"]);
     assert!(!success && err.contains("unknown command"));

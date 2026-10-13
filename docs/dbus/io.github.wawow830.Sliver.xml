@@ -132,6 +132,11 @@
     <property name="ActiveProfile" type="s" access="read"/>
     <property name="ActiveRule" type="i" access="read"/>
     <property name="ActiveRuleName" type="s" access="read"/>
+    <!--
+    What's wrong with the config, stylesheet or a module right now (one line each, the file
+    and line first when known). Empty when all is well.
+    -->
+    <property name="Errors" type="as" access="read"/>
     <property name="Healthy" type="b" access="read"/>
     <property name="Layers" type="as" access="read"/>
     <property name="Profiles" type="as" access="read"/>

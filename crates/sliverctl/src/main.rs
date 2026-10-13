@@ -195,6 +195,19 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
                 let v = property(&conn, iface, name)?;
                 out(&format!("{name}: {}", show(&v)));
             }
+            // Errors (API minor 3): an older agent doesn't have it.
+            if let Ok(v) = property(&conn, IFACE_CONTROL, "Errors")
+                && let Ok(errors) = <Vec<String>>::try_from(v)
+            {
+                if errors.is_empty() {
+                    out("Errors: none");
+                } else {
+                    out(&format!("Errors: {}", errors.len()));
+                    for e in &errors {
+                        out(&format!("  {e}"));
+                    }
+                }
+            }
         }
         Cmd::Modules | Cmd::Contexts => {
             let member = if cmd == Cmd::Modules {

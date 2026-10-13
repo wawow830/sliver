@@ -105,6 +105,8 @@ pub struct ControlState {
     pub profiles: Vec<String>,
     pub variables: Props,
     pub healthy: bool,
+    /// Config, stylesheet and module problems now, one per line (`Errors`; empty = none).
+    pub errors: Vec<String>,
 }
 
 /// The agent core, as seen by the API.
@@ -451,7 +453,8 @@ impl Api {
         i.active_profile_changed(e).await?;
         i.profiles_changed(e).await?;
         i.variables_changed(e).await?;
-        i.healthy_changed(e).await
+        i.healthy_changed(e).await?;
+        i.errors_changed(e).await
     }
 
     /// The user touched `module` (zone `zone`, `index` in its `modules`) on the held layout:
@@ -672,7 +675,7 @@ impl ControlIface {
         self.call(conn, hdr, req).await.map(|_| ())
     }
 
-    async fn errors(
+    async fn error_list(
         &self,
         conn: &Connection,
         hdr: &Header<'_>,
@@ -804,7 +807,7 @@ impl ControlIface {
         #[zbus(header)] h: Header<'_>,
         #[zbus(connection)] c: &Connection,
     ) -> Result<Vec<String>> {
-        self.errors(c, &h, Control::ReloadConfig).await
+        self.error_list(c, &h, Control::ReloadConfig).await
     }
     async fn validate_config(
         &self,
@@ -812,7 +815,7 @@ impl ControlIface {
         #[zbus(connection)] c: &Connection,
         toml: String,
     ) -> Result<Vec<String>> {
-        self.errors(c, &h, Control::ValidateConfig(toml)).await
+        self.error_list(c, &h, Control::ValidateConfig(toml)).await
     }
     async fn preview(
         &self,
@@ -1043,6 +1046,12 @@ impl ControlIface {
     #[zbus(property)]
     fn healthy(&self) -> bool {
         self.inner.host.control_state().healthy
+    }
+    /// What's wrong with the config, stylesheet or a module right now (one line each, the file
+    /// and line first when known). Empty when all is well.
+    #[zbus(property)]
+    fn errors(&self) -> Vec<String> {
+        self.inner.host.control_state().errors
     }
 }
 

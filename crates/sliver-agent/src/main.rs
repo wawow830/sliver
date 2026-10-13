@@ -1076,6 +1076,12 @@ fn control_state(agent: &Agent, reloader: &Reloader) -> ControlState {
         profiles: reloader.profile.1.clone(),
         variables: Default::default(),
         healthy: agent.errors.is_empty() && reloader.errors.is_empty(),
+        errors: reloader
+            .errors
+            .iter()
+            .chain(&agent.errors)
+            .cloned()
+            .collect(),
     }
 }
 
