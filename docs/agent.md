@@ -166,7 +166,8 @@ systemd-run --user --scope -q target/release/examples/memprobe            # fall
 **Soak (T118):** `scripts/soak` runs the release agent on private buses and churns it for a few
 minutes. An app publishes items with fresh ids, labels (some with missing glyphs) and PNG icons,
 and drops and re-creates its context. A continuous script prints 20 lines a second, `sliverctl`
-pushes text and toggles a layer, and the clock ticks every second. It fails if RSS grows by more
+pushes text and toggles a layer, touches go in through sliverd's `--touch-socket` (taps, slides,
+Fn presses), and the clock ticks every second. It fails if RSS grows by more
 than a budget after warm-up. First run: heap flat at 25.4–25.5 MB over 3 min (about 1,700
 publishes); RSS moves between 36 and 48 MB as fonts load and unload. No leak.
 
