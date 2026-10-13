@@ -304,11 +304,11 @@ Properties: `ActiveLayer` s, `ActiveLayout` s (what the base layer shows now),
 `ActiveLayoutSource` s (`rule`, `default` = the layer's default, `forced` = `SetLayout`/`HoldLayout`;
 empty before the first frame), `ActiveRule` i (index into the config's `rules`, -1 if none),
 `ActiveRuleName` s (that rule's `name`, may be empty), `Layers` as, `ActiveProfile` s, `Profiles` as, `Variables` a{sv}, `Healthy` b
-(agent connected to sliverd and driving the bar, and the config and modules have no errors: false
-while sliverd is gone, or a saved config was rejected and the last good one is live), `Errors` as
-(those problems: config, stylesheet and module errors, one line each with the file and line first
-when known; empty when all is well. `sliverctl status` prints them). All of these stay current
-while the bar is off.
+(agent connected to sliverd and driving the bar: false while sliverd is gone, while another seat
+user's session is active (standby), or after another agent took over), `Errors` as (problems with
+the user's setup, which leave the bar running on the last good config: config, stylesheet and
+module errors, one line each with the file and line first when known; empty when all is well.
+`sliverctl status` prints them). All of these stay current while the bar is off.
 
 `SetProfile` writes `~/.config/sliver/active-profile` and reloads. It fails, leaving the old profile
 active, if the name is unknown or the profile doesn't validate. `default` is `config.toml`.

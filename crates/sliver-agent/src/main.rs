@@ -33,7 +33,7 @@ use sliver_api::registry::Focus;
 use sliver_api::service::{Control, ControlReply, ControlState};
 use sliver_config::Config;
 use sliver_feeds::{Aggregate, Feed, Feeds};
-use sliver_ipc::proto::{AgentMsg, DisplayPolicy, DisplayState, Layer, SOCKET_PATH};
+use sliver_ipc::proto::{AgentMsg, DisplayPolicy, DisplayState, Layer, Role, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
 use sliver_render::{Fonts, Renderer, Stylesheet};
 use std::collections::HashMap;
@@ -1061,9 +1061,10 @@ fn wait_for_name(api: &ApiLink) {
     }
 }
 
-/// The `Control1` properties while connected to sliverd: `Healthy` is connected and driving the
-/// bar with no config or module errors (api.md §7).
-fn control_state(agent: &Agent, reloader: &Reloader) -> ControlState {
+/// The `Control1` properties while connected to sliverd (api.md §7). `Healthy`: connected and
+/// driving the bar (sliverd's active agent, not standby for another seat user); problems with
+/// the config, stylesheet or modules are `Errors`.
+fn control_state(agent: &Agent, reloader: &Reloader, role: Role) -> ControlState {
     let (active_layout, rule, active_rule_name, source) = agent.active_layout().unwrap_or_default();
     ControlState {
         active_layer: agent.base_layer().to_owned(),
@@ -1075,7 +1076,7 @@ fn control_state(agent: &Agent, reloader: &Reloader) -> ControlState {
         active_profile: reloader.profile.0.clone(),
         profiles: reloader.profile.1.clone(),
         variables: Default::default(),
-        healthy: agent.errors.is_empty() && reloader.errors.is_empty(),
+        healthy: role == Role::Active,
         errors: reloader
             .errors
             .iter()
@@ -1148,7 +1149,7 @@ fn run(
         // Not only after a render: with the bar off nothing renders, and the state (layer,
         // profile, health) must still be right (T132). Sent only when it changed.
         if let Some(api) = &live.api {
-            api.set_control_state(control_state(&agent, reloader));
+            api.set_control_state(control_state(&agent, reloader, link.role));
         }
         // Sleep until sliverd says something, a gesture/macro deadline, or a module's content
         // changes on its own. Nothing else wakes us (invariant 3).
