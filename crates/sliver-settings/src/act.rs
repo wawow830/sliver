@@ -1,11 +1,12 @@
 //! The action picker (ux.md §4 "Actions"): what a gesture does, chosen from a list instead of
-//! typed as TOML. The common forms of customization.md §5; anything else (macros, argv `exec`,
-//! signals…) stays editable as TOML under Advanced and is never rewritten.
+//! typed as TOML. The common forms of customization.md §5, and macros made of them; anything else
+//! (argv `exec`, signals…) stays editable as TOML under Advanced and is never rewritten.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
+use gtk::{gdk, glib};
 use sliver_config::{Key, parse_cli_value, writer::inline};
 use toml::{Table, Value};
 
@@ -36,6 +37,10 @@ pub enum Pick {
     Profile(String),
     /// `{ dbus = { … } }`, kept whole (fir's presets fill it).
     DBus(Value),
+    /// `[step, step…]`: each step is an action value (shown by its own picker).
+    Macro(Vec<Value>),
+    /// `{ sleep = "100ms" }`, only inside a macro.
+    Sleep(String),
 }
 
 /// The kinds in the picker, in order: (id, label).
@@ -51,7 +56,24 @@ pub const KINDS: &[(&str, &str)] = &[
     ("layout", "Switch layout"),
     ("profile", "Switch profile"),
     ("dbus", "Call D-Bus"),
+    ("macro", "Macro: several in order"),
+    ("sleep", "Wait"),
 ];
+
+/// Kinds a gesture can pick (`sleep` only makes sense inside a macro).
+fn kinds(step: bool) -> Vec<(&'static str, &'static str)> {
+    KINDS
+        .iter()
+        .copied()
+        .filter(|(k, _)| {
+            if step {
+                !matches!(*k, "none" | "macro")
+            } else {
+                *k != "sleep"
+            }
+        })
+        .collect()
+}
 
 pub const LAYER_MODES: &[(&str, &str)] = &[
     ("toggle", "until tapped again"),
@@ -73,6 +95,8 @@ impl Pick {
             Pick::Layout(_) => "layout",
             Pick::Profile(_) => "profile",
             Pick::DBus(_) => "dbus",
+            Pick::Macro(_) => "macro",
+            Pick::Sleep(_) => "sleep",
         }
     }
 
@@ -84,6 +108,10 @@ impl Pick {
         let t = match v {
             Value::String(s) => return Some(Pick::Command(s.clone())),
             Value::Table(t) => t,
+            // Macros don't nest.
+            Value::Array(steps) if !steps.iter().any(Value::is_array) => {
+                return Some(Pick::Macro(steps.clone()));
+            }
             _ => return None,
         };
         let s = |k: &str| t.get(k).and_then(Value::as_str).map(str::to_owned);
@@ -115,6 +143,11 @@ impl Pick {
             Pick::Profile(s("profile")?)
         } else if only(&["dbus"]) && t.get("dbus").is_some_and(Value::is_table) {
             Pick::DBus(v.clone())
+        } else if only(&["sleep"]) && t.contains_key("sleep") {
+            Pick::Sleep(match &t["sleep"] {
+                Value::String(s) => s.clone(),
+                other => inline(other),
+            })
         } else {
             return None;
         })
@@ -152,6 +185,18 @@ impl Pick {
             Pick::Layout(l) => one("layout", s(l)),
             Pick::Profile(p) => one("profile", s(p)),
             Pick::DBus(v) => Some(v.clone()),
+            // Steps added but not filled in yet aren't written.
+            Pick::Macro(steps) => {
+                let done: Vec<Value> = steps
+                    .iter()
+                    .filter(|v| v.as_str().is_none_or(|s| !s.trim().is_empty()))
+                    .cloned()
+                    .collect();
+                (!done.is_empty()).then_some(Value::Array(done))
+            }
+            Pick::Sleep(t) if t.trim().is_empty() => None,
+            // A bare number is seconds; "100ms" stays a string.
+            Pick::Sleep(t) => one("sleep", parse_cli_value(t.trim())),
         }
     }
 }
@@ -186,6 +231,8 @@ fn default_pick(kind: &str, c: &Choices) -> Pick {
         "close" => Pick::CloseLayer,
         "layout" => Pick::Layout(first(&c.layouts, "default")),
         "profile" => Pick::Profile(first(&c.profiles, "default")),
+        "macro" => Pick::Macro(Vec::new()),
+        "sleep" => Pick::Sleep("100ms".into()),
         "dbus" => Pick::DBus(
             crate::dbus_presets::PRESETS
                 .first()
@@ -234,11 +281,93 @@ pub fn editor(
     choices: Rc<Choices>,
     write: Rc<dyn Fn(Option<Value>)>,
 ) -> adw::PreferencesGroup {
+    build(title, current, choices, write, false)
+}
+
+/// Modifier keycodes, which a recording waits past.
+const MODIFIERS: &[u16] = &[29, 42, 54, 56, 97, 100, 125, 126];
+
+/// "Record": the next key pressed (with Ctrl/Alt/Shift/Super held) as key names, e.g.
+/// `["LeftCtrl", "T"]`. Works without an F row too: the list beside it stays.
+fn recorder(done: impl Fn(Vec<String>) + 'static) -> gtk::ToggleButton {
+    let b = gtk::ToggleButton::builder()
+        .label("Record")
+        .valign(gtk::Align::Center)
+        .tooltip_text("Press the keys to use")
+        .build();
+    b.connect_toggled(|b| {
+        b.set_label(if b.is_active() {
+            "Press keys…"
+        } else {
+            "Record"
+        });
+        if b.is_active() {
+            b.grab_focus();
+        }
+    });
+    // Capture phase on the button itself, so Enter/Space/Esc are recorded, not acted on.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = b.downgrade();
+    keys.connect_key_pressed(move |_, keyval, keycode, state| {
+        let Some(b) = weak.upgrade().filter(|b| b.is_active()) else {
+            return glib::Propagation::Proceed;
+        };
+        let Some(key) = recorded_key(&b.display(), keyval, keycode) else {
+            return glib::Propagation::Stop;
+        };
+        let mut combo: Vec<String> = [
+            (gdk::ModifierType::CONTROL_MASK, "LeftCtrl"),
+            (gdk::ModifierType::ALT_MASK, "LeftAlt"),
+            (gdk::ModifierType::SHIFT_MASK, "LeftShift"),
+            (gdk::ModifierType::SUPER_MASK, "LeftMeta"),
+        ]
+        .into_iter()
+        .filter(|(m, _)| state.contains(*m))
+        .map(|(_, n)| n.to_owned())
+        .collect();
+        combo.push(key.name().to_owned());
+        b.set_active(false);
+        done(combo);
+        glib::Propagation::Stop
+    });
+    b.add_controller(keys);
+    b
+}
+
+/// The key a press means, or `None` for a modifier (wait for the real key) or an unknown one.
+/// Wayland and X11 keycodes are evdev codes + 8: the physical key, which is what the bar
+/// injects, whatever the layout. Broadway (headless tests) sends character codes, so there
+/// the key's name is used.
+fn recorded_key(display: &gdk::Display, keyval: gdk::Key, keycode: u32) -> Option<Key> {
+    let key = if display.type_().name() == "GdkBroadwayDisplay" {
+        let name = keyval.to_lower().name()?;
+        Key::from_name(&name)?
+    } else {
+        Key::from_code(u16::try_from(keycode.checked_sub(8)?).ok()?)?
+    };
+    (!MODIFIERS.contains(&key.code())).then_some(key)
+}
+
+fn build(
+    title: &str,
+    current: Option<&Value>,
+    choices: Rc<Choices>,
+    write: Rc<dyn Fn(Option<Value>)>,
+    step: bool,
+) -> adw::PreferencesGroup {
+    let ks = kinds(step);
     let g = adw::PreferencesGroup::builder().title(title).build();
     let advanced = adw::EntryRow::builder()
         .title("Advanced: the action as TOML (customization.md §5)")
         .show_apply_button(true)
-        .text(current.map(inline).unwrap_or_default())
+        // A step not filled in yet is blank, not `""`.
+        .text(
+            current
+                .filter(|v| v.as_str() != Some(""))
+                .map(inline)
+                .unwrap_or_default(),
+        )
         .build();
     {
         let write = write.clone();
@@ -249,8 +378,8 @@ pub fn editor(
     }
     let Some(pick) = Pick::from_value(current) else {
         g.set_description(Some(
-            "This action is more than the picker shows (a macro, an argv exec, a signal…), so \
-             it's only editable as TOML.",
+            "This action is more than the picker shows (an argv exec, a signal, a macro inside \
+             a macro…), so it's only editable as TOML.",
         ));
         g.add(&advanced);
         return g;
@@ -277,11 +406,10 @@ pub fn editor(
     let kind = adw::ComboRow::builder()
         .title("Does")
         .model(&gtk::StringList::new(
-            &KINDS.iter().map(|(_, l)| *l).collect::<Vec<_>>(),
+            &ks.iter().map(|(_, l)| *l).collect::<Vec<_>>(),
         ))
         .selected(
-            KINDS
-                .iter()
+            ks.iter()
                 .position(|(k, _)| *k == pick.borrow().kind())
                 .unwrap_or(0) as u32,
         )
@@ -291,21 +419,70 @@ pub fn editor(
         .css_classes(["boxed-list"])
         .margin_top(8)
         .build();
+    // A macro's steps, each with its own picker.
+    let steps_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    steps_box.set_margin_top(8);
     let refill: Refill = Rc::default();
+    let again = Rc::downgrade(&refill);
     *refill.borrow_mut() = Some(Box::new({
-        let (pick, commit, values, choices) = (
+        let (pick, commit, values, steps_box, kind, choices) = (
             pick.clone(),
             commit.clone(),
             values.downgrade(),
+            steps_box.downgrade(),
+            kind.downgrade(),
             choices.clone(),
         );
+        let ks = ks.clone();
         move || {
-            let Some(values) = values.upgrade() else {
+            let (Some(values), Some(steps_box)) = (values.upgrade(), steps_box.upgrade()) else {
                 return;
             };
             while let Some(c) = values.first_child() {
                 values.remove(&c);
             }
+            while let Some(c) = steps_box.first_child() {
+                steps_box.remove(&c);
+            }
+            steps_box.set_visible(false);
+            let refill_later = {
+                let again = again.clone();
+                move || {
+                    // After the handler that asked for it has returned.
+                    let again = again.clone();
+                    glib::idle_add_local_once(move || {
+                        if let Some(r) = again.upgrade()
+                            && let Some(f) = r.borrow().as_ref()
+                        {
+                            f();
+                        }
+                    });
+                }
+            };
+            // A recorded key or combination: switches between the two kinds if needed.
+            let recorded = {
+                let (pick, commit, kind, ks, refill_later) = (
+                    pick.clone(),
+                    commit.clone(),
+                    kind.clone(),
+                    ks.clone(),
+                    refill_later.clone(),
+                );
+                move |mut combo: Vec<String>| {
+                    let p = if combo.len() == 1 {
+                        Pick::Key(combo.remove(0))
+                    } else {
+                        Pick::Keys(combo)
+                    };
+                    let id = p.kind();
+                    *pick.borrow_mut() = p;
+                    commit();
+                    if let Some(k) = kind.upgrade() {
+                        k.set_selected(ks.iter().position(|(k, _)| *k == id).unwrap_or(0) as u32);
+                    }
+                    refill_later();
+                }
+            };
             // Set the pick and write it.
             let set = {
                 let (pick, commit) = (pick.clone(), commit.clone());
@@ -341,6 +518,7 @@ pub fn editor(
                     let r = row("Key");
                     let set = set.clone();
                     r.add_suffix(&key_choice(&k, move |k| set(Pick::Key(k))));
+                    r.add_suffix(&recorder(recorded.clone()));
                     values.append(&r);
                 }
                 Pick::Keys(ks) => {
@@ -356,6 +534,7 @@ pub fn editor(
                         ))
                     });
                     r.add_suffix(&e);
+                    r.add_suffix(&recorder(recorded.clone()));
                     values.append(&r);
                 }
                 Pick::Open(a) => {
@@ -455,6 +634,87 @@ pub fn editor(
                     ));
                     values.append(&r);
                 }
+                Pick::Sleep(t) => {
+                    let r = row("Wait for");
+                    let e = entry(&t, "100ms, 0.5s, 1s… (10 s at most in all)");
+                    let set = set.clone();
+                    crate::cond::on_commit(&e, move |t| set(Pick::Sleep(t)));
+                    r.add_suffix(&e);
+                    values.append(&r);
+                }
+                Pick::Macro(steps) => {
+                    values.set_visible(false);
+                    let n = steps.len();
+                    for (i, v) in steps.iter().enumerate() {
+                        // One step changed: the macro is the same list with that step replaced.
+                        let write_step: Rc<dyn Fn(Option<Value>)> = {
+                            let (pick, commit) = (pick.clone(), commit.clone());
+                            Rc::new(move |v| {
+                                if let (Pick::Macro(s), Some(v)) = (&mut *pick.borrow_mut(), v) {
+                                    s[i] = v;
+                                }
+                                commit();
+                            })
+                        };
+                        let sg = build(
+                            &format!("Step {}", i + 1),
+                            Some(v),
+                            choices.clone(),
+                            write_step,
+                            true,
+                        );
+                        let tools = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                        for (icon, tip, delta) in [
+                            ("go-up-symbolic", "Move up", -1isize),
+                            ("go-down-symbolic", "Move down", 1),
+                            ("user-trash-symbolic", "Remove step", 0),
+                        ] {
+                            let b = gtk::Button::builder()
+                                .icon_name(icon)
+                                .tooltip_text(tip)
+                                .css_classes(["flat"])
+                                .valign(gtk::Align::Center)
+                                .build();
+                            b.update_property(&[gtk::accessible::Property::Label(&format!(
+                                "{tip}: step {}",
+                                i + 1
+                            ))]);
+                            let to = i as isize + delta;
+                            b.set_sensitive(delta == 0 || (0..n as isize).contains(&to));
+                            let (pick, commit, refill_later) =
+                                (pick.clone(), commit.clone(), refill_later.clone());
+                            b.connect_clicked(move |_| {
+                                if let Pick::Macro(s) = &mut *pick.borrow_mut() {
+                                    if delta == 0 {
+                                        s.remove(i);
+                                    } else {
+                                        s.swap(i, to as usize);
+                                    }
+                                }
+                                commit();
+                                refill_later();
+                            });
+                            tools.append(&b);
+                        }
+                        sg.set_header_suffix(Some(&tools));
+                        steps_box.append(&sg);
+                    }
+                    let add = gtk::Button::builder()
+                        .label("Add a step")
+                        .halign(gtk::Align::Start)
+                        .build();
+                    let (pick, refill_later) = (pick.clone(), refill_later.clone());
+                    add.connect_clicked(move |_| {
+                        if let Pick::Macro(s) = &mut *pick.borrow_mut() {
+                            // An empty command: written once it's filled in.
+                            s.push(Value::String(String::new()));
+                        }
+                        refill_later();
+                    });
+                    steps_box.append(&add);
+                    steps_box.set_visible(true);
+                    return;
+                }
             }
             values.set_visible(true);
         }
@@ -470,22 +730,29 @@ pub fn editor(
             choices.clone(),
         );
         kind.connect_selected_notify(move |k| {
-            let (id, _) = KINDS[k.selected() as usize];
+            let Some(&(id, _)) = ks.get(k.selected() as usize) else {
+                return;
+            };
             if pick.borrow().kind() == id {
                 return;
             }
-            *pick.borrow_mut() = default_pick(id, &choices);
+            let next = match (id, pick.borrow().to_value()) {
+                // What it did becomes the first step.
+                ("macro", Some(v)) => Pick::Macro(vec![v]),
+                _ => default_pick(id, &choices),
+            };
+            *pick.borrow_mut() = next;
             commit();
             if let Some(f) = refill.borrow().as_ref() {
                 f();
             }
         });
     }
-    let kinds = gtk::ListBox::builder()
+    let kind_box = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["boxed-list"])
         .build();
-    kinds.append(&kind);
+    kind_box.append(&kind);
     let adv = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["boxed-list"])
@@ -493,8 +760,9 @@ pub fn editor(
         .build();
     adv.append(&advanced);
     let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    col.append(&kinds);
+    col.append(&kind_box);
     col.append(&values);
+    col.append(&steps_box);
     col.append(&adv);
     g.add(&col);
     // `refill` lives as long as the kind row's handler (the dialog).
@@ -523,6 +791,9 @@ mod tests {
             r#"{ layout = "fkeys" }"#,
             r#"{ profile = "work" }"#,
             crate::dbus_presets::PRESETS[0].toml,
+            r#"[{ keys = ["LeftCtrl", "C"] }, { sleep = "100ms" }, "notify-send copied"]"#,
+            r#"{ sleep = "100ms" }"#,
+            r#"{ sleep = 1 }"#,
         ] {
             let p = Pick::from_value(Some(&v(s))).unwrap_or_else(|| panic!("can't show {s}"));
             assert_eq!(p.to_value(), Some(v(s)), "{s}");
@@ -534,7 +805,7 @@ mod tests {
     #[test]
     fn keeps_to_toml_what_it_cannot_show() {
         for s in [
-            r#"[{ key = "F1" }, { sleep = "100ms" }]"#,
+            r#"[[{ key = "F1" }], { sleep = "100ms" }]"#,
             r#"{ exec = ["foot", "-e", "htop"] }"#,
             r#"{ signal = 8 }"#,
             r#"{ key = "F5", url = "x" }"#,
@@ -551,9 +822,13 @@ mod tests {
             profiles: vec!["default".into()],
         };
         for (k, _) in KINDS {
-            let Some(val) = default_pick(k, &c).to_value() else {
+            let Some(mut val) = default_pick(k, &c).to_value() else {
                 continue;
             };
+            if *k == "sleep" {
+                // Only valid as a step.
+                val = Value::Array(vec![val, "true".into()]);
+            }
             let mut m = Table::new();
             m.insert("format".into(), "x".into());
             m.insert("on-tap".into(), val);
@@ -566,5 +841,19 @@ mod tests {
             assert!(l.diagnostics.ok(), "{k}: {text}\n{:#?}", l.diagnostics);
         }
         assert!(Key::names().any(|n| n == "F5"));
+        // Steps not filled in yet aren't written; an all-empty macro is nothing yet.
+        let m = Pick::Macro(vec![v(r#"{ key = "F1" }"#), Value::String(String::new())]);
+        assert_eq!(m.to_value(), Some(v(r#"[{ key = "F1" }]"#)));
+        assert_eq!(
+            Pick::Macro(vec![Value::String(" ".into())]).to_value(),
+            None
+        );
+        assert!(
+            !kinds(true)
+                .iter()
+                .any(|(k, _)| *k == "macro" || *k == "none")
+        );
+        assert!(!kinds(false).iter().any(|(k, _)| *k == "sleep"));
+        assert!(MODIFIERS.iter().all(|c| Key::from_code(*c).is_some()));
     }
 }

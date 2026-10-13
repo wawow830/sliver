@@ -372,7 +372,12 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   do: nothing, a command, a key (searchable list of every key name), a key combination, an app
   (searchable installed apps), a web address, open a layer (and how: until tapped again, while
   held, for one tap), close the layer, switch layout or profile, or a D-Bus call (fir's presets).
-  Anything else (macros, argv `exec`, signals) stays editable under Advanced as TOML and is never
+  "Macro: several in order" (T126) turns the action into steps, each with its own picker plus
+  "Wait" (the first step is what it did before), with move up/down, remove and "Add a step"
+  (written once filled in). Key and key-combination rows have **Record**: the next key pressed,
+  with Ctrl/Alt/Shift/Super, by physical key (evdev code = GDK keycode − 8; by name under
+  Broadway). A lone key becomes "Press a key", a combination "Press a key combination". Anything
+  else (argv `exec`, signals, nested macros) stays editable under Advanced as TOML and is never
   rewritten.
 - **Inspector, the rest of §4** (T124): "More gestures" (double tap, swipe left/right,
   release) uses the same action picker as tap and hold, and opens by itself when one is set. A
