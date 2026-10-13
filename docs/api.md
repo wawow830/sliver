@@ -401,7 +401,7 @@ highlight if absent.
 | `role` | `role` (`active`/`standby`/`revoked`) | session switches; non-active agents' presents are dropped |
 | `ping` | `nonce` | |
 | `error` | `code`, `msg`, `serial`? | rejected message (see the error policy below) |
-| `hw_report` | `version`, `backend`, `gate`, `model`, `width`, `height`, `card`, `backlight`, `max_brightness`, `backlight_writable`, `touch`, `inputs` [s], `hotplug`, `uinput`, `uptime_ms`, `display`?, `brightness`?, `view`, `hatch`, `pixel_shift`, `active_uid`?, `agent_uid`?, `clients` | answer to `report` (`sliver_ipc::proto::HwReport`). Facts are gathered at startup, so asking reads no devices. Unknown or missing fields: ignore or default |
+| `hw_report` | `version`, `backend`, `gate`, `model`, `width`, `height`, `card`, `backlight`, `max_brightness`, `backlight_writable`, `touch`, `inputs` [s], `hotplug`, `uinput`, `uptime_ms`, `display`?, `brightness`?, `view`, `hatch`, `pixel_shift`, `active_uid`?, `agent_uid`?, `clients` | answer to `report` (`sliver_ipc::proto::HwReport`). Facts are gathered at startup, so asking reads no devices. `view`: `agent:base`, `agent:fn`, `builtin:fkeys` (also the safe hatch), `builtin:media`, more may come. Unknown or missing fields: ignore or default |
 
 ### Safety rules sliverd enforces (invariant 1)
 - **Liveness:** an agent crash is a socket hangup, detected at once. Hangs are checked only when they

@@ -379,7 +379,8 @@ pub struct HwReport {
     pub display: Option<DisplayState>,
     /// The last brightness written (0 = off), if any.
     pub brightness: Option<u32>,
-    /// What the bar shows, e.g. `Agent(Base)`, `Builtin(FKeys)`.
+    /// What the bar shows: `agent:base`, `agent:fn`, `builtin:fkeys` (also the safe hatch) or
+    /// `builtin:media`. Stable names; new views may be added.
     pub view: String,
     pub hatch: bool,
     pub pixel_shift: bool,

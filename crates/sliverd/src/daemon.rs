@@ -106,6 +106,18 @@ pub enum View {
     Builtin(BuiltinKind),
 }
 
+impl View {
+    /// Stable name for the wire (`hw_report.view`), independent of the Rust names.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            View::Agent(Layer::Base) => "agent:base",
+            View::Agent(Layer::Fn) => "agent:fn",
+            View::Builtin(BuiltinKind::FKeys) => "builtin:fkeys",
+            View::Builtin(BuiltinKind::Media) => "builtin:media",
+        }
+    }
+}
+
 /// An agent frame as sliverd copied it.
 pub struct Frame {
     pub serial: u32,
@@ -292,7 +304,7 @@ impl Daemon {
             uptime_ms: self.now.saturating_sub(self.started),
             display: Some(self.idle.state()),
             brightness: self.backlight,
-            view: format!("{:?}", self.shown_view()),
+            view: self.shown_view().wire_name().into(),
             hatch: self.hatch.active(),
             pixel_shift: self.shift.enabled(),
             active_uid: self.active_uid,

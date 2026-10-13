@@ -129,7 +129,7 @@ fn from_report(r: &HwReport) -> Vec<Check> {
         .unwrap_or_else(|| "?".into());
     s.push_str(&format!(
         "\n        showing {}, display {display}{}{}, up {}",
-        r.view,
+        view_words(&r.view),
         r.brightness
             .map(|b| format!(" at {b}/{}", r.max_brightness))
             .unwrap_or_default(),
@@ -179,6 +179,18 @@ fn from_report(r: &HwReport) -> Vec<Check> {
         ));
     }
     out
+}
+
+/// `hw_report.view` (stable wire names) in words. Unknown names pass through.
+fn view_words(v: &str) -> &str {
+    match v {
+        "agent:base" => "your layout",
+        "agent:fn" => "your Fn layer",
+        "builtin:fkeys" => "the built-in F-keys",
+        "builtin:media" => "the built-in media keys",
+        "" => "?",
+        other => other,
+    }
 }
 
 fn uptime(ms: u64) -> String {

@@ -89,7 +89,7 @@ impl Fake {
                 card: "/dev/dri/card1".into(),
                 backlight_writable: true,
                 hotplug: true,
-                view: "Agent(Base)".into(),
+                view: "agent:base".into(),
                 ..Default::default()
             },
         ))));
@@ -453,7 +453,7 @@ fn the_report_is_shown_and_its_absence_explained_once() {
     let c = find(&run_checks(&f), "sliverd-hw").clone();
     assert_eq!(c.level, Level::Ok);
     assert!(
-        c.summary.contains("Mac14,7") && c.summary.contains("Agent(Base)"),
+        c.summary.contains("Mac14,7") && c.summary.contains("showing your layout"),
         "{}",
         c.summary
     );

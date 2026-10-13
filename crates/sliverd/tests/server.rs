@@ -251,7 +251,7 @@ fn report_connection_leaves_the_agent_alone() {
     assert_eq!((r.model.as_str(), r.width, r.height), ("Mac14,7", 2008, 60));
     assert_eq!(r.agent_uid, Some(uid));
     assert_eq!(r.active_uid, Some(uid));
-    assert_eq!(r.view, "Agent(Base)");
+    assert_eq!(r.view, "agent:base");
     assert_eq!(r.display, Some(DisplayState::On));
     assert_eq!(r.clients, 2, "the agent and this connection");
     rig.pump();
