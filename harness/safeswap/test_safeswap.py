@@ -95,6 +95,25 @@ class Props(unittest.TestCase):
             (Path(d) / "target").write_text("sshd.service\n")
             self.assertIsNone(ss.recorded_target(fresh), "only known owners")
 
+    def test_stop_leaves_someone_elses_live_run_alone(self):
+        orig = ss.unit_state
+        ss.unit_state = lambda mode, u: {"ActiveState": "active"}
+        try:
+            with tempfile.TemporaryDirectory(dir=HERE.parent.parent / "target") as d:
+                m = ss.Mode(user=False)
+                m.state_dir = Path(d)
+                self.assertIsNone(ss.stop_refusal(m, 123), "no record: allowed")
+                (Path(d) / "started-by").write_text(f"{os.getpid()}\n")  # a live process
+                self.assertIn("not yours", ss.stop_refusal(m, 123))
+                self.assertIsNone(ss.stop_refusal(m, os.getpid()), "the starter may stop it")
+                (Path(d) / "started-by").write_text("999999999\n")  # long gone
+                self.assertIsNone(ss.stop_refusal(m, 123))
+                (Path(d) / "started-by").write_text(f"{os.getpid()}\n")
+                ss.unit_state = lambda mode, u: {"ActiveState": "inactive"}
+                self.assertIsNone(ss.stop_refusal(m, 123), "no run: nothing to protect")
+        finally:
+            ss.unit_state = orig
+
     def test_restore_to_validated(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):

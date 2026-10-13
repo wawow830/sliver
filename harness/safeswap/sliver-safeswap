@@ -315,6 +315,24 @@ def restore_units(mode: Mode) -> list[str]:
     return [mode.target, *mode.activators.get(mode.target, [])]
 
 
+def stop_refusal(mode: Mode, by: int | None) -> str | None:
+    """Why `stop` must not end this run: someone else started it and is still there (T123: a
+    peer's stop ended the human's guided check). `bar` passes the caller's pid; --any overrides."""
+    try:
+        starter = int((mode.state_dir / "started-by").read_text())
+    except (OSError, ValueError):
+        return None
+    if not starter or starter == by or not Path(f"/proc/{starter}").exists():
+        return None
+    if not is_live(unit_state(mode, mode.run_unit)):
+        return None
+    try:
+        who = Path(f"/proc/{starter}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace").strip()
+    except OSError:
+        who = "?"
+    return f"the current run was started by pid {starter} ({who[:80]}), which is still running; not yours to stop (--any to force)"
+
+
 def cmd_stop(mode: Mode) -> int:
     sh(mode.systemctl() + ["stop", mode.run_unit], check=False, capture=True)
     return cmd_restore(mode, "stop")
@@ -399,7 +417,7 @@ def wait_for_end(mode: Mode, out_dir: Path) -> int:
     return 0 if s.get("Result") in ("success", "") else 1
 
 
-def cmd_run(mode: Mode, binary: str, seconds: int, wait: bool, extra: list[str]) -> int:
+def cmd_run(mode: Mode, binary: str, seconds: int, wait: bool, extra: list[str], by: int | None = None) -> int:
     if not mode.user and os.geteuid() != 0:
         raise SwapError("must run as root: pkexec /usr/local/libexec/sliver-safeswap run ...")
     uid = invoking_uid(mode)
@@ -417,6 +435,7 @@ def cmd_run(mode: Mode, binary: str, seconds: int, wait: bool, extra: list[str])
 
     bin_dir, out_dir = prepare_dirs(mode, uid)
     record_target(mode)
+    (mode.state_dir / "started-by").write_text(f"{by or 0}\n")
     if mode.user:
         card = None
         backlight = mode.state_dir / "fake-backlight"
@@ -594,7 +613,10 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("binary")
     r.add_argument("--seconds", type=int, default=DEFAULT_SECONDS)
     r.add_argument("--wait", action="store_true", help="block until the run ends; dying ends the run")
-    sub.add_parser("stop", help="end the run now and restore")
+    st = sub.add_parser("stop", help="end the run now and restore")
+    st.add_argument("--any", action="store_true", help="even if someone else started it")
+    for x in (r, st):
+        x.add_argument("--by", type=int, help=argparse.SUPPRESS)  # the caller's pid, from `bar`
     rs = sub.add_parser("restore", help="idempotently restore tiny-dfr")
     rs.add_argument("--reason", default="manual")
     rs.add_argument("--restore-to", help="which bar owner to start (tiny-dfr.service or sliverd.service)")
@@ -616,10 +638,12 @@ def main(argv: list[str] | None = None) -> int:
             # Give the bar back to whoever had it before the last run.
             mode.target = recorded_target(mode) or mode.target
         if ns.cmd == "run":
-            return cmd_run(mode, ns.binary, ns.seconds, ns.wait, extra)
+            return cmd_run(mode, ns.binary, ns.seconds, ns.wait, extra, ns.by)
         if ns.cmd in ("stop", "restore") and not mode.user and os.geteuid() != 0:
             raise SwapError(f"{ns.cmd} must run as root: pkexec /usr/local/libexec/sliver-safeswap {ns.cmd}")
         if ns.cmd == "stop":
+            if not ns.any and (why := stop_refusal(mode, ns.by)):
+                raise SwapError(why)
             return cmd_stop(mode)
         if ns.cmd == "restore":
             return cmd_restore(mode, ns.reason)

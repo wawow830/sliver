@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # User-side wrapper around the installed safe-swap helper (docs/safe-swap.md).
 #   harness/safeswap/bar run target/debug/sliverd [--seconds N] [-- ARGS]   (always --wait)
-#   harness/safeswap/bar snap out.png | status | stop | restore | logs
+#   harness/safeswap/bar snap out.png | status | stop [--any] | restore | logs
+# stop ends only a run this caller started (or whose starter is gone); --any forces it.
 set -euo pipefail
 H=/usr/local/libexec/sliver-safeswap
 [[ -x $H ]] || { echo "safe-swap harness not installed (see docs/safe-swap.md)" >&2; exit 1; }
@@ -9,12 +10,13 @@ cmd="${1:-status}"; shift || true
 case "$cmd" in
   run)
     bin="$(realpath "$1")"; shift
-    exec pkexec "$H" run "$bin" --wait "$@" ;;
+    exec pkexec "$H" run "$bin" --wait --by "$PPID" "$@" ;;
   snap)
     out="${1:-bar.png}"
     pkexec "$H" snap >"$out.tmp" && mv "$out.tmp" "$out" && echo "$out" ;;
   logs) cat /run/sliver-safeswap/out/sliverd.log ;;
   status) "$H" status ;;
-  stop|restore) exec pkexec "$H" "$cmd" ;;
-  *) echo "usage: bar run BIN [--seconds N] [-- ARGS] | snap [OUT.png] | status | stop | restore | logs" >&2; exit 2 ;;
+  stop) exec pkexec "$H" stop --by "$PPID" "$@" ;;   # --any: even someone else's run
+  restore) exec pkexec "$H" restore ;;
+  *) echo "usage: bar run BIN [--seconds N] [-- ARGS] | snap [OUT.png] | status | stop [--any] | restore | logs" >&2; exit 2 ;;
 esac

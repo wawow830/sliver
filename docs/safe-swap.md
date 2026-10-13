@@ -90,6 +90,10 @@ when convenient (~N min)?". Keys the bar sends land in the runner's terminal and
 (`/run/sliver-safeswap/target`). Before T123 they defaulted to tiny-dfr and raced the run's own
 ExecStopPost restoring sliverd, and tiny-dfr won.
 
+`bar stop` only ends a run the caller started, or one whose starter has exited. `--any` forces
+it. Check `bar status` before using the bar: the human may be in a guided check (T123, a peer's
+stop once ended one).
+
 ## Install (human, `sudo`)
 ```
 sudo harness/safeswap/install.sh            # --user NAME (default $SUDO_USER), --no-rule
