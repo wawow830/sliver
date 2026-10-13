@@ -10,6 +10,7 @@
 #   drag=X1,Y1,X2,Y2      press, move in 8 steps, release
 #   key=NAME       press a key (agent-browser key names: Delete, Control+z, ...)
 #   shot=FILE      screenshot now
+#   touch=LINE     with WITH_AGENT: inject a touch on the fake bar ("tap X", "down X", "up"…)
 #   wheel=X,Y,DY   scroll what's under X,Y by DY pixels (positive = down)
 #   sleep=SECS
 #
@@ -47,7 +48,7 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=$tmp/bus"
 if [ -n "${WITH_AGENT:-}" ]; then
     # A fake bar and the agent, on the private bus and the sandboxed config.
     "$root/target/debug/sliverd" --fake-hardware --socket "$tmp/sliverd.sock" \
-        --exit-after 600 >"$tmp/sliverd.log" 2>&1 &
+        --touch-socket "$tmp/touch.sock" --exit-after 600 >"$tmp/sliverd.log" 2>&1 &
     pids+=($!)
     sleep 1
     XDG_CONFIG_HOME="$sandbox" "$root/target/debug/sliver-agent" --socket "$tmp/sliverd.sock" \
@@ -88,6 +89,8 @@ for step in "$@"; do
                 [ -s "${step#shot=}" ] || echo "settings-headless: no screenshot at ${step#shot=}" >&2 ;;
         key=*) a press "${step#key=}"; sleep 1.5 ;;
         sleep=*) sleep "${step#sleep=}" ;;
+        touch=*) # WITH_AGENT: a touch on the fake bar (sliverd inject.rs), e.g. touch="tap 168"
+            printf '%s\n' "${step#touch=}" | socat - "UNIX-SENDTO:$tmp/touch.sock"; sleep 1.5 ;;
         wheel=*)
             IFS=, read -r x y dy <<<"${step#wheel=}"
             a mouse move "$x" "$y"; a mouse wheel "$dy"; sleep 1 ;;

@@ -389,7 +389,10 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
 - **Mirror touch-to-select** (T127, cedar's API 2): Mirror holds with `HoldLayoutWith(name,
   {select-only})` and listens for `HeldPressed` on the same connection, so touching an item on
   the real bar selects (rings) it in the preview. **Select only** beside Mirror stops touches
-  from firing while you edit. An older agent gets plain `HoldLayout`.
+  from firing while you edit. An older agent gets plain `HoldLayout`. Checked end to end headless:
+  `WITH_AGENT=1 scripts/settings-headless OUT.png sleep=3 "touch=tap 168"` taps the fake bar through
+  sliverd's real touch path (hazel's `--touch-socket`), and the preview rings that item; with Select
+  only on, its command doesn't run.
 - **Apps → Publishing now** lists each running provider's items (`ListContexts` `item-ids`/
   `item-labels`) with **Place on the bar**, which adds `app/<provider>#<id>` (or the whole
   `app/<provider>`) to the base layout's main zone, where it renders like any module (T121).
@@ -398,7 +401,7 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   (`target/test-tmp/xdg-ui`), on a **private D-Bus**, and drives it through agent-browser: clicks
   `X,Y`, `drag=…`, `key=…`, `shot=FILE`, `sleep=N`, `wheel=…`. `WITH_AGENT=1` also runs a fake
   sliverd and the agent on the private bus, `PUBLISH="…"` has `sliverctl publish` put items
-  up, and `BUS_HELPER="cmd"` runs any helper there (e.g. a stand-in agent that sends a signal). See the script's header.
+  up, and `touch="tap X"` injects a touch on the fake bar, `BUS_HELPER="cmd"` runs any helper there (e.g. a stand-in agent that sends a signal). See the script's header.
   - **Always use a private bus.** On this machine an installed `sliver-agent` runs on the session
     bus. The settings app talks to it (live status, Active now, Apps), and **Mirror is on by
     default**, so a test window on the real bus asks the real bar to show its layout. Before the
