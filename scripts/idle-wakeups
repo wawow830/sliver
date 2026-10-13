@@ -43,10 +43,9 @@ ROOT = Path(__file__).resolve().parent.parent
 BUDGET_ON = float(os.environ.get("IDLE_WAKEUPS_ON", "8"))
 BUDGET_OFF = float(os.environ.get("IDLE_WAKEUPS_OFF", "3"))
 # "full" (T143), measured on the Mac14,7 with an idle audio server (stand-in pactl/wpctl): every
-# module but `language` placed: on 1.5, off 0.00. With `language` and fcitx5 running: on 12-23,
-# because fcitx5 has no change signal and is re-read every 1.5 s, three calls per read, ~27
-# wakeups each (T144). OFF stops it. The budgets are what it should take; until T144 the ON phase
-# reports over budget.
+# module but `language` placed: on 1.5, off 0.00. With `language` and fcitx5 running: on 12-23
+# while fcitx5 was re-read with three calls every 1.5 s; since T144 (one CurrentInputMethod call
+# per 2 s, the rest only on change) on 6.1, off 0.00.
 BUDGET_FULL_ON = float(os.environ.get("IDLE_WAKEUPS_FULL_ON", "8"))
 BUDGET_FULL_OFF = float(os.environ.get("IDLE_WAKEUPS_FULL_OFF", "1.5"))
 # Every event-driven module, in the main zone.

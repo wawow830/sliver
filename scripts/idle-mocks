@@ -114,6 +114,11 @@ class Fcitx(dbus.service.Object):
         return im_info("keyboard-us", "en")
 
     @dbus.service.method(FCITX, in_signature="", out_signature="s")
+    def CurrentInputMethod(self):
+        seen("fcitx")
+        return "keyboard-us"
+
+    @dbus.service.method(FCITX, in_signature="", out_signature="s")
     def CurrentInputMethodGroup(self):
         return "Default"
 
