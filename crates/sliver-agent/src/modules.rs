@@ -2514,6 +2514,38 @@ mod tests {
     }
 
     #[test]
+    fn pinned_app_placeholders_have_short_labels() {
+        let l = load_str(
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"app/org.example.Pomodoro#timer\", \"app/org.example.Pomodoro\"]\n",
+            std::path::Path::new("."),
+        );
+        assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
+        let r = l.config.resolve("base", &Context::new()).unwrap();
+        let w = World::sample(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
+        let mut out = Vec::new();
+        let mut icons = Icons::builtin_only();
+        for z in &r.zones {
+            cells(
+                &z.modules,
+                &w,
+                &mut icons,
+                36,
+                &|_| UiState::default(),
+                &mut out,
+            );
+        }
+        let labels: Vec<String> = out
+            .iter()
+            .filter(|c| c.classes.contains(&"placeholder".to_string()))
+            .map(|c| match &c.content {
+                Content::Text(t) => t.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(labels, ["timer", "Pomodoro"]);
+    }
+
+    #[test]
     fn placeholders_take_the_module_width() {
         let l = load_str(
             "[modules.status-items]\nwidth = 332\n",
@@ -2594,7 +2626,12 @@ fn pinned_app(
     let item = m.id.instance.as_deref();
     let Some((ctx, class)) = world.published.find(provider) else {
         if world.preview {
-            out.push(placeholder(m, key, &m.id.to_string(), "app"));
+            // Short: the item id (`timer`), else the provider's last segment (`Pomodoro`).
+            let label = m.id.instance.clone().unwrap_or_else(|| {
+                let p = m.id.name.as_deref().unwrap_or("app");
+                p.rsplit('.').next().unwrap_or(p).to_owned()
+            });
+            out.push(placeholder(m, key, &label, "app"));
         }
         return;
     };
