@@ -21,6 +21,7 @@ pub const HIDDEN_WHILE_LOCKED: &[&str] = &[
     "app",
     "custom",
     "graph",
+    "image",
     "notifications",
     "window",
     "taskbar",

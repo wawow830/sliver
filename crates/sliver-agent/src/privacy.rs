@@ -19,6 +19,8 @@ const HIDDEN_KINDS: &[&str] = &[
     "custom",
     // A picture a script picked (album art, a photo).
     "image",
+    // A history of something (custom-graph/<name> is kind `graph` too).
+    "graph",
     "app-controls",
     "status-items",
     "slot",

@@ -21,6 +21,13 @@ pub enum Content {
     /// its aspect ratio, and its natural width follows that ratio. Never recolored, unlike a
     /// symbolic icon.
     Image(Icon),
+    /// A sparkline (the `graph` module): `values` in `0.0..=1.0`, oldest first, the newest at
+    /// the right edge; `capacity` samples span the width, so a short history starts mid-way.
+    /// Drawn in the item's `color`: a line over an area filled at a quarter of its alpha.
+    Graph {
+        values: Vec<f32>,
+        capacity: usize,
+    },
     /// A horizontal slider, `value` in `0.0..=1.0`, with an optional icon on its left. Styled
     /// with child nodes like GTK/waybar: `module > trough > highlight` (the filled part) and
     /// `trough > slider` (the knob).

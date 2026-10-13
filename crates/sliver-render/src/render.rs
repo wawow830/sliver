@@ -416,6 +416,8 @@ impl Renderer {
             Content::Text(t) => label(t, false).ceil(),
             Content::Markup(t) => label(t, true).ceil(),
             Content::Icon(_) => s.icon_size,
+            // Wide enough to read a trend; `width`/`min-width` make it wider.
+            Content::Graph { .. } => GRAPH_WIDTH,
             // As tall as the item's content box, as wide as its aspect ratio makes it.
             Content::Image(icon) => match icon.size() {
                 (w, h) if w > 0.0 && h > 0.0 => (content_h.max(0.0) * w / h).ceil(),
@@ -584,6 +586,17 @@ impl Renderer {
                 let x = (cx - icon_size / 2.0).round();
                 let y = (cy - icon_size / 2.0).round();
                 draw_icon(icon, x, y, icon_size, fg, opacity, pixmap);
+            }
+            Content::Graph { values, capacity } => {
+                // Some room above the highest value and below the area, inside any padding.
+                let v = (content.h * 0.15).round();
+                draw_graph(
+                    pixmap,
+                    content.inset([v, 0.0, v, 0.0]),
+                    values,
+                    *capacity,
+                    fg,
+                );
             }
             Content::Image(icon) => {
                 let (x, y) = (content.x.round(), content.y.round());
@@ -759,6 +772,77 @@ fn rounded_rect(r: Rect, radius: f32) -> Option<Path> {
     pb.cubic_to(x0, y0 + k, x0 + k, y0, x0 + rad, y0);
     pb.close();
     pb.finish()
+}
+
+/// Natural width of a `graph` (content, without padding).
+const GRAPH_WIDTH: f32 = 60.0;
+
+/// A sparkline in `r`: newest sample at the right edge, `capacity` samples across the width.
+fn draw_graph(pixmap: &mut Pixmap, r: Rect, values: &[f32], capacity: usize, color: Color) {
+    if values.is_empty() || r.w < 2.0 || r.h < 2.0 || color.a == 0 {
+        return;
+    }
+    let cap = capacity.max(values.len()).max(2);
+    let step = r.w / (cap - 1) as f32;
+    let first = cap - values.len();
+    let line_w = 1.5;
+    let (top, bottom) = (r.y + line_w / 2.0, r.bottom() - line_w / 2.0);
+    let point = |i: usize, v: f32| {
+        let x = r.x + (first + i) as f32 * step;
+        (x, bottom - v.clamp(0.0, 1.0) * (bottom - top))
+    };
+    let mut line = PathBuilder::new();
+    for (i, v) in values.iter().enumerate() {
+        let (x, y) = point(i, *v);
+        if i == 0 {
+            line.move_to(x, y);
+        } else {
+            line.line_to(x, y);
+        }
+    }
+    // One sample: a dot's worth of line at the right edge.
+    if values.len() == 1 {
+        let (x, y) = point(0, values[0]);
+        line.line_to(x - step.min(2.0), y);
+    }
+    let Some(line) = line.finish() else {
+        return;
+    };
+    let mut paint = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
+    // The area under the line, then the line.
+    let mut area = PathBuilder::new();
+    let (x0, _) = point(0, 0.0);
+    let (x1, _) = point(values.len() - 1, 0.0);
+    area.move_to(x0, r.bottom());
+    for (i, v) in values.iter().enumerate() {
+        let (x, y) = point(i, *v);
+        area.line_to(x, y);
+    }
+    area.line_to(x1, r.bottom());
+    area.close();
+    if let Some(area) = area.finish() {
+        let mut fill = color;
+        fill.a /= 4;
+        paint.set_color(fill.to_skia());
+        pixmap.fill_path(
+            &area,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
+    paint.set_color(color.to_skia());
+    let stroke = Stroke {
+        width: line_w,
+        line_join: tiny_skia::LineJoin::Round,
+        line_cap: tiny_skia::LineCap::Round,
+        ..Stroke::default()
+    };
+    pixmap.stroke_path(&line, &paint, &stroke, Transform::identity(), None);
 }
 
 /// Background and border of a bar, zone or module.

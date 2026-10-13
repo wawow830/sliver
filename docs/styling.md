@@ -32,6 +32,11 @@ bar   classes: layer-<name>, layout-<name>, <bar name>, locked, dimmed (set by t
 ```
 `#id` only ever matches modules.
 
+Pictures (`image` modules and items) fill the module's content box (inside `padding`) at their
+aspect ratio and are clipped to its `border-radius`. A `graph` draws its line in `color` over an
+area filled with the same color at a quarter of its alpha, inside the content box with 15% of its
+height free above and below; `width`/`min-width` make it wider than its natural 60 px.
+
 ## Selectors
 `*`, `bar`/`zone`/`module`, `#id`, `.class`, `:active` (pressed), `:checked` (a toggle that is on; the `.on` class is equivalent in the built-in themes),
 `:disabled`, `:first-child`, `:last-child`, `:not(simple)`, descendant (`a b`) and child

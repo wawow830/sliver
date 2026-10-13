@@ -151,6 +151,9 @@ pub struct Agent {
     pub_drag: HashMap<u32, f64>,
     /// Problems resolving layers, for logging/status. Cleared on each render.
     pub errors: Vec<String>,
+    /// `graph` modules' samples, by module id (T137): oldest first, 0..=1, and when the last
+    /// one was taken. Sampled in [`Agent::render`] while the bar is drawn.
+    graphs: HashMap<String, (std::collections::VecDeque<f32>, Option<DateTime<Local>>)>,
     /// The emoji picker's recents (shared with the worlds it draws).
     emoji: modules::EmojiHandle,
     /// An open `menu` sub-bar: the entries it shows.
@@ -242,6 +245,7 @@ impl Agent {
             active: None,
             pushed: HashMap::new(),
             errors: Vec::new(),
+            graphs: HashMap::new(),
             emoji: Default::default(),
             menu: None,
             popover: None,
@@ -256,6 +260,57 @@ impl Agent {
 
     pub fn frame(&self, layer: Layer) -> Option<&Frame> {
         self.frames[slot(layer)].as_ref()
+    }
+
+    /// Takes a sample for each placed `graph` whose period has passed (renders happen at least
+    /// that often while the bar is on: the graph's cell asks for it), and forgets graphs no
+    /// longer placed.
+    fn sample_graphs(&mut self, world: &World) {
+        use crate::modules::{graph_params, graph_sample, is_graph};
+        if !self.config.modules.keys().any(|id| is_graph(&id.kind)) {
+            self.graphs.clear();
+            return;
+        }
+        let placed: Vec<_> = crate::modules::placed_modules(&self.config)
+            .into_iter()
+            .filter(|(id, _)| is_graph(&id.kind))
+            .collect();
+        self.graphs
+            .retain(|k, _| placed.iter().any(|(id, _)| id.to_string() == *k));
+        for (id, block) in placed {
+            let (every, cap) = graph_params(&block);
+            let g = self.graphs.entry(id.to_string()).or_default();
+            let due = g.1.is_none_or(|t| {
+                (world.now - t)
+                    .to_std()
+                    .is_ok_and(|d| d + std::time::Duration::from_millis(50) >= every)
+            });
+            if !due {
+                continue;
+            }
+            if let Some(v) = graph_sample(&self.config, &id, &block, world) {
+                g.0.push_back(v);
+                while g.0.len() > cap {
+                    g.0.pop_front();
+                }
+                g.1 = Some(world.now);
+            }
+        }
+    }
+
+    /// The samples a `graph` cell draws: by its key, which ends with the module id (keys of
+    /// group members are prefixed with the group's).
+    fn graph_for(
+        graphs: &HashMap<String, (std::collections::VecDeque<f32>, Option<DateTime<Local>>)>,
+        config: &Config,
+        key: &str,
+    ) -> Option<(Vec<f32>, usize)> {
+        let (id, (samples, _)) = graphs
+            .iter()
+            .find(|(id, _)| key == id.as_str() || key.ends_with(&format!("/{id}")))?;
+        let block = config.modules.iter().find(|(m, _)| m.to_string() == *id)?.1;
+        let (_, cap) = crate::modules::graph_params(block);
+        Some((samples.iter().copied().collect(), cap))
     }
 
     pub fn ui(&mut self, key: &str) -> &mut UiState {
@@ -299,6 +354,7 @@ impl Agent {
         } else {
             world
         };
+        self.sample_graphs(world);
         let mut out = Vec::new();
         let base = self.base_layer().to_owned();
         for (layer, name) in [(Layer::Base, base.as_str()), (Layer::Fn, "fn")] {
@@ -507,7 +563,14 @@ impl Agent {
             });
         }
         let ui = &self.ui;
-        let lookup = |k: &str| ui.get(k).cloned().unwrap_or_default();
+        let (graphs, config) = (&self.graphs, &self.config);
+        let lookup = |k: &str| {
+            let mut s = ui.get(k).cloned().unwrap_or_default();
+            if !graphs.is_empty() {
+                s.graph = Self::graph_for(graphs, config, k);
+            }
+            s
+        };
         let hidden = &self.hidden_modules;
         let per_zone: Vec<Vec<Cell>> = zones
             .iter()

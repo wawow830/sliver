@@ -179,6 +179,85 @@ pub struct UiState {
     pub emoji: EmojiUi,
     /// `mpris`: the player the user picked (hold), instead of the most recently active one.
     pub player: Option<String>,
+    /// `graph`: the samples to draw, oldest first, 0..=1 (the agent keeps them, see
+    /// [`graph_sample`]), and how many fit.
+    pub graph: Option<(Vec<f32>, usize)>,
+}
+
+/// Is this a `graph` module kind (`graph`, waybar-style `custom-graph/<name>`)?
+pub fn is_graph(kind: &str) -> bool {
+    matches!(kind, "graph" | "custom-graph")
+}
+
+/// `graph` defaults: a sample every 2 s, 30 kept.
+pub const GRAPH_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+pub const GRAPH_SAMPLES: usize = 30;
+
+/// A graph's sampling period and history length, from its block (`interval`, `samples`).
+pub fn graph_params(block: &toml::Table) -> (std::time::Duration, usize) {
+    let every = block
+        .get("interval")
+        .and_then(|v| sliver_config::parse_duration(v).ok())
+        .unwrap_or(GRAPH_EVERY)
+        .max(std::time::Duration::from_millis(100));
+    let samples = block
+        .get("samples")
+        .and_then(|v| v.as_integer())
+        .map_or(GRAPH_SAMPLES, |n| n.clamp(2, 600) as usize);
+    (every, samples)
+}
+
+/// The value a `graph` plots now, scaled to 0..=1 by `min`/`max` (default 0 and 100): from its
+/// own script (`exec`: a number, or JSON `percentage`), or else another module's `percentage`
+/// (`source = "cpu"`, `"memory"`, `"battery"`, `"custom/x"`…). `None`: nothing to plot yet.
+pub fn graph_sample(
+    config: &sliver_config::Config,
+    id: &sliver_config::ModuleId,
+    block: &toml::Table,
+    world: &World,
+) -> Option<f32> {
+    use sliver_config::{ModuleId, ModuleRef};
+    let from_output = |out: &sliver_modules::Output| {
+        out.percentage.or_else(|| {
+            out.text
+                .lines()
+                .next()?
+                .trim()
+                .trim_end_matches('%')
+                .trim()
+                .parse()
+                .ok()
+        })
+    };
+    let raw = if block.contains_key("exec") {
+        from_output(world.outputs.get(&id.to_string())?)?
+    } else {
+        let src = ModuleId::parse(block.get("source")?.as_str()?).ok()?;
+        if src.kind == "custom" {
+            from_output(world.outputs.get(&src.to_string())?)?
+        } else {
+            let inst = ModuleInstance {
+                css_id: src.css_id(),
+                config: config.module_block(&ModuleRef::Named(src.clone())),
+                id: src,
+                classes: Vec::new(),
+                common: sliver_config::Common::default(),
+                children: Vec::new(),
+            };
+            spec(&inst, world, &UiState::default(), None)?.percentage?
+        }
+    };
+    let num = |k: &str, d: f64| {
+        block
+            .get(k)
+            .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+            .unwrap_or(d)
+    };
+    let (lo, hi) = (num("min", 0.0), num("max", 100.0));
+    if !raw.is_finite() || hi <= lo {
+        return None;
+    }
+    Some(((raw - lo) / (hi - lo)).clamp(0.0, 1.0) as f32)
 }
 
 /// Where an emoji strip is: tab 0 = recents, 1..=9 = the Unicode groups.
@@ -1116,6 +1195,8 @@ struct Spec {
     fallback_text: Option<&'static str>,
     /// The `image` module: a picture (path or icon name) that fills the cell.
     image: Option<String>,
+    /// `graph`: samples (oldest first, 0..=1) and how many fit.
+    graph: Option<(Vec<f32>, usize)>,
 }
 
 impl Spec {
@@ -1138,6 +1219,7 @@ impl Spec {
             menu: Vec::new(),
             fallback_text: None,
             image: None,
+            graph: None,
         }
     }
 
@@ -1188,6 +1270,25 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             sp
         }
         "key" | "custom" | "spacer" => Spec::new(ValueMap::new(), ""),
+        // The agent samples (Agent::render); here only what it has. Hidden until the first one.
+        "graph" | "custom-graph" => {
+            let (samples, cap) = ui.graph.clone()?;
+            if samples.is_empty() {
+                return None;
+            }
+            let mut sp = Spec::new(ValueMap::new(), "");
+            sp.percentage = samples.last().map(|v| f64::from(*v) * 100.0);
+            sp.graph = Some((samples, cap));
+            // Wake for the next sample (never while the bar is off: Agent::next_change).
+            // `interval` is a common key, so it's parsed into `common` here.
+            sp.refresh = Some(match m.common.interval {
+                Some(sliver_config::Interval::Every(d)) => {
+                    d.max(std::time::Duration::from_millis(100))
+                }
+                _ => GRAPH_EVERY,
+            });
+            sp
+        }
         // waybar's `image`: `exec` prints the path (first line), else `path`. Hidden without
         // one, like waybar.
         "image" => {
@@ -2058,6 +2159,11 @@ fn cell(
     let mut classes = m.classes.clone();
     let content = if m.id.kind == "spacer" {
         Content::Spacer
+    } else if let Some((values, capacity)) = sp.graph.take() {
+        // `states` still apply (on the latest value): `.warning`, `.critical`.
+        let f = format_module(c, "", &st, sp.values.as_ref());
+        classes.extend(f.classes);
+        Content::Graph { values, capacity }
     } else if let Some(name) = sp.image.take() {
         // A missing or unreadable picture hides the module (it may not exist yet).
         Content::Image(icons.image(&name, IMAGE_MAX_HEIGHT)?)
@@ -3060,14 +3166,15 @@ pub fn uses_kind(config: &sliver_config::Config, kind: &str) -> bool {
     placed_modules(config).iter().any(|(id, _)| id.kind == kind)
 }
 
-/// Runtime specs for every `custom/*` and `image` module with an `exec`, in any layout (including group
+/// Runtime specs for every `custom/*`, `image` and `graph` module with an `exec`, in any layout (including group
 /// members), for `sliver-feeds`' module runtime. Problems come back as messages.
 pub fn user_module_specs(
     config: &sliver_config::Config,
 ) -> (Vec<sliver_modules::Spec>, Vec<String>) {
     let (mut specs, mut errors) = (Vec::new(), Vec::new());
     for (id, block) in placed_modules(config) {
-        if !matches!(id.kind.as_str(), "custom" | "image") || !block.contains_key("exec") {
+        if !matches!(id.kind.as_str(), "custom" | "image" | "graph") || !block.contains_key("exec")
+        {
             continue;
         }
         let inst = ModuleInstance {

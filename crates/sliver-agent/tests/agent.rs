@@ -2024,3 +2024,101 @@ fn image_module() {
         "images are private while locked"
     );
 }
+
+/// `graph` / `custom-graph/<name>` (T137): samples another module's percentage (or its own
+/// script's number) every `interval`, keeps `samples` of them, and draws a sparkline.
+#[test]
+fn graph_module() {
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        modules = ["graph#load", "custom-graph/net", "clock"]
+        [modules."graph#load"]
+        source = "custom/load"
+        interval = "1s"
+        samples = 5
+        [modules."custom-graph/net"]
+        exec = "net-meter"
+        interval = "1s"
+        min = 0
+        max = 10
+        [modules."custom/load"]
+        format = "{}"
+        "#,
+    );
+    let mut w = world(9, 41);
+    let set = |w: &mut World, load: f64, net: &str| {
+        w.outputs.insert(
+            "custom/load".into(),
+            sliver_modules::Output {
+                text: format!("{load}"),
+                percentage: Some(load),
+                ..Default::default()
+            },
+        );
+        w.outputs.insert(
+            "graph/net".into(),
+            sliver_modules::Output {
+                text: net.into(),
+                ..Default::default()
+            },
+        );
+    };
+    let graphs = |a: &Agent| -> Vec<(String, Vec<f32>, usize)> {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .filter_map(|c| match &c.content {
+                Content::Graph { values, capacity } => {
+                    Some((c.id.clone(), values.clone(), *capacity))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    // Nothing to plot yet: hidden.
+    a.render(&w);
+    assert!(graphs(&a).is_empty());
+
+    for (i, (load, net)) in [
+        (10.0, "2"),
+        (50.0, "5"),
+        (90.0, "10"),
+        (30.0, "1"),
+        (70.0, "4"),
+        (20.0, "7"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set(&mut w, load, net);
+        a.render(&w);
+        // A second render within the period takes no sample.
+        a.render(&w);
+        let g = graphs(&a);
+        assert_eq!(g.len(), 2, "{g:?}");
+        assert_eq!(g[0].1.len(), (i + 1).min(5), "kept at most `samples`");
+        assert_eq!(g[0].2, 5);
+        assert_eq!(*g[0].1.last().unwrap(), (load / 100.0) as f32);
+        assert_eq!(g[1].2, 30, "default samples");
+        let n: f32 = net.parse().unwrap();
+        assert_eq!(*g[1].1.last().unwrap(), n / 10.0, "scaled by min/max");
+        // It asks to be woken for the next sample.
+        let next = a.next_change().unwrap();
+        assert!(
+            next <= w.now + chrono::Duration::seconds(1),
+            "{next} vs {}",
+            w.now
+        );
+        w.now += chrono::Duration::seconds(1);
+    }
+    w.now -= chrono::Duration::seconds(1);
+    settle(&mut a, &w);
+    check("graph-module", &a.frame(Layer::Base).unwrap().image);
+
+    w.context.set("locked", true);
+    a.render(&w);
+    assert!(graphs(&a).is_empty(), "graphs are private while locked");
+}
