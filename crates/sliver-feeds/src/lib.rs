@@ -46,6 +46,8 @@ pub struct SessionOptions {
     pub appearance: bool,
     /// The desktop's lock-screen state (`ActiveChanged`).
     pub screensaver: bool,
+    /// Who is capturing the microphone, camera or screen, from PipeWire's socket (`privacy`).
+    pub capture: bool,
 }
 
 impl Default for SessionOptions {
@@ -57,6 +59,7 @@ impl Default for SessionOptions {
             tray: true,
             appearance: true,
             screensaver: true,
+            capture: true,
         }
     }
 }
@@ -71,6 +74,7 @@ impl SessionOptions {
             tray: false,
             appearance: false,
             screensaver: false,
+            capture: false,
         }
     }
 }
@@ -286,6 +290,11 @@ impl Feeds {
         let handle = s.handle();
         if let Some(tools) = opts.audio {
             handle.start_audio(tools);
+        }
+        if opts.capture
+            && let Some(socket) = sliver_session::capture::socket_path(|k| std::env::var(k).ok())
+        {
+            handle.start_capture(socket);
         }
         if let Some(sysfs) = &opts.sysfs {
             handle.refresh_brightness(sysfs);

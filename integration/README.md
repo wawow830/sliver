@@ -83,3 +83,11 @@ extension (gnome-shell 50.5). KWin has its own nested test (`integration/kwin/te
 (`sliver-agent/examples/oneshot.rs`). It needs only the installed portal and python3-gobject, so it
 needs no compositor. Skips when they're missing. A real backend (xdpw in headless sway) accepted the
 call too but never answered, so grabbing pixels is unverified.
+
+## PipeWire check
+
+`integration/pipewire/test.sh` starts a private pipewire and wireplumber (policy only, no ALSA, none
+of the real machine's devices, and not Fedora Asahi's microphone filter chain, which would fight
+the user's own PipeWire for the real microphone), a null microphone and `pw-record`, and checks the
+capture follower behind the `privacy` module: the recorder shows up by name, and is gone when it
+stops. Needs `pipewire-utils` (`pw-cli`, `pw-record`); `SLIVER_TEST_ROOT` works as for sway.

@@ -15,6 +15,7 @@ pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
 pub mod failed;
+pub mod capture;
 pub mod fake;
 pub mod logind;
 pub mod menu;
@@ -123,6 +124,8 @@ pub struct SessionState {
     /// We hold the "caffeine" inhibitor (see [`Handle::set_caffeine`]).
     pub caffeine: bool,
     pub audio: audio::Audio,
+    /// Who is recording the microphone, the camera or the screen (PipeWire; see [`capture`]).
+    pub capture: capture::Capture,
     pub notifications: notifications::Notifications,
     pub appearance: appearance::Appearance,
     /// StatusNotifierItem tray, in registration order (empty until `Handle::start_tray`).
@@ -206,6 +209,8 @@ pub struct Handle {
     dnd_cookie: Arc<Mutex<Option<u32>>>,
     /// [`Handle::start_failed_units`] ran.
     failed_started: Arc<std::sync::atomic::AtomicBool>,
+    /// The PipeWire capture follower's on/off switch ([`Handle::start_capture`]).
+    capture_gate: Arc<capture::Gate>,
 }
 
 impl Handle {
@@ -227,6 +232,7 @@ impl Handle {
         if self.awake.swap(on, Ordering::SeqCst) == on {
             return;
         }
+        self.capture_gate.set(on);
         let me = self.clone();
         std::thread::spawn(move || {
             let _one_at_a_time = me.awake_gate.lock().unwrap_or_else(|e| e.into_inner());
@@ -307,6 +313,7 @@ impl Session {
             chatty_on: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             dnd_cookie: Arc::default(),
             failed_started: Arc::default(),
+            capture_gate: capture::Gate::new(),
         };
         let h = hub.clone();
         std::thread::Builder::new()

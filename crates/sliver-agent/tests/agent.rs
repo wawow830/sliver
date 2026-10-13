@@ -1470,6 +1470,45 @@ fn network_bluetooth_dnd_taps_toggle() {
     }
 }
 
+/// `privacy`: one cell per kind in use, nothing while idle, the apps' names in `{app}`.
+#[test]
+fn privacy_shows_one_cell_per_capture_kind() {
+    let toml = "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"privacy\", \"clock\"]\n[modules.privacy]\nformat = \"{app}\"\n";
+    let mut a = agent(toml);
+    let mut w = world(9, 41);
+    a.render(&w);
+    let kinds = |a: &Agent| -> Vec<(String, Option<String>)> {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .filter(|c| c.id.starts_with("privacy"))
+            .map(|c| {
+                let text = match &c.content {
+                    sliver_render::Content::IconMarkup(_, t)
+                    | sliver_render::Content::Markup(t) => Some(t.clone()),
+                    _ => None,
+                };
+                (c.id.clone(), text)
+            })
+            .collect()
+    };
+    assert!(kinds(&a).is_empty(), "hidden while nothing captures");
+    w.session.capture = sliver_session::capture::Capture {
+        mic: vec!["Firefox".into(), "Zoom".into()],
+        screen: vec!["OBS".into()],
+        camera: vec![],
+    };
+    a.render(&w);
+    let got = kinds(&a);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got[0].1.as_deref(), Some("OBS"), "{got:?}");
+    assert_eq!(got[1].1.as_deref(), Some("Firefox, Zoom"), "{got:?}");
+    w.session.capture = Default::default();
+    a.render(&w);
+    assert!(kinds(&a).is_empty(), "gone when they stop");
+}
+
 fn player(
     name: &str,
     title: &str,

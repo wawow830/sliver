@@ -536,6 +536,17 @@ fn cells_in(
             emoji_strip(m, &key, world, &ui(&key).emoji, out);
             continue;
         }
+        if m.id.kind == "privacy" {
+            // One cell per kind in use (screen, camera, microphone), nothing while idle.
+            for (i, (kind, _)) in world.session.capture.kinds().into_iter().enumerate() {
+                let item_key = format!("{key}/{kind}");
+                let state = ui(&item_key);
+                if let Some(c) = cell(m, item_key, world, icons, icon_size, &state, Some(i)) {
+                    out.push(c);
+                }
+            }
+            continue;
+        }
         if m.id.kind == "workspaces" || m.id.kind == "taskbar" {
             // Pinned apps first (launchers, or the running app's window), then the other windows.
             let mut shown = std::collections::HashSet::new();
@@ -1762,6 +1773,32 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             sp.checked = dark;
             sp.defaults
                 .push((Gesture::Tap, Action::ModuleAction("toggle".into())));
+            sp
+        }
+        // Who is recording the microphone, the camera or the screen (PipeWire). One item per kind
+        // in use: icon only by default, the apps' names in `{app}`.
+        "privacy" => {
+            let kinds = s.capture.kinds();
+            let (kind, apps) = *kinds.get(item?)?;
+            let names = apps.join(", ");
+            let v = ValueMap::new()
+                .with("kind", kind)
+                .with("app", esc(&names))
+                .with("count", apps.len() as i64)
+                .with("", esc(&names));
+            let (icon, text) = match kind {
+                "screen" => ("video-display-symbolic", "🖥"),
+                "camera" => ("camera-web-symbolic", "📷"),
+                _ => ("audio-input-microphone-symbolic", "🎙"),
+            };
+            let mut sp = Spec::new(v, "").icon(icon);
+            sp.fallback_text = Some(text);
+            sp.status = Some(match kind {
+                "screen" => "screen",
+                "camera" => "camera",
+                _ => "mic",
+            });
+            sp.extra_classes = vec![format!("privacy-{kind}")];
             sp
         }
         "workspaces" => {
