@@ -15,6 +15,7 @@ Step fields, run in this order: say, confirm, shell, resume, wait, expect, snap,
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import termios
@@ -102,12 +103,14 @@ class Run:
         if not sock.exists():
             raise RuntimeError(f"sliverd didn't start; see {self.dest}/swap.txt")
         if s.get("agent", True):
-            cmd = [ROOT / "target/release/sliver-agent", "--socket", sock]
+            # Its own session bus: on the real one it would take io.github.wawow830.Sliver from
+            # the installed agent, and when it exits systemd (Type=dbus) stops the installed one.
+            cmd = ["dbus-run-session", "--", ROOT / "target/release/sliver-agent", "--socket", sock]
             if "agent-config" in s:
                 cfg = self.dest / "agent.toml"
                 cfg.write_text(s["agent-config"])
                 cmd += ["--config", cfg]
-            self.agent = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+            self.agent = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True,
                                           stdout=open(self.dest / "agent.txt", "w"), stderr=subprocess.STDOUT)
             time.sleep(1.0)
 
@@ -119,7 +122,11 @@ class Run:
 
     def stop(self):
         if self.agent and self.agent.poll() is None:
-            self.agent.terminate()
+            # The whole group: terminating dbus-run-session alone orphans the agent.
+            try:
+                os.killpg(self.agent.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             self.agent.wait(5)
         try:
             shutil.copy(OUT / "sliverd.log", self.dest / "sliverd.log")
