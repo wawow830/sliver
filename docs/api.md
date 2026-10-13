@@ -77,7 +77,9 @@ Implementation: `crates/sliver-api`. `item` handles parsing, `registry` is the s
 plus `Api`, the agent core's handle. It's tested end to end on a private `dbus-daemon`.
 Machine-readable interfaces: `docs/dbus/io.github.wawow830.Sliver.xml`. A test regenerates and compares it,
 so it can't drift (`SLIVER_UPDATE_DBUS_XML=1` after an intentional change, and bump `API_MINOR`).
-In event `data`, integers are `i` (or `x` if they don't fit), reals are `d`, and lists are `av`.
+In event `data` and every `a{sv}` the service returns (`ListContexts`, …), integers are `i` (or
+`x` if they don't fit), reals are `d`, and lists are `av` (`as` for string lists). Readers should
+accept both `i` and `x`.
 
 ## 2. `NS.TouchBar1` at `root`
 

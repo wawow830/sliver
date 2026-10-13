@@ -228,6 +228,15 @@ pub struct ContextInfo {
     pub item_labels: Vec<String>,
 }
 
+/// An integer from an `a{sv}` reply: `i` when it fits, else `x` (api.md §1).
+fn int(d: &std::collections::HashMap<String, OwnedValue>, k: &str) -> Option<i64> {
+    let v = d.get(k)?;
+    i32::try_from(v.try_clone().ok()?)
+        .map(i64::from)
+        .ok()
+        .or_else(|| i64::try_from(v.try_clone().ok()?).ok())
+}
+
 fn list_contexts() -> Result<Vec<ContextInfo>, String> {
     use std::collections::HashMap;
     let conn = Connection::session().map_err(|e| e.to_string())?;
@@ -259,10 +268,7 @@ fn list_contexts() -> Result<Vec<ContextInfo>, String> {
             provider: text(d, "provider"),
             title: text(d, "title"),
             scope: text(d, "scope"),
-            items: d
-                .get("items")
-                .and_then(|v| i64::try_from(v.try_clone().ok()?).ok())
-                .unwrap_or(0),
+            items: int(d, "items").unwrap_or(0),
             on_screen: d
                 .get("on-screen")
                 .and_then(|v| bool::try_from(v.try_clone().ok()?).ok())
@@ -362,5 +368,34 @@ mod trouble_tests {
             "sliver-agent is older than this app"
         );
         assert_eq!(trouble("timeout").1, "timeout");
+    }
+}
+
+#[cfg(test)]
+mod int_tests {
+    use super::int;
+    use std::collections::HashMap;
+    use zbus::zvariant::{OwnedValue, Value};
+
+    #[test]
+    fn ints_read_as_i_or_x() {
+        let mut d = HashMap::new();
+        d.insert("a".to_owned(), OwnedValue::try_from(Value::I32(2)).unwrap());
+        d.insert(
+            "b".to_owned(),
+            OwnedValue::try_from(Value::I64(1 << 40)).unwrap(),
+        );
+        d.insert(
+            "c".to_owned(),
+            OwnedValue::try_from(Value::from("x")).unwrap(),
+        );
+        assert_eq!(
+            int(&d, "a"),
+            Some(2),
+            "ListContexts sends small counts as `i`"
+        );
+        assert_eq!(int(&d, "b"), Some(1 << 40));
+        assert_eq!(int(&d, "c"), None);
+        assert_eq!(int(&d, "missing"), None);
     }
 }
