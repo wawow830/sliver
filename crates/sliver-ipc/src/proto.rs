@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fmt;
 
 /// Protocol version spoken by this build.
-pub const PROTO: ProtoVersion = ProtoVersion(1, 0);
+pub const PROTO: ProtoVersion = ProtoVersion(1, 1);
 /// Where sliverd listens.
 pub const SOCKET_PATH: &str = "/run/sliver/sliverd.sock";
 /// Maximum packet size, both directions.
@@ -203,6 +203,10 @@ pub enum AgentMsg {
         nonce: u64,
     },
     Bye,
+    /// Instead of `hello`, from any uid (since 1.1): ask for a [`HwReport`] (`sliverctl doctor`).
+    /// sliverd answers `hw_report` and closes. Never an agent: roles and the bar are untouched.
+    /// An older sliverd answers `error{unknown_message}` (and keeps the connection; just close it).
+    Report,
 }
 
 impl AgentMsg {
@@ -218,6 +222,7 @@ impl AgentMsg {
         "emit_keys",
         "pong",
         "bye",
+        "report",
     ];
 
     /// Whether this message must arrive with exactly one fd attached.
@@ -330,6 +335,55 @@ pub enum DaemonMsg {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         serial: Option<u32>,
     },
+    /// The answer to [`AgentMsg::Report`].
+    HwReport(Box<HwReport>),
+}
+
+/// What sliverd found and opened, and its state now (read-only, for `sliverctl doctor`, T140).
+/// Facts are gathered once at startup, so asking costs no device or sysfs reads. Fields are added
+/// over time: missing ones read as their default.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct HwReport {
+    /// sliverd's version.
+    pub version: String,
+    /// `real` or `fake`.
+    pub backend: String,
+    /// Why sliverd may drive the bar: `safe-swap harness`, `sliverd.service (…)`, or `fake hardware`.
+    pub gate: String,
+    pub model: String,
+    pub width: u32,
+    pub height: u32,
+    /// The bar's DRM device, e.g. `/dev/dri/card1`.
+    pub card: String,
+    /// The bar backlight's sysfs dir. Empty if none was found.
+    pub backlight: String,
+    pub max_brightness: u32,
+    /// False: sliverd runs without dim/off (only when there's no tiny-dfr to fall back to).
+    pub backlight_writable: bool,
+    /// The digitizer sliverd chose, e.g. `/dev/input/event3`.
+    pub touch: String,
+    /// Every input device sliverd has open (digitizer, Fn/lid keyboards), by name.
+    pub inputs: Vec<String>,
+    /// Input hot-plug (udev netlink) is working.
+    pub hotplug: bool,
+    /// The uinput keyboard sliverd types with.
+    pub uinput: String,
+    /// Uptime of this sliverd, milliseconds.
+    pub uptime_ms: u64,
+    pub display: Option<DisplayState>,
+    /// The last brightness written (0 = off), if any.
+    pub brightness: Option<u32>,
+    /// What the bar shows, e.g. `Agent(Base)`, `Builtin(FKeys)`.
+    pub view: String,
+    pub hatch: bool,
+    pub pixel_shift: bool,
+    /// seat0's active uid, as logind says.
+    pub active_uid: Option<u32>,
+    /// The uid of the agent driving the bar, if one is.
+    pub agent_uid: Option<u32>,
+    /// Connections, including this one.
+    pub clients: u32,
 }
 
 impl DaemonMsg {
@@ -343,6 +397,7 @@ impl DaemonMsg {
         "role",
         "ping",
         "error",
+        "hw_report",
     ];
 }
 
@@ -431,7 +486,7 @@ mod tests {
         };
         assert_eq!(
             wire(&m),
-            json!({"t":"hello","proto":[1,0],"agent":"sliver-agent 0.1.0"})
+            json!({"t":"hello","proto":[1,1],"agent":"sliver-agent 0.1.0"})
         );
     }
 
@@ -488,7 +543,7 @@ mod tests {
         };
         assert_eq!(
             wire(&w),
-            json!({"t":"welcome","proto":[1,0],"panel":{"width":2008,"height":60,"format":"xrgb8888",
+            json!({"t":"welcome","proto":[1,1],"panel":{"width":2008,"height":60,"format":"xrgb8888",
                 "max_brightness":255,"model":"Mac14,7"},"role":"active","features":[]})
         );
     }
@@ -548,6 +603,7 @@ mod tests {
             },
             AgentMsg::Pong { nonce: 9 },
             AgentMsg::Bye,
+            AgentMsg::Report,
         ];
         let mut tags: Vec<String> = agent.iter().map(tag).collect();
         tags.sort();
@@ -593,6 +649,13 @@ mod tests {
                 msg: "no esc".into(),
                 serial: Some(4),
             },
+            DaemonMsg::HwReport(Box::new(HwReport {
+                backend: "real".into(),
+                inputs: vec!["Mac14,7 Touch Bar".into()],
+                brightness: Some(128),
+                agent_uid: Some(1000),
+                ..Default::default()
+            })),
         ];
         let mut tags: Vec<String> = daemon.iter().map(tag).collect();
         tags.sort();

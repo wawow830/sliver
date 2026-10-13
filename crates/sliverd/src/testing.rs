@@ -96,7 +96,8 @@ impl TestDaemon {
         ours.set_nonblocking(true)?;
         let uid = ours.peer_cred()?.uid;
         let hw = FakeHardware::new(panel.width, panel.height);
-        let daemon = Daemon::new(hw.backends(), panel.clone(), config, Some(uid), 0);
+        let mut daemon = Daemon::new(hw.backends(), panel.clone(), config, Some(uid), 0);
+        daemon.set_facts(crate::fake::facts());
         let mut d = TestDaemon {
             conn: Some(ours),
             daemon,

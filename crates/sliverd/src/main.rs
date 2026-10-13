@@ -146,7 +146,8 @@ fn main() {
         let height = panel.height;
         let hw = FakeHardware::new(panel.width, panel.height);
         hw.display.set_png_output(frame_png);
-        let daemon = Daemon::new(backends(hw.backends()), panel, &config, None, 0);
+        let mut daemon = Daemon::new(backends(hw.backends()), panel, &config, None, 0);
+        daemon.set_facts(sliverd::fake::facts());
         let session = FixedSession::new(Some(uid)).unwrap_or_else(|e| die(&e.to_string()));
         let mut inputs: Vec<Box<dyn sliverd::backend::InputSource>> = Vec::new();
         if let Some(path) = &touch_socket {
@@ -171,7 +172,8 @@ fn main() {
             "sliverd: {}x{} panel, model {}",
             panel.width, panel.height, panel.model
         );
-        let daemon = Daemon::new(backends(hw.backends), panel, &config, None, 0);
+        let mut daemon = Daemon::new(backends(hw.backends), panel, &config, None, 0);
+        daemon.set_facts(hw.facts);
         let session = SeatWatch::new(LOGIND_SEATS, "seat0")
             .unwrap_or_else(|e| die(&format!("watching {LOGIND_SEATS}: {e}")));
         Server::new(

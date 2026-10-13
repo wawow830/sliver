@@ -35,6 +35,12 @@ impl std::error::Error for NotUnderHarness {}
 /// `sliverd.service`, which sets `SLIVER_SYSTEM_UNIT=1` (there systemd's OnFailure=tiny-dfr is
 /// the safety net). Never set either by hand.
 pub fn require_harness() -> Result<(), NotUnderHarness> {
+    gate().map(|_| ())
+}
+
+/// Which rule lets this process open the bar, for diagnostics (`sliverctl doctor`): the same
+/// check as [`require_harness`].
+pub fn gate() -> Result<&'static str, NotUnderHarness> {
     let cgroup = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
     // SAFETY: getuid has no preconditions and can't fail.
     let uid = unsafe { libc::getuid() };
@@ -59,10 +65,10 @@ fn harness_env_ok(
     system_unit: Option<&str>,
     cgroup: &str,
     uid: u32,
-) -> Result<(), NotUnderHarness> {
+) -> Result<&'static str, NotUnderHarness> {
     match (safeswap, system_unit) {
-        (Some("1"), _) => Ok(()),
-        (_, Some("1")) if in_sliverd_unit(cgroup, uid) => Ok(()),
+        (Some("1"), _) => Ok("safe-swap harness (SLIVER_SAFESWAP=1)"),
+        (_, Some("1")) => in_sliverd_unit(cgroup, uid).ok_or(NotUnderHarness),
         _ => Err(NotUnderHarness),
     }
 }
@@ -71,12 +77,18 @@ fn harness_env_ok(
 const DYNAMIC_UIDS: std::ops::RangeInclusive<u32> = 61184..=65519;
 
 /// See [`harness_env_ok`]. Not a user unit or anything merely named like the system unit.
-fn in_sliverd_unit(cgroup: &str, uid: u32) -> bool {
+fn in_sliverd_unit(cgroup: &str, uid: u32) -> Option<&'static str> {
     cgroup
         .lines()
         .filter_map(|l| l.strip_prefix("0::"))
-        .any(|path| {
-            path == "/system.slice/sliverd.service" || (path == "/" && DYNAMIC_UIDS.contains(&uid))
+        .find_map(|path| {
+            if path == "/system.slice/sliverd.service" {
+                Some("sliverd.service (its cgroup)")
+            } else if path == "/" && DYNAMIC_UIDS.contains(&uid) {
+                Some("sliverd.service (private cgroup namespace, DynamicUser uid)")
+            } else {
+                None
+            }
         })
 }
 
@@ -115,7 +127,11 @@ mod tests {
         const PRIVATE_NS: &str = "0::/\n";
         const ME: u32 = 1000;
         const DYN: u32 = 65132;
-        assert!(harness_env_ok(Some("1"), None, SHELL, ME).is_ok());
+        assert!(harness_env_ok(Some("1"), None, SHELL, ME).is_ok_and(|r| r.contains("safe-swap")));
+        assert!(
+            harness_env_ok(None, Some("1"), PRIVATE_NS, DYN)
+                .is_ok_and(|r| r.contains("DynamicUser"))
+        );
         assert!(harness_env_ok(None, Some("1"), UNIT, DYN).is_ok());
         assert!(harness_env_ok(None, Some("1"), PRIVATE_NS, DYN).is_ok());
         // Set by hand outside the unit: refused.
@@ -128,20 +144,17 @@ mod tests {
         assert!(harness_env_ok(None, None, SHELL, ME).is_err());
         assert!(harness_env_ok(Some("0"), None, SHELL, ME).is_err());
         assert!(harness_env_ok(Some("yes"), Some("true"), UNIT, DYN).is_err());
-        assert!(!in_sliverd_unit(
-            "0::/system.slice/sliverd.service.d\n",
-            DYN
-        ));
-        assert!(!in_sliverd_unit(
-            "0::/system.slice/sliver-swap.service\n",
-            DYN
-        ));
-        assert!(!in_sliverd_unit(
-            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/sliverd.service\n",
-            DYN
-        ));
-        assert!(!in_sliverd_unit("0::/\n", 61183));
-        assert!(!in_sliverd_unit("0::/\n", 65520));
+        assert!(in_sliverd_unit("0::/system.slice/sliverd.service.d\n", DYN).is_none());
+        assert!(in_sliverd_unit("0::/system.slice/sliver-swap.service\n", DYN).is_none());
+        assert!(
+            in_sliverd_unit(
+                "0::/user.slice/user-1000.slice/user@1000.service/app.slice/sliverd.service\n",
+                DYN
+            )
+            .is_none()
+        );
+        assert!(in_sliverd_unit("0::/\n", 61183).is_none());
+        assert!(in_sliverd_unit("0::/\n", 65520).is_none());
     }
 
     #[test]

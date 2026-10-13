@@ -363,8 +363,8 @@ on fake hardware over a real socket. It replaced the earlier `sliver_ipc::fake::
 
 ### Handshake
 ```
-agent → {"t":"hello","proto":[1,0],"agent":"sliver-agent 0.1.0"}
-sliverd → {"t":"welcome","proto":[1,0],"panel":{"width":2008,"height":60,"format":"xrgb8888",
+agent → {"t":"hello","proto":[1,1],"agent":"sliver-agent 0.1.0"}
+sliverd → {"t":"welcome","proto":[1,1],"panel":{"width":2008,"height":60,"format":"xrgb8888",
            "max_brightness":255,"model":"Mac14,7"},"role":"active"|"standby","features":[]}
 ```
 Major mismatch: sliverd sends `Error{code:"proto"}`, closes, and keeps the safe layer.
@@ -383,6 +383,7 @@ sliverd rotates to the panel (`60x2008` on Mac14,7). Intel T2 bars report their 
 | `emit_keys` | `keys` [u16], `mode` (`tap`/`down`/`up`) | for keys decided by agent regions (long-press → key, macros). Rate-limited. |
 | `pong` | `nonce` | |
 | `bye` | — | clean exit: safe layer now |
+| `report` | — | **instead of** `hello`, any uid (1.1): sliverd answers `hw_report` and closes. Never an agent; roles and the bar are untouched (`sliverctl doctor`). An older sliverd answers `error{unknown_message}` and leaves the connection open (seen on the installed one) |
 
 `Region`: `{"id":u32,"rect":[x,y,w,h],"kind":"key","keys":[u16…]}` or `{"id":…,"rect":…,"kind":"agent"}`.
 `keys` is pressed in order and released in reverse (combos). `pressed` is an optional second image with
@@ -400,6 +401,7 @@ highlight if absent.
 | `role` | `role` (`active`/`standby`/`revoked`) | session switches; non-active agents' presents are dropped |
 | `ping` | `nonce` | |
 | `error` | `code`, `msg`, `serial`? | rejected message (see the error policy below) |
+| `hw_report` | `version`, `backend`, `gate`, `model`, `width`, `height`, `card`, `backlight`, `max_brightness`, `backlight_writable`, `touch`, `inputs` [s], `hotplug`, `uinput`, `uptime_ms`, `display`?, `brightness`?, `view`, `hatch`, `pixel_shift`, `active_uid`?, `agent_uid`?, `clients` | answer to `report` (`sliver_ipc::proto::HwReport`). Facts are gathered at startup, so asking reads no devices. Unknown or missing fields: ignore or default |
 
 ### Safety rules sliverd enforces (invariant 1)
 - **Liveness:** an agent crash is a socket hangup, detected at once. Hangs are checked only when they
@@ -411,7 +413,7 @@ highlight if absent.
   | what | reply | then |
   |---|---|---|
   | unknown `t` | `error{unknown_message}` | carry on (forward compatibility) |
-  | malformed/oversized packet, wrong fd count, anything before `hello` | `error{malformed}` | close → safe layer |
+  | malformed/oversized packet, wrong fd count, anything but `report` before `hello` | `error{malformed}` | close → safe layer |
   | major version mismatch | `error{proto}` | close → safe layer |
   | invalid buffer/frame/keys | `error{invalid_buffer/invalid_frame/forbidden_key}` | previous frame stays |
 

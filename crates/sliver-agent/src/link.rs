@@ -275,7 +275,8 @@ impl Link {
                     }
                     out.push(Event::Error { code, msg });
                 }
-                DaemonMsg::Welcome { .. } => {}
+                // Only sent to `report` connections, never to an agent.
+                DaemonMsg::Welcome { .. } | DaemonMsg::HwReport(_) => {}
             }
         }
     }

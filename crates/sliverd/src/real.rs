@@ -12,7 +12,7 @@ use sliver_hw::input::{HwEvent, HwInput};
 use sliver_hw::mt::{Contact, Phase};
 use sliver_hw::panel::DrmPanel;
 use sliver_hw::uinput::UinputKeys;
-use sliver_ipc::proto::TouchPhase;
+use sliver_ipc::proto::{HwReport, TouchPhase};
 use sliver_render::Pixmap;
 use sliver_render::panel::{Orientation, Span, blit_xrgb8888};
 
@@ -126,6 +126,8 @@ pub struct RealHardware {
     pub width: u32,
     pub height: u32,
     pub max_brightness: u32,
+    /// What was found and opened (for `report`, T140). The daemon adds model, size and live state.
+    pub facts: HwReport,
 }
 
 /// Discovers and opens the bar's panel, touch + seat0 input, backlight and a uinput keyboard.
@@ -134,6 +136,7 @@ pub fn open() -> io::Result<RealHardware> {
         .ok_or_else(|| io::Error::other("no Touch Bar DRM card"))?;
     let (touch, _) = sliver_hw::discover::touch_device(Path::new("/sys/class/input"))
         .ok_or_else(|| io::Error::other("no Touch Bar digitizer"))?;
+    let gate = sliver_hw::gate().map_err(io::Error::other)?;
     let panel = DrmPanel::open(&card)?;
     let (width, height) = panel.logical_size();
     let input = HwInput::open(&touch, width, height)?;
@@ -147,27 +150,42 @@ pub fn open() -> io::Result<RealHardware> {
     // installed, exit: systemd retries (udev may just be late), then falls back to tiny-dfr, which
     // has working dim/off. Only without any fallback do we run anyway, since Esc/F-keys at full
     // brightness beat no bar at all (invariant 1).
-    let (backlight, max_brightness): (Box<dyn Backlight>, u32) = match SysfsBacklight::open() {
-        Ok(b) => {
-            let max = b.max();
-            (Box::new(b), max)
-        }
-        Err(e) if Path::new(TINY_DFR_UNIT).exists() => {
-            return Err(io::Error::other(format!(
-                "bar backlight not writable ({e}); exiting so systemd can fall back to tiny-dfr"
-            )));
-        }
-        Err(e) => {
-            eprintln!(
-                "sliverd: WARNING: bar backlight not writable ({e}) and no tiny-dfr to fall back to; \
+    let (backlight, max_brightness, writable): (Box<dyn Backlight>, u32, bool) =
+        match SysfsBacklight::open() {
+            Ok(b) => {
+                let max = b.max();
+                (Box::new(b), max, true)
+            }
+            Err(e) if Path::new(TINY_DFR_UNIT).exists() => {
+                return Err(io::Error::other(format!(
+                    "bar backlight not writable ({e}); exiting so systemd can fall back to tiny-dfr"
+                )));
+            }
+            Err(e) => {
+                eprintln!(
+                    "sliverd: WARNING: bar backlight not writable ({e}) and no tiny-dfr to fall back to; \
                  running without dim/off. Fix: udevadm trigger --action=change on the bar backlight"
-            );
-            let max = sliver_hw::discover::bar_backlight(Path::new("/sys/class/backlight"))
-                .map_or(255, |b| b.max);
-            (Box::new(NoBacklight), max)
-        }
-    };
+                );
+                let max = sliver_hw::discover::bar_backlight(Path::new("/sys/class/backlight"))
+                    .map_or(255, |b| b.max);
+                (Box::new(NoBacklight), max, false)
+            }
+        };
     let keys = UinputKeys::create()?;
+    let facts = HwReport {
+        backend: "real".into(),
+        gate: gate.into(),
+        card: card.display().to_string(),
+        backlight: sliver_hw::discover::bar_backlight(Path::new("/sys/class/backlight"))
+            .map(|b| b.sysfs.display().to_string())
+            .unwrap_or_default(),
+        backlight_writable: writable,
+        touch: touch.display().to_string(),
+        inputs: input.device_names(),
+        hotplug: input.hotplug(),
+        uinput: sliver_hw::input::UINPUT_NAME.into(),
+        ..Default::default()
+    };
     Ok(RealHardware {
         backends: Backends {
             display: Box::new(panel),
@@ -178,6 +196,7 @@ pub fn open() -> io::Result<RealHardware> {
         width,
         height,
         max_brightness,
+        facts,
     })
 }
 

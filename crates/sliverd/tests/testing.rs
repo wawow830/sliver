@@ -27,7 +27,7 @@ fn connect() -> (TestDaemon, Conn, ShmBuffer) {
         DaemonMsg::Welcome {
             proto, panel, role, ..
         } => {
-            assert_eq!(proto, ProtoVersion(1, 0));
+            assert_eq!(proto, sliver_ipc::PROTO, "the lower minor: ours");
             assert_eq!((panel.width, panel.height), (2008, 60));
             assert_eq!(role, Role::Active);
         }

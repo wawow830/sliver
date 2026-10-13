@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use sliver_ipc::hatch::FnHatch;
 use sliver_ipc::proto::{
-    CodecError, DaemonMsg, DisplayState, ErrorCode, KeyMode, Layer, PING_MIN_INTERVAL_MS,
+    CodecError, DaemonMsg, DisplayState, ErrorCode, HwReport, KeyMode, Layer, PING_MIN_INTERVAL_MS,
     PONG_TIMEOUT_MS, PROTO, PanelInfo, Present, Rect, Region, Role, TouchPhase,
 };
 use sliver_ipc::router::{Routed, TouchRouter};
@@ -193,6 +193,9 @@ pub struct Daemon {
     /// Scratch for the shifted frame (reused, only while shifting).
     shifted: Option<Pixmap>,
     out: Vec<Out>,
+    /// What was found and opened at startup, for `report` (T140). Live fields are filled in per ask.
+    facts: HwReport,
+    started: u64,
 }
 
 impl Daemon {
@@ -260,6 +263,8 @@ impl Daemon {
             shift: PixelShift::new(now ^ u64::from(std::process::id()).rotate_left(17)),
             shifted: None,
             out: Vec::new(),
+            facts: HwReport::default(),
+            started: now,
         };
         d.recompose();
         d.apply_backlight();
@@ -268,6 +273,36 @@ impl Daemon {
 
     pub fn panel(&self) -> &PanelInfo {
         &self.panel
+    }
+
+    /// The startup facts for `report` answers (backend, gate, devices). Model and size come from
+    /// the panel.
+    pub fn set_facts(&mut self, facts: HwReport) {
+        self.facts = facts;
+    }
+
+    /// The `hw_report` answer: the startup facts plus the state right now.
+    pub fn hw_report(&self) -> HwReport {
+        HwReport {
+            version: env!("CARGO_PKG_VERSION").into(),
+            model: self.panel.model.clone(),
+            width: self.panel.width,
+            height: self.panel.height,
+            max_brightness: self.panel.max_brightness,
+            uptime_ms: self.now.saturating_sub(self.started),
+            display: Some(self.idle.state()),
+            brightness: self.backlight,
+            view: format!("{:?}", self.shown_view()),
+            hatch: self.hatch.active(),
+            pixel_shift: self.shift.enabled(),
+            active_uid: self.active_uid,
+            agent_uid: self
+                .active
+                .and_then(|a| self.clients.get(&a))
+                .map(|c| c.uid),
+            clients: self.clients.len() as u32,
+            ..self.facts.clone()
+        }
     }
 
     pub fn profile(&self) -> &DeviceProfile {
@@ -611,6 +646,11 @@ impl Daemon {
             );
             return self.close(client);
         }
+        if !c.said_hello && matches!(msg, AgentMsg::Report) {
+            // Read-only (sliverctl doctor, any uid): never an agent, so roles stay as they are.
+            self.send(client, DaemonMsg::HwReport(Box::new(self.hw_report())));
+            return self.close(client);
+        }
         if !c.said_hello && !matches!(msg, AgentMsg::Hello { .. }) {
             self.error(client, ErrorCode::Malformed, "hello first".into(), None);
             return self.close(client);
@@ -681,6 +721,13 @@ impl Daemon {
                 }
             }
             AgentMsg::Bye => self.close(client),
+            // From an agent (after hello): `report` is for non-agent connections.
+            AgentMsg::Report => self.error(
+                client,
+                ErrorCode::Malformed,
+                "report replaces hello; it isn't for agents".into(),
+                None,
+            ),
             AgentMsg::ClearLayer { .. }
             | AgentMsg::DisplayPolicy(_)
             | AgentMsg::Wake

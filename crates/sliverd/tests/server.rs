@@ -52,7 +52,8 @@ impl Rig {
             model: "Mac14,7".into(),
         };
         let clock = Instant::now();
-        let daemon = Daemon::new(hw.backends(), panel, &Config::default(), None, 0);
+        let mut daemon = Daemon::new(hw.backends(), panel, &Config::default(), None, 0);
+        daemon.set_facts(sliverd::fake::facts());
         let (input, handle) = FakeInput::new().unwrap();
         let uid = rustix::process::getuid().as_raw();
         let session = FixedSession::new(Some(uid)).unwrap();
@@ -223,6 +224,52 @@ fn agent_over_a_real_socket() {
     rig.pump();
     assert!(!rig.server.daemon().agent_drives());
     assert!(rig.server.daemon().active_client().is_none());
+}
+
+/// T140: `report` instead of `hello` (sliverctl doctor, any uid) answers `hw_report` and closes,
+/// and the agent driving the bar never notices: no `role` message, still active, still presenting.
+#[test]
+fn report_connection_leaves_the_agent_alone() {
+    let mut rig = Rig::new("report");
+    let a = hello(&mut rig);
+    let (_buf, _) = present_frame(&mut rig, &a); // waits for `presented`
+    let active = rig.server.daemon().active_client();
+
+    let doctor = rig.connect();
+    doctor.send(&AgentMsg::Report).unwrap();
+    let DaemonMsg::HwReport(r) = rig.recv(&doctor) else {
+        panic!("expected hw_report")
+    };
+    let uid = rustix::process::getuid().as_raw();
+    assert_eq!(r.backend, "fake");
+    assert_eq!(r.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!((r.model.as_str(), r.width, r.height), ("Mac14,7", 2008, 60));
+    assert_eq!(r.agent_uid, Some(uid));
+    assert_eq!(r.active_uid, Some(uid));
+    assert_eq!(r.view, "Agent(Base)");
+    assert_eq!(r.display, Some(DisplayState::On));
+    assert_eq!(r.clients, 2, "the agent and this connection");
+    rig.pump();
+    assert!(
+        matches!(doctor.recv::<DaemonMsg>(), Ok(None)),
+        "closed after the report"
+    );
+
+    assert_eq!(
+        rig.server.daemon().active_client(),
+        active,
+        "agent still active"
+    );
+    assert!(
+        matches!(a.recv::<DaemonMsg>(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+        "the agent got nothing (no role change)"
+    );
+    let (_buf2, _) = present_frame(&mut rig, &a); // still presenting
+
+    // From an agent, after hello, it's refused (and the agent stays).
+    a.send(&AgentMsg::Report).unwrap();
+    assert!(matches!(rig.recv(&a), DaemonMsg::Error { .. }));
+    assert_eq!(rig.server.daemon().active_client(), active);
 }
 
 #[test]

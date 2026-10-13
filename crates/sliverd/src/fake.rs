@@ -275,3 +275,13 @@ impl InputSource for FakeInput {
         self.queue.borrow_mut().drain(..).collect()
     }
 }
+
+/// The `report` facts for a fake-hardware sliverd (T140).
+pub fn facts() -> sliver_ipc::proto::HwReport {
+    sliver_ipc::proto::HwReport {
+        backend: "fake".into(),
+        gate: "fake hardware (no devices opened)".into(),
+        backlight_writable: true,
+        ..Default::default()
+    }
+}
