@@ -6,6 +6,8 @@
 //! ones. Reading only: nothing is started, changed or written. Checks that need root (the
 //! daemon's hardware side) are not here; they come from sliverd itself (see docs/sliverd.md).
 
+mod hardware;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -105,6 +107,10 @@ pub trait Sys {
     fn read(&self, path: &Path) -> Option<String>;
     /// Stdout of a command, `None` if it isn't there or fails.
     fn run(&self, cmd: &[&str]) -> Option<String>;
+    /// The bar as sysfs shows it (no root, nothing opened).
+    fn bar_sysfs(&self) -> hardware::BarSysfs;
+    /// sliverd's read-only hardware report.
+    fn hw_report(&self) -> hardware::ReportOutcome;
 }
 
 /// The machine, for the report header.
@@ -141,6 +147,7 @@ fn header(sys: &dyn Sys) -> Vec<(String, String)> {
 pub fn run_checks(sys: &dyn Sys) -> Vec<Check> {
     let mut out = Vec::new();
     out.extend(daemon(sys));
+    out.extend(hardware::checks(sys));
     out.extend(agent(sys));
     out.push(config(sys));
     out.push(desktop(sys));
@@ -774,6 +781,14 @@ impl Sys for Real {
 
     fn run(&self, cmd: &[&str]) -> Option<String> {
         run_cmd(cmd)
+    }
+
+    fn bar_sysfs(&self) -> hardware::BarSysfs {
+        hardware::real_bar_sysfs()
+    }
+
+    fn hw_report(&self) -> hardware::ReportOutcome {
+        hardware::real_report()
     }
 }
 

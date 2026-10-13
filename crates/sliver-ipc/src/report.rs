@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
-use crate::proto::{AgentMsg, DaemonMsg, HwReport};
+use crate::proto::{AgentMsg, DaemonMsg, HwReport, PROTO};
 use crate::transport::Conn;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Reply {
     Report(Box<HwReport>),
     /// sliverd answered with an error: it doesn't know `report` (older than protocol 1.1, which
@@ -21,9 +21,13 @@ pub enum Reply {
 
 /// Connects to sliverd at `path`, asks for its [`HwReport`] and waits up to `timeout`.
 /// Errors: not running (connect fails), hung (timeout), or hung up without an answer.
-pub fn ask(path: impl AsRef<Path>, timeout: Duration) -> io::Result<Reply> {
+/// `client` names the asker in sliverd's log, e.g. `sliverctl 0.1.0`.
+pub fn ask(path: impl AsRef<Path>, client: &str, timeout: Duration) -> io::Result<Reply> {
     let conn = Conn::connect(path)?;
-    conn.send(&AgentMsg::Report)?;
+    conn.send(&AgentMsg::Report {
+        proto: PROTO,
+        client: client.into(),
+    })?;
     let ts = Timespec {
         tv_sec: timeout.as_secs() as i64,
         tv_nsec: i64::from(timeout.subsec_nanos()),
@@ -66,7 +70,7 @@ mod tests {
         std::thread::spawn(move || {
             let c = l.accept().unwrap();
             let got = c.recv::<AgentMsg>().unwrap().unwrap().msg.unwrap();
-            assert_eq!(got, AgentMsg::Report);
+            assert!(matches!(got, AgentMsg::Report { proto: PROTO, .. }));
             match answer {
                 Some(m) => c.send(&m).unwrap(),
                 None => std::thread::sleep(Duration::from_millis(500)),
@@ -83,7 +87,7 @@ mod tests {
         };
         let p = serve_once("ok", Some(DaemonMsg::HwReport(Box::new(r.clone()))));
         assert_eq!(
-            ask(&p, Duration::from_secs(2)).unwrap(),
+            ask(&p, "test", Duration::from_secs(2)).unwrap(),
             Reply::Report(Box::new(r))
         );
 
@@ -94,17 +98,24 @@ mod tests {
         };
         let p2 = serve_once("old", Some(old));
         assert_eq!(
-            ask(&p2, Duration::from_secs(2)).unwrap(),
+            ask(&p2, "test", Duration::from_secs(2)).unwrap(),
             Reply::TooOld("unknown message type \"report\"".into())
         );
 
         let p3 = serve_once("hung", None);
-        let e = ask(&p3, Duration::from_millis(50)).unwrap_err();
+        let e = ask(&p3, "test", Duration::from_millis(50)).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
 
         for p in [p, p2, p3] {
             let _ = std::fs::remove_file(p);
         }
-        assert!(ask("/nonexistent/sliverd.sock", Duration::from_millis(50)).is_err());
+        assert!(
+            ask(
+                "/nonexistent/sliverd.sock",
+                "test",
+                Duration::from_millis(50)
+            )
+            .is_err()
+        );
     }
 }

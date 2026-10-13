@@ -63,6 +63,10 @@ Listen here when not socket\-activated.
 The default is
 .I /run/sliver/sliverd.sock
 (mode 0666, because each connection is authorised by its uid).
+Any user may also ask it for a read\-only hardware report
+(the devices it opened, the backlight, why it may drive the bar);
+.B sliverctl doctor
+does.
 .TP
 .BI \-\-config " path"
 Configuration file.

@@ -646,8 +646,18 @@ impl Daemon {
             );
             return self.close(client);
         }
-        if !c.said_hello && matches!(msg, AgentMsg::Report) {
+        if let (false, AgentMsg::Report { proto, client: who }) = (c.said_hello, &msg) {
             // Read-only (sliverctl doctor, any uid): never an agent, so roles stay as they are.
+            if PROTO.negotiate(*proto).is_none() {
+                self.error(
+                    client,
+                    ErrorCode::Proto,
+                    format!("sliverd speaks {PROTO:?}"),
+                    None,
+                );
+                return self.close(client);
+            }
+            crate::debug!("report for {who} (uid {})", c.uid);
             self.send(client, DaemonMsg::HwReport(Box::new(self.hw_report())));
             return self.close(client);
         }
@@ -722,7 +732,7 @@ impl Daemon {
             }
             AgentMsg::Bye => self.close(client),
             // From an agent (after hello): `report` is for non-agent connections.
-            AgentMsg::Report => self.error(
+            AgentMsg::Report { .. } => self.error(
                 client,
                 ErrorCode::Malformed,
                 "report replaces hello; it isn't for agents".into(),

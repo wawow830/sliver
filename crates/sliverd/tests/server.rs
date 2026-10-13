@@ -236,7 +236,12 @@ fn report_connection_leaves_the_agent_alone() {
     let active = rig.server.daemon().active_client();
 
     let doctor = rig.connect();
-    doctor.send(&AgentMsg::Report).unwrap();
+    doctor
+        .send(&AgentMsg::Report {
+            proto: PROTO,
+            client: "sliverctl test".into(),
+        })
+        .unwrap();
     let DaemonMsg::HwReport(r) = rig.recv(&doctor) else {
         panic!("expected hw_report")
     };
@@ -266,8 +271,29 @@ fn report_connection_leaves_the_agent_alone() {
     );
     let (_buf2, _) = present_frame(&mut rig, &a); // still presenting
 
+    // A different major is refused like a hello would be.
+    let future = rig.connect();
+    future
+        .send(&AgentMsg::Report {
+            proto: sliver_ipc::proto::ProtoVersion(PROTO.0 + 1, 0),
+            client: "sliverctl 9".into(),
+        })
+        .unwrap();
+    assert!(matches!(
+        rig.recv(&future),
+        DaemonMsg::Error {
+            code: sliver_ipc::proto::ErrorCode::Proto,
+            ..
+        }
+    ));
+    assert_eq!(rig.server.daemon().active_client(), active);
+
     // From an agent, after hello, it's refused (and the agent stays).
-    a.send(&AgentMsg::Report).unwrap();
+    a.send(&AgentMsg::Report {
+        proto: PROTO,
+        client: "agent".into(),
+    })
+    .unwrap();
     assert!(matches!(rig.recv(&a), DaemonMsg::Error { .. }));
     assert_eq!(rig.server.daemon().active_client(), active);
 }

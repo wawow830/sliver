@@ -383,7 +383,7 @@ sliverd rotates to the panel (`60x2008` on Mac14,7). Intel T2 bars report their 
 | `emit_keys` | `keys` [u16], `mode` (`tap`/`down`/`up`) | for keys decided by agent regions (long-press → key, macros). Rate-limited. |
 | `pong` | `nonce` | |
 | `bye` | — | clean exit: safe layer now |
-| `report` | — | **instead of** `hello`, any uid (1.1): sliverd answers `hw_report` and closes. Never an agent; roles and the bar are untouched (`sliverctl doctor`). An older sliverd answers `error{unknown_message}` and leaves the connection open (seen on the installed one) |
+| `report` | `proto`, `client` (e.g. `sliverctl 0.1.0`) | **instead of** `hello`, any uid (1.1): sliverd answers `hw_report` and closes. Never an agent; roles and the bar are untouched (`sliverctl doctor`). An older sliverd answers `error{unknown_message}` and leaves the connection open (seen on the installed one) |
 
 `Region`: `{"id":u32,"rect":[x,y,w,h],"kind":"key","keys":[u16…]}` or `{"id":…,"rect":…,"kind":"agent"}`.
 `keys` is pressed in order and released in reverse (combos). `pressed` is an optional second image with

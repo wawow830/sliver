@@ -206,7 +206,12 @@ pub enum AgentMsg {
     /// Instead of `hello`, from any uid (since 1.1): ask for a [`HwReport`] (`sliverctl doctor`).
     /// sliverd answers `hw_report` and closes. Never an agent: roles and the bar are untouched.
     /// An older sliverd answers `error{unknown_message}` (and keeps the connection; just close it).
-    Report,
+    /// Same header as `hello`: a different major gets `error{proto}`.
+    Report {
+        proto: ProtoVersion,
+        /// Who asks, e.g. `sliverctl 0.1.0` (logged).
+        client: String,
+    },
 }
 
 impl AgentMsg {
@@ -603,7 +608,10 @@ mod tests {
             },
             AgentMsg::Pong { nonce: 9 },
             AgentMsg::Bye,
-            AgentMsg::Report,
+            AgentMsg::Report {
+                proto: PROTO,
+                client: "sliverctl 0.1.0".into(),
+            },
         ];
         let mut tags: Vec<String> = agent.iter().map(tag).collect();
         tags.sort();

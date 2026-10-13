@@ -103,6 +103,13 @@ It's API-compatible with the former `sliver_ipc::fake::FakeDaemon` (removed; ced
 as a pixmap, incl. pressed feedback and hatch), `advance(ms)` (simulated time), `daemon()`, and
 `auto_pong` (default on: it answers the daemon's own pings, set false to test liveness).
 
+## Hardware report (T140)
+A connection may send `report` instead of `hello` (protocol 1.1, any uid). sliverd answers
+`hw_report` and closes. It never becomes an agent, so the bar's agent is untouched. The facts
+(gate rule, card, backlight and whether it's writable, digitizer, open inputs, hot-plug, uinput)
+are gathered once when the devices are opened. Live state is added per ask, so asking reads no
+devices. `sliverctl doctor` shows it next to what sysfs and systemd say (`sliverctl/src/doctor/hardware.rs`).
+
 ## Headless
 `cargo run -p sliverd -- --headless out.png [--fn] [--width 2170 --model MacBookPro15,1 --max-brightness 2]`
 writes what the panel would show (through the rotated fake framebuffer).

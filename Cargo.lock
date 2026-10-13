@@ -1757,6 +1757,7 @@ dependencies = [
  "sliver-bus",
  "sliver-client",
  "sliver-config",
+ "sliver-hw",
  "sliver-ipc",
  "sliver-testbus",
  "sliver-waybar",
