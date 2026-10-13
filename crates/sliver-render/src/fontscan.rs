@@ -159,13 +159,80 @@ pub fn release_pages(db: &Database) {
     }
 }
 
+/// How many font files cosmic-text has loaded: every font it loads holds a clone of the file's
+/// mapping, on top of the database's one per face.
+pub fn loaded_files(db: &Database) -> usize {
+    let mut faces: std::collections::HashMap<*const u8, (usize, usize)> = Default::default();
+    for face in db.faces() {
+        if let Source::SharedFile(_, data) = &face.source {
+            let bytes: &[u8] = (**data).as_ref();
+            let e = faces
+                .entry(bytes.as_ptr())
+                .or_insert((0, Arc::strong_count(data)));
+            e.0 += 1;
+        }
+    }
+    faces.values().filter(|(n, strong)| strong > n).count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cosmic_text::fontdb;
 
+    /// The tests here map system fonts, and one measures this process's font pages.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Resident pages of this process's font file mappings, in kB.
+    fn font_rss_kb() -> u64 {
+        let smaps = std::fs::read_to_string("/proc/self/smaps").unwrap_or_default();
+        let (mut font, mut kb) = (false, 0);
+        for l in smaps.lines() {
+            let first = l.split_whitespace().next().unwrap_or("");
+            if first.contains('-') && !first.ends_with(':') {
+                font = l.contains("/fonts/");
+            } else if font && let Some(v) = l.strip_prefix("Rss:") {
+                kb += v
+                    .trim()
+                    .trim_end_matches("kB")
+                    .trim()
+                    .parse::<u64>()
+                    .unwrap_or(0);
+            }
+        }
+        kb
+    }
+
+    #[test]
+    fn fallback_searches_and_new_styles_leave_few_fonts_behind() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut fonts = crate::Fonts::system();
+        let family = fonts.pick_family(&["sans-serif".into()]);
+        // New weights (a match list each, reading every font's fvar), then a private-use
+        // codepoint (a search through every font that may or may not find it).
+        for (text, weight) in [
+            ("Song 09:41", 400),
+            ("Song 09:41", 700),
+            ("x \u{10fffd}", 400),
+        ] {
+            crate::text::shape(&mut fonts, text, &family, weight, 20.0);
+            let loaded = loaded_files(fonts.system.db());
+            assert!(
+                loaded <= crate::text::LOADED_FONTS_MAX,
+                "{text}: {loaded} fonts loaded"
+            );
+            // The fonts in use: a few hundred kB (no system has 4 MB of them resident).
+            let kb = font_rss_kb();
+            assert!(
+                kb < 4096,
+                "{text} at {weight}: {kb} kB of font pages resident"
+            );
+        }
+    }
+
     #[test]
     fn same_faces_as_fontdb() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut ours = Database::new();
         load_system_fonts(&mut ours);
         let mut theirs = Database::new();

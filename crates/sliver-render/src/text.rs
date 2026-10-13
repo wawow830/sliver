@@ -1,8 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cosmic_text::fontdb;
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
+use cosmic_text::{
+    Attrs, Buffer, Family, FontMatchAttrs, FontSystem, Metrics, Shaping, SwashCache, Weight,
+};
 
 /// Family name of the font embedded in the binary.
 pub const EMBEDDED_FONT_FAMILY: &str = "Noto Sans";
@@ -17,6 +19,9 @@ pub struct Fonts {
     families: HashMap<Vec<String>, String>,
     /// Painted COLRv1 glyphs; `None` = this glyph isn't a colour glyph.
     color: HashMap<ColorKey, Option<Arc<crate::colr::ColorImage>>>,
+    /// Font-matching attributes shaped since the `FontSystem` was made. cosmic-text builds a
+    /// match list for each new one, and reads every font's `fvar` table to do it.
+    matched: HashSet<FontMatchAttrs>,
 }
 
 type ColorKey = (fontdb::ID, u16, u16, u32, [u8; 4]);
@@ -33,6 +38,10 @@ struct LabelKey {
 /// Shaped labels kept between frames. Re-renders mostly repeat the same labels, and shaping with
 /// font fallback is the expensive part of a frame.
 const LABEL_CACHE_MAX: usize = 1024;
+
+/// Font files cosmic-text may keep loaded. Drawing needs a handful (a few scripts, emoji,
+/// symbols); a fallback search through every font loads hundreds.
+pub(crate) const LOADED_FONTS_MAX: usize = 48;
 
 impl Fonts {
     /// Only the embedded font. Deterministic on every machine: use it for the safe layer and for
@@ -64,6 +73,7 @@ impl Fonts {
             labels: HashMap::new(),
             families: HashMap::new(),
             color: HashMap::new(),
+            matched: HashSet::new(),
         }
     }
 
@@ -81,6 +91,7 @@ impl Fonts {
         // The mappings stay (no read-ahead, see `fontscan`); only the pages drawing touched go.
         crate::fontscan::release_pages(&db);
         self.system = FontSystem::new_with_locale_and_db(locale, db);
+        self.matched.clear();
     }
 
     /// How many font faces are known (system, user and embedded).
@@ -157,6 +168,8 @@ pub(crate) struct Label {
     /// Height of capital letters above the baseline, in pixels. Used to center labels optically
     /// so "F1" and "g" share a baseline.
     pub cap_height: f32,
+    /// Shaping it needed a font match list cosmic-text didn't have yet.
+    pub new_match: bool,
 }
 
 /// Shapes `text`, or returns the cached result.
@@ -207,27 +220,30 @@ fn shape_any(
     }
     let label = Arc::new(shape_uncached(
         &mut fonts.system,
+        &mut fonts.matched,
         text,
         family,
         weight,
         size,
         markup,
     ));
-    // A glyph no font has (.notdef) means fallback just tried every font on the system: unload
-    // them. The label stays cached, so this text never triggers the scan again.
-    let missing = label
-        .buffer
-        .layout_runs()
-        .any(|run| run.glyphs.iter().any(|g| g.glyph_id == 0));
+    // A glyph that none of the fallback fonts has makes cosmic-text try every font on the
+    // system, whether one of them has it in the end (a Nerd Font has most private-use
+    // codepoints) or none does (.notdef). Each one it tried stays loaded: unload them. The label
+    // stays cached, so this text never triggers the search again.
     fonts.labels.insert(key, label.clone());
-    if missing {
+    if crate::fontscan::loaded_files(fonts.system.db()) > LOADED_FONTS_MAX {
         fonts.trim_loaded_fonts();
+    } else if label.new_match {
+        // A new match list read a page or two of every font: give those pages back.
+        crate::fontscan::release_pages(fonts.system.db());
     }
     label
 }
 
 fn shape_uncached(
     fs: &mut FontSystem,
+    matched: &mut HashSet<FontMatchAttrs>,
     text: &str,
     family: &str,
     weight: u16,
@@ -239,6 +255,11 @@ fn shape_uncached(
     let attrs = Attrs::new()
         .family(Family::Name(family))
         .weight(Weight(weight));
+    // cosmic-text clears its match cache at 256 entries; then every key is new again.
+    if matched.len() >= 256 {
+        matched.clear();
+    }
+    let mut new_match = matched.insert((&attrs).into());
     if markup {
         let parsed = crate::markup::parse(text);
         let spans: Vec<(&str, Attrs)> = parsed
@@ -246,6 +267,9 @@ fn shape_uncached(
             .iter()
             .map(|s| (s.text.as_str(), span_attrs(&attrs, &s.style, size)))
             .collect();
+        for (_, a) in &spans {
+            new_match |= matched.insert(a.into());
+        }
         buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
     } else {
         buffer.set_text(text, &attrs, Shaping::Advanced, None);
@@ -274,6 +298,7 @@ fn shape_uncached(
         buffer,
         width,
         cap_height,
+        new_match,
     }
 }
 

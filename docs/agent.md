@@ -136,15 +136,23 @@ A fresh agent uses about 20 MB. Two things made it look far bigger (hazel saw sy
   Each file is mapped once with `MADV_RANDOM` and kept in the database (`SharedFile`), which
   cosmic-text reuses rather than mapping the file again. The scan now reads ~14 MB, and the
   startup peak in a cold-cache cgroup dropped from 256 MB to ~42 MB.
-- **A glyph no font has loaded every font.** cosmic-text keeps every font it loads, with its
-  shaping data. A glyph that no fallback font has (an odd symbol in a song title) makes it try
-  every system font. That held 11 MB of heap forever, and with plain mappings it read every file
-  again. Now the search reads only each font's cmap, ~2.5 MB of page cache in all. `Fonts`
-  unloads loaded fonts after a shaping that hit `.notdef`, and whenever the label cache turns
-  over (`trim_loaded_fonts`). That rebuilds the `FontSystem` from the same database and drops
-  the pages the mappings touched (`fontscan::release_pages`, `MADV_DONTNEED`). Shaped labels
-  survive, so the same text never searches again. A new text with a missing glyph searches in
-  ~0.3 ms warm, 46 ms cold.
+- **A glyph that's in none of the fallback fonts loads every font.** cosmic-text keeps every
+  font it loads, with its shaping data. Such a glyph (an odd symbol in a song title) makes it try
+  every system font, whether one has it in the end (Nerd Fonts cover most private-use
+  codepoints) or none does. That held 11 MB of heap forever, and with plain mappings it read
+  every file again. Now the search reads only each font's cmap, ~2.5 MB of page cache in all.
+  When more than 48 font files are loaded (`fontscan::loaded_files`: each loaded font holds a
+  clone of its file's mapping), `Fonts` unloads them all, and also whenever the label cache
+  turns over (`trim_loaded_fonts`). That rebuilds the `FontSystem` from the same database and
+  drops the pages the mappings touched (`fontscan::release_pages`, `MADV_DONTNEED`). Shaped
+  labels survive, so the same text never searches again. A new text that searches costs ~4 ms
+  warm.
+- **Each new font style reads every font.** For each new family/weight/style, cosmic-text builds
+  a match list and reads every font's `fvar` table to do it (a variable font may cover the
+  weight). That's a page or two of each font, ~14 MB, which used to stay in RSS (hazel's fresh
+  agent showed 37 MB, 16 MB of it font pages). `Fonts` remembers the styles it has shaped and
+  releases the pages after a shaping that needed a new one, so only the fonts in use stay
+  resident (under 2 MB).
 
 Measure in a cgroup of its own, after evicting the fonts from the page cache (any
 `posix_fadvise(POSIX_FADV_DONTNEED)` loop over `/usr/share/fonts`):

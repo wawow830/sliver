@@ -12,6 +12,29 @@ fn mem() -> String {
         .collect::<Vec<_>>()
         .join("  ")
         + &cgroup_file()
+        + &font_rss()
+}
+
+/// Resident pages of font file mappings (they should only be the fonts in use).
+fn font_rss() -> String {
+    let smaps = std::fs::read_to_string("/proc/self/smaps").unwrap_or_default();
+    let (mut font, mut kb) = (false, 0u64);
+    for l in smaps.lines() {
+        if l.split_whitespace()
+            .next()
+            .is_some_and(|w| w.contains('-') && !w.ends_with(':'))
+        {
+            font = l.contains("/fonts/");
+        } else if font && let Some(v) = l.strip_prefix("Rss:") {
+            kb += v
+                .trim()
+                .trim_end_matches(" kB")
+                .trim()
+                .parse::<u64>()
+                .unwrap_or(0);
+        }
+    }
+    format!("  fonts resident: {kb} kB")
 }
 
 /// Page cache charged to this process's cgroup (run under `systemd-run --user --scope` to see
@@ -53,9 +76,10 @@ fn main() {
             &mut p,
         );
         println!(
-            "{:<28} {:?}",
+            "{:<28} {:?} {}",
             format!("missing-glyph text #{i}"),
-            t0.elapsed()
+            t0.elapsed(),
+            font_rss()
         );
     }
     for (name, t) in texts {
