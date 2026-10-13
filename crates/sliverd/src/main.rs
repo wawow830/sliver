@@ -7,6 +7,7 @@
 //! sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH] [--config PATH] [PANEL]
 //!     Serve the real IPC socket with fake hardware: develop and test the agent without a bar.
 //!     The active uid defaults to your own. --frame-png rewrites a PNG on every panel flush.
+//!     --touch-socket PATH takes injected touches/Fn/lid as text lines (sliverd::inject).
 //! PANEL: [--width 2008] [--model Mac14,7] [--max-brightness 255]
 //! --backend real|fake (= --fake-hardware), --exit-after SECONDS, -v (or SLIVER_LOG=debug): log
 //! touches, keys, Fn/lid, layer/display/hatch changes, flushes, backlight and agent traffic.
@@ -124,6 +125,10 @@ fn main() {
     });
     let uid = args.parse("--uid", rustix::process::getuid().as_raw());
     let frame_png = args.value("--frame-png").map(PathBuf::from);
+    let touch_socket = args.value("--touch-socket").map(PathBuf::from);
+    if touch_socket.is_some() && !fake {
+        die("--touch-socket needs --fake-hardware (real hardware has a real digitizer)");
+    }
     if !args.0.is_empty() {
         die(&format!("unknown arguments: {:?}", args.0));
     }
@@ -138,12 +143,20 @@ fn main() {
     };
     let clock = Instant::now();
     let mut server = if fake {
+        let height = panel.height;
         let hw = FakeHardware::new(panel.width, panel.height);
         hw.display.set_png_output(frame_png);
         let daemon = Daemon::new(backends(hw.backends()), panel, &config, None, 0);
         let session = FixedSession::new(Some(uid)).unwrap_or_else(|e| die(&e.to_string()));
+        let mut inputs: Vec<Box<dyn sliverd::backend::InputSource>> = Vec::new();
+        if let Some(path) = &touch_socket {
+            let src = sliverd::inject::TouchSocket::bind(path, height)
+                .unwrap_or_else(|e| die(&format!("--touch-socket {}: {e}", path.display())));
+            eprintln!("sliverd: injecting input from {}", path.display());
+            inputs.push(Box::new(src));
+        }
         eprintln!("sliverd: serving with fake hardware, active uid {uid}");
-        Server::new(daemon, listener, Vec::new(), Box::new(session), clock)
+        Server::new(daemon, listener, inputs, Box::new(session), clock)
     } else {
         // Real hardware: opening devices refuses unless SLIVER_SAFESWAP=1 (harness or unit).
         let hw = sliverd::real::open().unwrap_or_else(|e| die(&format!("hardware: {e}")));

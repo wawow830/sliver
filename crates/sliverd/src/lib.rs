@@ -22,6 +22,7 @@ pub mod config;
 pub mod daemon;
 pub mod fake;
 pub mod idle;
+pub mod inject;
 pub mod ipc;
 pub mod keystate;
 pub mod log;

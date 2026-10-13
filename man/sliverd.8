@@ -17,6 +17,8 @@ sliverd \- Touch Bar system daemon
 .IR n ]
 .RB [ \-\-frame\-png
 .IR path ]
+.RB [ \-\-touch\-socket
+.IR path ]
 .RI [ panel ]
 .br
 .B sliverd \-\-headless
@@ -78,6 +80,22 @@ Fake mode: the uid treated as the active session (default: your own).
 .TP
 .BI \-\-frame\-png " path"
 Fake mode: rewrite this PNG every time the panel is flushed.
+.TP
+.BI \-\-touch\-socket " path"
+Fake mode: take injected input on this Unix datagram socket, one command per line:
+.BI tap " x",
+.BI down " x \fR[\fPslot\fR]\fP",
+.BI move " x \fR[\fPslot\fR]\fP",
+.BR up " [\fIslot\fP]",
+.BR cancel " [\fIslot\fP]",
+.BR "fn down" | up ,
+.BR activity ,
+.BR "lid open" | closed ,
+.BR screen\-backlight .
+.I x
+is in bar pixels from the left edge. Touches go through the real touch path (key regions, the
+agent, the hatch). For example:
+.B printf 'tap 80\en' | socat \- UNIX\-SENDTO:\fIpath\fP
 .TP
 .BI \-\-headless " out.png"
 Render what the panel would show with no agent connected, then exit.

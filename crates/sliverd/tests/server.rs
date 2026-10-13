@@ -284,3 +284,71 @@ fn bad_attachment_is_refused() {
         }
     ));
 }
+
+/// `--touch-socket`: text lines on a datagram socket go through the real touch path. Without an
+/// agent the built-in layer shows, so a tap on F1 presses F1; a bad line doesn't stop the rest.
+#[test]
+fn touch_socket_injects_through_the_real_touch_path() {
+    use sliverd::inject::TouchSocket;
+    use std::os::unix::net::UnixDatagram;
+
+    let listener_path = socket_path("inject-ipc");
+    let inject_path = socket_path("inject");
+    let listener = Listener::bind(&listener_path).unwrap();
+    let hw = FakeHardware::new(2008, 60);
+    let panel = PanelInfo {
+        width: 2008,
+        height: 60,
+        format: PixelFormat::Xrgb8888,
+        max_brightness: 255,
+        model: "Mac14,7".into(),
+    };
+    let daemon = Daemon::new(hw.backends(), panel, &Config::default(), None, 0);
+    let src = TouchSocket::bind(&inject_path, 60).unwrap();
+    let session = FixedSession::new(Some(rustix::process::getuid().as_raw())).unwrap();
+    let mut server = Server::new(
+        daemon,
+        listener,
+        vec![Box::new(src)],
+        Box::new(session),
+        Instant::now(),
+    )
+    .unwrap();
+
+    const KEY_F1: u16 = 59;
+    let f1 = server
+        .daemon()
+        .visible_regions()
+        .iter()
+        .find(|r| r.kind == RegionKind::Key { keys: vec![KEY_F1] })
+        .expect("the built-in layer has F1")
+        .rect;
+    let x = f1.x as f32 + f1.w as f32 / 2.0;
+
+    let client = UnixDatagram::unbound().unwrap();
+    client
+        .send_to(format!("bogus line\ntap {x}\n").as_bytes(), &inject_path)
+        .unwrap();
+    for _ in 0..3 {
+        server.run_once(Some(Duration::from_millis(5))).unwrap();
+    }
+    use KeyEvent::{Down, Up};
+    assert_eq!(hw.keys.take(), vec![Down(KEY_F1), Up(KEY_F1)]);
+
+    // Held across datagrams: the key stays down until `up`.
+    client
+        .send_to(format!("down {x} 2").as_bytes(), &inject_path)
+        .unwrap();
+    server.run_once(Some(Duration::from_millis(5))).unwrap();
+    assert_eq!(hw.keys.take(), vec![Down(KEY_F1)]);
+    client.send_to(b"up 2", &inject_path).unwrap();
+    server.run_once(Some(Duration::from_millis(5))).unwrap();
+    assert_eq!(hw.keys.take(), vec![Up(KEY_F1)]);
+
+    drop(server);
+    assert!(
+        !inject_path.exists(),
+        "the socket file is removed with the source"
+    );
+    let _ = std::fs::remove_file(&listener_path);
+}

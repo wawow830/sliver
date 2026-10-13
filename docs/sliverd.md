@@ -35,6 +35,11 @@ conn per wakeup. A conn whose socket won't take a reply is dropped. Received fds
   and ms) and backlight writes, with timestamps. Harness runs check themselves from `sliverd.log`.
 - **Dev mode**: `sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH]` serves the real
   IPC with fake hardware. Point an agent at it, and `--frame-png` is rewritten on every panel flush.
+  `--touch-socket PATH` injects input: text lines on a Unix datagram socket (`tap X`, `down X [SLOT]`,
+  `move X [SLOT]`, `up [SLOT]`, `cancel [SLOT]`, `fn down|up`, `activity`, `lid open|closed`,
+  `screen-backlight`; X in bar pixels), routed through the real touch path: key regions and the key
+  fast path, agent touch events, the hatch. E.g. `printf 'tap 80\n' | socat - UNIX-SENDTO:PATH`.
+  Format in `crates/sliverd/src/inject.rs`. Refused without `--fake-hardware`.
 
 ## System integration (ADR-0005)
 `packaging/systemd/sliverd.{service,socket}` and `packaging/udev/99-z-sliverd.rules`. udev starts sliverd
