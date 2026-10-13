@@ -72,6 +72,11 @@ if command -v node >/dev/null; then
   done
 fi
 
+# The RPM must not send udev events to the digitizers: SYSTEMD_WANTS=sliverd.service fires on
+# 'change' too, so that would take the bar over at every install/upgrade (measured).
+! grep -E '^\s*udevadm trigger.*subsystem-match=input' packaging/rpm/sliver.spec \
+  || { echo "sliver.spec must not trigger udev events on input devices (takes the bar over)"; exit 1; }
+
 # The Chromium extension's id comes from the public "key" in its manifest. The system
 # native-messaging manifest must allow exactly that id (T108), or the packaged host won't connect.
 python3 - <<'PY'

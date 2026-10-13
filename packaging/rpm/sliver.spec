@@ -221,16 +221,17 @@ done
 udevadm trigger --action=change --subsystem-match=backlight \
     --sysname-match=228600000.dsi.0 --sysname-match=228200000.display-pipe.0 \
     --sysname-match=appletb_backlight >/dev/null 2>&1 || :
-# Without tiny-dfr, our rules also own the bar's seat (the digitizers) and the T2 USB switch to
-# the display configuration (an add-only rule; it acts only while the configuration is still 1).
-for name in "Apple Inc. Touch Bar Display Touchpad" "MacBookPro17,1 Touch Bar" "Mac14,7 Touch Bar"; do
-    udevadm trigger --action=change --subsystem-match=input --attr-match=name="$name" >/dev/null 2>&1 || :
-done
+# Never send a udev event to the digitizers here: they carry SYSTEMD_WANTS=sliverd.service, and
+# systemd acts on it for 'change' events too, so it would take the bar from tiny-dfr at every
+# install and upgrade (measured on the Mac14,7, T115/T122). Their seat rule
+# (ID_SEAT=seat-touchbar) applies from the next boot, like the rest. Without tiny-dfr our rules
+# also do the T2 USB switch to the display configuration (an add-only rule; it acts only while
+# the configuration is still 1).
 udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=05ac \
     --attr-match=idProduct=8302 >/dev/null 2>&1 || :
 udevadm settle --timeout=5 >/dev/null 2>&1 || :
 # No takeover at install time: the bar switches to sliverd at the next boot, or now with
-# `systemctl start sliverd` (Conflicts= stops tiny-dfr). docs/packaging.md.
+# `systemctl start sliverd` (its ExecStartPre stops tiny-dfr). docs/packaging.md.
 
 %preun -n sliverd
 %systemd_preun sliverd.service sliverd.socket
