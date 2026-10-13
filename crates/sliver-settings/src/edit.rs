@@ -625,23 +625,26 @@ fn describe(v: &Value) -> String {
 /// Sets (or with `None`, clears) one key of the module at `index`. A named module
 /// (`"battery#bat2"`) is configured in its `[modules."battery#bat2"]` block. An inline module
 /// (`{ type = … }`) is edited in place.
-/// Several keys of one module in one edit (one undo step); `None` clears a key.
-pub fn set_module_keys(
+/// Sets (or with `None` clears) key `k` of the named module `id` (`[modules."id"]`): for a
+/// module inside a group, which has no zone slot of its own.
+pub fn set_named_module_key(
     ed: &mut Editor,
-    merged: &Table,
-    layout: &str,
-    zone: &str,
-    index: usize,
-    changes: &[(String, Option<Value>)],
-    what: &str,
+    id: &str,
+    k: &str,
+    value: Option<Value>,
 ) -> Result<String, String> {
-    if changes.is_empty() {
-        return Err("Nothing changed".into());
+    let id = ModuleId::parse(id)?.to_string();
+    let path = format!("modules.{}.{}", key(&id), key(k));
+    match value {
+        Some(v) => {
+            ed.set(&path, &v)?;
+            Ok(format!("Set {k} of {id}"))
+        }
+        None => {
+            ed.remove(&path)?;
+            Ok(format!("Cleared {k} of {id}"))
+        }
     }
-    for (k, v) in changes {
-        set_module_key(ed, merged, layout, zone, index, k, v.clone())?;
-    }
-    Ok(what.to_owned())
 }
 
 /// What turns module block `old` into `new`: changed or new keys, and `None` for removed ones.
@@ -1408,16 +1411,37 @@ mod tests {
     }
 
     #[test]
-    fn set_module_keys_is_one_edit_and_moves_an_alias() {
+    fn named_module_keys_for_group_members() {
+        let (mut ed, _) = fresh("version = 1\n");
+        set_named_module_key(
+            &mut ed,
+            "custom/b",
+            "format",
+            Some(Value::String("B".into())),
+        )
+        .unwrap();
+        assert_eq!(
+            ed.get("modules.\"custom/b\".format").unwrap(),
+            Some(Value::String("B".into()))
+        );
+        set_named_module_key(&mut ed, "custom/b", "format", None).unwrap();
+        assert_eq!(ed.get("modules.\"custom/b\".format").unwrap(), None);
+        assert!(set_named_module_key(&mut ed, "", "format", None).is_err());
+    }
+
+    #[test]
+    fn an_alias_moves_to_the_canonical_key() {
         let (mut ed, merged) = fresh(
             "version = 1\n[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"clock\"]\n\
              [modules.clock]\non-click = \"gnome-clocks\"\n",
         );
-        let changes = vec![
+        let changes: Vec<(String, Option<Value>)> = vec![
             ("on-tap".into(), Some(Value::String("foot".into()))),
             ("on-click".into(), None),
         ];
-        set_module_keys(&mut ed, &merged, "default", "main", 0, &changes, "x").unwrap();
+        for (k, v) in changes {
+            set_module_key(&mut ed, &merged, "default", "main", 0, &k, v).unwrap();
+        }
         assert_eq!(
             ed.get("modules.clock.on-tap").unwrap(),
             Some(Value::String("foot".into()))

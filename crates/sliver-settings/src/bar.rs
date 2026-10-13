@@ -148,6 +148,8 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     let sizes: Rc<RefCell<Feedback>> = Rc::default();
     // The keyboard-selected module's span (bar px), ringed while the preview has focus (T114).
     let frame_focus: Rc<std::cell::Cell<Option<(f32, f32)>>> = Rc::default();
+    // The Shift/Ctrl-click multi-selection's spans (bar px), tinted and ringed.
+    let multi_spans: Rc<RefCell<Vec<(f32, f32)>>> = Rc::default();
     let picture = gtk::DrawingArea::builder()
         .content_width(size.0 as i32 / 2)
         .content_height(size.1 as i32 / 2)
@@ -160,6 +162,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         let caret = caret.clone();
         let sizes = sizes.clone();
         let frame_focus = frame_focus.clone();
+        let multi_spans = multi_spans.clone();
         picture.set_draw_func(move |area, cr, _, h| {
             if let Some(s) = frame.borrow().as_ref() {
                 cr.save().ok();
@@ -193,6 +196,15 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 let _ = cr.fill();
             }
             drop(fb);
+            for (x, w) in multi_spans.borrow().iter() {
+                let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
+                cr.set_source_rgba(0.21, 0.52, 0.89, 0.22);
+                cr.rectangle(x + 1.0, 1.0, (w - 2.0).max(1.0), h - 2.0);
+                let _ = cr.fill_preserve();
+                cr.set_source_rgb(0.21, 0.52, 0.89);
+                cr.set_line_width(2.0);
+                let _ = cr.stroke();
+            }
             if area.has_focus()
                 && let Some((x, w)) = frame_focus.get()
             {
@@ -234,6 +246,25 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         .build();
     page.append(&bar_scroll);
     let shown_layout: Rc<RefCell<String>> = Rc::default();
+    // Shift/Ctrl-click several modules of a zone, then Group (ux.md §4 "Group").
+    let multi_label = gtk::Label::builder().xalign(0.0).hexpand(true).build();
+    multi_label.add_css_class("dim-label");
+    let multi_group = gtk::Button::builder()
+        .label("Group…")
+        .css_classes(["suggested-action"])
+        .build();
+    let multi_clear = gtk::Button::with_label("Clear");
+    let multi_bar = gtk::Box::builder()
+        .spacing(8)
+        .margin_bottom(6)
+        .visible(false)
+        .build();
+    multi_bar.append(&multi_label);
+    multi_bar.append(&multi_clear);
+    multi_bar.append(&multi_group);
+    page.append(&multi_bar);
+    // Set once the preview exists; `refresh` calls it after every render.
+    let multi_hook: Rc<RefCell<Option<Hook>>> = Rc::default();
 
     let why = gtk::Label::builder()
         .xalign(0.0)
@@ -265,6 +296,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     )));
     let refresh = {
         let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
+        let multi_hook = multi_hook.clone();
         let (sizes, size_warning) = (sizes.clone(), size_warning.clone());
         let (layer_dd, app_entry, locked, picture, why, zones, layers) = (
             layer_dd.clone(),
@@ -340,6 +372,9 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 None => format!("Editing layout “{layout}”, the {layer} layer's default. Click a module to edit it; changes apply instantly."),
             }));
             zone_groups(&ui, &zones, &layout);
+            if let Some(f) = multi_hook.borrow().clone() {
+                f();
+            }
         })
     };
     for w in [layer_dd.upcast_ref::<gtk::Widget>(), locked.upcast_ref()] {
@@ -365,11 +400,94 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             });
         });
     }
-    // Click a module on the preview to open it in the inspector (ux.md §4 "Select").
+    // The multi-selection's rings and bar, from `ui.bar_multi` (dropping what no longer exists).
+    let update_multi: Rc<dyn Fn()> = Rc::new({
+        let (ui, preview, shown_layout, picture) = (
+            ui.clone(),
+            preview.clone(),
+            shown_layout.clone(),
+            picture.downgrade(),
+        );
+        let (multi_spans, multi_bar, multi_label, multi_group) = (
+            multi_spans.clone(),
+            multi_bar.downgrade(),
+            multi_label.downgrade(),
+            multi_group.downgrade(),
+        );
+        move || {
+            let state = ui.state();
+            let zones = state
+                .loaded
+                .config
+                .layout_zones(&shown_layout.borrow())
+                .unwrap_or_default();
+            let mut picked = ui.bar_multi.borrow_mut();
+            picked.retain(|(zi, i)| zones.get(*zi).is_some_and(|z| *i < z.modules.len()));
+            let ids = |zi: usize| -> Vec<String> {
+                zones[zi]
+                    .modules
+                    .iter()
+                    .map(|m| m.id().to_string())
+                    .collect()
+            };
+            *multi_spans.borrow_mut() = picked
+                .iter()
+                .filter_map(|(zi, i)| preview.borrow().module_span(*zi, &ids(*zi), *i))
+                .collect();
+            let n = picked.len();
+            if let (Some(bar), Some(label), Some(group)) = (
+                multi_bar.upgrade(),
+                multi_label.upgrade(),
+                multi_group.upgrade(),
+            ) {
+                bar.set_visible(n > 0);
+                let zone = picked.first().map(|(zi, _)| zones[*zi].name.clone());
+                label.set_text(&match (n, zone) {
+                    (1, Some(z)) => format!(
+                        "1 module of “{z}” selected. Shift- or Ctrl-click more to group them."
+                    ),
+                    (n, Some(z)) => format!("{n} modules of “{z}” selected"),
+                    _ => String::new(),
+                });
+                group.set_sensitive(n >= 2);
+            }
+            if let Some(p) = picture.upgrade() {
+                p.queue_draw();
+            }
+        }
+    });
+    *multi_hook.borrow_mut() = Some(update_multi.clone());
+    {
+        let (ui, update_multi) = (ui.clone(), update_multi.clone());
+        multi_clear.connect_clicked(move |_| {
+            ui.bar_multi.borrow_mut().clear();
+            update_multi();
+        });
+    }
+    {
+        let (ui, shown_layout) = (ui.clone(), shown_layout.clone());
+        multi_group.connect_clicked(move |_| {
+            let state = ui.state();
+            let layout = shown_layout.borrow().clone();
+            let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
+                return;
+            };
+            let picked = ui.bar_multi.borrow().clone();
+            let Some(z) = picked.first().and_then(|(zi, _)| zones.get(*zi)) else {
+                return;
+            };
+            let ids: Vec<String> = z.modules.iter().map(|m| m.id().to_string()).collect();
+            let checked: Vec<usize> = picked.iter().map(|(_, i)| *i).collect();
+            make_group_dialog(&ui, &layout, &z.name, &ids, &checked);
+        });
+    }
+    // Click a module on the preview to open it in the inspector (ux.md §4 "Select"); with
+    // Shift or Ctrl, add it to (or drop it from) the multi-selection instead.
     let click = gtk::GestureClick::new();
     {
         let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
-        click.connect_released(move |_, _, x, _| {
+        let update_multi = update_multi.clone();
+        click.connect_released(move |g, _, x, _| {
             // The preview is drawn at half scale.
             let Some(hit) = preview.borrow().hit(x as f32 * 2.0) else {
                 return;
@@ -384,12 +502,49 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             let Some(i) = hit.module_index(&ids) else {
                 return;
             };
+            let mods = g.current_event_state();
+            if mods.intersects(
+                gtk::gdk::ModifierType::SHIFT_MASK | gtk::gdk::ModifierType::CONTROL_MASK,
+            ) {
+                {
+                    let mut picked = ui.bar_multi.borrow_mut();
+                    // One zone at a time: a group takes modules from one zone.
+                    if picked.iter().any(|(zi, _)| *zi != hit.zone) {
+                        picked.clear();
+                    }
+                    if let Some(k) = picked.iter().position(|p| *p == (hit.zone, i)) {
+                        picked.remove(k);
+                    } else {
+                        picked.push((hit.zone, i));
+                    }
+                }
+                update_multi();
+                return;
+            }
+            if !ui.bar_multi.borrow().is_empty() {
+                ui.bar_multi.borrow_mut().clear();
+                update_multi();
+            }
             let m = &z.modules[i];
+            // A module inside a group: edit that member itself (its `[modules."id"]` block).
+            if let Some((group, member)) = group_member(&ids[i], &hit.key)
+                && let Ok(mid) = sliver_config::ModuleId::parse(&member)
+            {
+                inspector(
+                    &ui,
+                    Target {
+                        member: Some((group.clone(), member.clone())),
+                        ..Target::slot(&layout, &z.name, i)
+                    },
+                    &format!("{} › {member}", group.trim_start_matches("group/")),
+                    &state.loaded.config.module_block(&ModuleRef::Named(mid)),
+                    Some(hit.rect.1),
+                );
+                return;
+            }
             inspector(
                 &ui,
-                &layout,
-                &z.name,
-                i,
+                Target::slot(&layout, &z.name, i),
                 &m.id().to_string(),
                 &state.loaded.config.module_block(m),
                 Some(hit.rect.1),
@@ -665,7 +820,7 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
             b.set_valign(gtk::Align::Center);
             let ids: Vec<String> = z.modules.iter().map(|m| m.id().to_string()).collect();
             let (ui, layout, zone) = (ui.clone(), layout.to_owned(), z.name.clone());
-            b.connect_clicked(move |_| make_group_dialog(&ui, &layout, &zone, &ids));
+            b.connect_clicked(move |_| make_group_dialog(&ui, &layout, &zone, &ids, &[]));
             header.append(&b);
         }
         header.append(&zone_button(ui, layout, &z, origin.is_empty(), (zi, count)));
@@ -705,7 +860,9 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
                     .get("width")
                     .and_then(|w| w.as_integer())
                     .map(|w| w as f32);
-                r.connect_activated(move |_| inspector(&ui, &layout, &zone, i, &title, &block, px));
+                r.connect_activated(move |_| {
+                    inspector(&ui, Target::slot(&layout, &zone, i), &title, &block, px)
+                });
             }
             for (icon, tip, delta) in [
                 ("go-up-symbolic", "Move left", -1isize),
@@ -1391,10 +1548,15 @@ fn toml_key(k: &str) -> String {
 }
 
 /// "Group modules…": pick modules of a zone and a name; they become `group/<name>` in place.
-fn make_group_dialog(ui: &Rc<Ui>, layout: &str, zone: &str, ids: &[String]) {
+fn make_group_dialog(ui: &Rc<Ui>, layout: &str, zone: &str, ids: &[String], checked: &[usize]) {
     let checks: Vec<gtk::CheckButton> = ids
         .iter()
-        .map(|id| gtk::CheckButton::with_label(id))
+        .enumerate()
+        .map(|(i, id)| {
+            let c = gtk::CheckButton::with_label(id);
+            c.set_active(checked.contains(&i));
+            c
+        })
         .collect();
     let col = gtk::Box::new(gtk::Orientation::Vertical, 4);
     for c in &checks {
@@ -1426,6 +1588,7 @@ fn make_group_dialog(ui: &Rc<Ui>, layout: &str, zone: &str, ids: &[String]) {
             .map(|(i, _)| i)
             .collect();
         let (layout, zone, n) = (layout.clone(), zone.clone(), name.text().to_string());
+        ui2.bar_multi.borrow_mut().clear();
         apply(&ui2, move |ed, merged| {
             edit::make_group(ed, merged, &layout, &zone, &picked, &n)
         });
@@ -1491,11 +1654,92 @@ fn library_button(ui: &Rc<Ui>, layout: &str, zone: &str) -> gtk::MenuButton {
 }
 
 /// The inspector (ux.md §4): the common keys as text fields. Each applies on its own.
+/// A callback set after the widgets it needs exist.
+type Hook = Rc<dyn Fn()>;
+
+/// What an inspector edits: module `index` of a zone, or (`member`) a module inside a group,
+/// whose settings live in its `[modules."id"]` block.
+#[derive(Clone, Debug)]
+pub(crate) struct Target {
+    pub layout: String,
+    pub zone: String,
+    pub index: usize,
+    /// (innermost group, member id).
+    pub member: Option<(String, String)>,
+}
+
+/// For a cell inside a group: the innermost group and the member's id, from the zone's top-level
+/// module `top` (`group/tools`) and the cell key (`group/tools/custom/b`,
+/// `group/a/group/b/clock`). `None` for a top-level module.
+pub(crate) fn group_member(top: &str, key: &str) -> Option<(String, String)> {
+    let mut group = top.to_owned();
+    let mut rest = key.strip_prefix(&format!("{top}/"))?;
+    while let Some(after) = rest.strip_prefix("group/")
+        && let Some(slash) = after.find('/')
+    {
+        group = format!("group/{}", &after[..slash]);
+        rest = &after[slash + 1..];
+    }
+    Some((group, rest.to_owned()))
+}
+
+impl Target {
+    fn slot(layout: &str, zone: &str, index: usize) -> Self {
+        Target {
+            layout: layout.to_owned(),
+            zone: zone.to_owned(),
+            index,
+            member: None,
+        }
+    }
+
+    fn set(
+        &self,
+        ed: &mut sliver_config::writer::Editor,
+        merged: &toml::Table,
+        k: &str,
+        v: Option<Value>,
+    ) -> Result<String, String> {
+        match &self.member {
+            Some((_, id)) => edit::set_named_module_key(ed, id, k, v),
+            None => edit::set_module_key(ed, merged, &self.layout, &self.zone, self.index, k, v),
+        }
+    }
+
+    /// Several keys in one edit (one undo step).
+    fn set_many(
+        &self,
+        ed: &mut sliver_config::writer::Editor,
+        merged: &toml::Table,
+        changes: &[(String, Option<Value>)],
+        what: &str,
+    ) -> Result<String, String> {
+        if changes.is_empty() {
+            return Err("Nothing changed".into());
+        }
+        for (k, v) in changes {
+            self.set(ed, merged, k, v.clone())?;
+        }
+        Ok(what.to_owned())
+    }
+
+    /// Everything the module sets now, as the current config resolves it.
+    fn block(&self, ui: &Ui) -> Option<toml::Table> {
+        let state = ui.state();
+        let c = &state.loaded.config;
+        if let Some((_, id)) = &self.member {
+            let id = sliver_config::ModuleId::parse(id).ok()?;
+            return Some(c.module_block(&ModuleRef::Named(id)));
+        }
+        let zones = c.layout_zones(&self.layout).ok()?;
+        let z = zones.iter().find(|z| z.name == self.zone)?;
+        Some(c.module_block(z.modules.get(self.index)?))
+    }
+}
+
 fn inspector(
     ui: &Rc<Ui>,
-    layout: &str,
-    zone: &str,
-    index: usize,
+    target: Target,
     title: &str,
     block: &toml::Table,
     // Its width on the preview (bar px), when opened from there: warns if small for a finger.
@@ -1535,39 +1779,26 @@ fn inspector(
                 .valign(gtk::Align::Center)
                 .build();
             button.add_css_class("flat");
-            let (ui, layout, zone, dialog, entry2) = (
-                ui.clone(),
-                layout.to_owned(),
-                zone.to_owned(),
-                dialog.clone(),
-                entry.clone(),
-            );
+            let (ui, target, dialog, entry2) =
+                (ui.clone(), target.clone(), dialog.clone(), entry.clone());
             let theme = block
                 .get("icon-theme")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             button.connect_clicked(move |_| {
-                let (ui, layout, zone, entry) =
-                    (ui.clone(), layout.clone(), zone.clone(), entry2.clone());
+                let (ui, target, entry) = (ui.clone(), target.clone(), entry2.clone());
                 let pick: Rc<dyn Fn(crate::icon_picker::Choice)> = Rc::new(move |c| match c {
                     crate::icon_picker::Choice::Icon(name) => {
                         entry.set_text(&name);
                         entry.emit_by_name::<()>("apply", &[]);
                     }
                     crate::icon_picker::Choice::Emoji(text) => {
-                        let (layout, zone) = (layout.clone(), zone.clone());
+                        let target = target.clone();
                         apply(&ui, move |ed, merged| {
-                            edit::set_module_key(ed, merged, &layout, &zone, index, "icon", None)?;
-                            edit::set_module_key(
-                                ed,
-                                merged,
-                                &layout,
-                                &zone,
-                                index,
-                                "format",
-                                Some(Value::String(text.clone())),
-                            )
-                            .map(|_| format!("Label set to {text}"))
+                            target.set(ed, merged, "icon", None)?;
+                            target
+                                .set(ed, merged, "format", Some(Value::String(text.clone())))
+                                .map(|_| format!("Label set to {text}"))
                         });
                     }
                 });
@@ -1575,12 +1806,7 @@ fn inspector(
             });
             entry.add_suffix(&button);
         }
-        let (ui, layout, zone, key) = (
-            ui.clone(),
-            layout.to_owned(),
-            zone.to_owned(),
-            key.to_owned(),
-        );
+        let (ui, target, key) = (ui.clone(), target.clone(), key.to_owned());
         entry.connect_apply(move |e| {
             let text = e.text().trim().to_owned();
             let value = (!text.is_empty()).then(|| match key.as_str() {
@@ -1588,10 +1814,8 @@ fn inspector(
                 "format" | "icon" => Value::String(text.clone()),
                 _ => parse_cli_value(&text),
             });
-            let (layout, zone, key) = (layout.clone(), zone.clone(), key.clone());
-            apply(&ui, move |ed, merged| {
-                edit::set_module_key(ed, merged, &layout, &zone, index, &key, value)
-            });
+            let (target, key) = (target.clone(), key.clone());
+            apply(&ui, move |ed, merged| target.set(ed, merged, &key, value));
         });
         g.add(&entry);
     }
@@ -1610,16 +1834,16 @@ fn inspector(
             .get(g.key())
             .or_else(|| alias.and_then(|a| block.get(a)));
         let write: Rc<dyn Fn(Option<Value>)> = {
-            let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());
+            let (ui, target) = (ui.clone(), target.clone());
             Rc::new(move |v| {
-                let (layout, zone) = (layout.clone(), zone.clone());
+                let target = target.clone();
                 let mut changes = vec![(g.key().to_owned(), v)];
                 if let Some(a) = alias {
                     changes.push((a.to_owned(), None));
                 }
                 let what = format!("Set {}", g.key());
                 apply(&ui, move |ed, merged| {
-                    edit::set_module_keys(ed, merged, &layout, &zone, index, &changes, &what)
+                    target.set_many(ed, merged, &changes, &what)
                 });
             })
         };
@@ -1651,9 +1875,10 @@ fn inspector(
     let more_group = adw::PreferencesGroup::new();
     more_group.add(&more_gestures);
     // Updates: what a script runs and how often (ux.md §4.4).
-    let kind = sliver_config::ModuleId::parse(title)
-        .map(|id| id.kind)
-        .unwrap_or_default();
+    let kind =
+        sliver_config::ModuleId::parse(target.member.as_ref().map_or(title, |(_, id)| id.as_str()))
+            .map(|id| id.kind)
+            .unwrap_or_default();
     let mut update_fields: Vec<(&str, &str)> = Vec::new();
     if kind == "custom" {
         update_fields.push(("exec", "Command whose output it shows"));
@@ -1680,17 +1905,15 @@ fn inspector(
                         .unwrap_or_default(),
                 )
                 .build();
-            let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());
+            let (ui, target) = (ui.clone(), target.clone());
             entry.connect_apply(move |e| {
                 let text = e.text().trim().to_owned();
                 let value = (!text.is_empty()).then(|| match key {
                     "exec" => Value::String(text.clone()),
                     _ => parse_cli_value(&text),
                 });
-                let (layout, zone) = (layout.clone(), zone.clone());
-                apply(&ui, move |ed, merged| {
-                    edit::set_module_key(ed, merged, &layout, &zone, index, key, value)
-                });
+                let target = target.clone();
+                apply(&ui, move |ed, merged| target.set(ed, merged, key, value));
             });
             g.add(&entry);
         }
@@ -1723,12 +1946,7 @@ fn inspector(
             .margin_top(8)
             .css_classes(["suggested-action"])
             .build();
-        let (ui, layout, zone, old) = (
-            ui.clone(),
-            layout.to_owned(),
-            zone.to_owned(),
-            block.clone(),
-        );
+        let (ui, target, old) = (ui.clone(), target.clone(), block.clone());
         apply_btn.connect_clicked(move |_| {
             let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
             let new: toml::Table = match text.parse() {
@@ -1736,15 +1954,15 @@ fn inspector(
                 Err(e) => return ui.toast(&format!("Not valid TOML: {}", e.message())),
             };
             // Against the block as it is now: the pickers above may have written since.
-            let now = current_block(&ui, &layout, &zone, index).unwrap_or_else(|| old.clone());
+            let now = target.block(&ui).unwrap_or_else(|| old.clone());
             let changes = edit::block_changes(&now, &new);
             let what = match changes.len() {
                 1 => format!("Set {} as TOML", changes[0].0),
                 n => format!("Set {n} keys as TOML"),
             };
-            let (layout, zone) = (layout.clone(), zone.clone());
+            let target = target.clone();
             apply(&ui, move |ed, merged| {
-                edit::set_module_keys(ed, merged, &layout, &zone, index, &changes, &what)
+                target.set_many(ed, merged, &changes, &what)
             });
         });
         let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1756,6 +1974,24 @@ fn inspector(
         let size = group("Size", Some(&note));
         page.add(&size);
     }
+    // A group's member (ux.md §4 "Group"): its own settings here, the member list there.
+    if let Some((g, _)) = &target.member {
+        let name = g.trim_start_matches("group/");
+        let in_group = group(
+            "In a group",
+            Some(&format!(
+                "This is inside “{name}”. What you set here applies wherever it's used."
+            )),
+        );
+        let b = gtk::Button::builder()
+            .label(format!("Edit the members of “{name}”…"))
+            .halign(gtk::Align::Start)
+            .build();
+        let (ui, g) = (ui.clone(), g.clone());
+        b.connect_clicked(move |_| group_dialog(&ui, &g));
+        in_group.add(&b);
+        page.add(&in_group);
+    }
     page.add(&look);
     for g in &gesture_pickers {
         page.add(g);
@@ -1766,12 +2002,10 @@ fn inspector(
     }
     // Visibility (ux.md §4.3): the condition builder, as on rules.
     let write: Rc<dyn Fn(Option<Value>)> = {
-        let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());
+        let (ui, target) = (ui.clone(), target.clone());
         Rc::new(move |v| {
-            let (layout, zone) = (layout.clone(), zone.clone());
-            apply(&ui, move |ed, merged| {
-                edit::set_module_key(ed, merged, &layout, &zone, index, "when", v)
-            });
+            let target = target.clone();
+            apply(&ui, move |ed, merged| target.set(ed, merged, "when", v));
         })
     };
     page.add(&crate::cond::editor(
@@ -1782,15 +2016,6 @@ fn inspector(
     page.add(&advanced);
     dialog.add(&page);
     dialog.present(Some(&ui.win_widget()));
-}
-
-/// Module `index` of `zone` in `layout` as the current config resolves it (all its keys).
-fn current_block(ui: &Ui, layout: &str, zone: &str, index: usize) -> Option<toml::Table> {
-    let state = ui.state();
-    let c = &state.loaded.config;
-    let zones = c.layout_zones(layout).ok()?;
-    let z = zones.iter().find(|z| z.name == zone)?;
-    Some(c.module_block(z.modules.get(index)?))
 }
 
 fn crate_inline(v: &Value) -> String {
@@ -2011,9 +2236,7 @@ fn keyboard_access(
                     let width = preview.borrow().module_span(zi, &ids, i).map(|(_, w)| w);
                     inspector(
                         &ui,
-                        &layout,
-                        &zone,
-                        i,
+                        Target::slot(&layout, &zone, i),
                         &id,
                         &state.loaded.config.module_block(m),
                         width,
@@ -2098,6 +2321,22 @@ fn accessible_name(id: &str, zone: &str, n: usize, of: usize) -> String {
 
 #[cfg(test)]
 mod a11y_tests {
+    #[test]
+    fn group_members_from_cell_keys() {
+        use super::group_member;
+        let gm = |g: &str, m: &str| Some((g.to_owned(), m.to_owned()));
+        assert_eq!(
+            group_member("group/tools", "group/tools/custom/b"),
+            gm("group/tools", "custom/b")
+        );
+        assert_eq!(
+            group_member("group/a", "group/a/group/b/clock"),
+            gm("group/b", "clock")
+        );
+        assert_eq!(group_member("group/tools", "group/tools"), None);
+        assert_eq!(group_member("clock", "clock"), None);
+    }
+
     #[test]
     fn accessible_names() {
         assert_eq!(

@@ -10,6 +10,7 @@
 #   drag=X1,Y1,X2,Y2      press, move in 8 steps, release
 #   key=NAME       press a key (agent-browser key names: Delete, Control+z, ...)
 #   shot=FILE      screenshot now
+#   shiftclick=X,Y a click with Shift held (multi-select)
 #   touch=LINE     with WITH_AGENT: inject a touch on the fake bar ("tap X", "down X", "up"…)
 #   wheel=X,Y,DY   scroll what's under X,Y by DY pixels (positive = down)
 #   sleep=SECS
@@ -101,6 +102,14 @@ for step in "$@"; do
                 a mouse move $((x1 + (x2 - x1) * i / 8)) $((y1 + (y2 - y1) * i / 8))
             done
             sleep 0.4; a mouse up; sleep 2 ;;
+        shiftclick=*) # a click with Shift held (Broadway reads modifiers from the DOM event)
+            IFS=, read -r x y <<<"${step#shiftclick=}"
+            a mouse move "$x" "$y"
+            a eval "(() => { const el = document.elementFromPoint($x, $y);
+                for (const t of ['mousedown', 'mouseup']) el.dispatchEvent(new MouseEvent(t, {
+                    bubbles: true, clientX: $x, clientY: $y, screenX: $x, screenY: $y, button: 0,
+                    buttons: t === 'mousedown' ? 1 : 0, shiftKey: true })); })()"
+            sleep 1.5 ;;
         *,*) a mouse move "${step%,*}" "${step#*,}"; a mouse down; a mouse up; sleep 1.5 ;;
         *) echo "unknown step: $step" >&2; exit 2 ;;
     esac

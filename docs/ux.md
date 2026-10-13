@@ -366,8 +366,11 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   reference) and to set the drawer: off, opens in place, or opens as a sub-bar, plus close-after
   and start-open. Edits copy the group's effective member list into your file first (arrays
   replace). "Group modules…" on a zone header turns checked modules into a new `group/<name>`
-  where the first of them was. Not done: entering a group on the preview with a breadcrumb, and
-  grouping a multi-selection made on the preview.
+  where the first of them was. On the preview (T128), clicking a module inside a group opens
+  that member itself, titled with its group as a breadcrumb ("tools › custom/b"), writing its
+  `[modules."id"]` block, with "Edit the members of …" one click away. Shift- or Ctrl-click
+  picks several modules of one zone (tinted and ringed); the bar under the preview counts them
+  and offers Clear and Group…, which opens the group dialog with them checked.
 - **Action picker** (T110, `act.rs`): On tap and On hold in the inspector each pick what they
   do: nothing, a command, a key (searchable list of every key name), a key combination, an app
   (searchable installed apps), a web address, open a layer (and how: until tapped again, while
@@ -401,7 +404,7 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   (`target/test-tmp/xdg-ui`), on a **private D-Bus**, and drives it through agent-browser: clicks
   `X,Y`, `drag=…`, `key=…`, `shot=FILE`, `sleep=N`, `wheel=…`. `WITH_AGENT=1` also runs a fake
   sliverd and the agent on the private bus, `PUBLISH="…"` has `sliverctl publish` put items
-  up, and `touch="tap X"` injects a touch on the fake bar, `BUS_HELPER="cmd"` runs any helper there (e.g. a stand-in agent that sends a signal). See the script's header.
+  up, and `touch="tap X"` injects a touch on the fake bar, `shiftclick=X,Y` clicks with Shift held, `BUS_HELPER="cmd"` runs any helper there (e.g. a stand-in agent that sends a signal). See the script's header.
   - **Always use a private bus.** On this machine an installed `sliver-agent` runs on the session
     bus. The settings app talks to it (live status, Active now, Apps), and **Mirror is on by
     default**, so a test window on the real bus asks the real bar to show its layout. Before the

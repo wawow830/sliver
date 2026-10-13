@@ -112,6 +112,8 @@ pub(crate) struct Ui {
     /// the preview had keyboard focus, kept across the rebuild after every edit (T114).
     pub bar_selection: Cell<Option<(usize, usize)>>,
     pub bar_focused: Cell<bool>,
+    /// Modules picked with Shift/Ctrl-click on the preview, all in one zone: (zone, index).
+    pub bar_multi: RefCell<Vec<(usize, usize)>>,
 }
 
 impl Ui {
@@ -232,6 +234,7 @@ fn main() -> glib::ExitCode {
             mirror_wanted: RefCell::default(),
             bar_selection: Cell::new(None),
             bar_focused: Cell::new(false),
+            bar_multi: RefCell::default(),
         });
         // Mirroring only while the window is focused, and never after it closes (ux.md §4).
         {
