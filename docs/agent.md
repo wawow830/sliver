@@ -125,16 +125,35 @@ the agent down, because systemd would restart it into the same input over and ov
 
 ## Memory
 
-A fresh agent uses about 20 MB. cosmic-text keeps every font it loads, mapped and with its
-shaping data. A glyph that no fallback font has (an odd symbol in a song title) makes it try
-*every* system font: hundreds, which on the reference machine meant 70+ MB of mapped pages and
-11 MB of heap, held forever. hazel saw a 242 MB peak on the real install. `Fonts` now unloads
-loaded fonts after a shaping that hit `.notdef`, and whenever the label cache turns over
-(`trim_loaded_fonts`: rebuild the `FontSystem` from the same database, with cosmic-text's
-`SharedFile` mappings turned back into paths). Shaped labels survive, so the same text never
-searches again. The one-off search still shows as a peak. Measure with
-`cargo run --release -p sliver-render --example memprobe`. Re-searching for a new text with a
-missing glyph costs about 0.5 ms once the font files are in the page cache.
+A fresh agent uses about 20 MB. Two things made it look far bigger (hazel saw systemd report a
+242–251 MB peak on the real install):
+
+- **The font scan read every font file.** fontdb maps each system font to parse it, and a plain
+  mapping reads ahead around each page fault: with the usual 4 MB `read_ahead_kb`, most of the
+  file. So startup read ~214 MB (540 fonts) into the page cache, and systemd's MemoryPeak counts
+  page cache charged to the unit's cgroup, though RSS stayed at 20 MB.
+  `sliver_render::fontscan` scans instead, with the same fontconfig dirs and generic families.
+  Each file is mapped once with `MADV_RANDOM` and kept in the database (`SharedFile`), which
+  cosmic-text reuses rather than mapping the file again. The scan now reads ~14 MB, and the
+  startup peak in a cold-cache cgroup dropped from 256 MB to ~42 MB.
+- **A glyph no font has loaded every font.** cosmic-text keeps every font it loads, with its
+  shaping data. A glyph that no fallback font has (an odd symbol in a song title) makes it try
+  every system font. That held 11 MB of heap forever, and with plain mappings it read every file
+  again. Now the search reads only each font's cmap, ~2.5 MB of page cache in all. `Fonts`
+  unloads loaded fonts after a shaping that hit `.notdef`, and whenever the label cache turns
+  over (`trim_loaded_fonts`). That rebuilds the `FontSystem` from the same database and drops
+  the pages the mappings touched (`fontscan::release_pages`, `MADV_DONTNEED`). Shaped labels
+  survive, so the same text never searches again. A new text with a missing glyph searches in
+  ~0.3 ms warm, 46 ms cold.
+
+Measure in a cgroup of its own, after evicting the fonts from the page cache (any
+`posix_fadvise(POSIX_FADV_DONTNEED)` loop over `/usr/share/fonts`):
+
+```sh
+cargo build --release -p sliver-render --examples
+systemd-run --user --scope -q target/release/examples/fontscan [fontdb]   # scan only
+systemd-run --user --scope -q target/release/examples/memprobe            # fallback texts
+```
 
 **Soak (T118):** `scripts/soak` runs the release agent on private buses and churns it for a few
 minutes. An app publishes items with fresh ids, labels (some with missing glyphs) and PNG icons,

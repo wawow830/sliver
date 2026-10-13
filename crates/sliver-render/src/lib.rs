@@ -17,6 +17,7 @@
 mod anim;
 mod color;
 mod colr;
+mod fontscan;
 mod geometry;
 mod icon;
 pub mod markup;

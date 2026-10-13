@@ -18,4 +18,8 @@ svgtypes.workspace = true
 thiserror.workspace = true
 tiny-skia.workspace = true
 skrifa = "0.40"
+# Both already come in through cosmic-text/fontdb; used for a lean font scan (fontscan.rs).
+fontconfig-parser = { version = "0.5", default-features = false }
+memmap2 = "0.9"
+rustix.workspace = true
 zune-jpeg = "0.4"

@@ -42,9 +42,10 @@ impl Fonts {
     }
 
     /// System fonts (via the fontconfig config files, no C library) plus the embedded font.
+    /// The scan reads only the font tables it needs (see `fontscan`).
     pub fn system() -> Fonts {
         let mut db = fontdb::Database::new();
-        db.load_system_fonts();
+        crate::fontscan::load_system_fonts(&mut db);
         let locale = std::env::var("LC_ALL")
             .or_else(|_| std::env::var("LANG"))
             .ok()
@@ -72,22 +73,19 @@ impl Fonts {
     /// cosmic-text keeps each font it ever touched, mapped and with its shaping data, for the
     /// life of the `FontSystem`. That's normally a handful. But a glyph that's in none of the
     /// fallback fonts makes it try every font on the system, which is hundreds on a desktop, and
-    /// they all stay loaded: tens of MB of heap and hundreds of MB of mapped pages for one odd
+    /// they all stay loaded: tens of MB of heap, and the pages they touched, for one odd
     /// character in a song title. Drawing loads back only the fonts that are actually used.
     pub(crate) fn trim_loaded_fonts(&mut self) {
         let empty = FontSystem::new_with_locale_and_db(String::new(), fontdb::Database::new());
-        let (locale, mut db) = std::mem::replace(&mut self.system, empty).into_locale_and_db();
-        // cosmic-text maps a face into the database itself when it loads it (`SharedFile`);
-        // turn those back into plain paths so the mappings go too.
-        let shared: Vec<fontdb::ID> = db
-            .faces()
-            .filter(|f| matches!(f.source, fontdb::Source::SharedFile(..)))
-            .map(|f| f.id)
-            .collect();
-        for id in shared {
-            db.make_face_data_unshared(id);
-        }
+        let (locale, db) = std::mem::replace(&mut self.system, empty).into_locale_and_db();
+        // The mappings stay (no read-ahead, see `fontscan`); only the pages drawing touched go.
+        crate::fontscan::release_pages(&db);
         self.system = FontSystem::new_with_locale_and_db(locale, db);
+    }
+
+    /// How many font faces are known (system, user and embedded).
+    pub fn face_count(&self) -> usize {
+        self.system.db().len()
     }
 
     /// Make another font available (a user's emoji font, or a test fixture). Labels shaped before

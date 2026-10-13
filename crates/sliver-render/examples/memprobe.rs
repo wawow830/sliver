@@ -1,5 +1,6 @@
 //! Memory under font fallback: render texts that need fallback fonts and print RSS after each.
-//! `cargo run --release -p sliver-render --example memprobe`
+//! `cargo build --release -p sliver-render --example memprobe &&
+//!  systemd-run --user --scope -q target/release/examples/memprobe`
 
 use sliver_render::{Content, Fonts, Item, Pixmap, Renderer, Scene, Stylesheet};
 
@@ -10,6 +11,22 @@ fn mem() -> String {
         .map(|l| l.split_whitespace().take(2).collect::<Vec<_>>().join(" "))
         .collect::<Vec<_>>()
         .join("  ")
+        + &cgroup_file()
+}
+
+/// Page cache charged to this process's cgroup (run under `systemd-run --user --scope` to see
+/// only this process's): what systemd's MemoryPeak counts on top of RSS.
+fn cgroup_file() -> String {
+    let cg = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    let path = cg.trim().rsplit("::").next().unwrap_or("").to_owned();
+    let stat = std::fs::read_to_string(format!("/sys/fs/cgroup{path}/memory.stat"));
+    let file = stat.ok().and_then(|s| {
+        s.lines()
+            .find_map(|l| l.strip_prefix("file ")?.parse::<u64>().ok())
+    });
+    file.map_or(String::new(), |f| {
+        format!("  cgroup page cache: {} kB", f / 1024)
+    })
 }
 
 fn main() {

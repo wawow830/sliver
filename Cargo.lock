@@ -1683,7 +1683,10 @@ name = "sliver-render"
 version = "0.1.0"
 dependencies = [
  "cosmic-text",
+ "fontconfig-parser",
+ "memmap2",
  "resvg",
+ "rustix",
  "skrifa 0.40.0",
  "svgtypes",
  "thiserror",
