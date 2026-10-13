@@ -162,7 +162,8 @@ waits up to 2 s for the answer, so the core stays single-threaded.
   variables, preview PNGs, config validation, the module list, `SetLayout` (also the `layout`
   action: a config copy whose current layer shows that layout; empty name = back to rules),
   per-module show/hide/toggle/reset (runtime only), and `Update` (output pushed to exec-less
-  custom modules). Not yet: profiles. `ReloadConfig` re-reads the config at once and answers with its errors (T26).
+  custom modules), and profiles (`SetProfile`, persisted; also the `profile` action and
+  sliverctl). `ReloadConfig` re-reads the config at once and answers with its errors (T26).
 - Modal app contexts cover every zone but the user's first and get a × that sends `CloseModal`
   (`bar.modal`, `zone.zone-modal`, `#modal-close`).
 
@@ -176,7 +177,8 @@ Works: everything above, plus `--render` and the real sliverd loop. Verified end
 Previews: `World::sample(now)` (sample battery, volume, brightness, now playing, window) with
 `preview = true` draws empty App controls / Status items as outlined `.placeholder` cells.
 
-Not yet: `workspaces`/`taskbar`/`notifications`/`cpu`… modules.
+The desktop and system modules (`workspaces`, `taskbar`, `notifications`, `cpu`, memory,
+temperature, network…) are in `modules.rs`; `docs/features.md` has the full list and status.
 
 ## Hot reload (T26)
 `main.rs` `Reloader` wraps `sliver-reload` (fir). inotify watches the *directories* of the

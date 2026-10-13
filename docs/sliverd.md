@@ -105,5 +105,8 @@ Tests: `crates/sliverd/tests/daemon.rs` (core), `tests/server.rs` (real socket +
 (`SLIVER_BLESS=1` to update, then look at them).
 
 ## Not yet
-- COPR (RPM, units and udev rules are in `packaging/`, ADR-0005). SELinux: clean without a module (docs/packaging.md).
-- Pixel shift, `follow_screen` reading the main backlight on change (it's read on activity now).
+- COPR (not now, H46; RPM, units and udev rules are in `packaging/`, ADR-0005). SELinux: clean
+  without a module (docs/packaging.md).
+- Seen on the real panel: pixel shift (implemented, T79, `src/shift.rs`) and the resume repaint
+  (T120). Both wait on the human's guided check (`harness/checks/hwcheck pixel-shift suspend`).
+  `follow_screen` follows the main backlight's uevents (done, docs/hardware.md).
