@@ -107,24 +107,39 @@ fn mirror_conn() -> Option<Connection> {
     CONN.get_or_init(|| Connection::session().ok()).clone()
 }
 
-fn hold(conn: &Connection, layout: &str) {
-    let _ = conn.call_method(
+fn hold(conn: &Connection, layout: &str, select_only: bool) {
+    use std::collections::HashMap;
+    use zbus::zvariant::Value;
+    let options: HashMap<&str, Value> = HashMap::from([("select-only", Value::from(select_only))]);
+    let with = conn.call_method(
         Some(BUS_NAME),
         ROOT_PATH,
         Some(IFACE_CONTROL),
-        "HoldLayout",
-        &(layout,),
+        "HoldLayoutWith",
+        &(layout, options),
     );
+    // An agent older than API 2 has only HoldLayout (touches then always fire).
+    if with.is_err() {
+        let _ = conn.call_method(
+            Some(BUS_NAME),
+            ROOT_PATH,
+            Some(IFACE_CONTROL),
+            "HoldLayout",
+            &(layout,),
+        );
+    }
 }
 
 /// Mirror to Touch Bar (ux.md §4, Q10): show `layout` on the real bar while we hold it
-/// (`Control1.HoldLayout`). `""` releases it back to the rules. Off the main thread; an absent agent
-/// is fine.
-pub fn set_layout(layout: &str) {
+/// (`Control1.HoldLayoutWith`); `select_only` makes touches only select. `""` releases it back to
+/// the rules. Off the main thread; an absent agent is fine. The first hold also starts listening
+/// for touches on the held layout (`HeldPressed`, sent only to the holder).
+pub fn set_layout(layout: &str, select_only: bool) {
     let layout = layout.to_owned();
     std::thread::spawn(move || {
         if let Some(c) = mirror_conn() {
-            hold(&c, &layout);
+            hold(&c, &layout, select_only);
+            listen_held(&c);
         }
     });
 }
@@ -132,8 +147,33 @@ pub fn set_layout(layout: &str) {
 /// Blocking release for the window closing (process exit would also drop the hold).
 pub fn set_layout_now(layout: &str) {
     if let Some(c) = mirror_conn() {
-        hold(&c, layout);
+        hold(&c, layout, false);
     }
+}
+
+/// Once per process: a thread delivering `HeldPressed(module, zone, index)` to
+/// `crate::held_pressed` on the main loop.
+fn listen_held(conn: &Connection) {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    let conn = conn.clone();
+    STARTED.call_once(move || {
+        std::thread::spawn(move || {
+            let Ok(proxy) = zbus::blocking::Proxy::new(&conn, BUS_NAME, ROOT_PATH, IFACE_CONTROL)
+            else {
+                return;
+            };
+            let Ok(signals) = proxy.receive_signal("HeldPressed") else {
+                return;
+            };
+            for msg in signals {
+                if let Ok((module, zone, index)) = msg.body().deserialize::<(String, String, u32)>()
+                {
+                    gtk::glib::MainContext::default()
+                        .invoke(move || crate::held_pressed(&module, &zone, index));
+                }
+            }
+        });
+    });
 }
 
 /// What the base layer shows and why (`Control1.ActiveLayout`, `ActiveLayoutSource`,

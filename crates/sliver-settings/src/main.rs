@@ -101,6 +101,10 @@ pub(crate) struct Ui {
     last_text: RefCell<Option<String>>,
     /// Mirror to Touch Bar (Q10: on by default) and what we last asked the agent to show.
     pub mirror: Cell<bool>,
+    /// "Select only": touches on the mirrored bar select in the editor without firing.
+    pub select_only: Cell<bool>,
+    /// The Bar page's handler for a touch on the mirrored bar (zone name, index in its modules).
+    pub on_held_pressed: RefCell<Option<HeldPressed>>,
     mirrored: RefCell<Option<String>>,
     /// The layout the Bar page shows, mirrored again when the window regains focus.
     mirror_wanted: RefCell<Option<String>>,
@@ -126,15 +130,23 @@ impl Ui {
             return;
         }
         if self.mirrored.borrow().as_deref() != Some(layout) {
-            live::set_layout(layout);
+            live::set_layout(layout, self.select_only.get());
             *self.mirrored.borrow_mut() = Some(layout.to_owned());
+        }
+    }
+
+    /// "Select only" changed: hold the mirrored layout again with the new option.
+    pub fn set_select_only(&self, on: bool) {
+        self.select_only.set(on);
+        if let Some(l) = self.mirrored.borrow().as_deref() {
+            live::set_layout(l, on);
         }
     }
 
     /// Back to what the rules pick.
     pub fn stop_mirror(&self) {
         if self.mirrored.borrow_mut().take().is_some() {
-            live::set_layout("");
+            live::set_layout("", false);
         }
     }
 
@@ -147,6 +159,18 @@ impl Ui {
             .add_toast(adw::Toast::new(&glib::markup_escape_text(msg)));
     }
 }
+
+/// A touch on the mirrored bar (`Control1.HeldPressed`): select that module in the editor.
+pub(crate) fn held_pressed(_module: &str, zone: &str, index: u32) {
+    if let Some(ui) = WINDOW.with_borrow(Clone::clone)
+        && let Some(f) = ui.on_held_pressed.borrow().as_ref()
+    {
+        f(zone, index as usize);
+    }
+}
+
+/// See `Ui::on_held_pressed`.
+pub type HeldPressed = Box<dyn Fn(&str, usize)>;
 
 thread_local! {
     /// The one window (GTK is single-threaded): `open` reaches it after `activate` made it.
@@ -202,6 +226,8 @@ fn main() -> glib::ExitCode {
             refresh_pending: Cell::new(false),
             last_text: RefCell::default(),
             mirror: Cell::new(true),
+            select_only: Cell::new(false),
+            on_held_pressed: RefCell::default(),
             mirrored: RefCell::default(),
             mirror_wanted: RefCell::default(),
             bar_selection: Cell::new(None),

@@ -121,6 +121,22 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             .build(),
     );
     controls.append(&mirror);
+    // Touches on the mirrored bar always select here; this also stops them firing.
+    let select_only = gtk::CheckButton::builder()
+        .label("Select only")
+        .active(ui.select_only.get())
+        .sensitive(ui.mirror.get())
+        .margin_start(8)
+        .tooltip_text("Touching the real bar selects the item here without running its action")
+        .build();
+    {
+        let ui = ui.clone();
+        select_only.connect_toggled(move |c| ui.set_select_only(c.is_active()));
+    }
+    mirror
+        .bind_property("active", &select_only, "sensitive")
+        .build();
+    controls.append(&select_only);
     page.append(&controls);
 
     // Drawn at half scale (1004x30 or 1085x30) so it stays legible; narrower windows scroll
@@ -1905,6 +1921,29 @@ fn keyboard_access(
             show(true);
         })
     };
+    // Touching the mirrored real bar selects that module here (ux.md §4 Mirror, T127).
+    *ui.on_held_pressed.borrow_mut() = Some(Box::new({
+        let (ui, show, modules, picture) = (
+            Rc::downgrade(ui),
+            show.clone(),
+            modules.clone(),
+            picture.downgrade(),
+        );
+        move |zone: &str, index: usize| {
+            let (Some(ui), Some(picture)) = (ui.upgrade(), picture.upgrade()) else {
+                return;
+            };
+            if let Some((zi, ..)) = modules()
+                .into_iter()
+                .find(|(_, z, j, _)| z == zone && *j == index)
+            {
+                ui.bar_selection.set(Some((zi, index)));
+                // The ring shows while the preview has focus.
+                picture.grab_focus();
+                show(true);
+            }
+        }
+    }));
 
     let keys = gtk::EventControllerKey::new();
     {

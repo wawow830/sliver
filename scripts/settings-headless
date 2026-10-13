@@ -19,6 +19,7 @@
 #   SESSION   agent-browser session name (default: unique per run, so peers never share one)
 #   WITH_AGENT=1  also run sliverd --fake-hardware and sliver-agent on the private bus
 #   PUBLISH   with WITH_AGENT: arguments for `sliverctl publish` (an app publishing items)
+#   BUS_HELPER  a shell command run in the background on the private bus (e.g. a fake agent)
 #
 # Broadway has no implicit pointer grab: a drag that leaves the widget it started on is lost unless
 # a common ancestor handles it (see crates/sliver-settings/src/bar.rs, the page-level drag).
@@ -59,6 +60,12 @@ if [ -n "${WITH_AGENT:-}" ]; then
         pids+=($!)
         sleep 1
     fi
+fi
+if [ -n "${BUS_HELPER:-}" ]; then
+    # Any helper that should live on the private bus (e.g. a fake agent emitting signals).
+    sh -c "$BUS_HELPER" >"$tmp/bus-helper.log" 2>&1 &
+    pids+=($!)
+    sleep 1
 fi
 display=$((20 + $$ % 50))
 gtk4-broadwayd ":$display" >/dev/null 2>&1 &
