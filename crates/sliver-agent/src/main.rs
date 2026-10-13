@@ -368,6 +368,9 @@ impl Live {
         if sliver_agent::modules::uses_kind(config, "privacy") {
             feeds.watch_capture();
         }
+        if sliver_agent::modules::uses_kind(config, "language") {
+            feeds.watch_input_method();
+        }
         let ops = feeds.session.clone().and_then(|h| match start_ops(h) {
             Ok(tx) => Some(tx),
             Err(e) => {
@@ -404,7 +407,17 @@ impl Live {
                     self.outputs.insert(u.module.clone(), u.output.clone());
                 }
                 Feed::Session(s) => self.locked_hint = s.locked,
-                Feed::Desktop(d) => self.own_desktop = d.connected,
+                Feed::Desktop(d) => {
+                    self.own_desktop = d.connected;
+                    // Each window has its own input context: a new focus can mean another
+                    // fcitx5 input method (a no-op unless the `language` module follows fcitx5).
+                    let focus = |d: &sliver_desktop::DesktopState| {
+                        d.window.as_ref().map(|w| w.address.clone())
+                    };
+                    if focus(d) != focus(&self.agg.desktop) {
+                        self.feeds.refresh_input_method();
+                    }
+                }
                 Feed::Note(n) => eprintln!("sliver-agent: {n}"),
                 Feed::Art { .. } => {}
             }
@@ -511,6 +524,9 @@ impl Live {
         }
         if sliver_agent::modules::uses_kind(config, "privacy") {
             self.feeds.watch_capture();
+        }
+        if sliver_agent::modules::uses_kind(config, "language") {
+            self.feeds.watch_input_method();
         }
         if let Some(rt) = &self.feeds.modules {
             let keys: std::collections::HashSet<String> = rt.keys().into_iter().collect();
@@ -762,6 +778,7 @@ fn apply(
                         }
                     }
                     SessionOp::DBus(call) => Op::DBus(call),
+                    SessionOp::InputMethod(id) => Op::InputMethod(id),
                     SessionOp::ToggleDark => {
                         Op::Dark(!live.agg.session.appearance.dark.unwrap_or(false))
                     }

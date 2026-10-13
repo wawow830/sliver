@@ -1364,6 +1364,69 @@ fn language_hold_lists_and_picks_a_layout() {
     assert!(!keys(&a).contains(&"menu/0".to_string()));
 }
 
+/// While fcitx5 has an input method the `language` module shows its label instead of the
+/// compositor's layout; tap toggles it and hold lists the group (`SessionOp::InputMethod`).
+#[test]
+fn language_follows_fcitx5_toggles_and_picks() {
+    use sliver_agent::agent::{Effect, SessionOp};
+    use sliver_desktop::control::Action as Desk;
+    use sliver_ipc::proto::TouchPhase;
+    use sliver_session::fcitx::{InputMethod, Item};
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"language\"]\n[modules.language]\nformat = \"{short}\"\n",
+    );
+    let mut w = world(9, 41);
+    w.desktop.connected = true;
+    w.desktop.keyboard_layout = Some("us".into());
+    let item = |id: &str, name: &str, label: &str| Item {
+        id: id.into(),
+        name: name.into(),
+        label: label.into(),
+    };
+    let us = item("keyboard-us", "Keyboard - English (US)", "en");
+    let pinyin = item("pinyin", "Pinyin", "拼");
+    w.session.input_method = Some(InputMethod {
+        current: pinyin.clone(),
+        group: vec![us.clone(), pinyin.clone()],
+    });
+    a.render(&w);
+    let text = |a: &Agent| match a.frame(Layer::Base).unwrap().cells[0].content.clone() {
+        sliver_render::Content::Markup(t) | sliver_render::Content::IconMarkup(_, t) => t,
+        other => format!("{other:?}"),
+    };
+    assert_eq!(text(&a), "拼");
+    // tap: toggle the input method, not the compositor's layout
+    let (id, x) = region(&a, "language");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 40_000));
+    fx.extend(a.tick(400_000));
+    assert!(
+        fx.contains(&Effect::Session(SessionOp::InputMethod(None))),
+        "{fx:?}"
+    );
+    assert!(!fx.contains(&Effect::Desktop(Desk::NextLayout)), "{fx:?}");
+    // hold: both methods, then pick one
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000_000);
+    fx.extend(a.tick(2_000_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 2_100_000));
+    assert!(fx.contains(&Effect::Redraw), "{fx:?}");
+    a.render(&w);
+    let (mid, mx) = region(&a, "menu/0");
+    let mut fx = a.touch(mid, 0, TouchPhase::Down, mx, 3_000_000);
+    fx.extend(a.touch(mid, 0, TouchPhase::Up, mx, 3_040_000));
+    fx.extend(a.tick(3_400_000));
+    assert!(
+        fx.contains(&Effect::Session(SessionOp::InputMethod(Some(
+            "keyboard-us".into()
+        )))),
+        "{fx:?}"
+    );
+    // fcitx5 gone: the compositor's layout is back
+    w.session.input_method = None;
+    a.render(&w);
+    assert_eq!(text(&a), "us");
+}
+
 /// `screenshot` and `lock` fire a D-Bus call on tap; `power` opens a safe sub-bar on tap and the
 /// reboot/power-off one only on hold.
 #[test]

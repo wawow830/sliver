@@ -1508,10 +1508,44 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             let p = s.power.profile.as_deref()?;
             Spec::new(ValueMap::new().with("profile", p).with("", p), "{profile}")
         }
+        // fcitx5 (CJK input methods) takes over while it is running and has a current method:
+        // the label is the method's own (拼, あ, en); the compositor's layout shows otherwise.
+        "language" if s.input_method.is_some() => {
+            let im = s.input_method.as_ref()?;
+            let v = ValueMap::new()
+                .with("", esc(&im.current.label))
+                .with("short", esc(&im.current.label))
+                .with("input_method", esc(&im.current.name))
+                .with("long", esc(&im.current.name))
+                .with("id", esc(&im.current.id));
+            let mut sp = Spec::new(v, "{}").on(Gesture::Tap, "im-toggle");
+            if im.group.len() > 1 {
+                sp.menu = im
+                    .group
+                    .iter()
+                    .map(|i| sliver_config::MenuEntry {
+                        label: format!(
+                            "{}{} {}",
+                            if i.id == im.current.id { "✓ " } else { "" },
+                            i.label,
+                            i.name
+                        ),
+                        icon: None,
+                        on_tap: Action::ModuleAction(format!("language:im:{}", i.id)),
+                    })
+                    .collect();
+            }
+            sp
+        }
         "language" => {
             let l = world.desktop.keyboard_layout.as_deref()?;
-            let mut sp = Spec::new(ValueMap::new().with("", esc(l)).with("long", esc(l)), "{}")
-                .on(Gesture::Tap, "next");
+            // The same names as the fcitx5 variant, so one `format` works whichever is running.
+            let v = ValueMap::new()
+                .with("", esc(l))
+                .with("long", esc(l))
+                .with("short", esc(l))
+                .with("input_method", esc(l));
+            let mut sp = Spec::new(v, "{}").on(Gesture::Tap, "next");
             sp.target = Some(sliver_desktop::control::Action::NextLayout);
             // Hold lists the configured layouts (when the compositor says what they are).
             let d = &world.desktop;

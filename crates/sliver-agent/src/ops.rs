@@ -44,6 +44,8 @@ pub enum Op {
     },
     Dnd(bool),
     Dark(bool),
+    /// fcitx5: toggle (`None`) or select an input method.
+    InputMethod(Option<String>),
     /// Open (invoke) or close notification `id`.
     OpenNotification(u32),
     CloseNotification(u32),
@@ -130,6 +132,12 @@ fn run_ops(
                 Ok(())
             }
             Op::Dark(on) => sliver_session::appearance::set_dark(on),
+            Op::InputMethod(id) => {
+                let r = sliver_session::fcitx::switch(&ses, id.as_deref());
+                // No change signal from fcitx5: read back after our own switch.
+                handle.refresh_input_method();
+                r
+            }
         };
         if let Err(e) = r {
             eprintln!("sliver-agent: {e}");

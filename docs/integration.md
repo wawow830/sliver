@@ -320,7 +320,16 @@ bus has none (GNOME, bare sway), and `LayoutUpdated` live refresh of an open men
 
 Compositor events win (§2). Input methods also change what the user is typing:
 `fcitx5` is running here **(verified)** (`org.fcitx.Fcitx5`; `org.fcitx.Fcitx.Controller1`
-`CurrentInputMethod`). Treat it as a second `keyboard_layout` source for CJK users, later.
+`CurrentInputMethod`). **Implemented** (T138, `sliver_session::fcitx`, `SessionState.input_method`): the `language`
+module shows fcitx5's current input method and label when it runs; the compositor's layout otherwise.
+`CurrentInputMethod` is a method and fcitx5 sends no signal when the user switches with the hotkey
+(`Controller1` only has `InputMethodGroupsChanged`; checked on 5.1.23, headless: no tray signals
+either), so besides `NameOwnerChanged`, the groups signal, tray `New*` signals, window focus changes
+and our own switches, it is asked every 1.5 s while the bar is on and fcitx5 is running (invariant 3:
+not while the bar is off, not without fcitx5, only when a layout uses `language`). Verified against
+the real fcitx5 (read) and a mock `Controller1`; the switch calls (`Toggle`, `SetCurrentIM`) and a
+real hotkey switch were only exercised against a private headless fcitx5 / the mock, never on the
+user's session.
 
 ## 4. Recommended crates
 

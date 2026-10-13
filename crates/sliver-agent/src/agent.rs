@@ -91,6 +91,8 @@ pub enum SessionOp {
     ToggleBluetooth,
     ToggleDnd,
     ToggleDark,
+    /// fcitx5: `None` toggles (activate/deactivate), `Some(id)` selects that input method.
+    InputMethod(Option<String>),
     /// Invoke the latest notification's default action (where the daemon has a tool for it).
     OpenNotification,
     /// Close the latest notification.
@@ -1673,6 +1675,12 @@ impl Agent {
                     fx.push(Effect::Redraw);
                     // The `language` picker's entries are not config actions.
                     if let sliver_config::Action::ModuleAction(a) = &entry.on_tap
+                        && let Some(id) = a.strip_prefix("language:im:")
+                    {
+                        fx.push(Effect::Session(SessionOp::InputMethod(Some(id.to_owned()))));
+                        return;
+                    }
+                    if let sliver_config::Action::ModuleAction(a) = &entry.on_tap
                         && let Some(i) =
                             a.strip_prefix("language:set:").and_then(|n| n.parse().ok())
                     {
@@ -1699,6 +1707,10 @@ impl Agent {
                 self.menu = Some(crate::modules::power_menu(true));
                 fx.extend(self.cancel_touches());
                 fx.push(Effect::Redraw);
+                return;
+            }
+            ("language", "im-toggle", _) => {
+                fx.push(Effect::Session(SessionOp::InputMethod(None)));
                 return;
             }
             ("language", "next", _) => {
