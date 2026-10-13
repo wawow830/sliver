@@ -16,7 +16,7 @@
 # Environment:
 #   SANDBOX   config sandbox (default target/test-tmp/xdg-ui); put sliver/config.toml there first
 #   OPEN      a file to open (e.g. a .sliver preset)
-#   SESSION   agent-browser session name (default: $USER-settings)
+#   SESSION   agent-browser session name (default: unique per run, so peers never share one)
 #   WITH_AGENT=1  also run sliverd --fake-hardware and sliver-agent on the private bus
 #   PUBLISH   with WITH_AGENT: arguments for `sliverctl publish` (an app publishing items)
 #
@@ -27,7 +27,7 @@ out=${1:?usage: scripts/settings-headless OUT.png [STEP...]}
 shift
 root=$(cd "$(dirname "$0")/.." && pwd)
 sandbox=${SANDBOX:-$root/target/test-tmp/xdg-ui}
-session=${SESSION:-${USER:-me}-settings}
+session=${SESSION:-${USER:-me}-settings-$$}
 tmp=$root/target/test-tmp/headless.$$
 mkdir -p "$tmp" "$sandbox"
 pids=()

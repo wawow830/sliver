@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use sliver_config::{Context, ModuleRef, Width, parse_cli_value};
+use sliver_config::{Context, Gesture, ModuleRef, Width, parse_cli_value};
 use toml::Value;
 
 use crate::pages::{group, row, surface, width_text};
@@ -1539,22 +1539,156 @@ fn inspector(
         layouts: state.loaded.config.layouts.keys().cloned().collect(),
         profiles: sliver_config::profile::list(),
     });
-    let gesture_pickers: Vec<adw::PreferencesGroup> =
-        [("on-tap", "On tap"), ("on-hold", "On hold")]
-            .into_iter()
-            .map(|(key, label)| {
-                let write: Rc<dyn Fn(Option<Value>)> = {
-                    let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());
-                    Rc::new(move |v| {
-                        let (layout, zone) = (layout.clone(), zone.clone());
-                        apply(&ui, move |ed, merged| {
-                            edit::set_module_key(ed, merged, &layout, &zone, index, key, v)
-                        });
-                    })
-                };
-                crate::act::editor(label, block.get(key), choices.clone(), write)
+    // One picker per gesture (ux.md §4.2). A waybar spelling (on-click…) shows under its
+    // gesture and moves to the canonical key on the first edit.
+    let picker = |g: Gesture, label: &str| {
+        let alias = g.waybar_alias().filter(|a| block.contains_key(*a));
+        let current = block
+            .get(g.key())
+            .or_else(|| alias.and_then(|a| block.get(a)));
+        let write: Rc<dyn Fn(Option<Value>)> = {
+            let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());
+            Rc::new(move |v| {
+                let (layout, zone) = (layout.clone(), zone.clone());
+                let mut changes = vec![(g.key().to_owned(), v)];
+                if let Some(a) = alias {
+                    changes.push((a.to_owned(), None));
+                }
+                let what = format!("Set {}", g.key());
+                apply(&ui, move |ed, merged| {
+                    edit::set_module_keys(ed, merged, &layout, &zone, index, &changes, &what)
+                });
             })
-            .collect();
+        };
+        crate::act::editor(label, current, choices.clone(), write)
+    };
+    let gesture_pickers = [
+        picker(Gesture::Tap, "On tap"),
+        picker(Gesture::Hold, "On hold"),
+    ];
+    let more = [
+        (Gesture::DoubleTap, "On double tap"),
+        (Gesture::SwipeLeft, "On swipe left"),
+        (Gesture::SwipeRight, "On swipe right"),
+        (Gesture::Release, "On release"),
+    ];
+    let more_set = more.iter().any(|(g, _)| {
+        block.contains_key(g.key()) || g.waybar_alias().is_some_and(|a| block.contains_key(a))
+    });
+    let more_box = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    more_box.set_margin_top(12);
+    for (g, label) in more {
+        more_box.append(&picker(g, label));
+    }
+    let more_gestures = gtk::Expander::builder()
+        .label("More gestures: double tap, swipes, release")
+        .expanded(more_set)
+        .child(&more_box)
+        .build();
+    let more_group = adw::PreferencesGroup::new();
+    more_group.add(&more_gestures);
+    // Updates: what a script runs and how often (ux.md §4.4).
+    let kind = sliver_config::ModuleId::parse(title)
+        .map(|id| id.kind)
+        .unwrap_or_default();
+    let mut update_fields: Vec<(&str, &str)> = Vec::new();
+    if kind == "custom" {
+        update_fields.push(("exec", "Command whose output it shows"));
+    }
+    if kind == "custom" || block.contains_key("interval") {
+        update_fields.push(("interval", "Refresh every: seconds, \"5s\", \"1m\"…"));
+    }
+    if kind == "custom" {
+        update_fields.push(("timeout", "Time limit for one run: seconds or \"2s\""));
+    }
+    let updates = (!update_fields.is_empty()).then(|| {
+        let g = group("Updates", None);
+        for (key, label) in update_fields {
+            let entry = adw::EntryRow::builder()
+                .title(label)
+                .show_apply_button(true)
+                .text(
+                    block
+                        .get(key)
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            other => crate_inline(other),
+                        })
+                        .unwrap_or_default(),
+                )
+                .build();
+            let (ui, layout, zone) = (ui.clone(), layout.to_owned(), zone.to_owned());
+            entry.connect_apply(move |e| {
+                let text = e.text().trim().to_owned();
+                let value = (!text.is_empty()).then(|| match key {
+                    "exec" => Value::String(text.clone()),
+                    _ => parse_cli_value(&text),
+                });
+                let (layout, zone) = (layout.clone(), zone.clone());
+                apply(&ui, move |ed, merged| {
+                    edit::set_module_key(ed, merged, &layout, &zone, index, key, value)
+                });
+            });
+            g.add(&entry);
+        }
+        g
+    });
+    // Advanced: the whole block as TOML; Apply writes only the keys that changed.
+    let advanced = group(
+        "Advanced",
+        Some(
+            "Everything this item sets, as TOML (sliver-config(5)). Apply writes only what you changed.",
+        ),
+    );
+    {
+        let buffer = gtk::TextBuffer::new(None);
+        buffer.set_text(&toml::to_string(block).unwrap_or_default());
+        let view = gtk::TextView::builder()
+            .buffer(&buffer)
+            .monospace(true)
+            .wrap_mode(gtk::WrapMode::WordChar)
+            .top_margin(8)
+            .bottom_margin(8)
+            .left_margin(10)
+            .right_margin(10)
+            .css_classes(["card"])
+            .build();
+        view.update_property(&[gtk::accessible::Property::Label("The item's TOML")]);
+        let apply_btn = gtk::Button::builder()
+            .label("Apply")
+            .halign(gtk::Align::End)
+            .margin_top(8)
+            .css_classes(["suggested-action"])
+            .build();
+        let (ui, layout, zone, old) = (
+            ui.clone(),
+            layout.to_owned(),
+            zone.to_owned(),
+            block.clone(),
+        );
+        apply_btn.connect_clicked(move |_| {
+            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+            let new: toml::Table = match text.parse() {
+                Ok(t) => t,
+                Err(e) => return ui.toast(&format!("Not valid TOML: {}", e.message())),
+            };
+            // Against the block as it is now: the pickers above may have written since.
+            let now = current_block(&ui, &layout, &zone, index).unwrap_or_else(|| old.clone());
+            let changes = edit::block_changes(&now, &new);
+            let what = match changes.len() {
+                1 => format!("Set {} as TOML", changes[0].0),
+                n => format!("Set {n} keys as TOML"),
+            };
+            let (layout, zone) = (layout.clone(), zone.clone());
+            apply(&ui, move |ed, merged| {
+                edit::set_module_keys(ed, merged, &layout, &zone, index, &changes, &what)
+            });
+        });
+        let col = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        col.append(&view);
+        col.append(&apply_btn);
+        advanced.add(&col);
+    }
     if let Some(note) = width_px.and_then(width_note) {
         let size = group("Size", Some(&note));
         page.add(&size);
@@ -1562,6 +1696,10 @@ fn inspector(
     page.add(&look);
     for g in &gesture_pickers {
         page.add(g);
+    }
+    page.add(&more_group);
+    if let Some(u) = &updates {
+        page.add(u);
     }
     // Visibility (ux.md §4.3): the condition builder, as on rules.
     let write: Rc<dyn Fn(Option<Value>)> = {
@@ -1578,8 +1716,18 @@ fn inspector(
         block.get("when"),
         write,
     ));
+    page.add(&advanced);
     dialog.add(&page);
     dialog.present(Some(&ui.win_widget()));
+}
+
+/// Module `index` of `zone` in `layout` as the current config resolves it (all its keys).
+fn current_block(ui: &Ui, layout: &str, zone: &str, index: usize) -> Option<toml::Table> {
+    let state = ui.state();
+    let c = &state.loaded.config;
+    let zones = c.layout_zones(layout).ok()?;
+    let z = zones.iter().find(|z| z.name == zone)?;
+    Some(c.module_block(z.modules.get(index)?))
 }
 
 fn crate_inline(v: &Value) -> String {

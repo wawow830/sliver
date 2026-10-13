@@ -374,6 +374,13 @@ Q2, Q4 and Q5 shape the config schema, so they're also recorded in ADR-0004.
   held, for one tap), close the layer, switch layout or profile, or a D-Bus call (fir's presets).
   Anything else (macros, argv `exec`, signals) stays editable under Advanced as TOML and is never
   rewritten.
+- **Inspector, the rest of §4** (T124): "More gestures" (double tap, swipe left/right,
+  release) uses the same action picker as tap and hold, and opens by itself when one is set. A
+  waybar spelling (`on-click`, `on-scroll-up`…) shows under its gesture and moves to the
+  canonical key on the first edit. Scripts get an Updates group (command, refresh interval, time
+  limit; the interval row also appears on any module that sets one). Advanced shows everything
+  the item sets as TOML; Apply diffs it against the item as it is now and writes only the
+  changed keys, as one undo step.
 - **Apps → Publishing now** lists each running provider's items (`ListContexts` `item-ids`/
   `item-labels`) with **Place on the bar**, which adds `app/<provider>#<id>` (or the whole
   `app/<provider>`) to the base layout's main zone, where it renders like any module (T121).

@@ -625,6 +625,37 @@ fn describe(v: &Value) -> String {
 /// Sets (or with `None`, clears) one key of the module at `index`. A named module
 /// (`"battery#bat2"`) is configured in its `[modules."battery#bat2"]` block. An inline module
 /// (`{ type = … }`) is edited in place.
+/// Several keys of one module in one edit (one undo step); `None` clears a key.
+pub fn set_module_keys(
+    ed: &mut Editor,
+    merged: &Table,
+    layout: &str,
+    zone: &str,
+    index: usize,
+    changes: &[(String, Option<Value>)],
+    what: &str,
+) -> Result<String, String> {
+    if changes.is_empty() {
+        return Err("Nothing changed".into());
+    }
+    for (k, v) in changes {
+        set_module_key(ed, merged, layout, zone, index, k, v.clone())?;
+    }
+    Ok(what.to_owned())
+}
+
+/// What turns module block `old` into `new`: changed or new keys, and `None` for removed ones.
+/// Sorted by key, so the file changes predictably.
+pub fn block_changes(old: &Table, new: &Table) -> Vec<(String, Option<Value>)> {
+    let mut keys: Vec<&String> = old.keys().chain(new.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    keys.into_iter()
+        .filter(|k| old.get(*k) != new.get(*k))
+        .map(|k| (k.clone(), new.get(k).cloned()))
+        .collect()
+}
+
 pub fn set_module_key(
     ed: &mut Editor,
     merged: &Table,
@@ -1358,5 +1389,40 @@ mod tests {
         // the built-in Fn layer is complete already
         let (ed2, _) = fresh("version = 1\n");
         assert!(missing_fkeys(&ed2.load().config).unwrap().1.is_empty());
+    }
+
+    #[test]
+    fn block_changes_only_touches_what_differs() {
+        let t = |s: &str| s.parse::<Table>().unwrap();
+        let old = t("format = \"{}\"\non-tap = \"a\"\ninterval = 5");
+        let new = t("format = \"{}\"\non-tap = \"b\"\nicon = \"x\"");
+        assert_eq!(
+            block_changes(&old, &new),
+            vec![
+                ("icon".into(), Some(Value::String("x".into()))),
+                ("interval".into(), None),
+                ("on-tap".into(), Some(Value::String("b".into()))),
+            ]
+        );
+        assert!(block_changes(&old, &old).is_empty());
+    }
+
+    #[test]
+    fn set_module_keys_is_one_edit_and_moves_an_alias() {
+        let (mut ed, merged) = fresh(
+            "version = 1\n[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"clock\"]\n\
+             [modules.clock]\non-click = \"gnome-clocks\"\n",
+        );
+        let changes = vec![
+            ("on-tap".into(), Some(Value::String("foot".into()))),
+            ("on-click".into(), None),
+        ];
+        set_module_keys(&mut ed, &merged, "default", "main", 0, &changes, "x").unwrap();
+        assert_eq!(
+            ed.get("modules.clock.on-tap").unwrap(),
+            Some(Value::String("foot".into()))
+        );
+        assert_eq!(ed.get("modules.clock.on-click").unwrap(), None);
+        assert!(ed.check(HERE).ok(), "{:#?}", ed.check(HERE));
     }
 }
