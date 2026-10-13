@@ -43,6 +43,8 @@ struct Args {
     config: Option<PathBuf>,
     socket: PathBuf,
     size: (u32, u32),
+    /// Take the bus name from a running agent (it gets it back when this one exits).
+    replace: bool,
 }
 
 fn args() -> Args {
@@ -51,6 +53,7 @@ fn args() -> Args {
         config: None,
         socket: std::env::var_os("SLIVER_SOCKET").map_or_else(|| SOCKET_PATH.into(), PathBuf::from),
         size: (2008, 60),
+        replace: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -65,13 +68,14 @@ fn args() -> Args {
             }
             "--help" | "-h" => {
                 println!(
-                    "usage: sliver-agent [--render OUT] [--config FILE] [--socket PATH] [--size WxH]"
+                    "usage: sliver-agent [--render OUT] [--config FILE] [--socket PATH] [--size WxH] [--replace]"
                 );
                 std::process::exit(0);
             }
             "--render" => a.render = Some(val("--render").into()),
             "--config" => a.config = Some(val("--config").into()),
             "--socket" => a.socket = val("--socket").into(),
+            "--replace" => a.replace = true,
             "--size" => {
                 let v = val("--size");
                 let (w, h) = v.split_once('x').unwrap_or_else(|| die("--size WxH"));
@@ -327,12 +331,24 @@ struct Live {
 }
 
 impl Live {
-    fn start(config: &Config) -> std::io::Result<Live> {
+    /// `api`: serve the public API (`Some(replace)`), or not (`--render`).
+    fn start(config: &Config, api: Option<bool>) -> std::io::Result<Live> {
         // The API first: owning the bus name is what tells systemd (Type=dbus) and D-Bus
         // activation that the agent is up, so it must not wait on slow session sources.
-        let api = match ApiLink::start() {
-            Ok(a) => Some(a),
-            Err(e) => {
+        let api = match api.map(ApiLink::start) {
+            None => None,
+            Some(Ok(a)) => Some(a),
+            // Another agent drives the bar. Two would revoke each other on sliverd forever.
+            Some(Err(zbus::Error::NameTaken)) => {
+                eprintln!(
+                    "sliver-agent: another sliver-agent is running (it owns {}). Stop it \
+                     (systemctl --user stop sliver-agent), or pass --replace to take over \
+                     until this one exits.",
+                    sliver_ipc::dbus::BUS_NAME
+                );
+                std::process::exit(1);
+            }
+            Some(Err(e)) => {
                 eprintln!("sliver-agent: public D-Bus API unavailable: {e}");
                 None
             }
@@ -507,7 +523,8 @@ fn main() {
         );
         agent.set_config_dir(reloader.config_path.as_deref().and_then(Path::parent));
         // Give the live sources a moment to report, so the preview shows real state.
-        let world = match Live::start(&agent.config) {
+        // No API: a headless render must never take the bus name from the running agent.
+        let world = match Live::start(&agent.config, None) {
             Ok(mut live) => {
                 std::thread::sleep(Duration::from_millis(1500));
                 live.pump();
@@ -549,13 +566,22 @@ fn main() {
         return;
     }
 
-    let mut live =
-        Live::start(&reloader.config).unwrap_or_else(|e| die(&format!("starting feeds: {e}")));
+    let mut live = Live::start(&reloader.config, Some(a.replace))
+        .unwrap_or_else(|e| die(&format!("starting feeds: {e}")));
     drop((config, sheet));
     let mut backoff = Duration::from_millis(250);
     // Log the first failure and the recovery, not every retry (tiny-dfr may own the bar for days).
     let mut failing = false;
     loop {
+        // Replaced by a `--replace` agent: stay off sliverd (we'd revoke each other) until it
+        // exits and the bus hands the name back.
+        if let Some(api) = &live.api
+            && !api.owns_name()
+        {
+            wait_for_name(api);
+            live.published_stale = true;
+            eprintln!("sliver-agent: the bus name is back; taking the bar again");
+        }
         match Conn::connect(&a.socket)
             .and_then(|c| Link::handshake(c, concat!("sliver-agent ", env!("CARGO_PKG_VERSION"))))
         {
@@ -582,7 +608,9 @@ fn main() {
                 if let Err(e) = run(agent, link, &mut live, &mut reloader) {
                     eprintln!("sliver-agent: {e}");
                 }
-                eprintln!("sliver-agent: lost sliverd, reconnecting");
+                if live.api.as_ref().is_none_or(ApiLink::owns_name) {
+                    eprintln!("sliver-agent: lost sliverd, reconnecting");
+                }
             }
             Err(e) => {
                 if !failing {
@@ -1012,6 +1040,23 @@ fn control(
 }
 
 /// Drives one sliverd connection until it closes.
+/// Sleeps until we own the bus name again, answering `Control1` calls meanwhile (the
+/// `--replace` agent drives the bar, not us).
+fn wait_for_name(api: &ApiLink) {
+    eprintln!("sliver-agent: another sliver-agent took over (--replace); waiting until it exits");
+    while !api.owns_name() {
+        let fd = api.fd();
+        let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+        let _ = poll(&mut fds, None);
+        let (_, requests) = api.drain();
+        for (_, reply) in requests {
+            let _ = reply.send(Err(
+                "another sliver-agent (--replace) drives the bar right now".into(),
+            ));
+        }
+    }
+}
+
 fn run(
     mut agent: Agent,
     mut link: Link,
@@ -1176,6 +1221,10 @@ fn run(
                 let _ = reply.send(answer);
                 dirty |= apply(fx, &link, &mut children, live, &mut press_dirty)?;
             }
+        }
+        if api_woke && live.api.as_ref().is_some_and(|a| !a.owns_name()) {
+            // A `--replace` agent took over: let go of sliverd (main waits for the name).
+            return Ok(());
         }
         let world_changed = world_changed || api_woke;
         let fx = agent.tick(now_us());

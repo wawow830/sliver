@@ -73,6 +73,13 @@ Bar size for
 .BR \-\-render .
 The default is 2008x60.
 .TP
+.B \-\-replace
+Take the public D\-Bus name from an agent that is already running, for example to try a
+development build.
+The running agent steps back from the bar and takes it again when this one exits.
+Without this option, a second agent prints why and exits with status 1, so it never takes the
+bar or the name from the installed agent.
+.TP
 .BR \-h ", " \-\-help
 Show usage.
 .TP

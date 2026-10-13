@@ -28,6 +28,8 @@ struct AgentHost {
     changed: AtomicBool,
     requests: Mutex<Sender<(Control, Sender<Reply>)>>,
     state: Arc<Mutex<ControlState>>,
+    /// We own the bus name (false while a `--replace` agent has it).
+    owned: AtomicBool,
 }
 
 impl AgentHost {
@@ -60,6 +62,12 @@ impl Host for AgentHost {
     fn control_state(&self) -> ControlState {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
+
+    fn name_owned(&self, owned: bool) {
+        if self.owned.swap(owned, Ordering::SeqCst) != owned {
+            self.wake();
+        }
+    }
 }
 
 /// The served API, from the main loop's side.
@@ -73,15 +81,20 @@ pub struct ApiLink {
 }
 
 impl ApiLink {
-    /// Serves the API on the session bus as `io.github.wawow830.Sliver`.
-    pub fn start() -> zbus::Result<ApiLink> {
+    /// Serves the API on the session bus as `io.github.wawow830.Sliver`. `NameTaken` if another
+    /// agent owns it, unless `replace` (`--replace`).
+    pub fn start(replace: bool) -> zbus::Result<ApiLink> {
         // sliver-bus: no zbus `blocking` pool thread waking twice a second (T103).
         let conn = zbus::block_on(sliver_bus::session_async())?;
-        ApiLink::serve(conn, true)
+        ApiLink::serve_claiming(conn, true, replace)
     }
 
     /// Serves on `conn` (tests use a private bus; `named = false` skips the well-known name).
     pub fn serve(conn: zbus::Connection, named: bool) -> zbus::Result<ApiLink> {
+        ApiLink::serve_claiming(conn, named, false)
+    }
+
+    fn serve_claiming(conn: zbus::Connection, named: bool, replace: bool) -> zbus::Result<ApiLink> {
         let (wake_rx, wake) = UnixStream::pair()?;
         wake_rx.set_nonblocking(true)?;
         wake.set_nonblocking(true)?;
@@ -91,11 +104,12 @@ impl ApiLink {
             changed: AtomicBool::new(true),
             requests: Mutex::new(tx),
             state: Arc::default(),
+            owned: AtomicBool::new(true),
         });
         let h: Arc<dyn Host> = host.clone();
         let api = zbus::block_on(async {
             if named {
-                Api::serve(conn, h, Arc::new(RealProc)).await
+                Api::serve_claiming(conn, h, Arc::new(RealProc), replace).await
             } else {
                 Api::serve_unnamed(conn, h, Arc::new(RealProc)).await
             }
@@ -113,6 +127,12 @@ impl ApiLink {
     /// Readable when [`ApiLink::drain`] has something.
     pub fn fd(&self) -> BorrowedFd<'_> {
         self.wake_rx.as_fd()
+    }
+
+    /// We own the bus name. False while another agent took it with `--replace`: then this one
+    /// stays off sliverd until the name comes back (two agents would revoke each other).
+    pub fn owns_name(&self) -> bool {
+        self.host.owned.load(Ordering::SeqCst)
     }
 
     /// Whether published items changed since the last call, and the pending `Control1` requests.

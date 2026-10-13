@@ -44,11 +44,16 @@ impl Bus {
 struct FakeHost {
     changed: AtomicUsize,
     requests: Mutex<Vec<Control>>,
+    /// `name_owned` calls, in order.
+    owned: Mutex<Vec<bool>>,
 }
 
 impl Host for FakeHost {
     fn changed(&self) {
         self.changed.fetch_add(1, Ordering::SeqCst);
+    }
+    fn name_owned(&self, owned: bool) {
+        self.owned.lock().unwrap().push(owned);
     }
     fn control(&self, req: Control) -> Result<ControlReply, String> {
         let reply = match &req {
@@ -566,6 +571,77 @@ fn held_pressed_goes_to_the_holder() {
         "unicast to the holder"
     );
     assert!(mine.try_recv().is_err(), "nothing was sent before the hold");
+}
+
+/// A second agent must not take the bus name from a running one: systemd's `Type=dbus` unit
+/// stops the installed agent when its name goes, and the name never came back (birch). Only
+/// `--replace` takes it, and the replaced agent gets it back when the replacer exits.
+#[test]
+fn a_second_agent_does_not_steal_the_name() {
+    let Some((bus, _first, first_host)) = setup() else {
+        return;
+    };
+    let serve = |replace: bool| {
+        let host = Arc::new(FakeHost::default());
+        let h: Arc<dyn Host> = host.clone();
+        let api = zbus::block_on(async {
+            let conn = zbus::connection::Builder::address(bus.addr.as_str())
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
+            Api::serve_claiming(conn, h, Arc::new(RealProc), replace).await
+        });
+        (api, host)
+    };
+    let watcher = bus.client();
+    let dbus = zbus::blocking::fdo::DBusProxy::new(&watcher).unwrap();
+    let owner = || {
+        dbus.get_name_owner(BUS_NAME.try_into().unwrap())
+            .ok()
+            .map(|o| o.to_string())
+    };
+    let first_name = owner().expect("the first agent owns it");
+
+    let (second, _) = serve(false);
+    assert!(
+        matches!(second, Err(zbus::Error::NameTaken)),
+        "{:?}",
+        second.err()
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        owner().as_deref(),
+        Some(first_name.as_str()),
+        "still the first"
+    );
+    assert!(
+        dbus.list_queued_owners(BUS_NAME.try_into().unwrap())
+            .unwrap()
+            .len()
+            == 1,
+        "and the second isn't left waiting in line"
+    );
+
+    let (third, third_host) = serve(true);
+    let third = third.expect("--replace takes it");
+    assert_ne!(owner().as_deref(), Some(first_name.as_str()));
+    assert!(wait_until(
+        || first_host.owned.lock().unwrap().last() == Some(&false)
+    ));
+    assert!(wait_until(
+        || third_host.owned.lock().unwrap().last() == Some(&true)
+    ));
+    // The replacer exits: the first agent has its name back.
+    zbus::block_on(third.connection().clone().close()).unwrap();
+    assert!(
+        wait_until(|| owner().as_deref() == Some(first_name.as_str())),
+        "the name came back: {:?}",
+        owner()
+    );
+    assert!(wait_until(
+        || first_host.owned.lock().unwrap().last() == Some(&true)
+    ));
 }
 
 #[test]

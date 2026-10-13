@@ -113,6 +113,9 @@ pub trait Host: Send + Sync + 'static {
     fn changed(&self);
     fn control(&self, req: Control) -> std::result::Result<ControlReply, String>;
     fn control_state(&self) -> ControlState;
+    /// This connection got or lost [`BUS_NAME`] (another agent took it with `--replace`, or gave
+    /// it back by exiting).
+    fn name_owned(&self, _owned: bool) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -200,16 +203,44 @@ pub struct Api {
 }
 
 impl Api {
-    /// Serve the API on `conn` and request [`BUS_NAME`]. Use [`Api::serve_unnamed`] in tests that
-    /// run several agents on one bus.
+    /// Serve the API on `conn` and request [`BUS_NAME`]; `NameTaken` if another agent owns it.
+    /// Use [`Api::serve_unnamed`] in tests that run several agents on one bus.
     pub async fn serve(
         conn: Connection,
         host: Arc<dyn Host>,
         proc: Arc<dyn ProcInfo>,
     ) -> zbus::Result<Api> {
+        Self::serve_claiming(conn, host, proc, false).await
+    }
+
+    /// [`Api::serve`]; with `replace`, take [`BUS_NAME`] from a running agent (`--replace`). It
+    /// waits in the bus's queue and gets the name back when this one exits.
+    ///
+    /// Never replace by default: systemd runs the agent as `Type=dbus`, so a second agent taking
+    /// the name and then exiting stopped the installed one for good (zbus's `request_name` both
+    /// replaces and allows replacement). And no `DoNotQueue`: that's what puts a replaced owner
+    /// back in the queue instead of losing the name.
+    pub async fn serve_claiming(
+        conn: Connection,
+        host: Arc<dyn Host>,
+        proc: Arc<dyn ProcInfo>,
+        replace: bool,
+    ) -> zbus::Result<Api> {
+        use zbus::fdo::{RequestNameFlags, RequestNameReply};
         let api = Self::serve_unnamed(conn, host, proc).await?;
-        api.conn.request_name(BUS_NAME).await?;
-        Ok(api)
+        let flags = if replace {
+            RequestNameFlags::AllowReplacement | RequestNameFlags::ReplaceExisting
+        } else {
+            RequestNameFlags::AllowReplacement.into()
+        };
+        match api.conn.request_name_with_flags(BUS_NAME, flags).await? {
+            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(api),
+            RequestNameReply::InQueue | RequestNameReply::Exists => {
+                // Don't wait in line: the caller says why and stops.
+                let _ = api.conn.release_name(BUS_NAME).await;
+                Err(zbus::Error::NameTaken)
+            }
+        }
     }
 
     pub async fn serve_unnamed(
@@ -255,6 +286,7 @@ impl Api {
             inner,
         };
         let watcher = api.clone();
+        let me = conn.unique_name().map(|n| n.to_string());
         let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
         let mut changes = dbus.receive_name_owner_changed().await?;
         conn.executor()
@@ -263,6 +295,13 @@ impl Api {
                     use futures_lite::StreamExt;
                     while let Some(sig) = changes.next().await {
                         let Ok(args) = sig.args() else { continue };
+                        if args.name() == BUS_NAME {
+                            let owner = args.new_owner().as_ref().map(|o| o.to_string());
+                            watcher
+                                .inner
+                                .host
+                                .name_owned(owner.is_some() && owner == me);
+                        }
                         if args.new_owner().is_none() && args.name().starts_with(':') {
                             let _ = watcher.client_gone(args.name()).await;
                         }

@@ -22,6 +22,12 @@ root     = /io/github/wawow830/Sliver
 ifaces   = NS.TouchBar1  NS.Context1  NS.Control1  NS.Desktop1
 ```
 
+One agent owns the name. A second one gets `Exists` and exits (status 1) instead of taking it:
+the unit is `Type=dbus`, so losing the name used to stop the installed agent for good.
+`sliver-agent --replace` takes it on purpose. The replaced agent waits in the bus's queue, off
+sliverd, and gets the name back (and the bar) when the replacer exits. `--render` never asks for
+the name.
+
 The trailing digit is the **major** version. A breaking change creates `TouchBar2` alongside `TouchBar1`.
 Additive changes bump the `Version` property (minor).
 
