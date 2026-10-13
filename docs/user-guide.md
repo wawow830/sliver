@@ -210,6 +210,13 @@ Hyprland, sway, niri and other wlroots compositors need nothing.
 
 ## 11. Troubleshooting
 
+**Start with `sliverctl doctor`.** It checks the whole install in a few seconds and prints one line
+per check, `ok`, `WARN` (a module will be empty: no NetworkManager, no tray host, no PipeWire) or
+`FAIL` (the bar or the config isn't working), with the fix under each. It covers sliverd and
+tiny-dfr (and that they aren't both running), the agent and its errors, the config, the GNOME/KDE
+helper, and the services that feed modules. It only reads. Run it inside your desktop session, and
+paste its output (`--json` for scripts) into a bug report: it starts with your OS, machine and desktop.
+
 `sliverctl status` answers most questions: is the agent driving the bar (`Healthy`), which layer
 and layout are on the bar and **why** (`ActiveLayoutSource`: a rule, the layer's default, or
 forced), the active profile, whether the display is on, dimmed or off, and what's wrong right now

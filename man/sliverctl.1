@@ -66,6 +66,19 @@ Every module with its id, type, source, visibility and placement.
 .TP
 .B contexts
 Contexts published by apps and scripts: provider, scope, and whether they are on screen.
+.TP
+.RB "\fBdoctor\fR [" \-\-json ]
+Check the whole install, reading only: whether sliverd and tiny\-dfr are running (and not both),
+the agent's health and errors, the configuration, the desktop integration (the KWin script or
+GNOME extension when needed), and the services that feed modules (NetworkManager, UPower,
+logind, a notification daemon, a tray host, xdg\-desktop\-portal, PipeWire).
+Each line is ok, WARN (a module will be empty) or FAIL (the bar or config isn't working), with the
+fix under it.
+The machine, OS and desktop are printed first, so the output can go into a bug report.
+The exit status is 1 if anything failed.
+.B \-\-json
+prints the same as one JSON object.
+Run it inside the desktop session.
 .SH CONTROLLING
 .TP
 .B reload

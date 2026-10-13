@@ -9,6 +9,7 @@ Inspect
   status                          agent health, layer, profile, display state
   modules                         every module: id, type, source, visibility
   contexts                        contexts published by apps and scripts
+  doctor [--json]                 check the whole install; says what to fix (exit 1 on a failure)
 
 Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.x.Y#item)
   reload                          reload config (prints errors)
@@ -160,6 +161,7 @@ pub enum Cmd {
     Publish(Publish),
     /// `config …`: offline, handled by `config::run` (elm).
     Config(Vec<String>),
+    Doctor(Vec<String>),
     /// `preset …`: offline, handled by `preset::run`.
     Preset(Vec<String>),
 }
@@ -205,6 +207,7 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         "modules" => Ok(Cmd::Modules),
         "contexts" => Ok(Cmd::Contexts),
         "config" => Ok(Cmd::Config(rest.to_vec())),
+        "doctor" => Ok(Cmd::Doctor(rest.to_vec())),
         "preset" => Ok(Cmd::Preset(rest.to_vec())),
         "reload" => c(Call::Reload),
         "validate" => {

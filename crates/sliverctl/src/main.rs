@@ -2,6 +2,7 @@
 
 mod cli;
 mod config;
+mod doctor;
 mod preset;
 
 use cli::{Call, Cmd, ItemSpec, KeyVals, Publish, Val};
@@ -172,12 +173,16 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
         // Offline: never touches the session bus.
         Cmd::Config(args) => return Ok(config::run(&args)),
         Cmd::Preset(args) => return Ok(preset::run(&args)),
+        // Reports a missing session bus or agent itself instead of failing up front.
+        Cmd::Doctor(args) => return Ok(doctor::run(&args)),
         _ => {}
     }
     // Opened directly (sliver_bus): `publish` runs for hours and must not wake twice a second.
     let conn = sliver_bus::session().map_err(|e| format!("session bus: {e}"))?;
     match cmd {
-        Cmd::Help | Cmd::Version | Cmd::Config(_) | Cmd::Preset(_) => unreachable!(),
+        Cmd::Help | Cmd::Version | Cmd::Config(_) | Cmd::Preset(_) | Cmd::Doctor(_) => {
+            unreachable!()
+        }
         Cmd::Status => {
             for (iface, name) in [
                 (IFACE_CONTROL, "Healthy"),
