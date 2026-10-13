@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Quiet stand-ins for every service an event-driven module follows, for scripts/idle-wakeups'
+"full" phase (T143): systemd (system and user managers), NetworkManager, BlueZ, fcitx5, a tray
+watcher, a notification server, and a PipeWire socket that accepts and then says nothing.
+
+They answer what the sources ask at startup and then stay silent, like an idle desktop. So any
+wakeup the agent shows is its own. Each source that calls in is written to SEEN (one line per name)
+so idle-wakeups can fail when a source never connected (then the phase would prove nothing).
+
+  scripts/idle-mocks --session ADDR --system ADDR --pipewire PATH --seen FILE
+"""
+
+import argparse
+import os
+import socket
+import threading
+
+import dbus
+import dbus.service
+from dbus.mainloop.glib import DBusGMainLoop
+from gi.repository import GLib
+
+PROPS = "org.freedesktop.DBus.Properties"
+seen_lock = threading.Lock()
+SEEN = None
+
+
+def seen(name):
+    with seen_lock:
+        with open(SEEN, "a") as f:
+            f.write(name + "\n")
+
+
+class Props(dbus.service.Object):
+    """An object with fixed properties per interface."""
+
+    def __init__(self, conn, path, props, tag):
+        super().__init__(conn, path)
+        self.props, self.tag = props, tag
+
+    @dbus.service.method(PROPS, in_signature="ss", out_signature="v")
+    def Get(self, iface, name):
+        seen(self.tag)
+        return self.props[iface][name]
+
+    @dbus.service.method(PROPS, in_signature="s", out_signature="a{sv}")
+    def GetAll(self, iface):
+        seen(self.tag)
+        return dbus.Dictionary(self.props.get(iface, {}), signature="sv")
+
+    @dbus.service.method(PROPS, in_signature="ssv", out_signature="")
+    def Set(self, iface, name, value):
+        self.props.setdefault(iface, {})[name] = value
+
+
+SYSTEMD = "org.freedesktop.systemd1.Manager"
+
+
+class Systemd(Props):
+    def __init__(self, conn, tag):
+        super().__init__(conn, "/org/freedesktop/systemd1",
+                         {SYSTEMD: {"NFailedUnits": dbus.UInt32(0)}}, tag)
+
+    @dbus.service.method(SYSTEMD, in_signature="", out_signature="")
+    def Subscribe(self):
+        seen(self.tag)
+
+    @dbus.service.method(SYSTEMD, in_signature="as", out_signature="a(ssssssouso)")
+    def ListUnitsFiltered(self, states):
+        return dbus.Array([], signature="(ssssssouso)")
+
+
+NM = "org.freedesktop.NetworkManager"
+NM_PATH = "/org/freedesktop/NetworkManager"
+
+
+def network(conn):
+    active = NM_PATH + "/ActiveConnection/1"
+    dev = NM_PATH + "/Devices/1"
+    Props(conn, NM_PATH, {NM: {
+        "State": dbus.UInt32(70), "WirelessEnabled": dbus.Boolean(True),
+        "PrimaryConnection": dbus.ObjectPath(active),
+    }}, "network")
+    Props(conn, active, {NM + ".Connection.Active": {
+        "Type": "802-3-ethernet", "Vpn": dbus.Boolean(False), "Id": "Wired",
+        "Devices": dbus.Array([dbus.ObjectPath(dev)], signature="o"),
+        "Ip4Config": dbus.ObjectPath("/"),
+    }}, "network")
+    Props(conn, dev, {NM + ".Device": {"Interface": "eth0"}}, "network")
+
+
+class Bluez(dbus.service.Object):
+    @dbus.service.method("org.freedesktop.DBus.ObjectManager", in_signature="",
+                         out_signature="a{oa{sa{sv}}}")
+    def GetManagedObjects(self):
+        seen("bluetooth")
+        return {dbus.ObjectPath("/org/bluez/hci0"): {"org.bluez.Adapter1": {
+            "Powered": dbus.Boolean(True), "Address": "00:11:22:33:44:55", "Name": "mock",
+        }}}
+
+
+FCITX = "org.fcitx.Fcitx.Controller1"
+
+
+def im_info(id_, label):
+    return dbus.Struct((id_, id_, "", "icon", label, "xx", "addon", dbus.Boolean(True), "",
+                        dbus.Dictionary({}, signature="sv")), signature="sssssssbsa{sv}")
+
+
+class Fcitx(dbus.service.Object):
+    @dbus.service.method(FCITX, in_signature="", out_signature="(sssssssbsa{sv})")
+    def CurrentInputMethodInfo(self):
+        seen("fcitx")
+        return im_info("keyboard-us", "en")
+
+    @dbus.service.method(FCITX, in_signature="", out_signature="s")
+    def CurrentInputMethodGroup(self):
+        return "Default"
+
+    @dbus.service.method(FCITX, in_signature="s",
+                         out_signature="(sssa{sv}a(sssssssbsa{sv}))")
+    def FullInputMethodGroupInfo(self, group):
+        return dbus.Struct(("Default", "keyboard-us", "us", dbus.Dictionary({}, signature="sv"),
+                            dbus.Array([im_info("keyboard-us", "en"), im_info("pinyin", "拼")],
+                                       signature="(sssssssbsa{sv})")),
+                           signature="sssa{sv}a(sssssssbsa{sv})")
+
+    @dbus.service.signal(FCITX, signature="")
+    def InputMethodGroupsChanged(self):
+        pass
+
+
+SNW = "org.kde.StatusNotifierWatcher"
+
+
+class Watcher(Props):
+    def __init__(self, conn):
+        super().__init__(conn, "/StatusNotifierWatcher", {SNW: {
+            "RegisteredStatusNotifierItems": dbus.Array([], signature="s"),
+            "IsStatusNotifierHostRegistered": dbus.Boolean(True),
+            "ProtocolVersion": dbus.Int32(0),
+        }}, "tray")
+
+    @dbus.service.method(SNW, in_signature="s", out_signature="")
+    def RegisterStatusNotifierHost(self, name):
+        seen("tray")
+
+    @dbus.service.method(SNW, in_signature="s", out_signature="")
+    def RegisterStatusNotifierItem(self, name):
+        pass
+
+
+NOTIF = "org.freedesktop.Notifications"
+
+
+class Notifications(dbus.service.Object):
+    @dbus.service.method(NOTIF, in_signature="", out_signature="ssss")
+    def GetServerInformation(self):
+        seen("notifications")
+        return ("mock", "sliver", "1", "1.2")
+
+    @dbus.service.method(NOTIF, in_signature="", out_signature="as")
+    def GetCapabilities(self):
+        return ["body"]
+
+    @dbus.service.method(NOTIF, in_signature="susssasa{sv}i", out_signature="u")
+    def Notify(self, app, replaces, icon, summary, body, actions, hints, timeout):
+        return 1
+
+    @dbus.service.method(NOTIF, in_signature="u", out_signature="")
+    def CloseNotification(self, id_):
+        pass
+
+
+def pipewire(path):
+    """Accept, read the client's hello and registry request, then say nothing (an idle desktop
+    with no capture streams). The client blocks in read, which is what we measure."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(path)
+    srv.listen()
+
+    def serve(c):
+        seen("pipewire")  # one line per connection: reconnects show up as repeats
+        while c.recv(4096):
+            pass
+
+    while True:
+        c, _ = srv.accept()
+        threading.Thread(target=serve, args=(c,), daemon=True).start()
+
+
+def main():
+    global SEEN
+    ap = argparse.ArgumentParser()
+    for a in ("--session", "--system", "--pipewire", "--seen"):
+        ap.add_argument(a, required=True)
+    a = ap.parse_args()
+    SEEN = a.seen
+    open(SEEN, "w").close()
+    DBusGMainLoop(set_as_default=True)
+    system = dbus.bus.BusConnection(a.system)
+    session = dbus.bus.BusConnection(a.session)
+    keep = []
+    for conn, names in ((system, ["org.freedesktop.systemd1", NM, "org.bluez"]),
+                        (session, ["org.freedesktop.systemd1", "org.fcitx.Fcitx5", SNW, NOTIF])):
+        keep += [dbus.service.BusName(n, conn) for n in names]
+    keep += [Systemd(system, "systemd-system"), Systemd(session, "systemd-user")]
+    network(system)
+    keep += [Bluez(system, "/"), Fcitx(session, "/controller"), Watcher(session),
+             Notifications(session, "/org/freedesktop/Notifications")]
+    threading.Thread(target=pipewire, args=(a.pipewire,), daemon=True).start()
+    print("ready", flush=True)
+    GLib.MainLoop().run()
+
+
+if __name__ == "__main__":
+    main()

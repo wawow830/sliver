@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 """Invariant 3 end to end: how often sliverd + sliver-agent wake up when nothing happens (T101).
 
-Runs `sliverd --fake-hardware` and `sliver-agent` with the default config (plus shortened display
-timeouts) on private session and system buses, with no compositor or audio sockets, so nothing on
-the machine can wake them. It then counts voluntary context switches, i.e. sleeps after a wakeup,
-of every thread of both processes and every helper process the agent starts:
+Runs `sliverd --fake-hardware` and `sliver-agent` (shortened display timeouts) on private session
+and system buses, with no compositor or audio sockets, so nothing on the machine can wake them.
+It then counts voluntary context switches, i.e. sleeps after a wakeup, of every thread of both
+processes and every helper process the agent starts:
 
   phase "on":  30 s idle with the bar on (the clock module may tick, nothing else should)
   phase "off": 30 s with the bar off (sliverd must sleep; the agent only for its own feeds)
 
-and fails if either phase is over budget. ~80 s; not part of scripts/check (too slow).
+in two scenarios:
 
-  scripts/idle-wakeups [--release] [--seconds N]
+  default: the default config, with no services at all
+  full:    every event-driven module placed (privacy, language, systemd-failed-units,
+           notifications, tray, network, bluetooth, graph) with quiet stand-ins for their
+           services (scripts/idle-mocks: systemd, NetworkManager, BlueZ, fcitx5, a tray watcher,
+           a notification server, a PipeWire socket), so a source that's connected but idle is
+           measured. It fails if a source never called its service.
+
+It fails if any phase is over budget. ~80 s per scenario; not part of scripts/check (too slow).
+
+  scripts/idle-wakeups [--release] [--seconds N] [--scenario default|full|all]
 
 Budgets (wakeups per second, for all the processes together) can be overridden with
-IDLE_WAKEUPS_ON / IDLE_WAKEUPS_OFF.
+IDLE_WAKEUPS_ON / IDLE_WAKEUPS_OFF (default) and IDLE_WAKEUPS_FULL_ON / IDLE_WAKEUPS_FULL_OFF.
 """
 
 import argparse
@@ -33,6 +42,27 @@ ROOT = Path(__file__).resolve().parent.parent
 # D-Bus reactor; before T101's fix that retry loop alone was ~50/s. `--threads` breaks it down.
 BUDGET_ON = float(os.environ.get("IDLE_WAKEUPS_ON", "8"))
 BUDGET_OFF = float(os.environ.get("IDLE_WAKEUPS_OFF", "3"))
+# "full" (T143), measured on the Mac14,7 with an idle audio server (stand-in pactl/wpctl): every
+# module but `language` placed: on 1.5, off 0.00. With `language` and fcitx5 running: on 12-23,
+# because fcitx5 has no change signal and is re-read every 1.5 s, three calls per read, ~27
+# wakeups each (T144). OFF stops it. The budgets are what it should take; until T144 the ON phase
+# reports over budget.
+BUDGET_FULL_ON = float(os.environ.get("IDLE_WAKEUPS_FULL_ON", "8"))
+BUDGET_FULL_OFF = float(os.environ.get("IDLE_WAKEUPS_FULL_OFF", "1.5"))
+# Every event-driven module, in the main zone.
+FULL_LAYOUT = """
+[[layouts.default.zones]]
+name = "main"
+width = "fill"
+modules = ["privacy", "language", "systemd-failed-units", "notifications", "status-items",
+           "network", "bluetooth", "graph#cpu"]
+
+[modules.systemd-failed-units]
+hide-on-ok = false
+"""
+# Services that must have been called in "full", by scripts/idle-mocks' names.
+FULL_SOURCES = {"systemd-system", "systemd-user", "network", "bluetooth", "fcitx", "tray",
+                "notifications", "pipewire"}
 SETTLE_S = 5
 # Display timeouts in the sandbox config: "on" is measured before dim, "off" after off.
 DIM_AFTER_S = 40
@@ -133,6 +163,7 @@ def main() -> int:
     ap.add_argument("--release", action="store_true", help="use target/release (default: debug)")
     ap.add_argument("--seconds", type=float, default=30, help="length of each phase (default 30)")
     ap.add_argument("--threads", action="store_true", help="break the counts down per thread")
+    ap.add_argument("--scenario", choices=["default", "full", "all"], default="all")
     a = ap.parse_args()
     if a.seconds + SETTLE_S > DIM_AFTER_S:
         ap.error(f"--seconds must be at most {DIM_AFTER_S - SETTLE_S}")
@@ -141,15 +172,24 @@ def main() -> int:
     build = ["cargo", "build", "-q", "-p", "sliverd", "-p", "sliver-agent"]
     subprocess.run(build + (["--release"] if a.release else []), cwd=ROOT, check=True)
     bins = ROOT / "target" / profile
+    ok = True
+    for name in (["default", "full"] if a.scenario == "all" else [a.scenario]):
+        ok &= scenario(name, bins, a)
+    return 0 if ok else 1
 
-    tmp = ROOT / "target" / "test-tmp" / f"idle-wakeups.{os.getpid()}"
+
+def scenario(name: str, bins: Path, a: argparse.Namespace) -> bool:
+    full = name == "full"
+    tmp = ROOT / "target" / "test-tmp" / f"idle-wakeups.{name}.{os.getpid()}"
     shutil.rmtree(tmp, ignore_errors=True)
     (tmp / "config" / "sliver").mkdir(parents=True)
     (tmp / "run").mkdir(mode=0o700)
     (tmp / "config" / "sliver" / "config.toml").write_text(
         f'[display]\ndim-after = "{DIM_AFTER_S}s"\noff-after = "{OFF_AFTER_S}s"\n'
+        + (FULL_LAYOUT if full else "")
     )
     procs: list[subprocess.Popen] = []
+    ok = False
 
     def start(cmd: list[str], env: dict[str, str], log: str) -> subprocess.Popen:
         p = subprocess.Popen(
@@ -168,42 +208,75 @@ def main() -> int:
                    f"--address=unix:path={tmp / bus}"], base, f"{bus}-bus.log")
         sock = tmp / "sliverd.sock"
         start([str(bins / "sliverd"), "--fake-hardware", "--socket", str(sock)], base, "sliverd.log")
+        sliverd = procs[-1]
         for _ in range(100):
             if sock.exists() and (tmp / "session").exists() and (tmp / "system").exists():
                 break
             time.sleep(0.05)
+        seen = tmp / "seen"
+        if full:
+            # An idle audio server: `pactl subscribe` stays up and says nothing, `wpctl get-volume`
+            # answers at once. (The real tools against the silent PipeWire stand-in would hang
+            # until their timeout and be retried, which is the stand-in's doing, not the agent's.)
+            fake_bin = tmp / "bin"
+            fake_bin.mkdir()
+            (fake_bin / "pactl").write_text('#!/bin/sh\n[ "$1" = subscribe ] && exec sleep infinity\nexit 0\n')
+            (fake_bin / "wpctl").write_text('#!/bin/sh\n[ "$1" = get-volume ] && echo "Volume: 0.50"\nexit 0\n')
+            for f in ("pactl", "wpctl"):
+                (fake_bin / f).chmod(0o755)
+            base = base | {"PATH": f"{fake_bin}:{base['PATH']}"}
+            # Not under the agent: the stand-ins' own wakeups aren't counted.
+            start([sys.executable, str(ROOT / "scripts" / "idle-mocks"),
+                   "--session", f"unix:path={tmp / 'session'}",
+                   "--system", f"unix:path={tmp / 'system'}",
+                   "--pipewire", str(tmp / "run" / "pipewire-0"), "--seen", str(seen)],
+                  base, "mocks.log")
+            mocks = procs[-1]
+            for _ in range(100):
+                if "ready" in (tmp / "mocks.log").read_text() or mocks.poll() is not None:
+                    break
+                time.sleep(0.05)
+            if "ready" not in (tmp / "mocks.log").read_text():
+                print(f"idle-wakeups: scripts/idle-mocks didn't start; see {tmp}/mocks.log",
+                      file=sys.stderr)
+                return False
         env = base | {
             # No WAYLAND_DISPLAY / HYPRLAND_INSTANCE_SIGNATURE / SWAYSOCK / NIRI_SOCKET: no
-            # compositor events. A private runtime dir: no PipeWire.
+            # compositor events. A private runtime dir: no PipeWire (but the mock's, in "full").
             "XDG_CONFIG_HOME": str(tmp / "config"),
             "XDG_RUNTIME_DIR": str(tmp / "run"),
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path={tmp / 'session'}",
             "DBUS_SYSTEM_BUS_ADDRESS": f"unix:path={tmp / 'system'}",
         }
         agent = start([str(bins / "sliver-agent"), "--socket", str(sock)], env, "agent.log")
-        sliverd = procs[2]
         roots = [sliverd.pid, agent.pid]
 
         time.sleep(SETTLE_S)
         for p in (sliverd, agent):
             if p.poll() is not None:
                 print(f"idle-wakeups: {p.args[0]} exited early; see {tmp}", file=sys.stderr)
-                return 1
+                return False
+        if full:
+            missing = FULL_SOURCES - set(seen.read_text().split())
+            if missing:
+                print(f"idle-wakeups: full: never called: {', '.join(sorted(missing))} "
+                      f"(the phase would prove nothing); see {tmp}", file=sys.stderr)
+                return False
         on, on_per = measure(roots, a.seconds, a.threads)
         time.sleep(max(0.0, OFF_AFTER_S + 2 - SETTLE_S - a.seconds))
         off, off_per = measure(roots, a.seconds, a.threads)
 
         ok = True
-        for phase, rate, per, budget in (("on", on, on_per, BUDGET_ON),
-                                         ("off", off, off_per, BUDGET_OFF)):
+        budgets = (BUDGET_FULL_ON, BUDGET_FULL_OFF) if full else (BUDGET_ON, BUDGET_OFF)
+        for phase, rate, per, budget in (("on", on, on_per, budgets[0]),
+                                         ("off", off, off_per, budgets[1])):
             detail = ", ".join(f"{k} {v}" for k, v in sorted(per.items(), key=lambda kv: -kv[1]))
             verdict = "ok" if rate <= budget else "OVER BUDGET"
-            print(f"{phase:>3}: {rate:5.2f} wakeups/s (budget {budget}) {verdict}   [{detail}]")
+            print(f"{name:>7} {phase:>3}: {rate:5.2f} wakeups/s (budget {budget}) {verdict}   [{detail}]")
             ok &= rate <= budget
         if not ok:
             print(f"idle-wakeups: logs kept in {tmp}", file=sys.stderr)
-            return 1
-        return 0
+        return ok
     finally:
         for p in reversed(procs):
             try:
@@ -215,7 +288,7 @@ def main() -> int:
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 os.killpg(p.pid, signal.SIGKILL)
-        if "ok" in locals() and ok:
+        if ok:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
