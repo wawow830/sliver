@@ -262,6 +262,13 @@ fn agent(sys: &dyn Sys) -> Vec<Check> {
             "the agent is running but not driving the bar",
             Some("is sliverd running? journalctl --user -u sliver-agent -b"),
         )),
+        // No session bus at all (ssh, a root shell): starting the agent wouldn't help.
+        Err(_) if sys.bus_name(false, sliver_ipc::dbus::BUS_NAME).is_none() => out.push(check(
+            "agent",
+            Level::Warn,
+            "the session bus isn't reachable, so the agent can't be checked",
+            Some("run `sliverctl doctor` inside your desktop session"),
+        )),
         Err(e) => out.push(check(
             "agent",
             Level::Fail,
@@ -470,8 +477,8 @@ fn sources(sys: &dyn Sys) -> Vec<Check> {
             "network" => "NetworkManager",
             "power" => "UPower",
             "logind" => "systemd-logind",
-            "notifications" => "A notification daemon",
-            "tray" => "A tray host (StatusNotifierWatcher)",
+            "notifications" => "a notification daemon",
+            "tray" => "a tray host (StatusNotifierWatcher)",
             _ => "xdg-desktop-portal",
         };
         let c = match sys.bus_name(system, name) {
@@ -613,11 +620,12 @@ pub fn render_text(sys: &dyn Sys, checks: &[Check]) -> String {
         }
     }
     let count = |l| checks.iter().filter(|c| c.level == l).count();
+    let n = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     s.push_str(&format!(
-        "\n{} ok, {} warnings, {} failures\n",
+        "\n{} ok, {}, {}\n",
         count(Level::Ok),
-        count(Level::Warn),
-        count(Level::Fail)
+        n(count(Level::Warn), "warning", "warnings"),
+        n(count(Level::Fail), "failure", "failures")
     ));
     s
 }

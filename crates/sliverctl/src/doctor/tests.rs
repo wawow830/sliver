@@ -274,11 +274,30 @@ fn missing_sources_say_what_goes_empty() {
 fn no_session_bus_is_one_clear_warning_per_source_not_a_crash() {
     let mut f = Fake::healthy();
     f.no_session_bus = true;
+    f.agent = Some(Err("no session bus".into()));
     let c = run_checks(&f);
     assert!(
         find(&c, "source/tray")
             .summary
             .contains("session bus isn't reachable")
+    );
+    // The agent too: a warning to run it in the session, not "start the agent".
+    let a = find(&c, "agent");
+    assert_eq!(a.level, Level::Warn);
+    assert!(
+        a.fix
+            .as_deref()
+            .unwrap()
+            .contains("inside your desktop session"),
+        "{a:?}"
+    );
+    // The summary reads as a sentence.
+    assert!(
+        find(&c, "source/notifications")
+            .summary
+            .contains("so a notification daemon"),
+        "{:?}",
+        find(&c, "source/notifications")
     );
 }
 
@@ -340,10 +359,7 @@ fn the_reports_carry_the_machine_and_every_check() {
         text.contains("      fix: install and start upower"),
         "{text}"
     );
-    assert!(
-        text.trim_end().ends_with("1 warnings, 0 failures"),
-        "{text}"
-    );
+    assert!(text.trim_end().ends_with("1 warning, 0 failures"), "{text}");
     let json = render_json(&f, &checks);
     assert!(
         json.starts_with("{\"machine\":{") && json.contains("\"os\":\"Fedora Asahi Remix 44\""),
