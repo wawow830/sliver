@@ -7,6 +7,8 @@ use std::sync::mpsc::channel;
 struct Controller {
     cur: Arc<Mutex<String>>,
     reads: Arc<AtomicUsize>,
+    /// `CurrentInputMethod` calls (the cheap poll).
+    polls: Arc<AtomicUsize>,
     calls: Arc<Mutex<Vec<String>>>,
 }
 
@@ -36,6 +38,10 @@ impl Controller {
         self.reads.fetch_add(1, Ordering::SeqCst);
         let cur = self.cur.lock().unwrap().clone();
         if cur.is_empty() { info("") } else { info(&cur) }
+    }
+    fn current_input_method(&self) -> String {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        self.cur.lock().unwrap().clone()
     }
     fn current_input_method_group(&self) -> String {
         "Default".into()
@@ -79,6 +85,7 @@ struct Fixture {
     tb: sliver_testbus::TestBus,
     cur: Arc<Mutex<String>>,
     reads: Arc<AtomicUsize>,
+    polls: Arc<AtomicUsize>,
     calls: Arc<Mutex<Vec<String>>>,
 }
 
@@ -88,6 +95,7 @@ impl Fixture {
             tb: sliver_testbus::TestBus::start()?,
             cur: Arc::new(Mutex::new("keyboard-us".into())),
             reads: Arc::default(),
+            polls: Arc::default(),
             calls: Arc::default(),
         })
     }
@@ -110,6 +118,7 @@ impl Fixture {
                 Controller {
                     cur: self.cur.clone(),
                     reads: self.reads.clone(),
+                    polls: self.polls.clone(),
                     calls: self.calls.clone(),
                 },
             )
@@ -240,4 +249,33 @@ fn switching_toggles_or_selects() {
     switch(&fx.conn(), None).unwrap();
     switch(&fx.conn(), Some("mozc")).unwrap();
     assert_eq!(*fx.calls.lock().unwrap(), ["toggle", "set mozc"]);
+}
+
+/// The poll is one cheap call; the three-call full read happens only when the method changed.
+#[test]
+fn an_unchanged_poll_costs_one_call() {
+    let Some(fx) = Fixture::new() else {
+        return;
+    };
+    let _fcitx = fx.serve();
+    let (_handle, rx) = fx.follow();
+    expect(&rx, |s| s.is_some());
+    std::thread::sleep(Duration::from_millis(150));
+    let (full, polls) = (
+        fx.reads.load(Ordering::SeqCst),
+        fx.polls.load(Ordering::SeqCst),
+    );
+    std::thread::sleep(Duration::from_millis(700)); // several POLLs
+    assert!(fx.polls.load(Ordering::SeqCst) >= polls + 3, "it polls");
+    assert_eq!(
+        fx.reads.load(Ordering::SeqCst),
+        full,
+        "but reads nothing else while unchanged"
+    );
+    // A change is found by the poll and then read in full.
+    *fx.cur.lock().unwrap() = "pinyin".into();
+    expect(&rx, |s| {
+        s.as_ref().is_some_and(|m| m.current.id == "pinyin")
+    });
+    assert!(fx.reads.load(Ordering::SeqCst) > full);
 }

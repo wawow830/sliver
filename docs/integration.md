@@ -328,7 +328,7 @@ module shows fcitx5's current input method and label when it runs; the composito
 `CurrentInputMethod` is a method and fcitx5 sends no signal when the user switches with the hotkey
 (`Controller1` only has `InputMethodGroupsChanged`; checked on 5.1.23, headless: no tray signals
 either), so besides `NameOwnerChanged`, the groups signal, tray `New*` signals, window focus changes
-and our own switches, it is asked every 1.5 s while the bar is on and fcitx5 is running (invariant 3:
+and our own switches, it is asked every 2 s (one cheap call, `CurrentInputMethod`; the group only when that changed) while the bar is on and fcitx5 is running (invariant 3:
 not while the bar is off, not without fcitx5, only when a layout uses `language`). Verified against
 the real fcitx5 (read) and a mock `Controller1`; the switch calls (`Toggle`, `SetCurrentIM`) and a
 real hotkey switch were only exercised against a private headless fcitx5 / the mock, never on the

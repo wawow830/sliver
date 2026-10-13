@@ -15,7 +15,7 @@
 //! * after our own switch ([`Handle::refresh_input_method`]) and when the focused window changes
 //!   (each window has its own input context),
 //! * on the tray item's `NewIcon`/`NewToolTip`/`NewTitle`, where a real session sends them,
-//! * and every [`POLL`] while the bar is on ([`Handle::set_awake`]) and fcitx5 is running: that is
+//! * and every [`POLL`] (one call, `CurrentInputMethod`) while the bar is on ([`Handle::set_awake`]) and fcitx5 is running: that is
 //!   the only way to see a hotkey switch. It stops when the bar is off, and never starts when
 //!   fcitx5 isn't running (invariant 3: wakes only while shown).
 
@@ -38,7 +38,7 @@ const IFACE: &str = "org.fcitx.Fcitx.Controller1";
 pub const POLL: Duration = if cfg!(test) {
     Duration::from_millis(100)
 } else {
-    Duration::from_millis(1500)
+    Duration::from_millis(2000)
 };
 
 /// One input method.
@@ -251,55 +251,76 @@ impl Handle {
     }
 }
 
+/// `CurrentInputMethod`: fcitx5's unique name for the current method, `""` when no window has
+/// one, `None` when fcitx5 isn't there. One cheap call: what the poll asks.
+fn current(conn: &Connection) -> Option<String> {
+    props::call_no_autostart(conn, NAME, PATH, IFACE, "CurrentInputMethod", &())
+}
+
 fn work(conn: Connection, rx: Receiver<Msg>, hub: crate::Hub) {
     let mut awake = true;
     let mut running = false;
     let mut first = true;
+    // The current method's id as of the last full read (`""`: none).
+    let mut last: Option<String> = None;
     loop {
-        // One read per wake-up. While it is on screen and fcitx5 is there, ask again after POLL
-        // (a hotkey switch sends nothing); otherwise sleep until something happens.
-        let read_now = std::mem::take(&mut first);
-        let mut refresh = read_now;
-        let msg = if awake && running && !read_now {
+        // Sleep until something happens; while fcitx5 is there and the bar is on, also wake after
+        // POLL (a hotkey switch sends nothing). A message or the first round reads everything
+        // (3 calls); a bare poll asks only for the current method (1 call) and reads the rest
+        // only if that changed, because every call costs the agent a handful of wake-ups.
+        let mut full = std::mem::take(&mut first);
+        let mut poll = false;
+        let msg = if full {
+            None
+        } else if awake && running {
             match rx.recv_timeout(POLL) {
                 Ok(m) => Some(m),
                 Err(RecvTimeoutError::Timeout) => {
-                    refresh = true;
+                    poll = true;
                     None
                 }
                 Err(RecvTimeoutError::Disconnected) => return,
             }
-        } else if read_now {
-            None
         } else {
             match rx.recv() {
                 Ok(m) => Some(m),
                 Err(_) => return,
             }
         };
-        match msg {
-            Some(Msg::Refresh) => refresh = true,
-            Some(Msg::Awake(on)) => {
-                refresh = on && !awake;
+        let mut on_message = |m: Msg, full: &mut bool| match m {
+            Msg::Refresh => *full = true,
+            Msg::Awake(on) => {
+                *full |= on && !awake;
                 awake = on;
             }
-            None => {}
+        };
+        if let Some(m) = msg {
+            on_message(m, &mut full);
         }
         // Burst of signals: one read.
         while let Ok(m) = rx.try_recv() {
-            match m {
-                Msg::Refresh => refresh = true,
-                Msg::Awake(on) => {
-                    refresh |= on && !awake;
-                    awake = on;
-                }
+            on_message(m, &mut full);
+        }
+        if !awake {
+            continue;
+        }
+        if poll && !full {
+            match current(&conn) {
+                Some(id) if last.as_deref() == Some(id.as_str()) => continue,
+                _ => full = true,
             }
         }
-        if !refresh || !awake {
+        if !full {
             continue;
         }
         let (up, state) = read(&conn);
         running = up;
+        last = Some(
+            state
+                .as_ref()
+                .map(|s| s.current.id.clone())
+                .unwrap_or_default(),
+        );
         if !hub.update(|s| s.input_method = state) {
             return;
         }
