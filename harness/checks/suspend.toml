@@ -1,0 +1,28 @@
+# T120: does the bar come back after a suspend with the lid open? Runs on the installed Sliver.
+title = "Suspend and wake with the lid open"
+minutes = 1
+
+[[step]]
+say = """
+This suspends the Mac. Leave the lid open, wait about 10 seconds after the screen goes dark,
+then press any key to wake it. This window carries on by itself."""
+confirm = true
+shell = "systemctl suspend"
+resume = true
+
+[[step]]
+wait = 3
+
+[[step]]
+name = "after wake"
+ask = "Look at the Touch Bar: how is it?"
+options = ["normal", "dark (no light)", "lit but blank or an old picture", "something else"]
+
+[[step]]
+name = "touch after wake"
+ask = "Tap a button on the bar (e.g. volume). Did it work?"
+options = ["yes", "no"]
+
+[[step]]
+name = "logs"
+collect = "rpm -q sliverd; systemctl is-active sliverd tiny-dfr; cat /sys/class/backlight/*dsi*/brightness; journalctl -b -u sliverd --since=-10min --no-pager | tail -40; journalctl -b --user -u sliver-agent --since=-10min --no-pager | tail -20"

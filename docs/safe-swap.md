@@ -76,6 +76,20 @@ framebuffer via `GETFB2` + `MAP_DUMB` + `mmap` (read-only), un-rotates the portr
 2008x60 landscape PNG, and writes it to stdout. It works whether tiny-dfr or sliverd is drawing.
 It never modesets. The first use is still a `hardware` ask (it's a new hardware path).
 
+## Guided checks for the human (`harness/checks/hwcheck`, T123)
+For a hardware question that needs the human to *do* things on the bar, don't write instructions
+into an ask. Write a check instead: `harness/checks/NAME.toml` (see `pixel-shift.toml`,
+`suspend.toml`). The human runs `harness/checks/hwcheck NAME` when it suits them. It builds release
+binaries, does the bounded run with an agent, and tells them each step at the moment it matters.
+It checks the daemon log by itself (`expect`), saves snaps, asks short questions, and checks that
+the bar went back to its previous owner. Then it answers the open ask whose question mentions
+"hwcheck" and NAME. Files go to `target/hw/checks/<stamp>/`. So the ask is just "Run `hwcheck NAME`
+when convenient (~N min)?". Keys the bar sends land in the runner's terminal and are discarded.
+
+`stop` and a manual `restore` give the bar back to the owner recorded at the last run's start
+(`/run/sliver-safeswap/target`). Before T123 they defaulted to tiny-dfr and raced the run's own
+ExecStopPost restoring sliverd, and tiny-dfr won.
+
 ## Install (human, `sudo`)
 ```
 sudo harness/safeswap/install.sh            # --user NAME (default $SUDO_USER), --no-rule

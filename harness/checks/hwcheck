@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Guided hardware checks: the human starts one when convenient and is walked through it.
+
+    harness/checks/hwcheck                 # list the checks
+    harness/checks/hwcheck NAME [NAME...]  # run them, then answer the swarm ask that names them
+
+A check (harness/checks/NAME.toml) can build release binaries, do a bounded safe-swap run with
+an agent, and then go step by step: tell the human what to do at the moment it matters, check
+the daemon log by itself, save bar snapshots, and ask short questions. Results go to
+target/hw/checks/<stamp>/ and to the open `swarm human` ask whose question mentions "hwcheck" and
+the check's name. See docs/safe-swap.md "Guided checks".
+
+Step fields, run in this order: say, confirm, shell, resume, wait, expect, snap, ask, collect.
+"""
+import re
+import shutil
+import subprocess
+import sys
+import termios
+import time
+import tomllib
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+BAR = ROOT / "harness/safeswap/bar"
+OUT = Path("/run/sliver-safeswap/out")
+UNITS = ["sliverd", "sliverd.socket", "tiny-dfr"]
+TTY = sys.stdin.isatty()
+
+
+def c(code, s):
+    return f"\033[{code}m{s}\033[0m" if sys.stdout.isatty() else s
+
+
+# ---- terminal: the bar sends real keys to the focused window, which is this one -----------------
+
+saved_tty = termios.tcgetattr(0) if TTY else None
+
+
+def quiet(on):
+    """While nobody is typing an answer, don't echo whatever the bar types."""
+    if not TTY:
+        return
+    a = termios.tcgetattr(0)
+    a[3] = a[3] & ~(termios.ECHO | termios.ICANON) if on else a[3] | termios.ECHO | termios.ICANON
+    termios.tcsetattr(0, termios.TCSANOW, a)
+
+
+def drain():
+    if TTY:
+        termios.tcflush(0, termios.TCIFLUSH)
+
+
+def prompt(text):
+    drain()
+    quiet(False)
+    try:
+        return input(c("1;36", f"  {text}› ")).strip()
+    finally:
+        quiet(True)
+
+
+def enter(text="Enter when ready"):
+    prompt(text)
+
+
+# ---- the bounded run -------------------------------------------------------------------------
+
+class Run:
+    def __init__(self, spec, dest):
+        self.spec, self.dest = spec, dest
+        self.swap = self.agent = None
+
+    def start(self):
+        s = self.spec
+        self.owner_before = owner(units())
+        if s.get("build", True):
+            print(c("2", "  building release sliverd and sliver-agent (a minute or two the first time)..."))
+            subprocess.run(["cargo", "build", "-q", "--release", "-p", "sliverd", "-p", "sliver-agent"],
+                           cwd=ROOT, check=True)
+        if busy():
+            sys.exit("a safe-swap run is already active (a peer is using the bar); try again in a few minutes")
+        args = ["--backend", "real", "-v", *s.get("daemon-args", [])]
+        self.swap = subprocess.Popen(
+            [BAR, "run", ROOT / "target/release/sliverd", "--seconds", str(s.get("seconds", 240)), "--", *args],
+            cwd=ROOT, stdin=subprocess.DEVNULL, stdout=open(self.dest / "swap.txt", "w"),
+            stderr=subprocess.STDOUT)
+        sock = OUT / "sliverd.sock"
+        for _ in range(150):
+            if sock.exists() or self.swap.poll() is not None:
+                break
+            time.sleep(0.1)
+        if not sock.exists():
+            raise RuntimeError(f"sliverd didn't start; see {self.dest}/swap.txt")
+        if s.get("agent", True):
+            cmd = [ROOT / "target/release/sliver-agent", "--socket", sock]
+            if "agent-config" in s:
+                cfg = self.dest / "agent.toml"
+                cfg.write_text(s["agent-config"])
+                cmd += ["--config", cfg]
+            self.agent = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                          stdout=open(self.dest / "agent.txt", "w"), stderr=subprocess.STDOUT)
+            time.sleep(1.0)
+
+    def log(self):
+        try:
+            return (OUT / "sliverd.log").read_text(errors="replace")
+        except OSError:
+            return ""
+
+    def stop(self):
+        if self.agent and self.agent.poll() is None:
+            self.agent.terminate()
+            self.agent.wait(5)
+        try:
+            shutil.copy(OUT / "sliverd.log", self.dest / "sliverd.log")
+        except OSError:
+            pass
+        if self.swap and self.swap.poll() is None:
+            subprocess.run([BAR, "stop"], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                self.swap.wait(30)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+def busy():
+    return subprocess.run(["systemctl", "is-active", "-q", "sliver-swap.service"]).returncode == 0
+
+
+def units():
+    r = subprocess.run(["systemctl", "is-active", *UNITS], capture_output=True, text=True)
+    return dict(zip(UNITS, r.stdout.split()))
+
+
+def owner(u):
+    if "active" in (u.get("sliverd"), u.get("sliverd.socket")):
+        return "sliverd"
+    return "tiny-dfr" if u.get("tiny-dfr") == "active" else "nobody"
+
+
+def clock_gap():
+    return time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)
+
+
+# ---- steps -----------------------------------------------------------------------------------
+
+def run_step(st, run, dest, results):
+    if "say" in st:
+        print("\n  " + st["say"].strip().replace("\n", "\n  "))
+    if st.get("confirm") or (set(st) <= {"say"}):
+        enter()
+    if "shell" in st:
+        gap = clock_gap()
+        subprocess.run(st["shell"], shell=True)
+        if st.get("resume"):
+            print(c("2", "  waiting for the Mac to sleep and wake..."))
+            end = time.monotonic() + st.get("within", 180)
+            while clock_gap() - gap < 2 and time.monotonic() < end:
+                time.sleep(0.5)
+            slept = clock_gap() - gap
+            results.append(("suspended", f"{slept:.0f} s" if slept >= 2 else "no suspend detected"))
+    if "wait" in st:
+        for left in range(int(st["wait"]), 0, -1):
+            print(c("2", f"\r  {left:3d} s "), end="", flush=True)
+            time.sleep(1)
+        print("\r       ", end="\r")
+    if "expect" in st:
+        since = len(run.log()) if run else 0
+        end = time.monotonic() + st.get("within", 10)
+        hit = None
+        while time.monotonic() < end and not hit:
+            hit = re.search(st["expect"], run.log()[since:]) if run else None
+            time.sleep(0.2)
+        name = st.get("name", st["expect"])
+        results.append((name, "seen in the log" if hit else f"NOT seen within {st.get('within', 10)} s"))
+        print(c("32" if hit else "31", f"  {'✓' if hit else '✗'} {name}"))
+    if "snap" in st:
+        png = dest / f"{st['snap']}.png"
+        r = subprocess.run([BAR, "snap", png], cwd=ROOT, capture_output=True)
+        results.append((f"snap {st['snap']}", str(png) if r.returncode == 0 else "failed"))
+    if "ask" in st:
+        opts = st.get("options", [])
+        print("\n  " + c("1", st["ask"]))
+        for i, o in enumerate(opts):
+            print(f"    {chr(97 + i)}) {o}")
+        a = prompt("letter or words" if opts else "answer")
+        if opts and len(a) == 1 and "a" <= a.lower() < chr(97 + len(opts)):
+            a = opts[ord(a.lower()) - 97]
+        elif opts and (m := re.match(r"^([a-z])[)\s:,-]+(.+)$", a, re.I)) and "a" <= m[1].lower() < chr(97 + len(opts)):
+            a = f"{opts[ord(m[1].lower()) - 97]} ({m[2]})"
+        results.append((st.get("name", st["ask"]), a or "(no answer)"))
+    if "collect" in st:
+        r = subprocess.run(st["collect"], shell=True, capture_output=True, text=True)
+        (dest / f"{st.get('name', 'collect')}.txt").write_text(r.stdout + r.stderr)
+
+
+def run_check(name, dest):
+    spec = tomllib.loads(check_path(name).read_text())
+    print(c("1", f"\n== {spec['title']} (about {spec.get('minutes', 5)} min)"))
+    print(c("2", "  Keep this terminal focused: keys the bar sends land here and are ignored."))
+    results, run = [], None
+    try:
+        if "bar" in spec:
+            run = Run(spec["bar"], dest)
+            enter("Enter to start (the bar switches to the test build; it always switches back)")
+            run.start()
+        for st in spec.get("step", []):
+            run_step(st, run, dest, results)
+    finally:
+        if run:
+            run.stop()
+            want = getattr(run, "owner_before", None)
+            for _ in range(20):  # the restore is asynchronous
+                u = units()
+                if owner(u) == want:
+                    break
+                time.sleep(0.5)
+            ok = owner(u) == want
+            print(c("2" if ok else "31", f"  bar handed back to {owner(u)}: {u}"))
+            if not ok:
+                results.append(("restore", f"PROBLEM: was {want}, now {owner(u)} {u}"))
+    return spec, results
+
+
+def check_path(name):
+    """A name in harness/checks/, or a path to a .toml (tests, drafts)."""
+    return Path(name) if name.endswith(".toml") else HERE / f"{name}.toml"
+
+
+def open_ask(names):
+    r = subprocess.run(["swarm", "human", "list", "--brief"], capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        if "hwcheck" in line and any(Path(n).stem in line for n in names):
+            return line.split()[0]
+    return None
+
+
+def main():
+    names = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if not names:
+        for f in sorted(HERE.glob("*.toml")):
+            t = tomllib.loads(f.read_text())
+            print(f"{f.stem:<14} {t.get('minutes', '?')} min  {t['title']}")
+        return
+    for n in names:
+        if not check_path(n).exists():
+            sys.exit(f"no check {n!r} (harness/checks/{n}.toml)")
+    dest = ROOT / "target/hw/checks" / time.strftime("%Y%m%d-%H%M%S")
+    dest.mkdir(parents=True)
+    lines = []
+    quiet(True)
+    try:
+        for n in names:
+            spec, results = run_check(n, dest)
+            lines.append(f"{Path(n).stem}: " + "; ".join(f"{k} = {v}" for k, v in results))
+    except KeyboardInterrupt:
+        lines.append("stopped by the human (Ctrl-C)")
+    finally:
+        if saved_tty:
+            termios.tcsetattr(0, termios.TCSANOW, saved_tty)
+    report = "\n".join(lines) + f"\n(files: {dest})"
+    (dest / "result.txt").write_text(report + "\n")
+    print(c("1", "\n== Results\n") + report)
+    hid = open_ask(names)
+    if hid and lines:
+        subprocess.run(["swarm", "human", "answer", hid, "hwcheck " + " | ".join(lines) + f" (files: {dest})"],
+                       stdout=subprocess.DEVNULL)
+        print(c("32", f"\n  sent as the answer to {hid}. Thanks!"))
+    else:
+        print(c("2", "\n  No open ask names these checks; the peer can read result.txt."))
+
+
+if __name__ == "__main__":
+    main()

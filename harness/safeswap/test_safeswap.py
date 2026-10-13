@@ -81,6 +81,20 @@ class Props(unittest.TestCase):
         finally:
             ss.unit_state = orig
 
+    def test_stop_restores_the_recorded_owner(self):
+        # `stop` and a manual `restore` give the bar back to whoever had it before the run, not
+        # tiny-dfr by default (that raced the run's own ExecStopPost restoring sliverd).
+        with tempfile.TemporaryDirectory(dir=HERE.parent.parent / "target") as d:
+            m = ss.Mode(user=False, target="sliverd.service")
+            m.state_dir = Path(d)
+            self.assertIsNone(ss.recorded_target(m))
+            ss.record_target(m)
+            fresh = ss.Mode(user=False)
+            fresh.state_dir = Path(d)
+            self.assertEqual(ss.recorded_target(fresh), "sliverd.service")
+            (Path(d) / "target").write_text("sshd.service\n")
+            self.assertIsNone(ss.recorded_target(fresh), "only known owners")
+
     def test_restore_to_validated(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):

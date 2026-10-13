@@ -8,6 +8,7 @@ python3 -m py_compile swarm/bin/swarm
 
 echo "== safe-swap harness"
 python3 -m unittest discover -s harness/safeswap -p 'test_*.py' -q
+python3 -m unittest discover -s harness/checks -p 'test_*.py' -q
 
 if [[ -f Cargo.toml ]]; then
   echo "== cargo fmt";   cargo fmt --all -- --check

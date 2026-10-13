@@ -295,6 +295,21 @@ def cmd_restore(mode: Mode, reason: str) -> int:
     return 0
 
 
+def record_target(mode: Mode) -> None:
+    """Remember who owned the bar, for `stop` and a manual `restore` (the unit's own ExecStopPost
+    and the timer pass --restore-to). Without this they defaulted to tiny-dfr and raced the
+    ExecStopPost restoring sliverd: tiny-dfr won (its ExecStartPre stops sliverd)."""
+    (mode.state_dir / "target").write_text(mode.target + "\n")
+
+
+def recorded_target(mode: Mode) -> str | None:
+    try:
+        t = (mode.state_dir / "target").read_text().strip()
+    except OSError:
+        return None
+    return t if t in mode.owners else None
+
+
 def restore_units(mode: Mode) -> list[str]:
     """The target plus its activators (sliverd.service -> also sliverd.socket)."""
     return [mode.target, *mode.activators.get(mode.target, [])]
@@ -401,6 +416,7 @@ def cmd_run(mode: Mode, binary: str, seconds: int, wait: bool, extra: list[str])
     mode.target = pick_owner(mode)
 
     bin_dir, out_dir = prepare_dirs(mode, uid)
+    record_target(mode)
     if mode.user:
         card = None
         backlight = mode.state_dir / "fake-backlight"
@@ -596,6 +612,9 @@ def main(argv: list[str] | None = None) -> int:
             if ns.restore_to not in mode.owners:
                 raise SwapError(f"--restore-to must be one of {mode.owners}")
             mode.target = ns.restore_to
+        elif ns.cmd in ("stop", "restore"):
+            # Give the bar back to whoever had it before the last run.
+            mode.target = recorded_target(mode) or mode.target
         if ns.cmd == "run":
             return cmd_run(mode, ns.binary, ns.seconds, ns.wait, extra)
         if ns.cmd in ("stop", "restore") and not mode.user and os.geteuid() != 0:

@@ -1,0 +1,58 @@
+# T95 / T79: pixel shift on the real panel, and the agent's own Fn layer.
+title = "Pixel shift and your Fn layer on the real bar"
+minutes = 4
+
+[bar]
+seconds = 240
+agent-config = '''
+[display]
+pixel-shift = true
+brightness = "fixed"
+'''
+
+[[step]]
+say = """
+The bar now runs a test build with pixel shift on: the whole picture moves by 1 px every 15 s
+(and rests for a minute at each end). That's meant to be too slow to notice."""
+snap = "start"
+
+[[step]]
+say = "Just look at the bar for 40 seconds."
+wait = 40
+snap = "after-40s"
+
+[[step]]
+name = "edges"
+ask = "Is anything cut off at the left or right end of the bar?"
+options = ["no, everything fits", "yes, something is clipped"]
+
+[[step]]
+name = "jumps"
+ask = "Did you notice the picture move or jump?"
+options = ["no", "yes, a small jump now and then", "yes, distracting"]
+
+[[step]]
+say = "Tap the leftmost button on the bar, then the rightmost one."
+expect = "touch slot \\d+ Down"
+within = 20
+name = "taps reach sliverd"
+
+[[step]]
+name = "end taps"
+ask = "Did both taps do what those buttons do?"
+options = ["yes", "only one", "neither"]
+
+[[step]]
+say = "Now press and HOLD the Fn key (keep holding until the next question)."
+expect = "fn down"
+within = 20
+name = "Fn held"
+
+[[step]]
+wait = 2
+snap = "fn-held"
+
+[[step]]
+name = "Fn layer"
+ask = "While holding Fn: does the bar show F1 to F12? (You can let go now.)"
+options = ["yes, F-keys", "no, it didn't change", "something else"]
