@@ -196,6 +196,11 @@ impl Icon {
         Some(icon.symbolic(true))
     }
 
+    /// The SVG source of an embedded icon, for UIs that draw it themselves (pickers).
+    pub fn builtin_source(name: &str) -> Option<&'static [u8]> {
+        builtin_svg(name)
+    }
+
     /// Intrinsic size in pixels.
     pub fn size(&self) -> (f32, f32) {
         match &self.image {

@@ -280,3 +280,37 @@ fn configured_theme_sources() {
     .unwrap();
     assert_eq!(configured_theme(&p).as_deref(), Some("Papirus"));
 }
+
+#[test]
+fn names_cover_the_theme_chain_hicolor_and_pixmaps() {
+    let f = Fixture::new("names");
+    f.index("hicolor", HICOLOR);
+    f.index(
+        "child",
+        "[Icon Theme]\nName=C\nInherits=parent\nDirectories=scalable/apps\n\n[scalable/apps]\nSize=64\nType=Scalable\n",
+    );
+    f.index(
+        "parent",
+        "[Icon Theme]\nName=P\nDirectories=scalable/apps\n\n[scalable/apps]\nSize=64\nType=Scalable\n",
+    );
+    f.index("other", HICOLOR);
+    f.file("icons/child/scalable/apps/mine.svg");
+    f.file("icons/parent/scalable/apps/inherited.png");
+    f.file("icons/parent/scalable/apps/notes.txt");
+    f.file("icons/hicolor/48x48/apps/fallback.png");
+    f.file("icons/hicolor/16x16/apps/fallback.png");
+    f.file("icons/other/48x48/apps/not-in-chain.png");
+    f.file("pixmaps/loose.xpm");
+    let l = f.loader("child");
+    assert_eq!(
+        l.names(None),
+        ["fallback", "inherited", "loose", "mine"]
+            .map(String::from)
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    assert!(l.names(Some("other")).contains(&"not-in-chain".to_string()));
+    assert!(!l.names(Some("other")).contains(&"mine".to_string()));
+}

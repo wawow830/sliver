@@ -18,6 +18,8 @@ sliver-waybar.workspace = true
 sliver-render.workspace = true
 sliver-agent.workspace = true
 sliver-ipc.workspace = true
+sliver-icons.workspace = true
+sliver-emoji.workspace = true
 toml.workspace = true
 zbus = "5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

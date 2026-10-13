@@ -1495,7 +1495,7 @@ fn inspector(
     );
     let fields: [(&adw::PreferencesGroup, &str, &str); 3] = [
         (&look, "format", "Format"),
-        (&look, "icon", "Icon (name or path)"),
+        (&look, "icon", "Icon"),
         (
             &look,
             "width",
@@ -1512,6 +1512,53 @@ fn inspector(
             .show_apply_button(true)
             .build();
         entry.set_text(current.as_deref().unwrap_or(""));
+        if key == "icon" {
+            let button = gtk::Button::builder()
+                .icon_name("image-x-generic-symbolic")
+                .tooltip_text("Choose an icon, emoji or file")
+                .valign(gtk::Align::Center)
+                .build();
+            button.add_css_class("flat");
+            let (ui, layout, zone, dialog, entry2) = (
+                ui.clone(),
+                layout.to_owned(),
+                zone.to_owned(),
+                dialog.clone(),
+                entry.clone(),
+            );
+            let theme = block
+                .get("icon-theme")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            button.connect_clicked(move |_| {
+                let (ui, layout, zone, entry) =
+                    (ui.clone(), layout.clone(), zone.clone(), entry2.clone());
+                let pick: Rc<dyn Fn(crate::icon_picker::Choice)> = Rc::new(move |c| match c {
+                    crate::icon_picker::Choice::Icon(name) => {
+                        entry.set_text(&name);
+                        entry.emit_by_name::<()>("apply", &[]);
+                    }
+                    crate::icon_picker::Choice::Emoji(text) => {
+                        let (layout, zone) = (layout.clone(), zone.clone());
+                        apply(&ui, move |ed, merged| {
+                            edit::set_module_key(ed, merged, &layout, &zone, index, "icon", None)?;
+                            edit::set_module_key(
+                                ed,
+                                merged,
+                                &layout,
+                                &zone,
+                                index,
+                                "format",
+                                Some(Value::String(text.clone())),
+                            )
+                            .map(|_| format!("Label set to {text}"))
+                        });
+                    }
+                });
+                crate::icon_picker::open(&dialog, theme.clone(), pick);
+            });
+            entry.add_suffix(&button);
+        }
         let (ui, layout, zone, key) = (
             ui.clone(),
             layout.to_owned(),

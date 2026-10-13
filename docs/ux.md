@@ -152,7 +152,7 @@ Per-item diffs were rejected for now because they're hard to show and hard to re
 
 ### Inspector sections
 1. **Look**: label, icon (an icon picker with search over the XDG theme, plus emoji tab and
-   file), foreground/background colors (theme default unless set), width mode, outline override.
+   file) (**done**, `icon_picker.rs`: a button on the Icon row opens Icons / Emoji / File tabs. Icons = the bar's built-ins plus the module's icon theme, searched by word; Emoji = by group or name search, written to Format since the bar draws emoji as text; File = a PNG/SVG path), foreground/background colors (theme default unless set), width mode, outline override.
 2. **Actions**: one row per gesture the widget supports. Each row is an action picker: Key/combo
    (a "press the keys" recorder), Command, Open app, Open URL, D-Bus call, Switch layer/layout,
    Toggle, Macro, None. The keyboard recorder has to work with no physical F row, so it also

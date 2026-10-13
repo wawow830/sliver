@@ -292,6 +292,37 @@ impl IconLoader {
         out.into_iter().collect()
     }
 
+    /// Every icon name `theme` (default: the loader's) can resolve, sorted: its own icons, the
+    /// ones it inherits and `hicolor`'s, then unthemed pixmaps. For pickers; scans directories
+    /// (milliseconds for a full theme), so call it once per picker, not per keystroke.
+    pub fn names(&self, theme: Option<&str>) -> Vec<String> {
+        let mut out = std::collections::BTreeSet::new();
+        let mut visited = HashSet::new();
+        let mut todo = vec![theme.unwrap_or(&self.default_theme).to_string()];
+        let mut hicolor_pending = true;
+        while let Some(name) = todo.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if let Some(t) = self.theme(&name) {
+                for d in &t.dirs {
+                    for root in &t.roots {
+                        collect_names(&root.join(&d.path), &mut out);
+                    }
+                }
+                todo.extend(t.inherits.iter().rev().cloned());
+            }
+            if todo.is_empty() && hicolor_pending {
+                hicolor_pending = false;
+                todo.push("hicolor".into());
+            }
+        }
+        for d in &self.pixmaps {
+            collect_names(d, &mut out);
+        }
+        out.into_iter().collect()
+    }
+
     fn theme(&self, name: &str) -> Option<Arc<Theme>> {
         let mut themes = self.themes.lock().unwrap_or_else(|e| e.into_inner());
         themes
@@ -406,6 +437,20 @@ impl IconLoader {
             }
         }
         None
+    }
+}
+
+fn collect_names(dir: &Path, out: &mut std::collections::BTreeSet<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.filter_map(Result::ok) {
+        let p = e.path();
+        if IconKind::from_path(&p).is_some()
+            && let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+        {
+            out.insert(stem.to_owned());
+        }
     }
 }
 

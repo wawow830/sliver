@@ -1712,6 +1712,8 @@ dependencies = [
  "libadwaita",
  "sliver-agent",
  "sliver-config",
+ "sliver-emoji",
+ "sliver-icons",
  "sliver-ipc",
  "sliver-render",
  "sliver-waybar",

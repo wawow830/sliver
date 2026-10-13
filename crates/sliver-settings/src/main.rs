@@ -12,6 +12,7 @@ mod curve;
 mod dbus_presets;
 mod edit;
 mod history;
+mod icon_picker;
 mod live;
 mod look;
 mod pages;
