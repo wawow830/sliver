@@ -14,8 +14,8 @@
 //! What counts: `Stream/Input/Audio` is a recording app (the microphone), unless it only records
 //! what a sink plays (`stream.monitor`, `stream.capture.sink`, or a level meter). `Stream/Input/Video`
 //! is an app *receiving* video: a camera when it says `media.role = Camera`, a screen share
-//! otherwise. Only streams in the `running` state count. A camera used straight through V4L2,
-//! with PipeWire not involved, is invisible here.
+//! otherwise. Only streams in the `running` state count. A camera an app opens straight through
+//! V4L2, with PipeWire not involved, is found by [`v4l2`] and merged into `camera`.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -475,6 +475,9 @@ pub fn socket_path(get: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 /// turns off.
 #[derive(Default)]
 pub(crate) struct Gate {
+    /// The two independent sources, kept apart so each can replace its own part:
+    /// PipeWire's set, and the apps holding a V4L2 camera node.
+    parts: Mutex<(Capture, Vec<String>)>,
     awake: Mutex<bool>,
     changed: Condvar,
     conn: Mutex<Option<UnixStream>>,
@@ -486,6 +489,29 @@ impl Gate {
             awake: Mutex::new(true),
             ..Gate::default()
         })
+    }
+
+    /// PipeWire's view changed. Publishes the merged set; `false` = nobody is listening any more.
+    fn set_pipewire(&self, hub: &crate::Hub, c: Capture) -> bool {
+        let mut p = self.parts.lock().unwrap_or_else(|e| e.into_inner());
+        p.0 = c;
+        Self::publish(hub, &p)
+    }
+
+    /// The V4L2 holders changed.
+    fn set_v4l2(&self, hub: &crate::Hub, apps: Vec<String>) -> bool {
+        let mut p = self.parts.lock().unwrap_or_else(|e| e.into_inner());
+        p.1 = apps;
+        Self::publish(hub, &p)
+    }
+
+    /// A camera is a camera whichever way the app reached it.
+    fn publish(hub: &crate::Hub, p: &(Capture, Vec<String>)) -> bool {
+        let mut c = p.0.clone();
+        c.camera.extend(p.1.iter().cloned());
+        c.camera.sort();
+        c.camera.dedup();
+        hub.update(|s| s.capture = c)
     }
 
     pub(crate) fn set(&self, on: bool) {
@@ -528,16 +554,34 @@ fn wait_for_entry(dir: &Path, name: &std::ffi::OsStr) {
 }
 
 impl Handle {
+    /// Cameras held open straight through V4L2 (see [`v4l2`]), merged into `capture.camera`.
+    /// Event-driven, and quiet while nothing opens a camera; not gated by the bar's power state.
+    fn start_v4l2(&self, dev: PathBuf, proc_root: PathBuf) {
+        let (hub, gate) = (self.hub.clone(), self.capture_gate.clone());
+        std::thread::Builder::new()
+            .name("sliver-session-v4l2".into())
+            .spawn(move || {
+                v4l2::watch(&dev, &proc_root, |apps| gate.set_v4l2(&hub, apps));
+            })
+            .expect("spawn thread");
+    }
+
     /// Follow who is capturing the microphone, camera or screen, from the PipeWire socket at
     /// `socket`, into [`SessionState::capture`](crate::SessionState). A missing PipeWire is waited
     /// for (inotify), not retried on a timer. Starts once; later calls do nothing. See the module docs.
     pub fn start_capture(&self, socket: PathBuf) {
+        self.start_capture_in(socket, "/dev".into(), "/proc".into());
+    }
+
+    /// [`Handle::start_capture`] with the device and process directories given (tests).
+    pub(crate) fn start_capture_in(&self, socket: PathBuf, dev: PathBuf, proc_root: PathBuf) {
         if self
             .capture_started
             .swap(true, std::sync::atomic::Ordering::SeqCst)
         {
             return;
         }
+        self.start_v4l2(dev, proc_root);
         let hub = self.hub.clone();
         let gate = self.capture_gate.clone();
         std::thread::Builder::new()
@@ -568,13 +612,14 @@ impl Handle {
                     }
                     let started = std::time::Instant::now();
                     let h = hub.clone();
-                    let _ = run(stream, move |c| h.update(|s| s.capture = c));
+                    let g = gate.clone();
+                    let _ = run(stream, move |c| g.set_pipewire(&h, c));
                     gate.conn.lock().unwrap_or_else(|e| e.into_inner()).take();
                     if !gate.is_awake() {
                         continue; // cut on purpose: reconnect when the bar is back
                     }
                     // The server went away: nobody captures through it any more.
-                    if !hub.update(|s| s.capture = Capture::default()) {
+                    if !gate.set_pipewire(&hub, Capture::default()) {
                         return;
                     }
                     // A connection that lasted resets the delay; one that dropped at once backs off.
@@ -588,6 +633,8 @@ impl Handle {
             .expect("spawn thread");
     }
 }
+
+pub mod v4l2;
 
 #[cfg(test)]
 mod tests;

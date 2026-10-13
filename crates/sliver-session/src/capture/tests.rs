@@ -318,13 +318,15 @@ fn a_dark_bar_hangs_up_and_wake_reconnects() {
             .unwrap()
     };
     let dir = std::env::temp_dir().join(format!("sliver-capture-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("dev")).unwrap();
+    std::fs::create_dir_all(dir.join("proc")).unwrap();
     let sock = dir.join("pipewire-0");
     let events = fake_pipewire(&sock);
 
     let mut session = crate::Session::start(conn(), conn());
     let handle = session.handle();
-    handle.start_capture(sock.clone());
+    // Empty stand-ins for /dev and /proc: the test never reads the real machine's cameras.
+    handle.start_capture_in(sock.clone(), dir.join("dev"), dir.join("proc"));
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         use crate::SessionSource;
@@ -374,5 +376,71 @@ fn a_dark_bar_hangs_up_and_wake_reconnects() {
             .is_ok(),
         "reconnected on wake"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A camera held through V4L2 and one PipeWire reports are the same list, de-duplicated; with no
+/// PipeWire running at all the V4L2 holders still show.
+#[test]
+fn v4l2_holders_join_the_camera_list() {
+    let Some(tb) = sliver_testbus::TestBus::start() else {
+        eprintln!("SKIP: dbus-daemon not installed");
+        return;
+    };
+    let conn = || {
+        zbus::blocking::connection::Builder::address(tb.address())
+            .unwrap()
+            .build()
+            .unwrap()
+    };
+    let dir = std::env::temp_dir().join(format!("sliver-capture-v4l-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("dev")).unwrap();
+    std::fs::create_dir_all(dir.join("proc")).unwrap();
+    std::fs::write(dir.join("dev/video0"), "").unwrap();
+    let mut session = crate::Session::start(conn(), conn());
+    let handle = session.handle();
+    // No PipeWire socket at all.
+    handle.start_capture_in(dir.join("no-pipewire"), dir.join("dev"), dir.join("proc"));
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        use crate::SessionSource;
+        while let Ok(Some(s)) = session.next_change() {
+            if tx.send(s.capture).is_err() {
+                return;
+            }
+        }
+    });
+    // Zoom opens the camera.
+    let fd = dir.join("proc/30/fd");
+    std::fs::create_dir_all(&fd).unwrap();
+    std::fs::write(dir.join("proc/30/comm"), "zoom\n").unwrap();
+    std::os::unix::fs::symlink(dir.join("dev/video0"), fd.join("5")).unwrap();
+    let _open = std::fs::File::open(dir.join("dev/video0")).unwrap();
+    let t = std::time::Instant::now();
+    let mut seen = None;
+    while t.elapsed() < std::time::Duration::from_secs(8) && seen.is_none() {
+        if let Ok(c) = rx.recv_timeout(std::time::Duration::from_millis(100))
+            && !c.camera.is_empty()
+        {
+            seen = Some(c);
+        }
+    }
+    assert_eq!(seen.expect("the camera shows").camera, ["zoom"]);
+    // The merge itself: PipeWire says Zoom too, and OBS: one entry each, sorted.
+    let gate = Gate::new();
+    let (hub, rx2) = crate::Hub::new(crate::SessionState::default());
+    gate.set_v4l2(&hub, vec!["zoom".into()]);
+    gate.set_pipewire(
+        &hub,
+        Capture {
+            camera: vec!["obs".into(), "zoom".into()],
+            mic: vec!["zoom".into()],
+            ..Capture::default()
+        },
+    );
+    let last = rx2.try_iter().last().unwrap().capture;
+    assert_eq!(last.camera, ["obs", "zoom"]);
+    assert_eq!(last.mic, ["zoom"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
