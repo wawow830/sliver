@@ -12,6 +12,7 @@ the check's name. See docs/safe-swap.md "Guided checks".
 
 Step fields, run in this order: say, confirm, shell, resume, wait, expect, snap, ask, collect.
 """
+import os
 import re
 import shutil
 import subprocess
@@ -27,6 +28,10 @@ BAR = ROOT / "harness/safeswap/bar"
 OUT = Path("/run/sliver-safeswap/out")
 UNITS = ["sliverd", "sliverd.socket", "tiny-dfr"]
 TTY = sys.stdin.isatty()
+HELPER = Path("/usr/local/libexec/sliver-safeswap")
+# The repo's own swarm tool when it isn't on PATH, so the human needs no setup.
+if not shutil.which("swarm"):
+    os.environ["PATH"] = f"{ROOT / 'swarm/bin'}:{os.environ.get('PATH', '')}"
 
 
 def c(code, s):
@@ -74,6 +79,9 @@ class Run:
 
     def start(self):
         s = self.spec
+        if "record_target" not in HELPER.read_text():
+            sys.exit("the installed safe-swap harness is too old (its stop can hand the bar to tiny-dfr):\n"
+                     f"  sudo {ROOT}/harness/safeswap/install.sh")
         self.owner_before = owner(units())
         if s.get("build", True):
             print(c("2", "  building release sliverd and sliver-agent (a minute or two the first time)..."))
