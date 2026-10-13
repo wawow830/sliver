@@ -1272,7 +1272,22 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
         "key" | "custom" | "spacer" => Spec::new(ValueMap::new(), ""),
         // The agent samples (Agent::render); here only what it has. Hidden until the first one.
         "graph" | "custom-graph" => {
-            let (samples, cap) = ui.graph.clone()?;
+            let (samples, cap) = match ui.graph.clone() {
+                Some((s, cap)) if s.len() >= 2 || (!world.preview && !s.is_empty()) => (s, cap),
+                // Previews (settings, `--render`) have no history yet: a made-up one, so the
+                // editor shows what a graph looks like.
+                _ if world.preview => {
+                    let cap = graph_params(&m.config).1;
+                    let wave = (0..cap)
+                        .map(|i| {
+                            let t = i as f32 / cap.max(2) as f32 * std::f32::consts::TAU * 1.5;
+                            0.45 + 0.25 * t.sin() + 0.1 * (t * 2.7).cos()
+                        })
+                        .collect();
+                    (wave, cap)
+                }
+                _ => return None,
+            };
             if samples.is_empty() {
                 return None;
             }
@@ -2792,6 +2807,37 @@ mod tests {
             ],
         );
         assert!(out[0].classes.contains(&"placeholder".to_string()));
+    }
+
+    #[test]
+    fn graphs_preview_with_a_made_up_history() {
+        let l = load_str(
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"graph#cpu\"]\n[modules.\"graph#cpu\"]\nsource = \"cpu\"\nsamples = 20\n",
+            std::path::Path::new("."),
+        );
+        assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
+        let r = l.config.resolve("base", &Context::new()).unwrap();
+        let w = World::sample(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
+        assert!(w.preview);
+        let mut out = Vec::new();
+        let mut icons = Icons::builtin_only();
+        for z in &r.zones {
+            cells(
+                &z.modules,
+                &w,
+                &mut icons,
+                36,
+                &|_| UiState::default(),
+                &mut out,
+            );
+        }
+        match &out[0].content {
+            Content::Graph { values, capacity } => {
+                assert_eq!((values.len(), *capacity), (20, 20));
+                assert!(values.iter().all(|v| (0.0..=1.0).contains(v)));
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
