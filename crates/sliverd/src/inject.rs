@@ -27,7 +27,6 @@ use std::io;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use sliver_ipc::proto::TouchPhase;
 
@@ -164,7 +163,6 @@ pub struct TouchSocket {
     sock: UnixDatagram,
     path: PathBuf,
     parser: Parser,
-    clock: Instant,
 }
 
 impl TouchSocket {
@@ -188,7 +186,6 @@ impl TouchSocket {
             sock,
             path: path.to_owned(),
             parser: Parser::new(panel_height),
-            clock: Instant::now(),
         })
     }
 }
@@ -210,7 +207,10 @@ impl InputSource for TouchSocket {
         let mut out = Vec::new();
         let mut buf = vec![0u8; 64 * 1024];
         while let Ok(n) = self.sock.recv(&mut buf) {
-            let time_us = self.clock.elapsed().as_micros() as u64;
+            // CLOCK_MONOTONIC, like the digitizer's events (EVIOCSCLOCKID) and the agent's own
+            // clock: the agent times holds and double taps against it.
+            let t = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+            let time_us = t.tv_sec as u64 * 1_000_000 + t.tv_nsec as u64 / 1_000;
             for line in String::from_utf8_lossy(&buf[..n]).lines() {
                 match self.parser.line(line, time_us) {
                     Ok(evs) => out.extend(evs),
