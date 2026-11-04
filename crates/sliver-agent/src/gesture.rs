@@ -134,6 +134,11 @@ impl Recognizer {
         self.bar = bar;
     }
 
+    /// Is any bar gesture bound? (Then the frames carry a background region.)
+    pub fn bar_bound(&self) -> bool {
+        self.bar.two_finger || self.bar.edge_left || self.bar.edge_right
+    }
+
     /// One touch phase on `region`. Returns recognized gestures, in order, for that region (and
     /// possibly a pending tap on another region that this touch resolved).
     pub fn touch(

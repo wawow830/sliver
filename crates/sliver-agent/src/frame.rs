@@ -20,6 +20,8 @@ pub struct Frame {
     pub regions: Vec<Region>,
     /// Cells in item order. Region `id` is `id_base` + cell index + 1.
     pub cells: Vec<Cell>,
+    /// How many [`Frame::fill_gaps`] regions follow the cells' (ids after the last cell's).
+    pub background: u32,
     pub layout: Layout,
     pub id_base: u32,
     /// What was drawn, so a press can re-render just the image ([`Frame::repress`]).
@@ -31,6 +33,49 @@ impl Frame {
     pub fn cell_index(&self, id: u32) -> Option<usize> {
         let i = id.checked_sub(self.id_base + 1)? as usize;
         (i < self.cells.len()).then_some(i)
+    }
+
+    /// Is `id` one of the [`Frame::background`] regions?
+    pub fn is_background(&self, id: u32) -> bool {
+        let first = self.id_base + self.cells.len() as u32 + 1;
+        (first..first + self.background).contains(&id)
+    }
+
+    /// Gives the empty stretches between the cells' regions agent regions of their own, so bar
+    /// gestures work over empty space too. Regions may not overlap, so these fill the gaps
+    /// rather than lying under everything. Skipped if they'd pass sliverd's region limit.
+    pub fn fill_gaps(&mut self) {
+        let (w, h) = (self.image.width(), self.image.height());
+        let mut spans: Vec<(u32, u32)> = self
+            .regions
+            .iter()
+            .map(|r| (r.rect.x, r.rect.x + r.rect.w))
+            .collect();
+        spans.sort_unstable();
+        let first = self.id_base + self.cells.len() as u32 + 1;
+        let mut gaps = Vec::new();
+        let mut x = 0;
+        for (start, end) in spans.into_iter().chain([(w, w)]) {
+            if start > x {
+                gaps.push(Region {
+                    id: first + gaps.len() as u32,
+                    rect: IpcRect {
+                        x,
+                        y: 0,
+                        w: start - x,
+                        h,
+                    },
+                    kind: RegionKind::Agent,
+                });
+            }
+            x = x.max(end);
+        }
+        if self.background == 0
+            && self.regions.len() + gaps.len() <= sliver_ipc::validate::MAX_REGIONS
+        {
+            self.background = gaps.len() as u32;
+            self.regions.extend(gaps);
+        }
     }
 }
 
@@ -105,6 +150,7 @@ pub fn render(
         pressed,
         regions,
         cells,
+        background: 0,
         layout,
         id_base,
         scene: scene.clone(),

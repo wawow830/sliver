@@ -666,6 +666,48 @@ fn bar_gestures() {
     assert!(!fx.iter().any(|e| matches!(e, Spawn(_))), "no taps: {fx:?}");
 }
 
+/// Bar gestures work over empty bar space too (the gaps get regions of their own), and those
+/// regions are a valid frame: they don't overlap the modules'. A tap there does nothing.
+#[test]
+fn bar_gestures_over_empty_space() {
+    use sliver_agent::agent::Effect::*;
+    use sliver_ipc::proto::{KeyMode, TouchPhase::*};
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        width = "fill"
+        align = "center"
+        modules = ["custom/a"]
+        [modules."custom/a"]
+        format = "A"
+        on-tap = "echo a"
+        [gestures]
+        edge-swipe-from-left = { keys = ["LeftCtrl", "c"] }
+        "#,
+    );
+    let (mut fake, mut link) = connect();
+    let layers = a.render(&world(9, 41));
+    let regions = &a.frame(Layer::Base).unwrap().regions;
+    assert_eq!(
+        regions.len(),
+        3,
+        "custom/a and the gaps either side: {regions:?}"
+    );
+    sliver_ipc::validate::validate_regions(&FakeDaemon::mac14_7(), regions).unwrap();
+    present(&a, &mut link, &mut fake, &layers);
+
+    fake.tap(10.0, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(fx.is_empty(), "a tap on nothing does nothing: {fx:?}");
+    fake.touch(0, Down, 10.0, 30.0).unwrap();
+    fake.touch(0, Move, 60.0, 30.0).unwrap();
+    fake.touch(0, Move, 120.0, 30.0).unwrap();
+    fake.touch(0, Up, 120.0, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(fx.contains(&EmitKeys(vec![29, 46], KeyMode::Tap)), "{fx:?}");
+}
+
 /// Touch a collapsed slider's icon and slide without lifting: it opens under the finger and
 /// the value moves by how far the finger slid (never jumping to where the finger landed).
 #[test]

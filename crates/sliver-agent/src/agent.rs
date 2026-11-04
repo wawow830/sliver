@@ -716,7 +716,7 @@ impl Agent {
         }
         let scene = frame::scene(&zones, &per_zone, classes);
         let cells = per_zone.into_iter().flatten().collect();
-        frame::render(
+        let mut f = frame::render(
             &mut self.renderer,
             &self.sheet,
             &scene,
@@ -724,7 +724,11 @@ impl Agent {
             self.width,
             self.height,
             id_base,
-        )
+        );
+        if self.recognizer.bar_bound() {
+            f.fill_gaps();
+        }
+        f
     }
 
     /// Fixed-width App controls / Status items slots (`width = 332`): measure the items, give
@@ -935,6 +939,20 @@ impl Agent {
     ) -> Vec<Effect> {
         let mut fx = Vec::new();
         let Some(cell) = self.cell(region) else {
+            // Empty bar space: nothing of its own to tap or hold, only bar gestures.
+            if self
+                .frame_for(region)
+                .is_some_and(|f| f.is_background(region))
+            {
+                for (_, g) in
+                    self.recognizer
+                        .touch(region, Bindings::default(), slot, phase, x, time_us)
+                {
+                    if let Gesture::Bar(bg) = g {
+                        self.bar_gesture(bg, time_us, &mut fx);
+                    }
+                }
+            }
             return fx;
         };
         // Mirror: the editor selects what was touched (ux.md §4); select only fires nothing.
