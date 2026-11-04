@@ -262,6 +262,33 @@ fn agent_problems_come_with_the_errors() {
 }
 
 #[test]
+fn an_agent_nobody_starts_names_the_missing_session_target() {
+    let mut f = Fake::healthy();
+    f.agent = Some(Err("sliver-agent isn't on the session bus".into()));
+    let unit = |active: &str| Unit {
+        load: "loaded".into(),
+        active: active.into(),
+        sub: "dead".into(),
+        restarts: 0,
+    };
+    f.units
+        .insert(("sliver-agent.service".into(), true), unit("inactive"));
+    f.units
+        .insert(("graphical-session.target".into(), true), unit("inactive"));
+    let a = find(&run_checks(&f), "agent-unit").clone();
+    assert_eq!(a.level, Level::Fail);
+    assert!(a.summary.contains("graphical-session.target"), "{a:?}");
+    assert!(a.fix.unwrap().contains("exec-once"));
+
+    // With the target active, an inactive agent is the plain case.
+    f.units
+        .insert(("graphical-session.target".into(), true), unit("active"));
+    let a = find(&run_checks(&f), "agent-unit").clone();
+    assert_eq!(a.level, Level::Warn);
+    assert!(!a.summary.contains("graphical-session"), "{a:?}");
+}
+
+#[test]
 fn config_errors_fail_and_warnings_warn() {
     let mut f = Fake::healthy();
     f.config = ConfigState {

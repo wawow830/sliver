@@ -229,7 +229,25 @@ fn daemon(sys: &dyn Sys) -> Vec<Check> {
 fn agent(sys: &dyn Sys) -> Vec<Check> {
     let unit = sys.unit("sliver-agent.service", true);
     let mut out = Vec::new();
-    if unit.installed() && unit.active != "active" {
+    // The unit is wanted by graphical-session.target. Compositors started without a session
+    // manager (Hyprland or sway straight from a display manager, no uwsm) never activate it, so
+    // nothing starts the agent and the bar stays on sliverd's built-in keys.
+    let session = sys.unit("graphical-session.target", true);
+    if unit.installed()
+        && unit.active == "inactive"
+        && session.installed()
+        && session.active != "active"
+    {
+        out.push(check(
+            "agent-unit",
+            Level::Fail,
+            "sliver-agent.service never started: this session doesn't activate graphical-session.target",
+            Some(
+                "start it from your compositor's autostart, e.g. Hyprland: \
+                 exec-once = systemctl --user start sliver-agent",
+            ),
+        ));
+    } else if unit.installed() && unit.active != "active" {
         out.push(check(
             "agent-unit",
             if unit.active == "failed" {
