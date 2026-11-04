@@ -943,18 +943,17 @@ impl Agent {
     ) -> Vec<Effect> {
         let mut fx = Vec::new();
         let Some(cell) = self.cell(region) else {
-            // Empty bar space: nothing of its own to tap or hold, only bar gestures.
-            if self
+            // Empty bar space binds nothing itself, but a touch there still makes bar gestures
+            // and settles a tap waiting on a module. Under a select-only hold nothing fires.
+            let background = self
                 .frame_for(region)
-                .is_some_and(|f| f.is_background(region))
-            {
-                for (_, g) in
+                .is_some_and(|f| f.is_background(region));
+            if background && self.held != Some(true) {
+                let recognized =
                     self.recognizer
-                        .touch(region, Bindings::default(), slot, phase, x, time_us)
-                {
-                    if let Gesture::Bar(bg) = g {
-                        self.bar_gesture(bg, time_us, &mut fx);
-                    }
+                        .touch(region, Bindings::default(), slot, phase, x, time_us);
+                for (r, g) in recognized {
+                    self.gesture(r, g, time_us, &mut fx);
                 }
             }
             return fx;
@@ -992,13 +991,17 @@ impl Agent {
         };
         let b = bindings(cell);
         for (r, g) in self.recognizer.touch(region, b, slot, phase, x, time_us) {
-            if let Gesture::Bar(bg) = g {
-                self.bar_gesture(bg, time_us, &mut fx);
-            } else {
-                self.dispatch(r, g, time_us, &mut fx);
-            }
+            self.gesture(r, g, time_us, &mut fx);
         }
         fx
+    }
+
+    /// Runs a recognized gesture: a bar gesture's `[gestures]` action, else the module's.
+    fn gesture(&mut self, region: u32, g: Gesture, now: u64, fx: &mut Vec<Effect>) {
+        match g {
+            Gesture::Bar(bg) => self.bar_gesture(bg, now, fx),
+            g => self.dispatch(region, g, now, fx),
+        }
     }
 
     /// A bar-wide gesture: run its `[gestures]` action.

@@ -976,7 +976,11 @@ fn control(
         // No config: what the bar shows now. Otherwise that config, drawn offscreen with the
         // live state.
         Control::RenderPreview(toml, _) if toml.is_empty() => agent
-            .frame(Layer::Base)
+            .frame(if agent.fn_held {
+                Layer::Fn
+            } else {
+                Layer::Base
+            })
             .ok_or_else(|| "nothing drawn yet".to_string())
             .and_then(|f| f.image.encode_png().map_err(|e| e.to_string()))
             .map(ControlReply::Png),

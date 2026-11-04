@@ -220,7 +220,6 @@ fn region(a: &Agent, key: &str) -> (u32, f32) {
     (r.id, (r.rect.x + r.rect.w / 2) as f32)
 }
 
-/// Delivers what sliverd forwarded to the agent; returns the effects.
 /// Renders at the agent's animation deadlines until it's at rest, like the real loop. Returns
 /// the base images drawn, each with when it was drawn.
 fn settle(a: &mut Agent, w: &World) -> Vec<(std::time::Instant, Pixmap)> {
@@ -235,6 +234,7 @@ fn settle(a: &mut Agent, w: &World) -> Vec<(std::time::Instant, Pixmap)> {
     images
 }
 
+/// Delivers what sliverd forwarded to the agent; returns the effects.
 fn deliver(
     a: &mut Agent,
     link: &mut Link,
@@ -682,6 +682,7 @@ fn bar_gestures_over_empty_space() {
         [modules."custom/a"]
         format = "A"
         on-tap = "echo a"
+        on-double-tap = "echo aa"
         [gestures]
         edge-swipe-from-left = { keys = ["LeftCtrl", "c"] }
         "#,
@@ -706,6 +707,32 @@ fn bar_gestures_over_empty_space() {
     fake.touch(0, Up, 120.0, 30.0).unwrap();
     let fx = deliver(&mut a, &mut link, &mut fake);
     assert!(fx.contains(&EmitKeys(vec![29, 46], KeyMode::Tap)), "{fx:?}");
+
+    // custom/a waits to see if a tap is a double tap; touching empty space settles it as a tap.
+    let (_, ax) = region(&a, "custom/a");
+    fake.tap(ax, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Spawn(_))),
+        "still waiting: {fx:?}"
+    );
+    fake.tap(10.0, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(
+        fx.iter().any(|e| matches!(e, Spawn(_))),
+        "the tap ran: {fx:?}"
+    );
+
+    // A select-only hold (the settings app's Mirror): nothing fires, bar gestures included.
+    a.hold_layout("default", true).unwrap();
+    let layers = a.render(&world(9, 41));
+    present(&a, &mut link, &mut fake, &layers);
+    fake.touch(0, Down, 10.0, 30.0).unwrap();
+    fake.touch(0, Move, 60.0, 30.0).unwrap();
+    fake.touch(0, Move, 120.0, 30.0).unwrap();
+    fake.touch(0, Up, 120.0, 30.0).unwrap();
+    let fx = deliver(&mut a, &mut link, &mut fake);
+    assert!(!fx.iter().any(|e| matches!(e, EmitKeys(..))), "{fx:?}");
 }
 
 /// Touch a collapsed slider's icon and slide without lifting: it opens under the finger and
