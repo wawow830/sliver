@@ -445,11 +445,15 @@ impl Agent {
                 start: now,
                 t,
                 dir: if depth < old_depth { -1.0 } else { 1.0 },
+                drawn: now,
             });
         }
-        match self.layer_anim.as_ref().map(|a| (a, a.progress(now))) {
-            Some((a, Some(e))) => a.composite(&mut f.image, e),
-            Some((_, None)) => self.layer_anim = None,
+        match self.layer_anim.as_mut().map(|a| (a.progress(now), a)) {
+            Some((Some(e), a)) => {
+                a.composite(&mut f.image, e);
+                a.drawn = now;
+            }
+            Some((None, _)) => self.layer_anim = None,
             None => {}
         }
     }
@@ -849,7 +853,7 @@ impl Agent {
         let layer = self
             .layer_anim
             .as_ref()
-            .map(|_| std::time::Instant::now() + sliver_render::FRAME);
+            .map(|a| a.drawn + sliver_render::FRAME);
         self.renderer
             .animation_deadline()
             .into_iter()

@@ -164,6 +164,8 @@ pub struct LayerAnim {
     pub t: sliver_render::LayerTransition,
     /// Slide direction: `1.0` forward (new from the right), `-1.0` back. Ignored for fades.
     pub dir: f32,
+    /// When its last frame was drawn: the next is due one frame later.
+    pub drawn: std::time::Instant,
 }
 
 impl LayerAnim {

@@ -821,6 +821,48 @@ fn transitions_wake_the_loop_only_while_animating() {
     );
 }
 
+/// A layout change fades, and the agent's loop only draws when a deadline has come: so the
+/// fade's next frame must come due, and the fade must end (a deadline that's always one frame
+/// away left the bar frozen mid-fade, waking for nothing).
+#[test]
+fn a_layout_fade_comes_due_and_ends() {
+    use std::time::{Duration, Instant};
+    let mut a = agent(
+        r#"
+        [[layouts.default.zones]]
+        name = "main"
+        modules = ["custom/a"]
+        [[layouts.other.zones]]
+        name = "main"
+        modules = ["custom/b"]
+        [modules."custom/a"]
+        format = "A"
+        [modules."custom/b"]
+        format = "B"
+        "#,
+    );
+    let w = world(9, 41);
+    a.render(&w);
+    a.set_layout("other").unwrap();
+    a.render(&w);
+    let start = Instant::now();
+    let mut frames = 0;
+    // The agent's loop: sleep until the deadline, then draw if it is due (within 5 ms).
+    while let Some(due) = a.animation_deadline() {
+        std::thread::sleep(due.saturating_duration_since(Instant::now()));
+        let now = Instant::now();
+        let due = a.animation_deadline().expect("still fading");
+        assert!(
+            due <= now + Duration::from_millis(5),
+            "the next frame is due"
+        );
+        a.render(&w);
+        frames += 1;
+        assert!(start.elapsed() < Duration::from_secs(2), "the fade ends");
+    }
+    assert!(frames >= 3, "it animated: {frames} frames");
+}
+
 #[test]
 fn runtime_layout_visibility_and_pushed_output() {
     let mut a = agent(
