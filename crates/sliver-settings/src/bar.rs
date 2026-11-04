@@ -1,7 +1,7 @@
 //! The Bar page (ux.md §4): live preview of any layer in a simulated context, and editing of the
 //! layout it shows (add from the Library, reorder, remove, inspect), plus "Customize for app…".
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -60,6 +60,254 @@ const LIBRARY: &[(&str, &str)] = &[
     ("status-items", "Status items (background apps)"),
 ];
 
+/// The preview's overlay state: the rendered bar and what's drawn over it. Shared by the draw
+/// function and the controllers that change it.
+#[derive(Clone, Default)]
+struct Marks {
+    /// The rendered bar, full scale (drawn at half).
+    frame: Rc<RefCell<Option<gtk::cairo::ImageSurface>>>,
+    /// Feedback while dragging (widget px).
+    caret: Rc<Cell<Cue>>,
+    /// Overflow and small touch targets in the current render (ux.md §4).
+    sizes: Rc<RefCell<Feedback>>,
+    /// The keyboard-selected module's span (bar px), ringed while the preview has focus.
+    focus: Rc<Cell<Option<(f32, f32)>>>,
+    /// The Shift/Ctrl-click multi-selection's spans (bar px), tinted and ringed.
+    multi: Rc<RefCell<Vec<(f32, f32)>>>,
+}
+
+impl Marks {
+    /// Paints the bar at half scale, then the size feedback, selections and drag cue over it.
+    fn draw(&self, area: &gtk::DrawingArea, cr: &gtk::cairo::Context, h: f64) {
+        if let Some(s) = self.frame.borrow().as_ref() {
+            cr.save().ok();
+            cr.scale(0.5, 0.5);
+            let _ = cr.set_source_surface(s, 0.0, 0.0);
+            cr.source().set_filter(gtk::cairo::Filter::Best);
+            let _ = cr.paint();
+            cr.restore().ok();
+        }
+        // Bar px -> widget px (half scale). Overflowing zones: a red wash and a red right edge.
+        let fb = self.sizes.borrow();
+        for (_, x, w) in &fb.overflow {
+            let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
+            cr.set_source_rgba(0.88, 0.11, 0.14, 0.18);
+            cr.rectangle(x, 0.0, w, h);
+            let _ = cr.fill();
+            cr.set_source_rgba(0.88, 0.11, 0.14, 0.9);
+            cr.rectangle(x + w - 2.0, 0.0, 2.0, h);
+            let _ = cr.fill();
+        }
+        // Small touch targets: a bar under the item, amber below 80 px, red below 60 px.
+        for (_, (x, w), strong) in &fb.narrow {
+            let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
+            if *strong {
+                cr.set_source_rgba(0.88, 0.11, 0.14, 0.95);
+            } else {
+                cr.set_source_rgba(0.96, 0.62, 0.0, 0.95);
+            }
+            cr.rectangle(x + 1.0, h - 3.0, (w - 2.0).max(1.0), 3.0);
+            let _ = cr.fill();
+        }
+        drop(fb);
+        for (x, w) in self.multi.borrow().iter() {
+            let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
+            cr.set_source_rgba(0.21, 0.52, 0.89, 0.22);
+            cr.rectangle(x + 1.0, 1.0, (w - 2.0).max(1.0), h - 2.0);
+            let _ = cr.fill_preserve();
+            cr.set_source_rgb(0.21, 0.52, 0.89);
+            cr.set_line_width(2.0);
+            let _ = cr.stroke();
+        }
+        if area.has_focus()
+            && let Some((x, w)) = self.focus.get()
+        {
+            let (x, w) = (f64::from(x) / 2.0, f64::from(w) / 2.0);
+            cr.set_source_rgb(0.21, 0.52, 0.89);
+            cr.set_line_width(2.0);
+            cr.rectangle(x + 1.0, 1.0, (w - 2.0).max(1.0), h - 2.0);
+            let _ = cr.stroke();
+        }
+        match self.caret.get() {
+            Cue::None => {}
+            Cue::Insert(x) => {
+                cr.set_source_rgb(0.21, 0.52, 0.89);
+                cr.rectangle(x - 1.5, 0.0, 3.0, h);
+                let _ = cr.fill();
+            }
+            Cue::Remove(x0, x1) => {
+                cr.set_source_rgba(0.88, 0.11, 0.14, 0.45);
+                cr.rectangle(x0, 0.0, x1 - x0, h);
+                let _ = cr.fill();
+            }
+            Cue::Resize(x0, x1) => {
+                cr.set_source_rgba(0.21, 0.52, 0.89, 0.25);
+                cr.rectangle(x0, 0.0, x1 - x0, h);
+                let _ = cr.fill();
+                cr.set_source_rgb(0.21, 0.52, 0.89);
+                cr.rectangle(x1 - 1.5, 0.0, 3.0, h);
+                let _ = cr.fill();
+            }
+        }
+    }
+
+    /// Clears the drag cue.
+    fn clear_cue(&self, picture: &gtk::DrawingArea) {
+        self.caret.set(Cue::None);
+        picture.queue_draw();
+    }
+}
+
+/// What the preview's controllers share.
+#[derive(Clone)]
+struct View {
+    ui: Rc<Ui>,
+    preview: Rc<RefCell<Preview>>,
+    /// The layout the preview shows, which is what edits apply to.
+    shown_layout: Rc<RefCell<String>>,
+    picture: gtk::DrawingArea,
+    marks: Marks,
+}
+
+impl View {
+    /// Zone `zone` of the shown layout: its name and module ids.
+    fn zone(&self, zone: usize) -> Option<(String, Vec<String>)> {
+        let state = self.ui.state();
+        let zones = state
+            .loaded
+            .config
+            .layout_zones(&self.shown_layout.borrow())
+            .ok()?;
+        let z = zones.get(zone)?;
+        Some((
+            z.name.clone(),
+            z.modules.iter().map(|m| m.id().to_string()).collect(),
+        ))
+    }
+
+    /// The drag cue for inserting at widget x: where the module will really land (after a
+    /// whole group, not inside it).
+    fn insert_cue(&self, x: f64) -> Cue {
+        match self.preview.borrow().insertion_x(x as f32 * 2.0) {
+            Some(bx) => Cue::Insert(bx as f64 / 2.0),
+            None => Cue::None,
+        }
+    }
+}
+
+/// The controls above the preview.
+struct Header {
+    row: gtk::Box,
+    layers: Vec<String>,
+    layer: gtk::DropDown,
+    app: gtk::Entry,
+    customize: gtk::Button,
+    locked: gtk::Switch,
+    mirror: gtk::Switch,
+}
+
+impl Header {
+    fn new(ui: &Rc<Ui>) -> Header {
+        let state = ui.state();
+        let layers: Vec<String> = state.loaded.config.layers.keys().cloned().collect();
+        let names: Vec<&str> = layers.iter().map(String::as_str).collect();
+        let layer = gtk::DropDown::from_strings(&names);
+        let want = ui.layer.borrow().clone();
+        layer.set_selected(
+            layers
+                .iter()
+                .position(|l| *l == want)
+                .or_else(|| layers.iter().position(|l| l == "base"))
+                .unwrap_or(0) as u32,
+        );
+        let app = gtk::Entry::builder()
+            .placeholder_text("app id, e.g. firefox")
+            .width_chars(20)
+            .text(ui.app.borrow().as_str())
+            .build();
+        let customize = gtk::Button::with_label("Customize for app…");
+        customize.set_tooltip_text(Some("Give this app its own layout, based on the one shown"));
+        let locked = gtk::Switch::builder()
+            .valign(gtk::Align::Center)
+            .active(ui.locked.get())
+            .build();
+        let mirror = gtk::Switch::builder()
+            .valign(gtk::Align::Center)
+            .active(ui.mirror.get())
+            .build();
+        mirror.set_tooltip_text(Some(
+            "Show the layout you're editing on the real Touch Bar while this window is focused",
+        ));
+        // Touches on the mirrored bar always select here; this also stops them firing.
+        let select_only = gtk::CheckButton::builder()
+            .label("Select only")
+            .active(ui.select_only.get())
+            .sensitive(ui.mirror.get())
+            .margin_start(8)
+            .tooltip_text("Touching the real bar selects the item here without running its action")
+            .build();
+        {
+            let ui = ui.clone();
+            select_only.connect_toggled(move |c| ui.set_select_only(c.is_active()));
+        }
+        mirror
+            .bind_property("active", &select_only, "sensitive")
+            .build();
+
+        let label = |text: &str| gtk::Label::builder().label(text).margin_start(16).build();
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        row.append(&gtk::Label::new(Some("Layer")));
+        row.append(&layer);
+        row.append(&label("Preview as"));
+        row.append(&app);
+        row.append(&customize);
+        row.append(&label("Locked"));
+        row.append(&locked);
+        row.append(&label("Mirror"));
+        row.append(&mirror);
+        row.append(&select_only);
+        Header {
+            row,
+            layers,
+            layer,
+            app,
+            customize,
+            locked,
+            mirror,
+        }
+    }
+
+    /// The layer, app and lock switches re-render; Customize and Mirror act on the shown layout.
+    fn connect(&self, v: &View, refresh: &Hook) {
+        let r = refresh.clone();
+        self.layer.connect_selected_notify(move |_| r());
+        let r = refresh.clone();
+        self.locked.connect_active_notify(move |_| r());
+        let r = refresh.clone();
+        self.app.connect_changed(move |_| r());
+        {
+            let (v, app) = (v.clone(), self.app.clone());
+            self.customize.connect_clicked(move |_| {
+                let app = app.text().to_string();
+                let base = v.shown_layout.borrow().clone();
+                *v.ui.layer.borrow_mut() = "base".into();
+                apply(&v.ui, |ed, merged| {
+                    edit::customize_for_app(ed, merged, &app, &base).map(|(_, msg)| msg)
+                });
+            });
+        }
+        let v = v.clone();
+        self.mirror.connect_active_notify(move |m| {
+            v.ui.mirror.set(m.is_active());
+            if m.is_active() {
+                v.ui.mirror_layout(&v.shown_layout.borrow());
+            } else {
+                v.ui.stop_mirror();
+            }
+        });
+    }
+}
+
 pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     let state = ui.state();
     let page = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -67,91 +315,13 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     page.set_margin_bottom(18);
     page.set_margin_start(18);
     page.set_margin_end(18);
-
-    let layers: Vec<String> = state.loaded.config.layers.keys().cloned().collect();
-    let names: Vec<&str> = layers.iter().map(String::as_str).collect();
-    let layer_dd = gtk::DropDown::from_strings(&names);
-    let want = ui.layer.borrow().clone();
-    layer_dd.set_selected(
-        layers
-            .iter()
-            .position(|l| *l == want)
-            .or_else(|| layers.iter().position(|l| l == "base"))
-            .unwrap_or(0) as u32,
-    );
-    let app_entry = gtk::Entry::builder()
-        .placeholder_text("app id, e.g. firefox")
-        .width_chars(20)
-        .text(ui.app.borrow().as_str())
-        .build();
-    let customize = gtk::Button::with_label("Customize for app…");
-    customize.set_tooltip_text(Some("Give this app its own layout, based on the one shown"));
-    let locked = gtk::Switch::builder()
-        .valign(gtk::Align::Center)
-        .active(ui.locked.get())
-        .build();
-
-    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    controls.append(&gtk::Label::new(Some("Layer")));
-    controls.append(&layer_dd);
-    controls.append(
-        &gtk::Label::builder()
-            .label("Preview as")
-            .margin_start(16)
-            .build(),
-    );
-    controls.append(&app_entry);
-    controls.append(&customize);
-    controls.append(
-        &gtk::Label::builder()
-            .label("Locked")
-            .margin_start(16)
-            .build(),
-    );
-    controls.append(&locked);
-    let mirror = gtk::Switch::builder()
-        .valign(gtk::Align::Center)
-        .active(ui.mirror.get())
-        .build();
-    mirror.set_tooltip_text(Some(
-        "Show the layout you're editing on the real Touch Bar while this window is focused",
-    ));
-    controls.append(
-        &gtk::Label::builder()
-            .label("Mirror")
-            .margin_start(16)
-            .build(),
-    );
-    controls.append(&mirror);
-    // Touches on the mirrored bar always select here; this also stops them firing.
-    let select_only = gtk::CheckButton::builder()
-        .label("Select only")
-        .active(ui.select_only.get())
-        .sensitive(ui.mirror.get())
-        .margin_start(8)
-        .tooltip_text("Touching the real bar selects the item here without running its action")
-        .build();
-    {
-        let ui = ui.clone();
-        select_only.connect_toggled(move |c| ui.set_select_only(c.is_active()));
-    }
-    mirror
-        .bind_property("active", &select_only, "sensitive")
-        .build();
-    controls.append(&select_only);
-    page.append(&controls);
+    let header = Header::new(ui);
+    page.append(&header.row);
 
     // Drawn at half scale (1004x30 or 1085x30) so it stays legible; narrower windows scroll
     // sideways.
     let size = crate::preview::bar_size(state.hw);
-    let frame: Rc<RefCell<Option<gtk::cairo::ImageSurface>>> = Rc::default();
-    let caret: Rc<std::cell::Cell<Cue>> = Rc::default();
-    // Overflow and small touch targets in the current render (ux.md §4), drawn over the preview.
-    let sizes: Rc<RefCell<Feedback>> = Rc::default();
-    // The keyboard-selected module's span (bar px), ringed while the preview has focus.
-    let frame_focus: Rc<std::cell::Cell<Option<(f32, f32)>>> = Rc::default();
-    // The Shift/Ctrl-click multi-selection's spans (bar px), tinted and ringed.
-    let multi_spans: Rc<RefCell<Vec<(f32, f32)>>> = Rc::default();
+    let marks = Marks::default();
     let picture = gtk::DrawingArea::builder()
         .content_width(size.0 as i32 / 2)
         .content_height(size.1 as i32 / 2)
@@ -160,85 +330,8 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         .margin_bottom(12)
         .build();
     {
-        let frame = frame.clone();
-        let caret = caret.clone();
-        let sizes = sizes.clone();
-        let frame_focus = frame_focus.clone();
-        let multi_spans = multi_spans.clone();
-        picture.set_draw_func(move |area, cr, _, h| {
-            if let Some(s) = frame.borrow().as_ref() {
-                cr.save().ok();
-                cr.scale(0.5, 0.5);
-                let _ = cr.set_source_surface(s, 0.0, 0.0);
-                cr.source().set_filter(gtk::cairo::Filter::Best);
-                let _ = cr.paint();
-                cr.restore().ok();
-            }
-            // Bar px -> widget px (half scale). Overflowing zones: a red wash and a red right edge.
-            let h = h as f64;
-            let fb = sizes.borrow();
-            for (_, x, w) in &fb.overflow {
-                let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
-                cr.set_source_rgba(0.88, 0.11, 0.14, 0.18);
-                cr.rectangle(x, 0.0, w, h);
-                let _ = cr.fill();
-                cr.set_source_rgba(0.88, 0.11, 0.14, 0.9);
-                cr.rectangle(x + w - 2.0, 0.0, 2.0, h);
-                let _ = cr.fill();
-            }
-            // Small touch targets: a bar under the item, amber below 80 px, red below 60 px.
-            for (_, (x, w), strong) in &fb.narrow {
-                let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
-                if *strong {
-                    cr.set_source_rgba(0.88, 0.11, 0.14, 0.95);
-                } else {
-                    cr.set_source_rgba(0.96, 0.62, 0.0, 0.95);
-                }
-                cr.rectangle(x + 1.0, h - 3.0, (w - 2.0).max(1.0), 3.0);
-                let _ = cr.fill();
-            }
-            drop(fb);
-            for (x, w) in multi_spans.borrow().iter() {
-                let (x, w) = (f64::from(*x) / 2.0, f64::from(*w) / 2.0);
-                cr.set_source_rgba(0.21, 0.52, 0.89, 0.22);
-                cr.rectangle(x + 1.0, 1.0, (w - 2.0).max(1.0), h - 2.0);
-                let _ = cr.fill_preserve();
-                cr.set_source_rgb(0.21, 0.52, 0.89);
-                cr.set_line_width(2.0);
-                let _ = cr.stroke();
-            }
-            if area.has_focus()
-                && let Some((x, w)) = frame_focus.get()
-            {
-                let (x, w) = (f64::from(x) / 2.0, f64::from(w) / 2.0);
-                cr.set_source_rgb(0.21, 0.52, 0.89);
-                cr.set_line_width(2.0);
-                cr.rectangle(x + 1.0, 1.0, (w - 2.0).max(1.0), h - 2.0);
-                let _ = cr.stroke();
-            }
-            // Feedback while dragging (widget coordinates).
-            match caret.get() {
-                Cue::None => {}
-                Cue::Insert(x) => {
-                    cr.set_source_rgb(0.21, 0.52, 0.89);
-                    cr.rectangle(x - 1.5, 0.0, 3.0, h);
-                    let _ = cr.fill();
-                }
-                Cue::Remove(x0, x1) => {
-                    cr.set_source_rgba(0.88, 0.11, 0.14, 0.45);
-                    cr.rectangle(x0, 0.0, x1 - x0, h);
-                    let _ = cr.fill();
-                }
-                Cue::Resize(x0, x1) => {
-                    cr.set_source_rgba(0.21, 0.52, 0.89, 0.25);
-                    cr.rectangle(x0, 0.0, x1 - x0, h);
-                    let _ = cr.fill();
-                    cr.set_source_rgb(0.21, 0.52, 0.89);
-                    cr.rectangle(x1 - 1.5, 0.0, 3.0, h);
-                    let _ = cr.fill();
-                }
-            }
-        });
+        let marks = marks.clone();
+        picture.set_draw_func(move |area, cr, _, h| marks.draw(area, cr, h as f64));
     }
     let bar_scroll = gtk::ScrolledWindow::builder()
         .vscrollbar_policy(gtk::PolicyType::Never)
@@ -247,27 +340,20 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         .child(&picture)
         .build();
     page.append(&bar_scroll);
-    let shown_layout: Rc<RefCell<String>> = Rc::default();
-    // Shift/Ctrl-click several modules of a zone, then Group (ux.md §4 "Group").
-    let multi_label = gtk::Label::builder().xalign(0.0).hexpand(true).build();
-    multi_label.add_css_class("dim-label");
-    let multi_group = gtk::Button::builder()
-        .label("Group…")
-        .css_classes(["suggested-action"])
-        .build();
-    let multi_clear = gtk::Button::with_label("Clear");
-    let multi_bar = gtk::Box::builder()
-        .spacing(8)
-        .margin_bottom(6)
-        .visible(false)
-        .build();
-    multi_bar.append(&multi_label);
-    multi_bar.append(&multi_clear);
-    multi_bar.append(&multi_group);
-    page.append(&multi_bar);
-    // Set once the preview exists; `refresh` calls it after every render.
-    let multi_hook: Rc<RefCell<Option<Hook>>> = Rc::default();
+    let v = View {
+        ui: ui.clone(),
+        preview: Rc::new(RefCell::new(Preview::new(
+            state.loaded.config.clone(),
+            state.sheet.clone(),
+            size,
+        ))),
+        shown_layout: Rc::default(),
+        picture: picture.clone(),
+        marks,
+    };
 
+    let (multi_bar, update_multi) = multi_select(&v);
+    page.append(&multi_bar);
     let why = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -282,7 +368,6 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         .build();
     size_warning.add_css_class("warning");
     page.append(&size_warning);
-
     let zones = gtk::Box::new(gtk::Orientation::Vertical, 18);
     page.append(
         &gtk::ScrolledWindow::builder()
@@ -291,130 +376,147 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             .build(),
     );
 
-    let preview = Rc::new(RefCell::new(Preview::new(
-        state.loaded.config.clone(),
-        state.sheet.clone(),
-        size,
-    )));
-    let refresh = {
-        let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
-        let multi_hook = multi_hook.clone();
-        let (sizes, size_warning) = (sizes.clone(), size_warning.clone());
-        let (layer_dd, app_entry, locked, picture, why, zones, layers) = (
-            layer_dd.clone(),
-            app_entry.clone(),
-            locked.clone(),
-            picture.clone(),
-            why.clone(),
-            zones.clone(),
-            layers.clone(),
-        );
-        Rc::new(move || {
-            let state = ui.state();
-            let layer = layers
-                .get(layer_dd.selected() as usize)
-                .cloned()
-                .unwrap_or_else(|| "base".into());
-            *ui.layer.borrow_mut() = layer.clone();
-            *ui.app.borrow_mut() = app_entry.text().to_string();
-            ui.locked.set(locked.is_active());
-            let mut ctx = Context::new()
-                .with("physical_esc", state.hw.physical_esc)
-                .with("locked", locked.is_active());
-            if !app_entry.text().is_empty() {
-                ctx.set("app_id", app_entry.text().as_str());
-            }
-            while let Some(c) = zones.first_child() {
-                zones.remove(&c);
-            }
-            let config = &state.loaded.config;
-            let (layout, rule) = match config.select_layout(&layer, &ctx) {
-                Ok((l, r)) => (l.to_owned(), r),
-                Err(e) => {
-                    why.set_text(&format!("Can't show this layer: {e}"));
-                    return;
-                }
-            };
-            *shown_layout.borrow_mut() = layout.clone();
-            // Only base-layer layouts are mirrored: the agent's SetLayout replaces the base layer.
-            if layer == "base" {
-                ui.mirror_layout(&layout);
-            } else {
-                ui.stop_mirror();
-            }
-            match preview.borrow_mut().render(&layer, ctx.clone()) {
-                Ok(p) => *frame.borrow_mut() = pages_surface(&p),
-                Err(e) => {
-                    *frame.borrow_mut() = None;
-                    zones.append(&row("Can't render", &e));
-                }
-            }
-            let fb = preview.borrow().feedback();
-            size_warning.set_visible(fb.summary().is_some());
-            size_warning.set_text(&fb.summary().unwrap_or_default());
-            // Overflow is red, small targets amber (libadwaita style classes).
-            size_warning.set_css_classes(if fb.overflow.is_empty() {
-                &["warning"]
-            } else {
-                &["error"]
-            });
-            *sizes.borrow_mut() = fb;
-            picture.queue_draw();
-            let profile = sliver_config::profile::active();
-            let in_profile = if profile == sliver_config::profile::DEFAULT {
-                String::new()
-            } else {
-                format!("Profile “{profile}”: ")
-            };
-            why.set_text(&format!("{in_profile}{}", match rule {
-                Some(i) => format!(
-                    "Editing layout “{layout}”, picked by rules[{i}]{}. Click a module to edit it; changes apply instantly.",
-                    config.rules[i].name.as_deref().map(|n| format!(" ({n})")).unwrap_or_default()
-                ),
-                None => format!("Editing layout “{layout}”, the {layer} layer's default. Click a module to edit it; changes apply instantly."),
-            }));
-            zone_groups(&ui, &zones, &layout);
-            if let Some(f) = multi_hook.borrow().clone() {
-                f();
-            }
-        })
-    };
-    for w in [layer_dd.upcast_ref::<gtk::Widget>(), locked.upcast_ref()] {
-        let r = refresh.clone();
-        if let Some(dd) = w.downcast_ref::<gtk::DropDown>() {
-            dd.connect_selected_notify(move |_| r());
-        } else if let Some(sw) = w.downcast_ref::<gtk::Switch>() {
-            sw.connect_active_notify(move |_| r());
+    let refresh = refresher(
+        &v,
+        &header,
+        &why,
+        &size_warning,
+        &zones,
+        update_multi.clone(),
+    );
+    header.connect(&v, &refresh);
+    connect_select(&v, update_multi);
+    connect_hover(&v);
+    let (drop_target, drop_module) = drop_target(&v);
+    let lib = palette(ui, &v.shown_layout);
+    page.insert_child_after(&lib, Some(&bar_scroll));
+    page.add_controller(drag_gesture(&v, &page, drop_module));
+    picture.add_controller(drop_target);
+    keyboard_access(ui, &picture, &v.preview, &v.shown_layout, &v.marks.focus);
+    refresh();
+    page.upcast()
+}
+
+/// Renders the chosen layer for the simulated context (layer, app, locked), then rebuilds the
+/// zone list, the "why this layout" line and the size warnings under it.
+fn refresher(
+    v: &View,
+    h: &Header,
+    why: &gtk::Label,
+    size_warning: &gtk::Label,
+    zones: &gtk::Box,
+    update_multi: Hook,
+) -> Hook {
+    let v = v.clone();
+    let (layers, layer_dd, app_entry, locked) = (
+        h.layers.clone(),
+        h.layer.clone(),
+        h.app.clone(),
+        h.locked.clone(),
+    );
+    let (why, size_warning, zones) = (why.clone(), size_warning.clone(), zones.clone());
+    Rc::new(move || {
+        let ui = &v.ui;
+        let state = ui.state();
+        let layer = layers
+            .get(layer_dd.selected() as usize)
+            .cloned()
+            .unwrap_or_else(|| "base".into());
+        *ui.layer.borrow_mut() = layer.clone();
+        *ui.app.borrow_mut() = app_entry.text().to_string();
+        ui.locked.set(locked.is_active());
+        let mut ctx = Context::new()
+            .with("physical_esc", state.hw.physical_esc)
+            .with("locked", locked.is_active());
+        if !app_entry.text().is_empty() {
+            ctx.set("app_id", app_entry.text().as_str());
         }
-    }
-    {
-        let r = refresh.clone();
-        app_entry.connect_changed(move |_| r());
-    }
-    {
-        let (ui, app_entry, shown_layout) = (ui.clone(), app_entry.clone(), shown_layout.clone());
-        customize.connect_clicked(move |_| {
-            let app = app_entry.text().to_string();
-            let base = shown_layout.borrow().clone();
-            *ui.layer.borrow_mut() = "base".into();
-            apply(&ui, |ed, merged| {
-                edit::customize_for_app(ed, merged, &app, &base).map(|(_, msg)| msg)
-            });
+        while let Some(c) = zones.first_child() {
+            zones.remove(&c);
+        }
+        let config = &state.loaded.config;
+        let (layout, rule) = match config.select_layout(&layer, &ctx) {
+            Ok((l, r)) => (l.to_owned(), r),
+            Err(e) => {
+                why.set_text(&format!("Can't show this layer: {e}"));
+                return;
+            }
+        };
+        *v.shown_layout.borrow_mut() = layout.clone();
+        // Only base-layer layouts are mirrored: the agent's SetLayout replaces the base layer.
+        if layer == "base" {
+            ui.mirror_layout(&layout);
+        } else {
+            ui.stop_mirror();
+        }
+        match v.preview.borrow_mut().render(&layer, ctx.clone()) {
+            Ok(p) => *v.marks.frame.borrow_mut() = surface(&p),
+            Err(e) => {
+                *v.marks.frame.borrow_mut() = None;
+                zones.append(&row("Can't render", &e));
+            }
+        }
+        let fb = v.preview.borrow().feedback();
+        size_warning.set_visible(fb.summary().is_some());
+        size_warning.set_text(&fb.summary().unwrap_or_default());
+        // Overflow is red, small targets amber (libadwaita style classes).
+        size_warning.set_css_classes(if fb.overflow.is_empty() {
+            &["warning"]
+        } else {
+            &["error"]
         });
-    }
-    // The multi-selection's rings and bar, from `ui.bar_multi` (dropping what no longer exists).
-    let update_multi: Rc<dyn Fn()> = Rc::new({
-        let (ui, preview, shown_layout, picture) = (
-            ui.clone(),
-            preview.clone(),
-            shown_layout.clone(),
-            picture.downgrade(),
+        *v.marks.sizes.borrow_mut() = fb;
+        v.picture.queue_draw();
+        let profile = sliver_config::profile::active();
+        let in_profile = if profile == sliver_config::profile::DEFAULT {
+            String::new()
+        } else {
+            format!("Profile “{profile}”: ")
+        };
+        why.set_text(&format!("{in_profile}{}", match rule {
+            Some(i) => format!(
+                "Editing layout “{layout}”, picked by rules[{i}]{}. Click a module to edit it; changes apply instantly.",
+                config.rules[i].name.as_deref().map(|n| format!(" ({n})")).unwrap_or_default()
+            ),
+            None => format!("Editing layout “{layout}”, the {layer} layer's default. Click a module to edit it; changes apply instantly."),
+        }));
+        zone_groups(ui, &zones, &layout);
+        update_multi();
+    })
+}
+
+/// The bar under the preview for a Shift/Ctrl-click multi-selection (ux.md §4 "Group"), and the
+/// function that redraws it and its rings from `ui.bar_multi` (dropping what no longer exists).
+fn multi_select(v: &View) -> (gtk::Box, Hook) {
+    let label = gtk::Label::builder().xalign(0.0).hexpand(true).build();
+    label.add_css_class("dim-label");
+    let group = gtk::Button::builder()
+        .label("Group…")
+        .css_classes(["suggested-action"])
+        .build();
+    let clear = gtk::Button::with_label("Clear");
+    let bar = gtk::Box::builder()
+        .spacing(8)
+        .margin_bottom(6)
+        .visible(false)
+        .build();
+    bar.append(&label);
+    bar.append(&clear);
+    bar.append(&group);
+
+    // Weak: the page's other closures already keep these alive for as long as it shows.
+    let update: Hook = Rc::new({
+        let (ui, preview, shown_layout, spans) = (
+            v.ui.clone(),
+            v.preview.clone(),
+            v.shown_layout.clone(),
+            v.marks.multi.clone(),
         );
-        let (multi_spans, multi_bar, multi_label, multi_group) = (
-            multi_spans.clone(),
-            multi_bar.downgrade(),
-            multi_label.downgrade(),
-            multi_group.downgrade(),
+        let (picture, bar, label, group) = (
+            v.picture.downgrade(),
+            bar.downgrade(),
+            label.downgrade(),
+            group.downgrade(),
         );
         move || {
             let state = ui.state();
@@ -432,16 +534,14 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                     .map(|m| m.id().to_string())
                     .collect()
             };
-            *multi_spans.borrow_mut() = picked
+            *spans.borrow_mut() = picked
                 .iter()
                 .filter_map(|(zi, i)| preview.borrow().module_span(*zi, &ids(*zi), *i))
                 .collect();
             let n = picked.len();
-            if let (Some(bar), Some(label), Some(group)) = (
-                multi_bar.upgrade(),
-                multi_label.upgrade(),
-                multi_group.upgrade(),
-            ) {
+            if let (Some(bar), Some(label), Some(group)) =
+                (bar.upgrade(), label.upgrade(), group.upgrade())
+            {
                 bar.set_visible(n > 0);
                 let zone = picked.first().map(|(zi, _)| zones[*zi].name.clone());
                 label.set_text(&match (n, zone) {
@@ -458,162 +558,141 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             }
         }
     });
-    *multi_hook.borrow_mut() = Some(update_multi.clone());
     {
-        let (ui, update_multi) = (ui.clone(), update_multi.clone());
-        multi_clear.connect_clicked(move |_| {
+        let (ui, update) = (v.ui.clone(), update.clone());
+        clear.connect_clicked(move |_| {
             ui.bar_multi.borrow_mut().clear();
-            update_multi();
+            update();
         });
     }
     {
-        let (ui, shown_layout) = (ui.clone(), shown_layout.clone());
-        multi_group.connect_clicked(move |_| {
-            let state = ui.state();
-            let layout = shown_layout.borrow().clone();
-            let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
+        let v = v.clone();
+        group.connect_clicked(move |_| {
+            let picked = v.ui.bar_multi.borrow().clone();
+            let Some((zone, ids)) = picked.first().and_then(|(zi, _)| v.zone(*zi)) else {
                 return;
             };
-            let picked = ui.bar_multi.borrow().clone();
-            let Some(z) = picked.first().and_then(|(zi, _)| zones.get(*zi)) else {
-                return;
-            };
-            let ids: Vec<String> = z.modules.iter().map(|m| m.id().to_string()).collect();
             let checked: Vec<usize> = picked.iter().map(|(_, i)| *i).collect();
-            make_group_dialog(&ui, &layout, &z.name, &ids, &checked);
+            make_group_dialog(&v.ui, &v.shown_layout.borrow(), &zone, &ids, &checked);
         });
     }
-    // Click a module on the preview to open it in the inspector (ux.md §4 "Select"); with
-    // Shift or Ctrl, add it to (or drop it from) the multi-selection instead.
+    (bar, update)
+}
+
+/// Click a module on the preview to open it in the inspector (ux.md §4 "Select"); with Shift or
+/// Ctrl, add it to (or drop it from) the multi-selection instead.
+fn connect_select(v: &View, update_multi: Hook) {
     let click = gtk::GestureClick::new();
-    {
-        let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
-        let update_multi = update_multi.clone();
-        click.connect_released(move |g, _, x, _| {
-            // The preview is drawn at half scale.
-            let Some(hit) = preview.borrow().hit(x as f32 * 2.0) else {
-                return;
-            };
-            let state = ui.state();
-            let layout = shown_layout.borrow().clone();
-            let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
-                return;
-            };
-            let Some(z) = zones.get(hit.zone) else { return };
-            let ids: Vec<String> = z.modules.iter().map(|m| m.id().to_string()).collect();
-            let Some(i) = hit.module_index(&ids) else {
-                return;
-            };
-            let mods = g.current_event_state();
-            if mods.intersects(
-                gtk::gdk::ModifierType::SHIFT_MASK | gtk::gdk::ModifierType::CONTROL_MASK,
-            ) {
-                {
-                    let mut picked = ui.bar_multi.borrow_mut();
-                    // One zone at a time: a group takes modules from one zone.
-                    if picked.iter().any(|(zi, _)| *zi != hit.zone) {
-                        picked.clear();
-                    }
-                    if let Some(k) = picked.iter().position(|p| *p == (hit.zone, i)) {
-                        picked.remove(k);
-                    } else {
-                        picked.push((hit.zone, i));
-                    }
-                }
-                update_multi();
-                return;
-            }
-            if !ui.bar_multi.borrow().is_empty() {
-                ui.bar_multi.borrow_mut().clear();
-                update_multi();
-            }
-            let m = &z.modules[i];
-            // A module inside a group: edit that member itself (its `[modules."id"]` block).
-            if let Some((group, member)) = group_member(&ids[i], &hit.key)
-                && let Ok(mid) = sliver_config::ModuleId::parse(&member)
+    let view = v.clone();
+    click.connect_released(move |g, _, x, _| {
+        let v = &view;
+        // The preview is drawn at half scale.
+        let Some(hit) = v.preview.borrow().hit(x as f32 * 2.0) else {
+            return;
+        };
+        let state = v.ui.state();
+        let layout = v.shown_layout.borrow().clone();
+        let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
+            return;
+        };
+        let Some(z) = zones.get(hit.zone) else { return };
+        let ids: Vec<String> = z.modules.iter().map(|m| m.id().to_string()).collect();
+        let Some(i) = hit.module_index(&ids) else {
+            return;
+        };
+        let mods = g.current_event_state();
+        if mods
+            .intersects(gtk::gdk::ModifierType::SHIFT_MASK | gtk::gdk::ModifierType::CONTROL_MASK)
+        {
             {
-                inspector(
-                    &ui,
-                    Target {
-                        member: Some((group.clone(), member.clone())),
-                        ..Target::slot(&layout, &z.name, i)
-                    },
-                    &format!("{} › {member}", group.trim_start_matches("group/")),
-                    &state.loaded.config.module_block(&ModuleRef::Named(mid)),
-                    Some(hit.rect.1),
-                );
-                return;
+                let mut picked = v.ui.bar_multi.borrow_mut();
+                // One zone at a time: a group takes modules from one zone.
+                if picked.iter().any(|(zi, _)| *zi != hit.zone) {
+                    picked.clear();
+                }
+                if let Some(k) = picked.iter().position(|p| *p == (hit.zone, i)) {
+                    picked.remove(k);
+                } else {
+                    picked.push((hit.zone, i));
+                }
             }
+            update_multi();
+            return;
+        }
+        if !v.ui.bar_multi.borrow().is_empty() {
+            v.ui.bar_multi.borrow_mut().clear();
+            update_multi();
+        }
+        let m = &z.modules[i];
+        // A module inside a group: edit that member itself (its `[modules."id"]` block).
+        if let Some((group, member)) = group_member(&ids[i], &hit.key)
+            && let Ok(mid) = sliver_config::ModuleId::parse(&member)
+        {
             inspector(
-                &ui,
-                Target::slot(&layout, &z.name, i),
-                &m.id().to_string(),
-                &state.loaded.config.module_block(m),
+                &v.ui,
+                Target {
+                    member: Some((group.clone(), member.clone())),
+                    ..Target::slot(&layout, &z.name, i)
+                },
+                &format!("{} › {member}", group.trim_start_matches("group/")),
+                &state.loaded.config.module_block(&ModuleRef::Named(mid)),
                 Some(hit.rect.1),
             );
-        });
-    }
-    picture.add_controller(click);
-    picture.set_cursor_from_name(Some("pointer"));
-    // The width handle shows as a resize cursor on a module's right edge.
-    let hover = gtk::EventControllerMotion::new();
-    {
-        let (preview, picture2) = (preview.clone(), picture.clone());
-        hover.connect_motion(move |_, x, _| {
-            let edge = preview.borrow().edge_at(x as f32 * 2.0).is_some();
-            picture2.set_cursor_from_name(Some(if edge { "col-resize" } else { "pointer" }));
-        });
-    }
-    picture.add_controller(hover);
+            return;
+        }
+        inspector(
+            &v.ui,
+            Target::slot(&layout, &z.name, i),
+            &m.id().to_string(),
+            &state.loaded.config.module_block(m),
+            Some(hit.rect.1),
+        );
+    });
+    v.picture.add_controller(click);
+    v.picture.set_cursor_from_name(Some("pointer"));
+}
 
-    // Library items dropped on the preview go where the caret shows.
-    let drop_target = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::COPY);
+/// The width handle shows as a resize cursor on a module's right edge.
+fn connect_hover(v: &View) {
+    let hover = gtk::EventControllerMotion::new();
+    let (preview, picture) = (v.preview.clone(), v.picture.clone());
+    hover.connect_motion(move |_, x, _| {
+        let edge = preview.borrow().edge_at(x as f32 * 2.0).is_some();
+        picture.set_cursor_from_name(Some(if edge { "col-resize" } else { "pointer" }));
+    });
+    v.picture.add_controller(hover);
+}
+
+/// Library items dropped on the preview go where the caret shows. Also returns the function that
+/// puts a module there, which the page's own drag uses too.
+fn drop_target(v: &View) -> (gtk::DropTarget, DropFn) {
+    let target = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::COPY);
     {
-        let (caret, picture2) = (caret.clone(), picture.clone());
-        let preview = preview.clone();
-        drop_target.connect_motion(move |_, x, _| {
-            caret.set(match preview.borrow().insertion_x(x as f32 * 2.0) {
-                Some(bx) => Cue::Insert(bx as f64 / 2.0),
-                None => Cue::None,
-            });
-            picture2.queue_draw();
+        let v = v.clone();
+        target.connect_motion(move |_, x, _| {
+            v.marks.caret.set(v.insert_cue(x));
+            v.picture.queue_draw();
             gtk::gdk::DragAction::COPY
         });
     }
     {
-        let (caret, picture2) = (caret.clone(), picture.clone());
-        drop_target.connect_leave(move |_| {
-            caret.set(Cue::None);
-            picture2.queue_draw();
-        });
+        let v = v.clone();
+        target.connect_leave(move |_| v.marks.clear_cue(&v.picture));
     }
-    // Puts Library module `m` where the caret is: at preview x-coordinate `x` (widget px).
+    // Puts Library module `module` where the caret is: at preview x-coordinate `x` (widget px).
     let drop_module: DropFn = {
-        let (ui, preview, shown_layout, caret, picture2) = (
-            ui.clone(),
-            preview.clone(),
-            shown_layout.clone(),
-            caret.clone(),
-            picture.clone(),
-        );
+        let v = v.clone();
         Rc::new(move |module: String, x: f64| {
-            caret.set(Cue::None);
-            picture2.queue_draw();
-            let Some((zone, left)) = preview.borrow().drop_target(x as f32 * 2.0) else {
+            v.marks.clear_cue(&v.picture);
+            let Some((zone, left)) = v.preview.borrow().drop_target(x as f32 * 2.0) else {
                 return false;
             };
-            let state = ui.state();
-            let layout = shown_layout.borrow().clone();
-            let Ok(zones) = state.loaded.config.layout_zones(&layout) else {
+            let Some((zname, ids)) = v.zone(zone) else {
                 return false;
             };
-            let Some(z) = zones.get(zone) else {
-                return false;
-            };
-            let ids: Vec<String> = z.modules.iter().map(|m| m.id().to_string()).collect();
             let at = left.and_then(|h| h.module_index(&ids)).map_or(0, |i| i + 1);
-            let zname = z.name.clone();
-            apply(&ui, move |ed, merged| {
+            let layout = v.shown_layout.borrow().clone();
+            apply(&v.ui, move |ed, merged| {
                 edit::insert_module(ed, merged, &layout, &zname, Some(at), &module)
             });
             true
@@ -621,50 +700,47 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     };
     {
         let drop_module = drop_module.clone();
-        drop_target
-            .connect_drop(move |_, v, x, _| v.get::<String>().is_ok_and(|m| drop_module(m, x)));
+        target
+            .connect_drop(move |_, val, x, _| val.get::<String>().is_ok_and(|m| drop_module(m, x)));
     }
-    let lib = palette(ui, &shown_layout);
-    page.insert_child_after(&lib, Some(&bar_scroll));
+    (target, drop_module)
+}
 
-    // Dragging (GOAL: WYSIWYG drag/drop/resize): a Library chip onto the bar; a module along the
-    // bar to move it, also into another zone; a module off the bar (up or down) to remove it; a
-    // module's right edge to set its width. One gesture on the page, which holds both the chips
-    // and the preview, so it follows the pointer between them on every GDK backend (Broadway has
-    // no implicit grab). It claims the pointer only once it has really moved, so plain clicks
-    // still reach the chips and the preview.
+/// Dragging (GOAL: WYSIWYG drag/drop/resize): a Library chip onto the bar; a module along the bar
+/// to move it, also into another zone; a module off the bar (up or down) to remove it; a module's
+/// right edge to set its width. One gesture on the page, which holds both the chips and the
+/// preview, so it follows the pointer between them on every GDK backend (Broadway has no implicit
+/// grab). It claims the pointer only once it has really moved, so plain clicks still reach the
+/// chips and the preview.
+fn drag_gesture(v: &View, page: &gtk::Box, drop_module: DropFn) -> gtk::GestureDrag {
     let grab: Rc<RefCell<Option<Grab>>> = Rc::default();
     let drag = gtk::GestureDrag::new();
     drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    // Page coordinates -> preview (widget) coordinates.
     let to_bar = {
-        let (page, picture) = (page.clone(), picture.clone());
+        let (page, picture) = (page.clone(), v.picture.clone());
         move |x: f64, y: f64| {
             page.compute_point(&picture, &gtk::graphene::Point::new(x as f32, y as f32))
                 .map(|p| (p.x() as f64, p.y() as f64))
         }
     };
+    // The preview x when the pointer is over (or just above or below) the preview.
     let over_bar = {
-        let picture = picture.clone();
+        let picture = v.picture.clone();
         move |(x, y): (f64, f64)| {
             let (w, h) = (picture.width() as f64, picture.height() as f64);
             (y > -12.0 && y < h + 12.0 && x >= 0.0 && x <= w).then_some(x)
         }
     };
     {
-        let (grab, page2, picture2, preview, to_bar) = (
-            grab.clone(),
-            page.clone(),
-            picture.clone(),
-            preview.clone(),
-            to_bar.clone(),
-        );
+        let (v, grab, page, to_bar) = (v.clone(), grab.clone(), page.clone(), to_bar.clone());
         drag.connect_drag_begin(move |_, x, y| {
             let mut found = None;
-            let mut w = page2.pick(x, y, gtk::PickFlags::DEFAULT);
+            let mut w = page.pick(x, y, gtk::PickFlags::DEFAULT);
             while let Some(cur) = w {
-                if &cur == picture2.upcast_ref::<gtk::Widget>() {
+                if &cur == v.picture.upcast_ref::<gtk::Widget>() {
                     if let Some((bx, _)) = to_bar(x, y) {
-                        let resize = preview.borrow().edge_at(bx as f32 * 2.0).is_some();
+                        let resize = v.preview.borrow().edge_at(bx as f32 * 2.0).is_some();
                         found = Some(Grab::Bar { x: bx, resize });
                     }
                     break;
@@ -673,7 +749,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                     found = Some(Grab::Chip(id.to_owned(), cur.clone()));
                     break;
                 }
-                if &cur == page2.upcast_ref::<gtk::Widget>() {
+                if &cur == page.upcast_ref::<gtk::Widget>() {
                     break;
                 }
                 w = cur.parent();
@@ -682,22 +758,8 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         });
     }
     {
-        let (grab, caret, picture2, preview, to_bar, over_bar) = (
-            grab.clone(),
-            caret.clone(),
-            picture.clone(),
-            preview.clone(),
-            to_bar.clone(),
-            over_bar.clone(),
-        );
-        // The caret where the module will really land (after a whole group, not inside it).
-        let snap = {
-            let preview = preview.clone();
-            move |x: f64| match preview.borrow().insertion_x(x as f32 * 2.0) {
-                Some(bx) => Cue::Insert(bx as f64 / 2.0),
-                None => Cue::None,
-            }
-        };
+        let (v, grab, to_bar, over_bar) =
+            (v.clone(), grab.clone(), to_bar.clone(), over_bar.clone());
         drag.connect_drag_update(move |g, dx, dy| {
             let Some(kind) = grab.borrow().clone() else {
                 return;
@@ -712,9 +774,9 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             let cue = match kind {
                 Grab::Chip(_, chip) => {
                     chip.set_opacity(0.5);
-                    over_bar(pos).map_or(Cue::None, &snap)
+                    over_bar(pos).map_or(Cue::None, |x| v.insert_cue(x))
                 }
-                Grab::Bar { x, resize: true } => match preview.borrow().edge_at(x as f32 * 2.0) {
+                Grab::Bar { x, resize: true } => match v.preview.borrow().edge_at(x as f32 * 2.0) {
                     Some(h) => {
                         let left = h.rect.0 as f64 / 2.0;
                         Cue::Resize(left, pos.0.max(left + 8.0))
@@ -722,32 +784,23 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                     None => Cue::None,
                 },
                 Grab::Bar { x, resize: false } if dy.abs() > OFF_BAR => {
-                    match preview.borrow().hit(x as f32 * 2.0) {
+                    match v.preview.borrow().hit(x as f32 * 2.0) {
                         Some(h) => {
                             Cue::Remove(h.rect.0 as f64 / 2.0, (h.rect.0 + h.rect.1) as f64 / 2.0)
                         }
                         None => Cue::None,
                     }
                 }
-                Grab::Bar { .. } => snap(pos.0),
+                Grab::Bar { .. } => v.insert_cue(pos.0),
             };
-            caret.set(cue);
-            picture2.queue_draw();
+            v.marks.caret.set(cue);
+            v.picture.queue_draw();
         });
     }
     {
-        let (ui, grab, caret, picture2, preview, shown_layout, drop_module) = (
-            ui.clone(),
-            grab.clone(),
-            caret.clone(),
-            picture.clone(),
-            preview.clone(),
-            shown_layout.clone(),
-            drop_module.clone(),
-        );
+        let v = v.clone();
         drag.connect_drag_end(move |g, dx, dy| {
-            caret.set(Cue::None);
-            picture2.queue_draw();
+            v.marks.clear_cue(&v.picture);
             let Some(kind) = grab.take() else { return };
             if let Grab::Chip(_, chip) = &kind {
                 chip.set_opacity(1.0);
@@ -763,31 +816,12 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                     }
                 }
                 Grab::Bar { x, resize } => {
-                    finish_bar_drag(&ui, &preview, &shown_layout, x, dx, dy, resize)
+                    finish_bar_drag(&v.ui, &v.preview, &v.shown_layout, x, dx, dy, resize)
                 }
             }
         });
     }
-    page.add_controller(drag);
-    picture.add_controller(drop_target);
-    {
-        let (ui, shown_layout) = (ui.clone(), shown_layout.clone());
-        mirror.connect_active_notify(move |m| {
-            ui.mirror.set(m.is_active());
-            if m.is_active() {
-                ui.mirror_layout(&shown_layout.borrow());
-            } else {
-                ui.stop_mirror();
-            }
-        });
-    }
-    keyboard_access(ui, &picture, &preview, &shown_layout, &frame_focus);
-    refresh();
-    page.upcast()
-}
-
-fn pages_surface(p: &sliver_render::Pixmap) -> Option<gtk::cairo::ImageSurface> {
-    surface(p)
+    drag
 }
 
 /// One preferences group per zone, with the zone's modules as editable rows.
@@ -1101,6 +1135,8 @@ fn zone_dialog(
 }
 
 type DropFn = Rc<dyn Fn(String, f64) -> bool>;
+/// A callback a page part gets from another.
+type Hook = Rc<dyn Fn()>;
 
 /// What a drag on the Bar page started on.
 #[derive(Clone)]
@@ -1655,10 +1691,6 @@ fn library_button(ui: &Rc<Ui>, layout: &str, zone: &str) -> gtk::MenuButton {
     button
 }
 
-/// The inspector (ux.md §4): the common keys as text fields. Each applies on its own.
-/// A callback set after the widgets it needs exist.
-type Hook = Rc<dyn Fn()>;
-
 /// What an inspector edits: module `index` of a zone, or (`member`) a module inside a group,
 /// whose settings live in its `[modules."id"]` block.
 #[derive(Clone, Debug)]
@@ -1739,6 +1771,7 @@ impl Target {
     }
 }
 
+/// The inspector (ux.md §4): the common keys as text fields. Each applies on its own.
 fn inspector(
     ui: &Rc<Ui>,
     target: Target,
