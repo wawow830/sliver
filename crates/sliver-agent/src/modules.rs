@@ -182,6 +182,8 @@ pub struct UiState {
     /// `graph`: the samples to draw, oldest first, 0..=1 (the agent keeps them, see
     /// [`graph_sample`]), and how many fit.
     pub graph: Option<(Vec<f32>, usize)>,
+    /// `clock` with `timezones`: how far the user swiped through the list (wraps around).
+    pub tz: i32,
 }
 
 /// Is this a `graph` module kind (`graph`, waybar-style `custom-graph/<name>`)?
@@ -427,11 +429,31 @@ pub fn module_index(zone_ids: &[String], zone_keys: &[String], pos: usize) -> Op
 
 /// Is this group a `drawer = { mode = "bar" }` one?
 fn is_bar_drawer(m: &ModuleInstance) -> bool {
-    m.config
-        .get("drawer")
-        .and_then(|d| d.get("mode"))
-        .and_then(|v| v.as_str())
-        == Some("bar")
+    drawer_opt(m, "mode").and_then(toml::Value::as_str) == Some("bar")
+}
+
+/// A drawer group's `drawer.<key>` setting.
+fn drawer_opt<'a>(m: &'a ModuleInstance, key: &str) -> Option<&'a toml::Value> {
+    m.config.get("drawer").and_then(|d| d.get(key))
+}
+
+/// The cell keys of drawer groups with `start-expanded = true`, in `zones`. The agent opens each
+/// the first time it sees it; after that, taps and `collapse-after` decide.
+pub fn start_expanded_drawers(zones: &[sliver_config::ResolvedZone]) -> Vec<String> {
+    fn walk(ms: &[ModuleInstance], prefix: &str, out: &mut Vec<String>) {
+        for m in ms.iter().filter(|m| m.id.kind == "group") {
+            let key = format!("{prefix}{}", m.id);
+            if drawer_opt(m, "start-expanded").and_then(toml::Value::as_bool) == Some(true) {
+                out.push(key.clone());
+            }
+            walk(&m.children, &format!("{key}/"), out);
+        }
+    }
+    let mut out = Vec::new();
+    for z in zones {
+        walk(&z.modules, "", &mut out);
+    }
+    out
 }
 
 /// The cells of an open bar-mode drawer: the group's modules after its leader, then a ✕. `key`
@@ -497,20 +519,23 @@ fn cells_in(
             };
             let start = out.len();
             let children = &m.children[..shown.min(m.children.len())];
-            cells_in(
-                children,
-                &format!("{key}/"),
-                world,
-                icons,
-                icon_size,
-                ui,
-                out,
-            );
-            if drawer && let Some(handle) = out.get_mut(start) {
-                let collapse_after = m
-                    .config
-                    .get("drawer")
-                    .and_then(|d| d.get("collapse-after"))
+            let child_prefix = format!("{key}/");
+            // waybar's transition-left-to-right = false: the drawer opens towards the left, so
+            // the leader comes after the rest.
+            let rtl = drawer
+                && drawer_opt(m, "transition-left-to-right").and_then(toml::Value::as_bool)
+                    == Some(false);
+            let mut handle_at = start;
+            if rtl && children.len() > 1 {
+                let (leader, rest) = children.split_at(1);
+                cells_in(rest, &child_prefix, world, icons, icon_size, ui, out);
+                handle_at = out.len();
+                cells_in(leader, &child_prefix, world, icons, icon_size, ui, out);
+            } else {
+                cells_in(children, &child_prefix, world, icons, icon_size, ui, out);
+            }
+            if drawer && let Some(handle) = out.get_mut(handle_at) {
+                let collapse_after = drawer_opt(m, "collapse-after")
                     .and_then(|v| sliver_config::parse_duration(v).ok());
                 handle.drawer = Some(Drawer {
                     group: key.clone(),
@@ -522,11 +547,17 @@ fn cells_in(
                     handle.touch = Touch::Agent;
                 }
             }
+            let child_class = drawer.then(|| {
+                drawer_opt(m, "children-class")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or("drawer-child")
+                    .to_owned()
+            });
             for c in &mut out[start..] {
                 c.classes
                     .push(format!("group-{}", m.id.name.as_deref().unwrap_or("")));
-                if drawer {
-                    c.classes.push("drawer-child".into());
+                if let Some(class) = &child_class {
+                    c.classes.push(class.clone());
                 }
             }
             continue;
@@ -1332,7 +1363,16 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
             }
             sp
         }
-        "clock" => Spec::new(Clock(world.now), CLOCK_DEFAULT),
+        "clock" => {
+            let (clock, zones) = Clock::new(m, world.now, ui.tz);
+            let mut sp = Spec::new(clock, CLOCK_DEFAULT);
+            if zones > 1 {
+                sp = sp
+                    .on(Gesture::SwipeLeft, "tz-next")
+                    .on(Gesture::SwipeRight, "tz-prev");
+            }
+            sp
+        }
         "battery" => {
             let p = &s.power;
             let level = p.battery_pct?;
@@ -1569,11 +1609,18 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
         }
         "window" => {
             let w = world.desktop.window.as_ref()?;
+            // waybar's `rewrite`; bad rules were already reported by the config validator.
+            let title = match m.config.get("rewrite") {
+                Some(r) => {
+                    sliver_config::Rewrite::parse(r, "", &mut Default::default()).apply(&w.title)
+                }
+                None => w.title.clone(),
+            };
             Spec::new(
                 ValueMap::new()
-                    .with("title", esc(&w.title))
+                    .with("title", esc(&title))
                     .with("app_id", esc(&w.class))
-                    .with("", esc(&w.title)),
+                    .with("", esc(&title)),
                 "{title}",
             )
         }
@@ -2346,8 +2393,41 @@ fn touch_kind(m: &ModuleInstance, on: &[(Gesture, Action)]) -> Touch {
 
 const CLOCK_DEFAULT: &str = "{:%H:%M}";
 
-/// Clock placeholders: `{}`/`{time}` with a strftime spec, like waybar (`{:%a %d %b}`).
-struct Clock(DateTime<Local>);
+/// Clock placeholders: `{}`/`{time}` with a strftime spec, like waybar (`{:%a %d %b}`), and
+/// `{timezone}`. waybar's `timezone`/`timezones` (`""` is local time; swipe to cycle) and `locale`
+/// (`de_DE`; names of days and months) are read from the module block.
+struct Clock {
+    now: DateTime<Local>,
+    /// `None`: local time. `Err`: a name that isn't in the time-zone database.
+    zone: Option<Result<chrono_tz::Tz, String>>,
+    locale: Option<Result<chrono::Locale, String>>,
+}
+
+impl Clock {
+    /// The clock for this module, and how many time zones it cycles through.
+    fn new(m: &ModuleInstance, now: DateTime<Local>, tz: i32) -> (Clock, usize) {
+        let s = |v: &toml::Value| v.as_str().map(str::to_owned);
+        let zones: Vec<String> = match (m.config.get("timezones"), m.config.get("timezone")) {
+            (Some(toml::Value::Array(a)), _) if !a.is_empty() => a.iter().filter_map(s).collect(),
+            (_, Some(z)) => s(z).into_iter().collect(),
+            _ => Vec::new(),
+        };
+        let zone = (!zones.is_empty())
+            .then(|| &zones[tz.rem_euclid(zones.len() as i32) as usize])
+            .filter(|z| !z.is_empty())
+            .map(|z| z.parse::<chrono_tz::Tz>().map_err(|_| z.clone()));
+        let locale = m
+            .config
+            .get("locale")
+            .and_then(toml::Value::as_str)
+            .map(|l| {
+                // `de_DE.UTF-8@euro` → `de_DE`, as found in $LANG.
+                let base = l.split(['.', '@']).next().unwrap_or(l);
+                chrono::Locale::try_from(base).map_err(|_| l.to_owned())
+            });
+        (Clock { now, zone, locale }, zones.len())
+    }
+}
 
 impl Values for Clock {
     fn format(&self, name: &str, spec: Option<&str>) -> Option<String> {
@@ -2358,10 +2438,38 @@ impl Values for Clock {
                 if items.iter().any(|i| matches!(i, FmtItem::Error)) {
                     return Some(format!("⚠ bad time format {spec:?}"));
                 }
-                Some(self.0.format_with_items(items.into_iter()).to_string())
+                let locale = match &self.locale {
+                    None => None,
+                    Some(Ok(l)) => Some(*l),
+                    Some(Err(l)) => return Some(format!("⚠ unknown locale {l:?}")),
+                };
+                Some(match &self.zone {
+                    Some(Err(z)) => format!("⚠ unknown time zone {z:?}"),
+                    Some(Ok(tz)) => strftime(&self.now.with_timezone(tz), &items, locale),
+                    None => strftime(&self.now, &items, locale),
+                })
             }
+            "timezone" => Some(match &self.zone {
+                None => "local".to_owned(),
+                Some(Ok(tz)) => tz.name().to_owned(),
+                Some(Err(z)) => z.clone(),
+            }),
             _ => None,
         }
+    }
+}
+
+fn strftime<Tz: chrono::TimeZone>(
+    t: &DateTime<Tz>,
+    items: &[FmtItem],
+    locale: Option<chrono::Locale>,
+) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    match locale {
+        Some(l) => t.format_localized_with_items(items.iter(), l).to_string(),
+        None => t.format_with_items(items.iter()).to_string(),
     }
 }
 
@@ -2435,6 +2543,94 @@ mod tests {
             );
         }
         out
+    }
+
+    #[test]
+    fn clock_time_zones_and_locale() {
+        let toml = r#"
+            [[layouts.default.zones]]
+            name = "main"
+            modules = ["clock", "clock#de", "clock#bad"]
+            [modules.clock]
+            format = "{:%H:%M} {timezone}"
+            timezones = ["", "Asia/Tokyo"]
+            [modules."clock#de"]
+            format = "{:%A}"
+            locale = "de_DE.UTF-8"
+            [modules."clock#bad"]
+            timezone = "Mars/Olympus"
+            "#;
+        let loaded = load_str(toml, std::path::Path::new("."));
+        let r = loaded.config.resolve("base", &Context::new()).unwrap();
+        let at = |tz: i32| {
+            let mut out = Vec::new();
+            let ui = move |_: &str| UiState {
+                tz,
+                ..UiState::default()
+            };
+            let mut icons = Icons::builtin_only();
+            cells(&r.zones[0].modules, &world(), &mut icons, 36, &ui, &mut out);
+            out.iter()
+                .map(|c| match &c.content {
+                    Content::Markup(t) | Content::Text(t) => t.clone(),
+                    other => panic!("{other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        let now = world().now;
+        let tokyo = now.with_timezone(&chrono_tz::Asia::Tokyo).format("%H:%M");
+        assert_eq!(at(0)[0], format!("{} local", now.format("%H:%M")));
+        assert_eq!(at(1)[0], format!("{tokyo} Asia/Tokyo"));
+        assert_eq!(at(-1)[0], at(1)[0], "swiping back wraps around");
+        assert_eq!(at(0)[1], "Montag", "2026-10-12 in German");
+        assert!(at(0)[2].contains("unknown time zone"), "{:?}", at(0)[2]);
+
+        let mut out = Vec::new();
+        let mut icons = Icons::builtin_only();
+        cells(
+            &r.zones[0].modules,
+            &world(),
+            &mut icons,
+            36,
+            &|_| UiState::default(),
+            &mut out,
+        );
+        let swipes = |c: &Cell| {
+            c.on.iter()
+                .filter(|(g, _)| *g == Gesture::SwipeLeft)
+                .count()
+        };
+        assert_eq!(
+            (swipes(&out[0]), swipes(&out[1])),
+            (1, 0),
+            "only a list cycles"
+        );
+    }
+
+    #[test]
+    fn window_title_rewrite() {
+        let mut w = World::sample(world().now);
+        w.desktop.window.as_mut().unwrap().title = "Docs <b> - Mozilla Firefox".into();
+        let cells = stat_cells(
+            r#"
+            [[layouts.default.zones]]
+            name = "main"
+            modules = ["window", "window#plain"]
+            [modules.window]
+            rewrite = [{ match = "(.*) - Mozilla Firefox", replace = "web: $1" }]
+            "#,
+            &w,
+        );
+        let text = |c: &Cell| match &c.content {
+            Content::Markup(t) | Content::Text(t) => t.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            text(&cells[0]),
+            "web: Docs &lt;b&gt;",
+            "rewritten, still escaped"
+        );
+        assert_eq!(text(&cells[1]), "Docs &lt;b&gt; - Mozilla Firefox");
     }
 
     #[test]
@@ -3050,6 +3246,51 @@ mod tests {
         );
         assert_eq!(cells[0].touch, Touch::Agent, "the handle opens the drawer");
         assert!(matches!(cells[1].content, Content::Icon(_)));
+    }
+
+    #[test]
+    fn drawer_options_class_direction_and_start() {
+        let loaded = load_str(
+            r#"
+            [[layouts.t.zones]]
+            name = "main"
+            modules = ["group/d"]
+            [modules."group/d"]
+            modules = ["key/F1", "key/F2", "key/F3"]
+            drawer = { start-expanded = true, transition-left-to-right = false, children-class = "kid" }
+            [[rules]]
+            layout = "t"
+            "#,
+            std::path::Path::new("."),
+        );
+        assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
+        let r = loaded.config.resolve("base", &Context::new()).unwrap();
+        assert_eq!(start_expanded_drawers(&r.zones), ["group/d"]);
+
+        let open = |k: &str| UiState {
+            expanded: k == "group/d",
+            ..UiState::default()
+        };
+        let mut out = Vec::new();
+        let mut icons = Icons::builtin_only();
+        cells(
+            &r.zones[0].modules,
+            &world(),
+            &mut icons,
+            36,
+            &open,
+            &mut out,
+        );
+        let keys: Vec<&str> = out.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["group/d/key/F2", "group/d/key/F3", "group/d/key/F1"],
+            "opens towards the left: the leader comes last"
+        );
+        assert!(out[2].drawer.is_some(), "the leader is still the handle");
+        assert!(out[0].drawer.is_none());
+        assert!(out.iter().all(|c| c.classes.contains(&"kid".to_string())
+            && !c.classes.contains(&"drawer-child".to_string())));
     }
 }
 

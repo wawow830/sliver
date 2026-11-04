@@ -688,6 +688,12 @@ fn parse_rule(t: &Table, path: &str, d: &mut Diagnostics) -> Option<Rule> {
         Some(v) => Condition::parse(v, &join(path, "when"), d),
         None => Some(Condition::always()),
     };
+    if when.as_ref().is_some_and(|w| w.mentions("layout")) {
+        d.warn(
+            join(path, "when"),
+            "rules choose the layout, so `layout` is unknown here and never matches",
+        );
+    }
     let layer = r.string("layer", d).unwrap_or_else(|| "base".into());
     let layout = r.string("layout", d);
     if layout.is_none() {

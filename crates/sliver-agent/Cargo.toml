@@ -29,7 +29,8 @@ rustix = { workspace = true, features = ["event", "time", "pipe", "fs"] }
 zbus = "5"
 signal-hook = "0.3"
 sliver-reload.workspace = true
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "unstable-locales"] }
+chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 xkbcommon = { version = "0.8", default-features = false }
 
 [dev-dependencies]

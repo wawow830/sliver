@@ -183,3 +183,28 @@ fn includes_are_followed_and_the_including_file_wins() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn window_rewrite_keeps_its_order() {
+    let i = import_str(
+        r#"{ "modules-left": ["hyprland/window"],
+             "hyprland/window": { "rewrite": { "z(.*)": "Z$1", "(.*) - Firefox": "web $1" } } }"#,
+        &Options { stylesheet: None },
+    )
+    .unwrap();
+    let t: Table = i.toml.parse().unwrap();
+    let rules = t["modules"]["hyprland/window"]["rewrite"]
+        .as_array()
+        .unwrap();
+    let first: Vec<&str> = rules.iter().map(|r| r["match"].as_str().unwrap()).collect();
+    assert_eq!(
+        first,
+        ["z(.*)", "(.*) - Firefox"],
+        "waybar's order, not sorted"
+    );
+    assert!(
+        !i.notes.iter().any(|n| n.path.contains("rewrite")),
+        "{:?}",
+        i.notes
+    );
+}

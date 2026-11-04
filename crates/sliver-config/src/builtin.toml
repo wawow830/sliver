@@ -88,7 +88,7 @@ when = { not = { physical-esc = true } }
 [modules."group/control-strip"]
 modules = ["custom/expand", "kbd-backlight/slider", "key/MicMute",
            "key/PreviousSong", "key/PlayPause", "key/NextSong"]
-drawer = { reveal = "tap", mode = "inline", collapse-after = "5s", transition-left-to-right = false }
+drawer = { reveal = "tap", mode = "inline", collapse-after = "5s" }
 
 [modules."group/fkeys"]
 modules = ["key/F1", "key/F2", "key/F3", "key/F4", "key/F5", "key/F6",

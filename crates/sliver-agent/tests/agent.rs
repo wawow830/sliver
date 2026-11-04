@@ -1175,6 +1175,42 @@ fn emoji_skin_tones() {
     assert_eq!(texts(&a)[11], "👋🏽");
 }
 
+/// `drawer = { start-expanded = true }`: open on the first frame; the leader still closes it.
+#[test]
+fn start_expanded_drawer_opens_once() {
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"group/tools\"]\n\
+[modules.\"group/tools\"]\nmodules = [\"custom/more\", \"custom/a\"]\ndrawer = { start-expanded = true }\n\
+[modules.\"custom/more\"]\nformat = \"more\"\n[modules.\"custom/a\"]\nformat = \"A\"\n",
+    );
+    let w = world(9, 41);
+    let keys = |a: &Agent| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .map(|c| c.key.clone())
+            .collect::<Vec<_>>()
+    };
+    a.render(&w);
+    assert_eq!(
+        keys(&a),
+        ["group/tools/custom/more", "group/tools/custom/a"]
+    );
+    let (id, x) = region(&a, "group/tools/custom/more");
+    a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    a.touch(id, 0, TouchPhase::Up, x, 41_000);
+    a.tick(400_000);
+    a.render(&w);
+    a.render(&w);
+    assert_eq!(
+        keys(&a),
+        ["group/tools/custom/more"],
+        "closed, and it stays closed"
+    );
+}
+
 /// `drawer = { mode = "bar" }`: tapping the leader opens the rest of the group as a sub-bar
 /// with a ✕, instead of expanding in place.
 #[test]

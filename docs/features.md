@@ -37,7 +37,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (config in `/usr/share/tiny-dfr/config
 |---|---|---|---|---|---|---|
 | Key button: text and/or icon, single key or combo | P0 | done | dfr, MTMR staticButton | tap, hold = key repeat | uinput (daemon) | Keys come from the `sliver-touch-bar-keys` device; held keys use the compositor's normal repeat. |
 | Spacer: fixed or flexible | P0 | done | dfr `{Stretch}`, MTMR | none |  |  |
-| Clock: 12h/24h/strftime, locale | P0 | done | dfr Time, MTMR timeButton | tap → action (e.g. calendar) |  |  |
+| Clock: 12h/24h/strftime, locale, time zones | P0 | done | dfr Time, MTMR timeButton | tap → action (e.g. calendar) |  |  |
 | Battery: percent/icon/both, charging and low colors | P0 | done | dfr Battery, MTMR | tap → power settings | UPower in the agent; sysfs fallback in the daemon |  |
 | Media keys: brightness ±, kbd backlight ±, volume ±, mute, mic mute, prev/play/next, search | P0 | done | dfr media layer | tap, hold-repeat | uinput keycodes | Whether a media key repeats is up to the compositor bind, as with a physical keyboard. |
 | **Brightness / volume / kbd-backlight slider** | P1 | done | mac control strip, BTT | press-and-slide, drag, tap to expand | logind backlight, PipeWire/wpctl |  |

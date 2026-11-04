@@ -155,6 +155,8 @@ impl Config {
     /// Everything one layer shows in this context.
     pub fn resolve(&self, layer: &str, ctx: &Context) -> Result<Resolved, ResolveError> {
         let (layout, rule) = self.select_layout(layer, ctx)?;
+        // Modules' `when` can ask which layout they're in. Rules can't: they choose it.
+        let ctx = &ctx.clone().with("layout", layout);
         let zones = self
             .layout_zones(layout)?
             .into_iter()
@@ -308,6 +310,43 @@ mod tests {
         let r = c.resolve("fn", &old_mac).unwrap();
         assert_eq!(ids(&r)[0], vec!["key/Esc#auto"]);
         assert_eq!(r.zones[0].modules[0].classes, vec!["auto"]);
+    }
+
+    #[test]
+    fn module_when_sees_the_chosen_layout() {
+        let c = config(
+            r#"
+            [[layouts.firefox.zones]]
+            name = "main"
+            modules = ["key/Back", "clock", "battery"]
+            [layouts.firefox]
+            extends = "default"
+            [modules.clock]
+            when = { layout = "firefox" }
+            [modules.battery]
+            when = { layout = "default" }
+            [[rules]]
+            when = { app-id = "firefox" }
+            layout = "firefox"
+            "#,
+        );
+        let ff = Context::new()
+            .with("app_id", "firefox")
+            .with("physical_esc", true);
+        let r = c.resolve("base", &ff).unwrap();
+        assert_eq!(r.layout, "firefox");
+        assert_eq!(ids(&r)[1], ["key/Back", "clock"]);
+
+        let rule: Table = "[[rules]]\nwhen = { not = { layout = \"x\" } }\nlayout = \"default\""
+            .parse()
+            .unwrap();
+        let (_, d) = Config::from_table(&rule);
+        assert!(
+            d.warnings
+                .iter()
+                .any(|w| w.path == "rules[0].when" && w.message.contains("rules choose")),
+            "{d:#?}"
+        );
     }
 
     #[test]

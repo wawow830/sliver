@@ -333,6 +333,19 @@ fn build(bar: Map<String, Json>, opts: &Options, mut notes: Vec<Note>) -> Import
                     bk.clone(),
                     Value::Array(kids.into_iter().map(Value::String).collect()),
                 );
+            } else if let (true, Json::Object(rules)) = (bk == "rewrite", bv) {
+                // TOML tables are unordered here and waybar applies rules in order: keep it as
+                // an array of { match, replace }.
+                let rules = rules
+                    .iter()
+                    .filter_map(|(re, to)| {
+                        let mut r = Table::new();
+                        r.insert("match".into(), re.as_str().into());
+                        r.insert("replace".into(), to.as_str()?.into());
+                        Some(Value::Table(r))
+                    })
+                    .collect();
+                t.insert(bk.clone(), Value::Array(rules));
             } else if let Some(x) = to_toml(bv, &format!("{k}.{bk}"), &mut notes) {
                 t.insert(bk.clone(), x);
             }

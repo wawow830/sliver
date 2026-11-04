@@ -537,10 +537,29 @@ or
 .BR bar ),
 .BR start\-expanded ,
 .BR collapse\-after ,
-.BR transition\-duration ,
 .B children\-class
-and
-.BR transition\-left\-to\-right .
+(replaces the
+.B drawer\-child
+class) and
+.B transition\-left\-to\-right
+.RB ( false
+opens it towards the left).
+.SS Clock and window
+.B clock
+takes
+.B locale
+(\fBde_DE\fP: day and month names),
+.B timezone
+or
+.B timezones
+(a list; \fB""\fP is local time; swipe to cycle) and the placeholder
+.BR {timezone} .
+.B window
+takes waybar's
+.BR rewrite :
+a table of \fIregex\fP = \fIreplacement\fP, or an array of
+.B { match, replace }
+tables when order matters. Every rule whose regex matches the whole title applies, in order.
 .SS Custom modules
 .BI custom/ name
 runs scripts the way waybar does.

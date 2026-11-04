@@ -31,6 +31,7 @@ mod module;
 pub mod preset;
 pub mod profile;
 mod resolve;
+mod rewrite;
 pub mod tinydfr;
 mod validate;
 mod values;
@@ -51,6 +52,7 @@ pub use resolve::{
     HIDDEN_WHILE_LOCKED, MAX_DEPTH, ModuleInstance, ResolveError, Resolved, ResolvedZone,
     deep_merge,
 };
+pub use rewrite::Rewrite;
 pub use validate::{COMFORTABLE_TARGET_PX, Hardware, TINY_TARGET_PX};
 pub use values::{Align, FireOn, Interval, MIN_INTERVAL, Width, parse_duration};
 pub use writer::{Editor, parse_cli_value};

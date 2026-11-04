@@ -191,6 +191,9 @@ impl Config {
         let block = self.module_block(m);
         let (common, rest) = Common::parse(&block, path, d);
         check_type_keys(id, &rest, path, d);
+        if let Some(r) = rest.get("rewrite") {
+            crate::Rewrite::parse(r, &crate::diag::join(path, "rewrite"), d);
+        }
         let formats = [
             ("format", common.format.as_ref()),
             ("format-alt", common.format_alt.as_ref()),

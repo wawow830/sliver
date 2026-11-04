@@ -208,14 +208,14 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
 |---|---|---|
 | `key/<Key>` | (none, from tiny-dfr) | Esc, F1–F24 and media keys. Emitted by sliverd through uinput. |
 | `spacer` | (CSS margins) | `width` decides its size. |
-| `clock` | `clock` | `{:%strftime}`, `locale`, `timezones` with swipe to cycle (like waybar's scroll). |
+| `clock` | `clock` | `{:%strftime}` and `{timezone}`. `locale = "de_DE"` names days and months in that language (a `$LANG`-style `de_DE.UTF-8` works too). `timezone = "Asia/Tokyo"`, or `timezones = ["", "Asia/Tokyo"]` (`""` is local time) to swipe through them, like waybar's scroll. Unknown names show a ⚠ on the module. |
 | `battery` | `battery`, `upower` | `{capacity}`, `{time}`, `{status}` states, `format-charging`… |
 | `backlight`, `backlight/slider` | same | Slider: press-and-slide. `on-drag` gets `{value}`. |
 | `kbd-backlight`, `kbd-backlight/slider` | (none) | |
 | `audio`, `audio/slider` | `pulseaudio`, `wireplumber`, `pulseaudio/slider` | `audio#mic` with `node = "source"` for the mic. |
 | `mpris` | `mpris` | `{title}` `{artist}` `{status_icon}` `{album}` `{player}`; tap play/pause, swipe next/previous, **hold switches to the next player** when several run. Album art (`mpris:artUrl`: `file://`, or `http(s)://` fetched once with curl into `~/.cache/sliver/art`; PNG and JPEG) is the icon (`art = false` turns it off). `scrub = true` turns the module into a progress slider (position extrapolated while playing, no polling) that seeks on drag. |
 | `workspaces` | `hyprland/workspaces`, `sway/workspaces`, `niri/workspaces` | One button per workspace (the focused output's, or all with `all-outputs = true`); classes `.active` `.urgent` `.empty` `.default`, `:checked` on the active one; `{name}` `{id}` `{windows}`; tap switches workspace. The backend is chosen automatically (Hyprland, sway, niri). The waybar names are accepted as aliases. |
-| `window` | `hyprland/window`… | Focused app/title. `rewrite` rules as in waybar. |
+| `window` | `hyprland/window`… | `{title}`, `{app_id}`. `rewrite` as in waybar: each rule whose regex matches the whole title rewrites it, in order (`$1` for captures). Either `rewrite = { "(.*) - Mozilla Firefox" = "🌎 $1" }` or, when order matters (TOML tables are unordered), `rewrite = [{ match = "…", replace = "…" }]`. The waybar importer writes the array form. |
 | `mode` | `hyprland/submap`, `sway/mode` | |
 | `language` | `hyprland/language`, `sway/language` | Tap = next layout. Hold opens a sub-bar of the configured layouts (Hyprland, sway, niri); picking one switches to it. An explicit `menu = [...]` on the module replaces it. **fcitx5** (CJK input methods): while fcitx5 is running and a window has an input method, the module shows the method's own label (`拼`, `あ`, `en`) instead of the compositor's layout; tap toggles it (fcitx5's activate/deactivate), hold lists the active group and picks one. Placeholders `{}`/`{short}` (the label), `{input_method}`/`{long}` (`Pinyin`), `{id}` (`pinyin`); with fcitx5 absent `{short}`/`{input_method}` are the layout name, so one `format` serves both. fcitx5 sends no signal when the input method changes, so sliver asks it every 2 s (one cheap call), on window focus changes and after its own switches. It only asks while the bar is on, fcitx5 is running and a layout uses the module. |
 | `idle-inhibitor` | `idle_inhibitor` | Caffeine. |
@@ -249,9 +249,12 @@ Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar com
   "tap" | "hold" | "swipe"` is accepted (there's no hover), but only tap is implemented: tapping
   the leader opens and closes the drawer. `mode = "inline"` expands in place and pushes neighbors,
   like the macOS control strip. `mode = "bar"` opens the rest of the group as a sub-bar below the
-  first zone, with an automatic ✕, like MTMR/BTT folders. The other keys are `start-expanded`,
-  `collapse-after`, `transition-duration`, `children-class` and `transition-left-to-right`, all
-  named as in waybar.
+  first zone, with an automatic ✕, like MTMR/BTT folders. As in waybar: `start-expanded = true`
+  opens it on the first frame, `children-class` replaces the `drawer-child` class on its
+  modules, and `transition-left-to-right = false` puts the leader after the rest, so an inline
+  drawer opens towards the left. `collapse-after = "5s"` closes it again after that long without
+  a touch. A drawer's modules appear at once; a stylesheet `transition: width …` on the modules
+  around it makes them glide out of the way (§7).
 - The default base layout's main zone is `app-controls` followed by `group/fkeys` (F1–F12,
   `module-width = "fill"`, `when = { not = { app-controls = true } }`). The bar shows F-keys
   until the focused app publishes controls, then gives the app the space. This is because few
@@ -356,7 +359,8 @@ edge-swipe-from-right = "notify-send hi"
   rules below it, and `rules = []` means "no rules, not even that one". Privacy doesn't depend on
   it either way (§9.4).
 - **Conditions** (`when`, here and on modules) form a table whose keys are context keys
-  (integration.md §1; `app-id` and `app_id` are the same key). All keys must match. `any = [ {…},
+  (integration.md §1; `app-id` and `app_id` are the same key). A module's `when` can also test
+  `layout`, the layout the rules chose; a rule can't, since it's what chooses it. All keys must match. `any = [ {…},
   {…} ]` means at least one of the sub-tables matches, and `not = {…}` negates. A value can be:
   - a literal (bool, number, or string; `app-id` compares case-insensitively and also matches
     the .desktop id)
@@ -468,6 +472,7 @@ These are the selectors sliver guarantees, mirroring waybar (full reference: `do
 | Hover and `tooltip` | No hover on touch | `detail` (§3) |
 | Mouse buttons (middle/back/forward, triple-click) | Touch has none of them | tap, double-tap, hold, swipe, drag |
 | `rotate` | The bar is 60 px tall | none |
+| Drawer `transition-duration` | Animation belongs to the stylesheet, and a drawer's modules appear at once | `transition: width <time>` makes the neighbouring modules glide (§7) |
 | `cffi` (in-process C plugins) | Crash safety: a plugin must never take the bar down | `custom/*` exec, or the D-Bus API for long-running programs |
 | `cava` | Power cost (invariant 3) | none |
 | GtkBuilder `menu-file` | No GTK on the bar | `menu = [...]` sub-bar |

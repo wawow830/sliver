@@ -64,6 +64,7 @@ the context, so it never matches.
 | `time` (`HH:MM`), `weekday` (`mon`…) | string | agent |
 | `physical_esc` | bool | agent: does this Mac have a physical Esc key |
 | `layer` | string | agent: the current layer |
+| `layout` | string | the layout the rules chose. Only module `when` conditions see it: rules choose the layout, so a rule on `layout` never matches (the config check warns) |
 | `app_controls` | bool | agent: the focused app fills App controls |
 
 `app_id` also matches the `.desktop` id (`org.mozilla.firefox` vs class `firefox`), because icon

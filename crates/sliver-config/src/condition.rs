@@ -182,6 +182,13 @@ impl Condition {
         Self::default()
     }
 
+    /// Whether context key `key` appears anywhere in this condition.
+    pub fn mentions(&self, key: &str) -> bool {
+        self.all.iter().any(|(k, _)| k == key)
+            || self.any.iter().any(|c| c.mentions(key))
+            || self.not.as_ref().is_some_and(|n| n.mentions(key))
+    }
+
     /// Whether this only matches when context flag `key` is true (`{ locked = true, … }`).
     pub fn requires_flag(&self, key: &str) -> bool {
         let key = canonical_key(key);

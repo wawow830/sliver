@@ -378,6 +378,12 @@ impl Agent {
                         let rule = r.rule.filter(|_| self.layout_override.is_none());
                         self.active = Some((r.layout.clone(), rule));
                     }
+                    for key in modules::start_expanded_drawers(&r.zones) {
+                        self.ui.entry(key).or_insert_with(|| UiState {
+                            expanded: true,
+                            ..UiState::default()
+                        });
+                    }
                     // A panic while building (a module bug, input nobody foresaw) must not take
                     // the agent down: systemd would restart it into the same panic, over and
                     // over. Keep showing this layer's last good frame and report it instead.
@@ -1617,6 +1623,14 @@ impl Agent {
             ("dark-mode", "toggle", _) => SessionOp::ToggleDark,
             ("notifications", "open", _) => SessionOp::OpenNotification,
             ("notifications", "dismiss", _) => SessionOp::DismissNotification,
+            ("clock", "tz-next" | "tz-prev", _) => {
+                let key = cell.key.clone();
+                let step = if name == "tz-next" { 1 } else { -1 };
+                let ui = self.ui(&key);
+                ui.tz = ui.tz.wrapping_add(step);
+                fx.push(Effect::Redraw);
+                return;
+            }
             ("timer", "toggle", _) => {
                 let total = cell
                     .timer_total
