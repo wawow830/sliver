@@ -1,6 +1,6 @@
 # ADR-0005: sliverd system integration (systemd, udev, tiny-dfr fallback, no root)
 
-Status: accepted · Owner: hazel · Files: `packaging/systemd/`, `packaging/udev/`, `packaging/itest-units.sh`
+Status: accepted · Files: `packaging/systemd/`, `packaging/udev/`, `packaging/itest-units.sh`
 
 ## Context
 GOAL invariant 1: "If the daemon dies, systemd brings back tiny-dfr or sliverd." tiny-dfr is
@@ -22,7 +22,7 @@ package, and hand the bar back when it can't run.
   tiny-dfr as soon as a start was queued, even one the start limit then refused, and `OnFailure=`
   doesn't fire again for an already-failed unit. A second `systemctl start sliverd` after the
   fallback left the bar with no daemon. ExecStartPre only runs for starts that really happen.
-  *Amended again (T131):* the stop tolerates exit 5 ("no such unit"), via `/bin/sh -c`. A plain
+  *Amended again:* the stop tolerates exit 5 ("no such unit"), via `/bin/sh -c`. A plain
   `systemctl stop tiny-dfr.service` fails where tiny-dfr isn't installed, so sliverd never started
   there; `packaging/itest-rpm.sh` found it. Other stop failures still fail the start.
 - **Recovery ladder.** `Restart=always`, `RestartSec=500ms`, `RestartMode=direct` (no trip through
@@ -54,7 +54,7 @@ package, and hand the bar back when it can't run.
   fallback, preemption both ways, no reactivation via the socket after the fallback, a refused start
   after the fallback leaving tiny-dfr up (fails on the old `Conflicts=` units), socket-only start,
   and simultaneous starts (exactly one runs).
-- Installing the files is a `sudo` ask. The first boot with them is a `hardware` ask (watch the
-  bar, confirm `systemctl status sliverd`, and check that the fallback works with
-  `systemctl kill -s SEGV` ×6).
-- SELinux: sliverd runs as `unconfined_service_t` like tiny-dfr. No denials on the real install (T76), and no module is planned (docs/packaging.md).
+- Installing the files needs root. On a new machine, the first boot with them needs someone
+  watching the bar: confirm `systemctl status sliverd`, and check that the fallback works with
+  `systemctl kill -s SEGV` ×6.
+- SELinux: sliverd runs as `unconfined_service_t` like tiny-dfr. No denials on the real install, and no module is planned (docs/packaging.md).

@@ -1,7 +1,6 @@
 # Sliver API
 
-Owner: **cedar** (ADR-0003). Changes to anything in this file: message cedar or amend the ADR.
-Status: **draft v1**. Nothing here is public until a release ships. Bus name settled by the human (H1).
+Status: **draft v1**. Nothing here is public until a release ships. Design decisions: ADR-0003.
 
 Sliver has two API surfaces:
 
@@ -22,8 +21,8 @@ root     = /io/github/wawow830/Sliver
 ifaces   = NS.TouchBar1  NS.Context1  NS.Control1  NS.Desktop1
 ```
 
-One agent owns the name. A second one gets `Exists` and exits (status 1) instead of taking it:
-the unit is `Type=dbus`, so losing the name used to stop the installed agent for good.
+One agent owns the name. A second one gets `Exists` and exits (status 1) instead of taking it,
+because the unit is `Type=dbus` and systemd would stop the installed agent if it lost the name.
 `sliver-agent --replace` takes it on purpose. The replaced agent waits in the bus's queue, off
 sliverd, and gets the name back (and the bar) when the replacer exits. `--render` never asks for
 the name.
@@ -50,7 +49,7 @@ Additive changes bump the `Version` property (minor).
  └─────┴──────────────────────────────────────────────────────────┴──────────────────────────────┘
 ```
 
-Terms match docs/ux.md (elm). The **user's layout** (config, settings app) has three zones: **Esc**
+Terms match docs/ux.md. The **user's layout** (config, settings app) has three zones: **Esc**
 (pinned), **Main**, and **Controls** (collapsible control strip). Apps never decide the layout. Their
 items only appear where the user put one of two **placeholder items**:
 - **App controls**: the focused app's context. The default layout puts it in Main.
@@ -72,7 +71,7 @@ Rules, layers and layout resolution all happen in the agent. sliverd only knows 
   gesture recognition, and sends **events** back to the owner. Apps never draw pixels.
 - **Published items are modules** (GOAL.md design principle, waybar model). Each item is a module
   instance `app/<provider>#<item-id>`, and a whole context is the group module `app/<provider>`
-  (grammar owned by docs/customization.md).
+  (grammar in docs/customization.md).
   The user treats them **exactly like built-ins**: place them in any zone of any layout (not just
   the placeholders), style them from the stylesheet, bind any gesture to their own actions, and
   reshape them with `format`. The placeholders are just the zero-config default. They hold
@@ -197,7 +196,7 @@ Emoji are just text.
 
 ### 3.1 Published items are first-class modules
 Everything a config-defined module can do, a published item can do too. The vocabulary is shared
-with the config schema (T11/T20/T21/T22, owned by elm and the config peers). This is the D-Bus side of it.
+with the config schema (docs/customization.md). This is the D-Bus side of it.
 
 | waybar-style feature | for a published item |
 |---|---|
@@ -234,8 +233,8 @@ While the session is **locked**, App controls and Status items are empty whateve
 Status zone: all visible `status` contexts, ordered by user prefs, then provider id. Overflow drops the
 lowest `priority` items; the user can hide any provider.
 
-### User preferences (config, T53)
-The user steers all of this from `config.toml` (schema owned by elm, docs/customization.md):
+### User preferences (config)
+The user steers all of this from `config.toml` (schema in docs/customization.md):
 - `[apps."<app-id>"]` (case-insensitive, with `[apps."*"]` as the default) sets `controls` (may
   fill App controls), `whole-bar` (modal allowed) and `pin` (only this provider fills App controls).
 - `[providers."<provider-id>"]` sets `show` (false hides it everywhere), `allow` (lets a sandboxed
@@ -262,7 +261,7 @@ is sliverd (§6).
 queued: changes from apps and scripts redraw the bar at most 30 times a second (the last change
 always gets drawn; touches and animations aren't held back), so a client calling `Update` in a
 loop costs at most 30 renders a second, and sustained abuse (> 120 calls/s) is throttled. The same
-cap applies to `custom/*` scripts that print in a tight loop (`sliver_agent::pace`, T99).
+cap applies to `custom/*` scripts that print in a tight loop (`sliver_agent::pace`).
 Clients can't emit key presses, read other clients' items, or force the bar on.
 
 ## 5. `NS.Control1` and `NS.Desktop1` at `root`
@@ -359,7 +358,7 @@ Implemented in `crates/sliver-ipc`. `proto` has the types and codec, `validate` 
 `transport` the seqpacket connection with fd passing (peer hangup *and* reset both read as `Ok(None)`),
 `shm` the sealed memfd buffers, `router` the key-region touch semantics, and `hatch` the safe hatch.
 For headless agent tests, `sliverd::testing::TestDaemon` (feature `testing`) runs the real daemon core
-on fake hardware over a real socket. It replaced the earlier `sliver_ipc::fake::FakeDaemon`. Error codes on the wire are the snake_case `ErrorCode` variants.
+on fake hardware over a real socket. Error codes on the wire are the snake_case `ErrorCode` variants.
 
 ### Handshake
 ```
@@ -383,7 +382,7 @@ sliverd rotates to the panel (`60x2008` on Mac14,7). Intel T2 bars report their 
 | `emit_keys` | `keys` [u16], `mode` (`tap`/`down`/`up`) | for keys decided by agent regions (long-press → key, macros). Rate-limited. |
 | `pong` | `nonce` | |
 | `bye` | — | clean exit: safe layer now |
-| `report` | `proto`, `client` (e.g. `sliverctl 0.1.0`) | **instead of** `hello`, any uid (1.1): sliverd answers `hw_report` and closes. Never an agent; roles and the bar are untouched (`sliverctl doctor`). An older sliverd answers `error{unknown_message}` and leaves the connection open (seen on the installed one) |
+| `report` | `proto`, `client` (e.g. `sliverctl 0.1.0`) | **instead of** `hello`, any uid (1.1): sliverd answers `hw_report` and closes. Never an agent; roles and the bar are untouched (`sliverctl doctor`). A 1.0 sliverd answers `error{unknown_message}` and leaves the connection open |
 
 `Region`: `{"id":u32,"rect":[x,y,w,h],"kind":"key","keys":[u16…]}` or `{"id":…,"rect":…,"kind":"agent"}`.
 `keys` is pressed in order and released in reverse (combos). `pressed` is an optional second image with
@@ -418,11 +417,11 @@ highlight if absent.
   | invalid buffer/frame/keys | `error{invalid_buffer/invalid_frame/forbidden_key}` | previous frame stays |
 
   Every switch to the safe layer releases held keys first.
-- **Safe hatch (invariant 1):** layouts and the fn layer are **fully editable** (H4 revised), so sliverd
+- **Safe hatch (invariant 1):** layouts and the fn layer are **fully editable**, so sliverd
   never rejects a frame for lacking Esc/F-keys. Instead, **double-press Fn and hold** (two key-downs
   ≤ 400 ms apart) and sliverd shows its built-in layer for as long as Fn stays down. That's F1–F12,
-  plus Esc first on bars with no physical Esc (≥ 2170 px, tiny-dfr's heuristic; this 2008 px Mac14,7
-  has one, H2). It's hard-wired: no config, agent or app can change or block it. Touches captured
+  plus Esc first on bars with no physical Esc (≥ 2170 px, tiny-dfr's heuristic; the 2008 px Mac14,7
+  has one). It's hard-wired: no config, agent or app can change or block it. Touches captured
   on the agent's layer are cancelled when it opens, and the agent gets `hatch{active}`. The same
   built-in layer is the safe layer when no agent is connected, and the fn layer when the agent never
   presented one. `sliver_ipc::hatch::FnHatch` is the shared state machine.
@@ -436,7 +435,7 @@ highlight if absent.
 A touch that starts on a key region presses its keys, and lifting releases them. Sliding off the region
 releases them, and sliding back presses them again. A touch never presses a second region. Each
 slot is independent, so multi-touch chords work. This is tiny-dfr parity (docs/hardware.md), with one
-deliberate change: combos are released in **reverse** order (modifiers last). T8 implements it.
+deliberate change: combos are released in **reverse** order (modifiers last). `sliver_ipc::router` implements it.
 
 ## 7. Lifecycles
 - **Agent restart:** clients see `NameOwnerChanged` for `NS` and must re-create their contexts.
@@ -451,8 +450,9 @@ deliberate change: combos are released in **reverse** order (modifiers last). T8
 
 Clients: **`crates/sliver-client`** (Rust: builders, an event channel, and automatic re-publishing
 when the agent restarts or starts late), **`sliverctl`** (every `Control1` method, plus `publish`), and
-**`examples/`** (`python/pomodoro.py` in plain Gio, `node/counter.js`, `gjs/counter.js`, `qt/counter.cpp`, `shell/README.md`). Per-toolkit recipes (GTK/GJS, Qt, Electron/Node) are in `docs/integrating-apps.md`. All three are tested end to end
-against the real server on a private bus, the Python example included.
+**`examples/`** (`python/pomodoro.py` in plain Gio, `node/counter.js`, `gjs/counter.js`, `qt/counter.cpp`, `shell/README.md`). Per-toolkit recipes (GTK/GJS, Qt, Electron/Node) are in `docs/integrating-apps.md`. The Rust crate,
+`sliverctl` and the Python and Node examples are tested end to end against the real server on a
+private bus.
 
 Shell (`busctl`):
 ```sh

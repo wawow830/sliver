@@ -1,15 +1,14 @@
-# Desktop integration survey (T7)
+# Desktop integration
 
 How `sliver-agent` learns what is on screen and what state the machine is in, so it can pick
-layouts (per app / workspace / state) and drive widgets. Written against this machine
-(Fedora Asahi 44, Hyprland 0.56.2, PipeWire 1.6.8, UPower, logind, quickshell as the shell) but
-the backend list covers the other targets in `GOAL.md`.
+layouts (per app, workspace or state) and drive modules. It covers the desktops listed in
+`GOAL.md`. Notes about specific software versions come from a Fedora Asahi 44 system running
+Hyprland 0.56.2, PipeWire 1.6.8, UPower, logind and quickshell as the shell.
 
-Code: `crates/sliver-desktop` (`DesktopState`, `DesktopSource`, Hyprland watcher, scripted fake)
-and `crates/sliver-session` (`SessionState`, `SessionSource`: logind, UPower, power-profiles,
-MPRIS; `mpris::control` for transport commands; `Session::start(system_conn, session_conn)`).
-Facts below marked **(verified)** were checked on this machine; the rest is from protocol docs
-and should be re-verified when that backend is built.
+Code: `crates/sliver-desktop` (`DesktopState`, `DesktopSource`, the compositor backends, a scripted
+fake) and `crates/sliver-session` (`SessionState`, `SessionSource`: logind, UPower,
+power-profiles, MPRIS and more; `mpris::control` for transport commands;
+`Session::start(system_conn, session_conn)`).
 
 ## 1. Architecture
 
@@ -23,362 +22,353 @@ notifications      ─┘
 
 - Every source is **event driven** (socket read, D-Bus signal, netlink); none polls on a timer
   except where noted. This keeps invariant 3 (cheap on power): the agent sleeps until something
-  changes. Where only polling exists (sysfs brightness) poll only while a widget showing it is
-  on the bar.
-- Each source reduces to a flat piece of state. Layout predicates should match flat keys, not
-  backend objects, so one layout works on any compositor.
-- Every source must degrade to "unknown", never to an error: a dead compositor connection
-  yields `DesktopState { connected: false, .. }` and the agent shows the default/safe layer
+  changes. Where only polling exists (sysfs brightness), it polls only while a widget showing the
+  value is on the bar.
+- Each source reduces to a flat piece of state. Layout conditions match flat keys, not backend
+  objects, so one layout works on any compositor.
+- Every source degrades to "unknown", never to an error: a dead compositor connection yields
+  `DesktopState { connected: false, .. }` and the agent shows the default/safe layer
   (invariant 1).
-- Sources are plain blocking threads or zbus tasks. `sliver-desktop` has no async runtime
-  dependency; hand states to the agent through a channel.
+- Sources are plain blocking threads or zbus connections. `sliver-desktop` has no async runtime
+  dependency; states reach the agent through a channel.
 
 ### Context keys (what predicates can match)
+
+The full list is `sliver_config::condition::CONTEXT_KEYS`. Keys are matched case-insensitively,
+with `-` and `_` interchangeable (`app-id` = `app_id`). A key with no known value is left out of
+the context, so it never matches.
 
 | key | type | source |
 |---|---|---|
 | `app_id` | string | compositor: Wayland app_id / X11 WM_CLASS class |
+| `desktop_id` | string | the focused app's `.desktop` entry (`sliver-icons`) |
 | `title` | string | compositor |
-| `pid` | u32 | compositor |
+| `pid` | number | compositor |
 | `fullscreen`, `floating`, `xwayland` | bool | compositor |
-| `workspace` (id + name), `special_workspace`, `monitor` | | compositor |
-| `monitors` (count), `external_display` (bool), `monitor_names` | | compositor (`monitoraddedv2`/`monitorremovedv2` + `j/monitors`; internal = `eDP`/`LVDS`/`DSI` prefix) |
+| `workspace` (id), `workspace_name`, `special_workspace`, `monitor` | | compositor |
+| `monitors` (count), `external_display` (bool) | | compositor (Hyprland: `monitoraddedv2`/`monitorremovedv2` + `j/monitors`; internal = `eDP`/`LVDS`/`DSI` prefix) |
 | `keyboard_layout` | string | compositor (see §3) |
-| `submap` / `mode` | string? | compositor |
-| `screencast` | bool | Hyprland event; other DEs: PipeWire/portal sessions |
-| `locked` | bool | logind `LockedHint` + `Lock`/`Unlock` signals |
-| `idle` | bool | logind `IdleHint` / `ext-idle-notify-v1` |
+| `submap` | string | compositor (Hyprland submap, sway mode) |
+| `screencast` | bool | Hyprland event |
+| `locked` | bool | see §3 |
+| `idle` | bool | logind `IdleHint` |
 | `sleeping` | bool | logind `PrepareForSleep` |
 | `on_battery`, `battery_pct`, `battery_state`, `lid_closed` | | UPower |
 | `power_profile` | string | power-profiles-daemon |
-| `media_state` (`playing`/`paused`/`stopped`/`none`) | enum | MPRIS |
+| `media_status` (`playing`/`paused`/`stopped`/`none`), `media_player`, `media_title`, `media_artist` | string | MPRIS |
 | `mic_muted`, `output_muted`, `volume` | | PipeWire |
-| `dnd`, `caffeine` | bool | notification daemon / inhibitors |
+| `brightness` | number | screen backlight, percent |
+| `dnd` | bool | notification daemon |
+| `caffeine` | bool | idle inhibitors |
+| `dark_mode` | bool | XDG portal `color-scheme` |
+| `time` (`HH:MM`), `weekday` (`mon`…) | string | agent |
+| `physical_esc` | bool | agent: does this Mac have a physical Esc key |
+| `layer` | string | agent: the current layer |
+| `app_controls` | bool | agent: the focused app fills App controls |
 
-`app_id` should be matchable against the `.desktop` id too (`org.mozilla.firefox` vs class
-`firefox`), because icon lookup needs the desktop entry. Resolve through
-`StartupWMClass` and the id with the `.desktop` suffix stripped, case-insensitively.
+`app_id` also matches the `.desktop` id (`org.mozilla.firefox` vs class `firefox`), because icon
+lookup needs the desktop entry. It's resolved through `StartupWMClass` and the id with the
+`.desktop` suffix stripped, case-insensitively.
 
 ## 2. Compositor backends (focus, workspace, keyboard layout)
 
 There is **no portal or cross-desktop standard** for "which window is focused": it is
-deliberately withheld from Wayland clients. Each DE needs its own backend. Backend selection
-is in `sliver_desktop::Backend::detect` (env: `HYPRLAND_INSTANCE_SIGNATURE`, `NIRI_SOCKET`,
-`SWAYSOCK`, `XDG_CURRENT_DESKTOP`, `DISPLAY`/`WAYLAND_DISPLAY`).
+deliberately withheld from Wayland clients, so each desktop needs its own backend.
+`sliver_desktop::Backend::detect` picks one from the environment (`HYPRLAND_INSTANCE_SIGNATURE`,
+`NIRI_SOCKET`, `SWAYSOCK`, `XDG_CURRENT_DESKTOP`, `DISPLAY`/`WAYLAND_DISPLAY`).
 
-| backend | mechanism | events | effort | status |
-|---|---|---|---|---|
-| **Hyprland** | `socket2` event stream + `socket1` JSON queries | yes | small | **done** (`sliver_desktop::hyprland`) |
-| sway / i3 | i3-ipc over `$SWAYSOCK`, `SUBSCRIBE ["window","workspace","input","mode"]` | yes | small | **done** (`sliver_desktop::sway`; fake-server tests, and `integration/sway/test.sh` against a real headless sway 1.11) |
-| niri | JSON IPC over `$NIRI_SOCKET`, `"EventStream"` request | yes | small | **done** (`sliver_desktop::niri`; fake-server tests, and `integration/niri/test.sh` against a real niri 26.04 running nested in a headless sway: list, focus, workspaces, focus/switch/close) |
-| wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | yes | medium | **done** (`sliver-desktop::wlr`; verified on a real headless **labwc** with `integration/labwc/test.sh`: list, focus, workspaces, focus/close/switch; mock-tested too) |
-| KDE Plasma 6 | KWin script (JS) calling our D-Bus service | yes | medium | **done** (`integration/kwin`; tested in nested `kwin_wayland --virtual`) |
-| GNOME Shell | extension calling our D-Bus service | yes | medium-large | **done, verified on a real headless gnome-shell 50.5** (`integration/gnome-shell/test.sh`; see integration/README.md); also switches workspaces for the agent |
-| X11 | `_NET_ACTIVE_WINDOW` on the root window | yes | small | todo, last |
+| backend | mechanism | status | tested against |
+|---|---|---|---|
+| **Hyprland** | `socket2` event stream + `socket1` JSON queries | implemented (`sliver_desktop::hyprland`) | fake compositor; live Hyprland 0.56.2 |
+| sway / i3 | i3-ipc over `$SWAYSOCK`, `SUBSCRIBE ["window","workspace","input","mode"]` | implemented (`sliver_desktop::sway`) | fake server; headless sway 1.11 (`integration/sway/test.sh`) |
+| niri | JSON IPC over `$NIRI_SOCKET`, `"EventStream"` request | implemented (`sliver_desktop::niri`) | fake server; niri 26.04 nested in a headless sway (`integration/niri/test.sh`): list, focus, workspaces, focus/switch/close |
+| wlroots generic | `wlr-foreign-toplevel-management-v1` (+ `ext-workspace-v1`) | implemented (`sliver_desktop::wlr`) | mock compositor; headless labwc (`integration/labwc/test.sh`); river-classic 0.3 (`integration/river/test.sh`) |
+| KDE Plasma 6 | KWin script calling our D-Bus service | implemented (`integration/kwin`) | nested `kwin_wayland --virtual` |
+| GNOME Shell | extension calling our D-Bus service | implemented (`integration/gnome-shell`); also switches workspaces for the agent | headless gnome-shell 50.5 (`integration/gnome-shell/test.sh`; see integration/README.md) |
+| X11 | `_NET_ACTIVE_WINDOW` on the root window | not implemented | |
 
-### Hyprland (done)
+### Hyprland
 
 - Sockets: `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock` (commands) and
-  `.socket2.sock` (events). **They are dotfiles**; `ls` without `-a` hides them. **(verified)**
-  Several instance directories can exist (stale ones from past sessions); the env var picks the
-  live one. Pre-0.40 location was `/tmp/hypr/$SIG`, kept as fallback.
-- Events are lines `NAME>>DATA`. The agent uses: `activewindowv2` (address), `windowtitlev2`,
+  `.socket2.sock` (events). **They are dotfiles**, so `ls` without `-a` hides them. Several
+  instance directories can exist (stale ones from past sessions); the env var picks the live one.
+  The pre-0.40 location, `/tmp/hypr/$SIG`, is kept as a fallback.
+- Events are lines `NAME>>DATA`. The agent uses `activewindowv2` (address), `windowtitlev2`,
   `closewindow`, `fullscreen`, `changefloatingmode`, `workspacev2`, `focusedmonv2`,
-  `activespecialv2`, `activelayout`, `submap`, `screencast`, `configreloaded`.
-  All of these strings are present in the 0.56.2 binary **(verified)**. Legacy `activewindow`
-  (`class,title`) is redundant with the query and ignored by the watcher.
+  `activespecialv2`, `activelayout`, `submap`, `screencast` and `configreloaded`. The legacy
+  `activewindow` (`class,title`) is redundant with the query and ignored.
 - Gotchas handled in the parser:
   - titles contain commas: split only on the first comma;
-  - `activelayout>>keyboard,layout`: keyboard names are sanitized (no commas), layout names
+  - `activelayout>>keyboard,layout`: keyboard names are sanitized (no commas), but layout names
     can contain them (`English (US, intl.)`), so split on the first comma;
-  - events carry class/title/address only. pid, floating, xwayland need `j/activewindow`, which
-    the watcher runs after each focus change;
+  - events carry class/title/address only. pid, floating and xwayland need `j/activewindow`,
+    which the watcher runs after each focus change;
   - special workspaces have negative ids and arrive via `activespecialv2`, not `workspacev2`;
-  - unknown events and malformed lines are ignored so a newer Hyprland can't break the agent.
-- Subscribe to the event socket **before** snapshotting via the command socket, so changes in
-  between aren't lost. After `configreloaded`, resnapshot.
-- Initial keyboard layout isn't in any event. Read it from `j/devices` (`active_keymap`). On
-  this machine **no keyboard has `main: true`** and virtual keyboards (fcitx5, tiny-dfr's
-  `dynamic-function-row-virtual-input-device`) are listed, so pick the first physical one.
-  **(verified)**
-- Read-only by design. Dispatching (`hyprctl dispatch`) would be needed for actions like
-  "switch workspace" widgets; that is a separate, opt-in capability for the action layer.
-- Hyprland lists tiny-dfr's `dynamic-function-row-virtual-input-device` among its keyboards
-  **(verified)**, i.e. keys emitted via uinput go through the compositor like any keyboard.
-  Probably an F-key we emit can therefore be consumed by a user keybind; unverified, relevant to
-  the action engine.
+  - unknown events and malformed lines are ignored, so a newer Hyprland can't break the agent.
+- The watcher subscribes to the event socket **before** snapshotting via the command socket, so
+  changes in between aren't lost. After `configreloaded` it takes a new snapshot.
+- The initial keyboard layout isn't in any event, so it's read from `j/devices`
+  (`active_keymap`). On Apple laptops no keyboard has `main: true`, and virtual keyboards (fcitx5,
+  tiny-dfr's `dynamic-function-row-virtual-input-device`) are listed, so the first physical one is
+  used.
+- Actions (switch workspace, focus or close a window, change keyboard layout) are dispatcher
+  commands on the command socket (`sliver_desktop::control`), sent only on an explicit user action.
+- Hyprland lists sliverd's virtual input device among its keyboards: keys emitted through uinput
+  go through the compositor like any other keyboard. The keymap Hyprland applies to it is what
+  makes key combos follow the keyboard layout (customization.md §3).
 
 ### sway / i3
 
-i3-ipc is a tiny framed protocol (`"i3-ipc"` + u32 len + u32 type + payload); hand-roll it
-rather than add `swayipc` (async-std heavy). Use `window` (change=focus/title/close),
-`workspace` (focus), `input` (`xkb_layout_names` / `xkb_active_layout_name`) and `mode`
-events; `GET_TREE` once for the snapshot. Focused window: `app_id` (Wayland) or
-`window_properties.class` (XWayland).
+i3-ipc is a tiny framed protocol (`"i3-ipc"` + u32 len + u32 type + payload), hand-rolled rather
+than pulling in `swayipc` (which depends on async-std). The backend uses the `window`
+(change=focus/title/close), `workspace` (focus), `input` (`xkb_layout_names` /
+`xkb_active_layout_name`) and `mode` events, and `GET_TREE` once for the snapshot. The focused
+window's id is `app_id` (Wayland) or `window_properties.class` (XWayland).
 
 ### niri
 
-`NIRI_SOCKET`, newline JSON. Send `"EventStream"`; events include `WindowFocusChanged`,
-`WorkspaceActivated`, `KeyboardLayoutsChanged`, `KeyboardLayoutSwitched`, `WindowOpenedOrChanged`.
-Window `app_id`, `title`, `pid` are provided. Same shape as Hyprland; cheap to add.
+`NIRI_SOCKET`, newline-delimited JSON. The backend sends `"EventStream"`; events include
+`WindowFocusChanged`, `WorkspaceActivated`, `KeyboardLayoutsChanged`, `KeyboardLayoutSwitched` and
+`WindowOpenedOrChanged`. Windows carry `app_id`, `title` and `pid`.
 
 ### wlroots generic fallback
 
-`zwlr_foreign_toplevel_manager_v1`: per-toplevel `title`, `app_id`, `state` (activated,
-fullscreen). Works on Hyprland, sway, river, labwc, niri(no), KWin(no). It has no workspace
-info (`ext-workspace-v1` fills that in on newer compositors) and no pid. Use it for compositors
-without a dedicated backend. Crates: `wayland-client` + `wayland-protocols-wlr` (pure-Rust
-backend, no libwayland needed at build; `wayland-client` 1.25 is installed anyway **(verified)**).
-`ext-foreign-toplevel-list-v1` is the standard replacement but has no "activated" state, so it
-can't answer "which is focused".
+`zwlr_foreign_toplevel_manager_v1` gives each toplevel's `title`, `app_id` and `state`
+(activated, fullscreen). It has no pid and no workspace info (`ext-workspace-v1` fills that in on
+newer compositors). `ext-foreign-toplevel-list-v1` is the standard replacement, but it has no
+"activated" state, so it can't answer "which window is focused". The crates are `wayland-client`
++ `wayland-protocols-wlr` (pure-Rust backend, no libwayland needed at build time).
 
-**Implemented (T84, `sliver-desktop/src/wlr.rs`).** Used for any Wayland session that isn't
-Hyprland, sway, niri, GNOME or KDE (`Backend::Wlroots`). One thread owns the connection and sleeps
-in `poll(2)` on it and on a wake pipe; actions (focus, close, switch workspace) are requests on
-that same connection, which `control::run` hands over through a channel, because the protocols
-give no ids a second connection could use (ids are numbers handed out by the watcher). The
-protocols don't say which workspace a window is on, so all windows show on the active workspace.
-Verified against real headless labwc (workspaces too) and river-classic 0.3 (windows and focus; river has no
-`ext-workspace`: its tags are the private `river-status` protocol, not implemented, so no workspaces there). river 0.4
-manages no windows without a separate window-manager client, so it shows nothing.
-There is no pid, floating or keyboard-layout info. A compositor without
-`wlr-foreign-toplevel-management` makes the watcher stop at once (no retry loop). The test
-(`crates/sliver-desktop/tests/wlr.rs`) runs a mock compositor (wayland-server) speaking both
-protocols and checks the initial burst, live changes and the three actions over a real socket. A
-headless Hyprland could not be started here (`CBackend::create() failed`), but a real **labwc**
-runs headless (`WLR_BACKENDS=headless WLR_RENDERER=pixman`) and `integration/labwc/test.sh` checks
-the whole chain against it. Neither labwc nor sway needs root: `dnf download --resolve` the rpms,
-`rpm2cpio | cpio -idm` them into a prefix and point `SLIVER_TEST_ROOT` at it (the scripts say
-how, and skip when the compositor is missing). `integration/sway/test.sh` does the same for the
-sway backend and found a real bug: closing a window that wasn't focused never refreshed the
-taskbar's list (fixed in `sway.rs`).
+`sliver-desktop/src/wlr.rs` (`Backend::Wlroots`) is used for any Wayland session that isn't
+Hyprland, sway, niri, GNOME or KDE. One thread owns the connection and sleeps in `poll(2)` on it
+and on a wake pipe. Actions (focus, close, switch workspace) are requests on that same connection,
+handed over by `control::run` through a channel, because the protocols' object ids only mean
+something on the connection that received them. The protocols don't say which workspace a window
+is on, so all windows show on the active workspace. There is no pid, floating or keyboard-layout
+info. On a compositor without `wlr-foreign-toplevel-management` the watcher stops at once (no
+retry loop).
+
+- **labwc:** windows, focus and workspaces work.
+- **river-classic 0.3:** windows and focus work. river has no `ext-workspace` (its tags use the
+  private `river-status` protocol, which isn't implemented), so there are no workspaces.
+- **river 0.4** manages no windows without a separate window-manager client, so nothing shows.
+
+The test (`crates/sliver-desktop/tests/wlr.rs`) runs a mock compositor (wayland-server) speaking
+both protocols and checks the initial burst, live changes and the three actions over a real
+socket. `integration/labwc/test.sh` checks the whole chain against a real labwc running headless
+(`WLR_BACKENDS=headless WLR_RENDERER=pixman`). Neither labwc nor sway needs root:
+`dnf download --resolve` the rpms, `rpm2cpio | cpio -idm` them into a prefix and point
+`SLIVER_TEST_ROOT` at it (the scripts explain how, and skip when the compositor is missing).
+`integration/sway/test.sh` does the same for the sway backend.
 
 ### KDE Plasma 6 (KWin script)
 
-KWin exposes no focus-query D-Bus API. Standard approach: the agent installs a small KWin
-script (a `KPackage` in `/usr/share/kwin/scripts/sliver-focus/`, enabled by the user or via
-`org.kde.KWin /Scripting loadScript`+`start`). The script listens to
-`workspace.windowActivated` (Plasma 6 names: `workspace.activeWindow`,
-`window.resourceClass`, `window.desktopFileName`, `window.caption`, `window.pid`,
-`window.fullScreen`) and `workspace.currentDesktopChanged`, and calls the agent with
-`callDBus("org.sliver.Agent1", ...)`. The agent therefore needs one tiny private method
-(`SetFocus(...)`), only accepted from the user's own KWin: keep it off the public API surface
-(cedar). Keyboard layout: `org.kde.keyboard /Layouts` `getLayout` + `layoutChanged` signal.
-Brightness has PowerDevil D-Bus too (`org.kde.Solid.PowerManagement.Actions.BrightnessControl`).
-KDE is also on this machine's bus (`org.kde.*` services are present) **(verified)**, so it is
-testable in a nested KWin.
+KWin has no D-Bus API for querying focus, so a small KWin script (`integration/kwin/sliver-focus`,
+installed by the `sliver-kwin` package to `/usr/share/kwin/scripts/sliver-focus/` and enabled by
+the user) listens to `workspace.windowActivated` and `workspace.currentDesktopChanged` and pushes
+focus, workspaces and windows to the agent with `callDBus` over
+`io.github.wawow830.Sliver.Desktop1` (integration/README.md). The agent switches the keyboard
+layout through `org.kde.keyboard /Layouts` (`switchToNextLayout`) and workspaces through KWin's
+own `setCurrentDesktop`.
 
 ### GNOME Shell (extension)
 
-Mutter does not let clients enumerate or watch windows (`org.gnome.Shell.Eval` is locked
-down since 41). The only route is a **GNOME Shell extension** (ESM, GNOME 45+) that watches
-`global.display` `notify::focus-window` (and `window.get_title()`, `get_wm_class()`,
-`get_pid()`, `get_gtk_application_id()`) and either exports a D-Bus interface or calls the
-agent. Keyboard layout: `org.gnome.desktop.input-sources` (`current`, `sources`) via GSettings,
-no extension needed. Ship at `/usr/share/gnome-shell/extensions/<uuid>/` from the RPM; users
-must enable it, and it must be re-validated each GNOME release (extension API churn). This is
-the highest-maintenance backend; do it last of the Wayland ones.
+Mutter doesn't let clients enumerate or watch windows (`org.gnome.Shell.Eval` has been locked down
+since GNOME 41). The only route is a **GNOME Shell extension** (ESM, GNOME 45+):
+`integration/gnome-shell/sliver-focus@sliver.wawow830.github.io`, installed by the
+`gnome-shell-extension-sliver` package and enabled by the user. It watches `global.display`
+`notify::focus-window` and reads the window's GTK application id, sandboxed app id or WM class,
+title and pid. Extensions must be re-checked each GNOME release (the extension API changes), so
+this is the highest-maintenance backend.
 
-### X11
+### X11 (not implemented)
 
-`_NET_ACTIVE_WINDOW` on the root, `PropertyNotify` events, then `_NET_WM_NAME`, `WM_CLASS`,
-`_NET_WM_PID`, `_NET_CURRENT_DESKTOP`. Crate: `x11rb` (pure Rust, `xcb` backend optional).
-Only needed for Xorg sessions and t2linux users on X11 WMs. XWayland windows under Wayland
-compositors are already covered by their native backend.
+The approach would be `_NET_ACTIVE_WINDOW` on the root window, `PropertyNotify` events, then
+`_NET_WM_NAME`, `WM_CLASS`, `_NET_WM_PID`, `_NET_CURRENT_DESKTOP`, with the `x11rb` crate. It's
+only needed for Xorg sessions (for example t2linux users on X11 window managers). XWayland windows
+under Wayland compositors are already covered by the native backends.
 
 ## 3. System sources
 
-All D-Bus via `zbus` (ADR-0001), system bus unless noted. Names/paths **(verified present)**
-on this machine.
+All over D-Bus via `zbus` (ADR-0001), on the system bus unless noted.
 
 ### Lock, idle, sleep: logind (`org.freedesktop.login1`)
 
 - `Session` (`/org/freedesktop/login1/session/auto`): properties `LockedHint`, `IdleHint`,
-  `Active`, signals `Lock`/`Unlock`. Manager signal `PrepareForSleep(b)`.
-- **Caveat (verified):** `LockedHint` read `true` while the session was plainly unlocked and in
-  use. It is only a *hint* that the locker sets; a stale value or a locker that doesn't maintain
-  it is possible. Don't rely on it alone: treat `Lock` and `Unlock` signals as edges and
-  combine with "is a locker process/surface present" (e.g. `hyprlock`) when the hint looks
-  stuck. Needs a per-compositor check before `locked` is trustworthy. **Root cause found on the dev
-  machine:** quickshell's lock calls `loginctl lock-session` (sets the hint, emits `Lock`) but never
-  `unlock-session`, so the hint stays `yes` after unlocking. A rule on `locked` is therefore
-  advisory until the agent can see the locker itself (ext-session-lock has no client-side
-  observer; per-locker adapters such as hyprlock/quickshell process checks are the likely fix). GNOME also has
-  `org.gnome.ScreenSaver.ActiveChanged`; KDE has `org.freedesktop.ScreenSaver`.
-- **How the agent decides `locked` (T83)**, most trustworthy first: (1) the desktop's own
-  `ActiveChanged` signal on `org.gnome.ScreenSaver` / `org.freedesktop.ScreenSaver` (read once with
-  `GetActive`, then followed; `sliver-session::screensaver`); (2) on GNOME and KDE without it, the
-  logind hint, which those shells keep honest; (3) everywhere else, whether a known locker process
-  (`hyprlock`, `swaylock`, `gtklock`, `waylock`, `i3lock`, `physlock`) is running, **regardless of the hint**, so
-  a locker started by a keybind or `swayidle` (which never touches logind) still brings up the
-  privacy layout, and a stuck `LockedHint` no longer does. The scan reads `/proc/*/comm`, is cached
-  for 1.5 s and redone whenever the bar wakes from off. **Limit:** a locker that starts while the bar
-  is on and nothing else changes is only noticed at the next render or wake; there is no
-  event for it (nothing polls, invariant 3). Unknown lockers (e.g. a shell's built-in lock such as
-  quickshell's) are not detected on those compositors unless they emit `ActiveChanged`.
-- Idle for dimming the bar: sliverd should use its own touch/key idle timer (it sees the
-  input). For "user is idle on the desktop" use `ext-idle-notify-v1` (Wayland) rather than
-  polling `IdleHint`.
+  `Active`; signals `Lock`/`Unlock`. Manager signal: `PrepareForSleep(b)`.
+- **`LockedHint` can't be trusted on its own.** It's only a hint that the locker sets, and some
+  lockers leave it stale. For example, quickshell's lock calls `loginctl lock-session` (which sets
+  the hint and emits `Lock`) but never `unlock-session`, so the hint stays `yes` after unlocking.
+  There's no client-side way to observe `ext-session-lock`.
+- **How the agent decides `locked`**, most trustworthy first:
+  1. the desktop's own `ActiveChanged` signal on `org.gnome.ScreenSaver` /
+     `org.freedesktop.ScreenSaver` (read once with `GetActive`, then followed;
+     `sliver-session::screensaver`);
+  2. on GNOME and KDE without that signal, the logind hint, which those shells keep accurate;
+  3. everywhere else, whether a known locker process (`hyprlock`, `swaylock`, `gtklock`,
+     `waylock`, `i3lock`, `physlock`) is running, **regardless of the hint**. So a locker started
+     by a keybind or `swayidle` (which never touches logind) still brings up the privacy layout,
+     and a stuck `LockedHint` doesn't. The scan reads `/proc/*/comm`, is cached for 1.5 s and is
+     redone whenever the bar wakes from off.
+
+  **Limits:** a locker that starts while the bar is on and nothing else changes is only noticed at
+  the next render or wake; there is no event for it, and nothing polls (invariant 3). Unknown
+  lockers (such as a shell's built-in lock, like quickshell's) aren't detected on those
+  compositors unless they emit `ActiveChanged`.
+- For dimming the bar, sliverd uses its own touch/key idle timer (it sees the input). For "the
+  user is idle on the desktop", `ext-idle-notify-v1` (Wayland) is better than polling `IdleHint`.
 
 ### Power: UPower (`org.freedesktop.UPower`)
 
-- `/org/freedesktop/UPower`: `OnBattery`, `LidIsClosed`. `/org/freedesktop/UPower/devices/DisplayDevice`:
-  `Percentage`, `State`, `TimeToEmpty/Full`, `IsPresent`. Standard `PropertiesChanged` signals.
-  **(verified: 100%, state 4 = fully charged, OnBattery false)**
+- `/org/freedesktop/UPower`: `OnBattery`, `LidIsClosed`.
+  `/org/freedesktop/UPower/devices/DisplayDevice`: `Percentage`, `State`, `TimeToEmpty/Full`,
+  `IsPresent`. Changes arrive as standard `PropertiesChanged` signals.
 - Power profile: `net.hadess.PowerProfiles` / `org.freedesktop.UPower.PowerProfiles`
   `ActiveProfile`.
 
 ### Brightness: sysfs read, logind write
-**Implemented** (`sliver_session::brightness`): `Sysfs` finds the screen (never the Touch Bar:
-matched by tiny-dfr's device names or the `panel-summit` driver) and the keyboard LED;
-`Handle::refresh_brightness` pushes levels (call on own writes, wake, and a slow timer only
-while a slider shows); `brightness::set` writes through logind. Verified live (screen 23%).
-udev events are not wired yet.
 
-- Two backlight devices **(verified)**: `/sys/class/backlight/apple-panel-bl` (laptop screen,
-  max 509) and `/sys/class/backlight/228600000.dsi.0` (max 255; this looks like the Touch Bar
-  panel itself: birch/sliverd territory, **never** expose it as "screen brightness").
-  Keyboard backlight: `/sys/class/leds/kbd_backlight` (max 255).
-- sysfs `brightness` is world-readable but root-writable **(verified)**. User-space writes go
-  through `org.freedesktop.login1.Session.SetBrightness(subsystem, name, value)` (`ssu`)
-  **(verified present)**: `("backlight","apple-panel-bl",v)` or `("leds","kbd_backlight",v)`.
-  No polkit prompt for the active local session.
-- Change notification: sysfs attributes don't reliably emit inotify. Options in order: udev
-  `backlight`/`leds` subsystem change uevents (`udev` crate / netlink; libudev 259 installed),
-  our own writes (we know the new value), DE services (GNOME
-  `org.gnome.SettingsDaemon.Power.Screen`/`Keyboard`, KDE PowerDevil), else a slow poll
-  (1 s) only while a slider is visible. External changes (the user's brightness keys) are the
-  only case that needs the fallback, and on this laptop those keys are exactly the Touch Bar.
-- Scale: map to percent in the widget; curves belong in the appearance layer, not here.
+`sliver_session::brightness`: `Sysfs` finds the screen backlight and the keyboard LED, and never
+picks the Touch Bar (matched by tiny-dfr's device names or the `panel-summit` driver).
+`Handle::refresh_brightness` pushes levels (called after our own writes, on wake, and on a slow
+timer only while a slider shows). `brightness::set` writes through logind. udev change events
+aren't used yet.
+
+- Apple Silicon example: `/sys/class/backlight/apple-panel-bl` is the laptop screen (max 509);
+  `/sys/class/backlight/228600000.dsi.0` (max 255) is the Touch Bar panel itself. That one belongs
+  to sliverd and is **never** exposed as "screen brightness". Keyboard backlight:
+  `/sys/class/leds/kbd_backlight` (max 255).
+- sysfs `brightness` is world-readable but root-writable. User-space writes go through
+  `org.freedesktop.login1.Session.SetBrightness(subsystem, name, value)` (`ssu`), e.g.
+  `("backlight","apple-panel-bl",v)` or `("leds","kbd_backlight",v)`. There's no polkit prompt for
+  the active local session.
+- Change notification: sysfs attributes don't reliably emit inotify. The options, in order: udev
+  `backlight`/`leds` change uevents, our own writes (we know the new value), desktop services
+  (GNOME `org.gnome.SettingsDaemon.Power.Screen`/`Keyboard`, KDE PowerDevil), else a slow poll
+  (1 s) only while a slider is visible. Only external changes (the user's brightness keys) need
+  the fallback, and on Touch Bar Macs those keys are on the Touch Bar itself.
+- Levels are percent of the device's range; curves belong in the appearance layer, not here.
 
 ### Audio: PipeWire
-**Implemented** (`sliver_session::audio`): the `wpctl` + `pactl subscribe` option below, verified
-live. `Handle::start_audio(Tools)`; writes via `audio::set_volume/change_volume/set_mute/set_mic_mute`.
 
-Needed: default sink volume + mute, default source mute (mic toggle), and writes.
+`sliver_session::audio` (`Handle::start_audio(Tools)`): default sink volume and mute, default
+source (mic) volume and mute. Reads and writes use `wpctl` (`wpctl set-volume
+@DEFAULT_AUDIO_SINK@ 5%+`, `set-mute @DEFAULT_AUDIO_SOURCE@ toggle`); writes are
+`audio::set_volume/change_volume/set_mute/set_mic_mute`. Change events come from a long-lived
+`pactl subscribe` (pipewire-pulse), so the agent sleeps until something changes. There are no
+build-time dependencies and nothing is polled.
 
-| option | verdict |
+Alternatives that weren't picked:
+
+| option | why not (yet) |
 |---|---|
-| `pipewire` crate (pipewire-rs) | Native, event driven. Needs `libpipewire-0.3` dev files (installed: 1.6.8 **(verified)**) and bindgen/clang at build, and reading the default sink means following WirePlumber's `default` metadata. Large API for little gain. |
-| `libpulse-binding` (talks to `pipewire-pulse`) | Event driven (`subscribe`: sink/source/server), simple, works on Pulse systems too. **`libpulse` dev files are not installed here** **(verified)**: needs `dnf install pulseaudio-libs-devel` (sudo request). |
-| `wpctl` subprocess | No events; spawn-per-poll. Fine for **writes** (`wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+`, `set-mute @DEFAULT_AUDIO_SOURCE@ toggle`) and as the zero-dependency MVP, bad for reading state. |
-
-Recommendation: MVP = `wpctl` for writes and on-demand reads (read once when a
-slider appears, then trust our own writes; refresh on focus/wake). Target = `pipewire` crate in
-its own thread (no new sudo, dev files already present) following default-node metadata.
-Revisit `libpulse-binding` if bindgen/clang cost bites. Whoever builds the audio widget
-decides, and records the choice in an ADR.
+| `pipewire` crate (pipewire-rs) | Native and event driven, but needs `libpipewire-0.3` dev files and bindgen/clang at build time, and reading the default sink means following WirePlumber's `default` metadata. A large API for little gain. It could replace the CLI backend behind the same `Audio` state later. |
+| `libpulse-binding` (talks to `pipewire-pulse`) | Event driven and simple, and works on Pulse systems too, but needs the `pulseaudio-libs-devel` dev files at build time. |
 
 ### Media: MPRIS
 
-`org.mpris.MediaPlayer2.*` on the session bus. Watch `NameOwnerChanged` for the
+`org.mpris.MediaPlayer2.*` on the session bus. The source watches `NameOwnerChanged` for the
 `org.mpris.MediaPlayer2.` prefix, then `PropertiesChanged` on `/org/mpris/MediaPlayer2`
 (`org.mpris.MediaPlayer2.Player`: `PlaybackStatus`, `Metadata` (`xesam:title`/`artist`,
-`mpris:artUrl`, `mpris:length`), `Volume`, `CanSeek`...). `Position` does **not** emit changes:
-interpolate from the last `Seeked` + time, never poll it. Choose the "active" player: the one
-`Playing`, else the most recently changed. **(verified)** `playerctld` is already registered as
-`org.mpris.MediaPlayer2.playerctld` (a proxy that tracks the most-recent player); the agent
-must not treat it as a real second player or it will show duplicates. Prefer talking to
-players directly (zbus) over shelling out to `playerctl`.
+`mpris:artUrl`, `mpris:length`), `Volume`, `CanSeek`...). `Position` doesn't emit changes, so
+it's interpolated from the last `Seeked` and the elapsed time, never polled. The "active" player
+is the one `Playing`, else the most recently changed. `playerctld` registers as
+`org.mpris.MediaPlayer2.playerctld` (a proxy that tracks the most recent player); it isn't
+treated as a second player, which would show duplicates. Players are talked to directly over
+D-Bus rather than through `playerctl`.
 
 ### Notifications and DND
-**Implemented** (`sliver_session::notifications`): `BecomeMonitor` counting works on this
-session bus (verified); only `replaces_id` of `Notify` is read, never summary/body. DND via
-dunst `paused` and KDE `Inhibited`; quickshell (this machine's server) exposes neither, so
-`dnd` is `None` here and the agent needs its own "hide chips" DND.
 
-`org.freedesktop.Notifications` is owned by quickshell (`qs -c ii`) on this machine
-**(verified)**. The spec has no DND and no "list". To count/show notifications, the agent must
-not become a server: use bus monitoring (`org.freedesktop.DBus.Monitoring.BecomeMonitor`) on
-`Notify` / `NotificationClosed` to keep a count, which works with any daemon on a session bus
-that permits it (check dbus-broker policy; testing needed). DND is per-daemon: mako
-(`makoctl mode`), dunst (`org.dunstproject.cmd0` `paused`), swaync
-(`org.erikreider.swaync.cc`), GNOME (`org.gnome.desktop.notifications show-banners`), KDE
-(`org.freedesktop.Notifications` `Inhibited` property). A `dnd` toggle widget should be a
-small adapter list keyed on the bus-name owner, falling back to "sliver-managed" (hide our own
-notification chips only).
+`sliver_session::notifications`. `org.freedesktop.Notifications` has no DND and no "list", and
+the agent must not become the notification server. So it counts open notifications by **bus
+monitoring** (`org.freedesktop.DBus.Monitoring.BecomeMonitor`, which a user may do on their own
+session bus): `Notify` calls, the server's replies and `NotificationClosed` signals. It keeps the
+latest notification's app and summary for the `notifications` module, never the body.
+
+DND has no standard, so there's a small adapter list: dunst (`org.dunstproject.cmd0` `paused`),
+KDE (the server's `Inhibited` property), mako (`makoctl mode`) and swaync (`swaync-client`).
+Other servers (GNOME, quickshell) report DND as unknown.
 
 ### Caffeine / inhibit
-**Implemented** (logind part): `SessionState.idle_inhibited` follows `BlockInhibited`;
-`Handle::set_caffeine` holds an `idle` inhibitor fd (released when the agent dies). hypridle
-honours logind inhibitors only if `ignore_systemd_inhibit` is false (default).
 
-`org.freedesktop.ScreenSaver` (`Inhibit`/`UnInhibit`; owned by hypridle on this machine
-**(verified)**) and logind `Inhibit(what, who, why, mode)` (fd-based: closing the fd releases).
-The caffeine toggle holds an inhibit; the state is "do we hold one". Listing others' inhibitors:
-logind `ListInhibitors`.
+`SessionState.idle_inhibited` follows logind's `BlockInhibited`. `Handle::set_caffeine` holds a
+logind `idle` inhibitor (`Inhibit(what, who, why, mode)`, fd-based: closing the fd releases it, so
+it's released when the agent dies). hypridle honours logind inhibitors only if
+`ignore_systemd_inhibit` is false (the default). The other mechanism,
+`org.freedesktop.ScreenSaver` `Inhibit`/`UnInhibit` (owned by hypridle on Hyprland setups), isn't
+used. logind's `ListInhibitors` lists other programs' inhibitors.
 
-### System tray: StatusNotifierItem (T27)
-**Implemented** (`sliver_session::tray`, `sliver_session::menu`): `Handle::start_tray(conn)` registers
-a host with the existing `org.kde.StatusNotifierWatcher` (quickshell owns it here **(verified)**,
-so it is an additional host), follows `RegisteredStatusNotifierItems` plus the watcher's
-Registered/Unregistered and the items' `New*` signals, and fills `SessionState.tray` (id, title,
-status, icon name + theme path, best pixmap converted ARGB to RGBA, tooltip, menu path).
-Controls: `tray::poke` (`Activate`, `SecondaryActivate`, `ContextMenu`), `tray::scroll`;
-`menu::layout` / `menu::click` decode and drive the dbusmenu for a sub-bar. Verified against
-this session (fcitx5's item and its menu). Not done: a host-owned fallback watcher when the
-bus has none (GNOME, bare sway), and `LayoutUpdated` live refresh of an open menu.
+### System tray: StatusNotifierItem
+
+`sliver_session::tray` and `sliver_session::menu`. `Handle::start_tray(conn)` registers an extra
+host with the existing `org.kde.StatusNotifierWatcher` (KDE, quickshell, waybar…). It follows
+`RegisteredStatusNotifierItems`, the watcher's Registered/Unregistered signals and the items' `New*`
+signals, and fills `SessionState.tray` (id, title, status, icon name + theme path, the best pixmap
+converted from ARGB to RGBA, tooltip, menu path). Controls: `tray::poke` (`Activate`,
+`SecondaryActivate`, `ContextMenu`) and `tray::scroll`. `menu::layout` / `menu::click` decode and
+drive the dbusmenu for a sub-bar.
+
+Not implemented: a fallback watcher owned by sliver when the bus has none (GNOME, bare sway: the
+tray stays empty until one appears), and live refresh of an open menu on `LayoutUpdated`.
 
 ### Keyboard layout (outside the compositor)
 
-Compositor events win (§2). Input methods also change what the user is typing:
-`fcitx5` is running here **(verified)** (`org.fcitx.Fcitx5`; `org.fcitx.Fcitx.Controller1`
-`CurrentInputMethod`). **Implemented** (T138, `sliver_session::fcitx`, `SessionState.input_method`): the `language`
-module shows fcitx5's current input method and label when it runs; the compositor's layout otherwise.
-`CurrentInputMethod` is a method and fcitx5 sends no signal when the user switches with the hotkey
-(`Controller1` only has `InputMethodGroupsChanged`; checked on 5.1.23, headless: no tray signals
-either), so besides `NameOwnerChanged`, the groups signal, tray `New*` signals, window focus changes
-and our own switches, it is asked every 2 s (one cheap call, `CurrentInputMethod`; the group only when that changed) while the bar is on and fcitx5 is running (invariant 3:
-not while the bar is off, not without fcitx5, only when a layout uses `language`). Verified against
-the real fcitx5 (read) and a mock `Controller1`; the switch calls (`Toggle`, `SetCurrentIM`) and a
-real hotkey switch were only exercised against a private headless fcitx5 / the mock, never on the
-user's session.
+Compositor events win (§2), but input methods also change what the user is typing.
+`sliver_session::fcitx` (`SessionState.input_method`) follows fcitx5 (`org.fcitx.Fcitx5`;
+`org.fcitx.Fcitx.Controller1` `CurrentInputMethod`): while it runs, the `language` module shows
+fcitx5's current input method and label, and the compositor's layout otherwise.
 
-## 4. Recommended crates
+`CurrentInputMethod` is a method, and fcitx5 sends no signal when the user switches with the
+hotkey (`Controller1` only has `InputMethodGroupsChanged`, and there are no tray signals either).
+So besides `NameOwnerChanged`, the groups signal, tray `New*` signals, window focus changes and
+our own switches, fcitx5 is asked every 2 s (one cheap `CurrentInputMethod` call; the group is
+read only when that changed). This happens only while the bar is on, fcitx5 is running and a
+layout uses `language` (invariant 3).
+
+## 4. Crates
 
 | need | crate | note |
 |---|---|---|
-| D-Bus | `zbus` | per ADR-0001; use the `tokio` or `async-io` feature, one runtime for the agent (cedar decides) |
-| JSON | `serde`, `serde_json` | Hyprland/niri IPC, already used by `sliver-desktop` |
-| Wayland protocols | `wayland-client`, `wayland-protocols`, `wayland-protocols-wlr` | foreign-toplevel, idle-notify |
-| X11 | `x11rb` | |
-| PipeWire | `pipewire` | see §3 |
-| udev events | `udev` or `tokio-udev` | backlight/led change |
+| D-Bus | `zbus` | per ADR-0001; blocking API, no async runtime |
+| JSON | `serde`, `serde_json` | Hyprland/niri IPC |
+| Wayland protocols | `wayland-client`, `wayland-protocols`, `wayland-protocols-wlr` | foreign-toplevel, ext-workspace |
 | icons/desktop entries | **`sliver-icons`** (own crate, std only) | `IconLoader` (freedesktop theme spec: Inherits, hicolor, sizes/scales, `-symbolic`, dash fallback, pixmaps, cache), `DesktopEntries::find_by_app_id` (id, StartupWMClass, reverse-DNS tail, Exec); `cargo run -p sliver-icons --example icon-find -- kitty firefox 40` |
 | sway/i3 | none (hand-rolled) | tiny protocol |
 
+Candidates for parts not implemented yet: `x11rb` (X11), `pipewire` (native audio), `udev` or
+`tokio-udev` (backlight/LED change events).
+
 ## 5. Testing without hardware or a live session
 
-- `sliver_desktop::fake::ScriptedSource` replays `DesktopState`s: use it for resolver and
-  agent tests.
+- `sliver_desktop::fake::ScriptedSource` replays `DesktopState`s, for resolver and agent tests.
 - The Hyprland backend is tested against a fake compositor on a temp Unix socket
   (`cargo test -p sliver-desktop`).
 - `sliver-session` has `ScriptedSession` and `tests/dbus.rs`: mock logind/UPower/MPRIS services
   on a private `dbus-daemon` (skipped if the binary is missing). `cargo run -p sliver-session
   --example session-watch` prints live state (read-only).
-- Lesson from that test: **subscribe to signals before the initial read**, or changes between the
-  two are lost (the sources do this; keep it when adding new ones).
-- `cargo run -p sliver-desktop --example desktop-watch` (any supported compositor; `hypr-watch` for Hyprland only) prints live JSON states; it is read-only
-  and safe on a live Hyprland session.
-- For D-Bus sources, test against a private `dbus-daemon --session` with mock services
-  (zbus makes this easy); never against the system bus.
+- **Subscribe to signals before the initial read**, or changes between the two are lost. The
+  existing sources do this; new ones must too.
+- `cargo run -p sliver-desktop --example desktop-watch` (any supported compositor; `hypr-watch`
+  for Hyprland only) prints live JSON states. It's read-only and safe on a live session.
+- Test D-Bus sources against a private `dbus-daemon --session` with mock services, never against
+  the system bus.
+- Tests against real compositors, the portal and PipeWire: integration/README.md.
 
 ## 5b. `sliver-feeds`: the wiring
 
 `crates/sliver-feeds` runs the desktop watcher (`watch_auto`), the session sources and the
 `custom/*` runtime on threads, forwards everything on one channel with a wake fd, and folds it into
 the rule `Context`: `Feeds::new()`, `start_desktop(env)`, `start_session()`, `start_modules(specs)`,
-then poll `feeds.as_fd()` and call `feeds.drain()`; `Aggregate::apply(feed)` returns whether rules or a
-module output changed and `Aggregate::context()` gives the `CONTEXT_KEYS` (unknown values are left
-out, so they never match). `cargo run -p sliver-feeds --example context-dump` prints the live context.
+then poll `feeds.as_fd()` and call `feeds.drain()`. `Aggregate::apply(feed)` returns whether rules
+or a module output changed, and `Aggregate::context()` gives the `CONTEXT_KEYS` (unknown values
+are left out, so they never match). `cargo run -p sliver-feeds --example context-dump` prints the
+live context.
 
-## 6. Open items / next tasks
+## 6. Not implemented yet
 
-1. Agent wiring: `sliver-agent` consumes `DesktopSource` on a thread and feeds the resolver.
-   Needs cedar's state/predicate model; field names above are the proposal.
-2. sway/i3 and niri backends (small, each ~1 file).
-3. System sources crate (`sliver-session`?): logind, UPower, MPRIS, notifications, behind a
-   trait with fakes, like `DesktopSource`.
-4. Audio decision (ADR) and brightness widget plumbing.
-5. KWin script and GNOME extension (packaging + nested-session tests).
-6. Verify `locked` on Hyprland (hyprlock) and `BecomeMonitor` permission on dbus-broker.
+1. X11 backend (§2).
+2. udev change events for brightness (§3).
+3. A sliver-owned StatusNotifierWatcher when the bus has none, and live menu refresh on
+   `LayoutUpdated` (§3).
+4. Workspaces on river (its tags are the private `river-status` protocol).
+5. Detecting lockers that neither set `ActiveChanged` nor appear in the known-locker list (§3).

@@ -1,6 +1,6 @@
 # ADR-0004: Stylesheets (waybar-style CSS) for the bar
 
-Status: accepted (ash, T22). Supersede with a new ADR. User reference: `docs/styling.md`.
+Status: accepted. Supersede with a new ADR. User reference: `docs/styling.md`.
 
 ## Context
 GOAL.md's design principle says to style the bar like waybar's `style.css`: target modules by id,
@@ -41,7 +41,7 @@ CSS engine isn't available.
   file is unreadable. A typo can't blank the bar, and the safe layer doesn't use user CSS at all
   (sliverd renders it with the built-in `classic`).
 - **Themes are stylesheets.** `assets/themes/classic.css` reproduces tiny-dfr pixel-for-pixel
-  (identical snapshots to the old hard-coded theme). `sliver.css` is the default (T18, H10: macOS
+  (identical snapshots to the old hard-coded theme). `sliver.css` is the default (macOS
   look + desktop accent on `.on` toggles and slider fills). `@accent` is always defined
   (`DEFAULT_ACCENT`); the agent overrides it via `Stylesheet::new()` + `define_color()` before
   `add_file()`.
@@ -60,6 +60,6 @@ CSS engine isn't available.
 - `Theme` is gone. `Renderer::render(scene, &Stylesheet, pixmap)` returns the `Layout` (zone and
   item rects) it drew, so touch regions come from the same pass.
 - No layout-affecting CSS beyond padding, margin, gap, min-width and border. `width` modes stay in
-  config (H6), so layout can't be broken from the stylesheet.
+  config, so layout can't be broken from the stylesheet.
 - Later, as needed: `transition`/animations, `box-shadow`, gradients, per-part pseudo-elements
   (`::icon`, `::label`), `@media (layer)`-like queries.

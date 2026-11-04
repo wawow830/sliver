@@ -1,10 +1,9 @@
 # Customization reference (waybar model)
 
-Owner: elm (T20 + T11). Status: **spec v1**, implemented by `crates/sliver-config` (ADR-0004). sliver-config (T11), the module runtime (T21), the
-stylesheet (T22), sliverctl and the D-Bus API all follow this doc. Change it via a PR to this doc
-plus a message to the owners of the parts it touches.
+The config is implemented by `crates/sliver-config` (ADR-0004). The module runtime, the
+stylesheet, sliverctl and the D-Bus API all follow this document.
 
-GOAL.md says to be **as customizable as possible, with waybar as the model**. Everything is a module,
+Sliver aims to be **as customizable as possible, with waybar as the model**. Everything is a module,
 every module is shaped by config, styling is a stylesheet, the structure (zones, layers, rules) is
 user-defined, and the text config is the source of truth. The **only** things a user can't change
 are the invariants in §9.
@@ -17,7 +16,7 @@ are the invariants in §9.
 | `/etc/xdg/sliver/config.toml` | System-wide config, used only if there's no user file. |
 | `/usr/share/sliver/config.toml` | Packaged config, used only if neither file above exists. |
 | built-in defaults (`crates/sliver-config/src/builtin.toml`) | **Always merged underneath** whichever file is used, so the `base`/`fn`/`media` layers, the `default`/`fkeys`/`media` layouts and the control strip exist even with an empty config. Any of them can be redefined. |
-| `style.css` next to the active config (or `stylesheet = "..."`) | Stylesheet (T22). `style-dark.css` and `style-light.css` follow the desktop color scheme when present. |
+| `style.css` next to the active config (or `stylesheet = "..."`) | Stylesheet (§7). `style-dark.css` and `style-light.css` follow the desktop color scheme when present. |
 
 - The format is **TOML** (ADR-0001). Comments are allowed. Keys are **kebab-case** and use waybar's
   names wherever the concept maps, so module blocks are easy to port.
@@ -32,11 +31,14 @@ are the invariants in §9.
   config is **never applied**: the last good config stays live, and the error shows up in the
   settings Status page and `sliverctl status`, with an optional desktop notification.
 - Unknown keys produce a **warning** (they catch typos), not an error.
+- The settings app edits these same files and keeps your comments and formatting
+  (`sliver_config::edit`). `sliverctl config import-waybar` converts waybar module blocks (JSONC)
+  to TOML.
 
 ## 1b. Profiles
 
-A profile is a whole config you can switch to, like "Work" or "Presenting" (ux.md §9). Owner:
-`sliver_config::profile`.
+A profile is a whole config you can switch to, like "Work" or "Presenting" (ux.md §9).
+Implemented in `sliver_config::profile`.
 
 - `default` is the ordinary config above. Any other profile is
   `~/.config/sliver/profiles/<name>.toml` (names: letters, digits, `-`, `_`).
@@ -145,7 +147,7 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
   (what tiny-dfr accepts, e.g. `F1`, `BrightnessDown`, `PlayPause`), matched case-insensitively.
   Letters, digits and punctuation in `key`/`keys` mean the *character* on a US keyboard: they're
   sent as the key that types that character in the layout of sliverd's keyboard, so
-  `["LeftCtrl", "Z"]` is undo on AZERTY/QWERTZ too, not Ctrl+W/Ctrl+Y (T104). It needs the
+  `["LeftCtrl", "Z"]` is undo on AZERTY/QWERTZ too, not Ctrl+W/Ctrl+Y. It needs the
   compositor to report that keyboard's layout (Hyprland does). A character the layout has only
   with Shift (AZERTY digits) or not at all (Greek) is sent by US position, as everywhere else.
   A `[modules."key/F1"]` block, if present, is merged on top.
@@ -170,7 +172,7 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
 | `icon` | string | ≈ `image-name`/`image-path` | XDG icon name, file path, or `tiny-dfr:<name>` (the dfr icon dirs). Paths can be absolute, `~/…`, or relative to the main config file's directory (`icons/x.png`, or a bare `logo.svg`: a name ending in `.png`/`.svg`/`.svgz` is a file). In an `include`d file, relative paths start from that file's directory. |
 | `icon-theme` | string | (none) | Overrides the theme for this module. |
 | `icon-size` | int | same | px |
-| `width` | `"auto"` \| px int \| `"fill"` \| `{ fill = N }` | ≈ `expand` | Q4/H6. `expand = true` is accepted as `"fill"`. |
+| `width` | `"auto"` \| px int \| `"fill"` \| `{ fill = N }` | ≈ `expand` | The module's width. `expand = true` is accepted as `"fill"`. |
 | `min-length` / `max-length` | int (chars) | same | Labels are ellipsized past max-length. |
 | `align` / `justify` | float / string | same | Label alignment within the module. |
 | `class` | string or array | (none) | Static extra CSS classes. |
@@ -181,7 +183,7 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
 | `repeat` | bool | (none) | Hold-to-repeat, the default for `key/*`. |
 | `on-tap`, `on-double-tap`, `on-hold`, `on-release`, `on-swipe-left`, `on-swipe-right`, `on-drag`, `on-update` | action (§5) | `on-click`, `on-double-click`, `on-click-right`, `on-click-release`, `on-scroll-down`, `on-scroll-up`, n/a, `on-update` | The waybar names are accepted as aliases, so ported blocks work. Double-tap delays that module's single tap, so it's opt-in. |
 | `actions` | table gesture → module-action name | same | Bind gestures to a module's *built-in* actions, e.g. `actions = { on-hold = "mode" }` on clock. |
-| `menu` / `menu-trigger` | array of `{label, icon, on-tap}` / gesture | ≈ `menu` + `menu-file` | Done. Opens a temporary sub-bar with these entries and a ✕ (it covers the layout like a modal context: the first zone stays). The trigger defaults to tap, or hold when the module also has a tap action. Picking an entry runs its action and closes the sub-bar. Replaces GtkBuilder menus. Preset: `examples/config/power-menu.toml` (a `custom/power` button with lock, suspend, reboot and power off, and a `custom/screenshot` button for the Print key); copy it or `include` it. |
+| `menu` / `menu-trigger` | array of `{label, icon, on-tap}` / gesture | ≈ `menu` + `menu-file` | Opens a temporary sub-bar with these entries and a ✕ (it covers the layout like a modal context: the first zone stays). The trigger defaults to tap, or hold when the module also has a tap action. Picking an entry runs its action and closes the sub-bar. Replaces GtkBuilder menus. Preset: `examples/config/power-menu.toml` (a `custom/power` button with lock, suspend, reboot and power off, and a `custom/screenshot` button for the Print key); copy it or `include` it. |
 | `swipe-threshold` | px | `smooth-scrolling-threshold` | |
 | `pass-through` | bool | (none) | App-published modules (`app/<provider>#<id>`): also send the gesture to the app when a user `on-*` binding exists. Default false: the user binding replaces the app's event (api.md §5). |
 | `interval` | duration or `"once"` | same | For modules that poll. The floor is 100 ms and anything under 1 s gets a warning (invariant 3). |
@@ -200,57 +202,60 @@ The old tiny-dfr `MediaLayerDefault = true` is just `[layers] base = "media"`, `
 
 Durations are `"250ms"`, `"5s"`, `"2m"`, or a bare number of seconds (waybar compat).
 
-### Built-in module types (v1 target set)
+### Built-in module types
 
-| sliver | waybar equivalent | Tier (features.md) | Notes |
-|---|---|---|---|
-| `key/<Key>` | (none, from tiny-dfr) | P0 | Esc, F1–F24 and media keys. Emitted by sliverd through uinput. |
-| `spacer` | (CSS margins) | P0 | `width` decides its size. |
-| `clock` | `clock` | P0 | `{:%strftime}`, `locale`, `timezones` with swipe to cycle (like waybar's scroll). |
-| `battery` | `battery`, `upower` | P0 | `{capacity}`, `{time}`, `{status}` states, `format-charging`… |
-| `backlight`, `backlight/slider` | same | P0/P1 | Slider: press-and-slide. `on-drag` gets `{value}`. |
-| `kbd-backlight`, `kbd-backlight/slider` | (none) | P0/P1 | |
-| `audio`, `audio/slider` | `pulseaudio`, `wireplumber`, `pulseaudio/slider` | P0/P1 | `audio#mic` with `node = "source"` for the mic. |
-| `mpris` | `mpris` | P1 | Done. `{title}` `{artist}` `{status_icon}` `{album}` `{player}`; tap play/pause, swipe next/previous, **hold switches to the next player** when several run. Album art (`mpris:artUrl`: `file://`, or `http(s)://` fetched once with curl into `~/.cache/sliver/art`; PNG and JPEG) is the icon (`art = false` turns it off). `scrub = true` turns the module into a progress slider (position extrapolated while playing, no polling) that seeks on drag. |
-| `workspaces` | `hyprland/workspaces`, `sway/workspaces`, `niri/workspaces` | P1 | Done. One button per workspace (the focused output's, or all with `all-outputs = true`); classes `.active` `.urgent` `.empty` `.default`, `:checked` on the active one; `{name}` `{id}` `{windows}`; tap switches workspace. The backend is chosen automatically (Hyprland, sway, niri). The waybar names are accepted as aliases. |
-| `window` | `hyprland/window`… | P2 | Focused app/title. `rewrite` rules as in waybar. |
-| `mode` | `hyprland/submap`, `sway/mode` | P2 | |
-| `language` | `hyprland/language`, `sway/language` | P2 | Tap = next layout. Hold opens a sub-bar of the configured layouts (Hyprland, sway, niri); picking one switches to it. An explicit `menu = [...]` on the module replaces it. **fcitx5** (CJK input methods): while fcitx5 is running and a window has an input method, the module shows the method's own label (`拼`, `あ`, `en`) instead of the compositor's layout; tap toggles it (fcitx5's activate/deactivate), hold lists the active group and picks one. Placeholders `{}`/`{short}` (the label), `{input_method}`/`{long}` (`Pinyin`), `{id}` (`pinyin`); with fcitx5 absent `{short}`/`{input_method}` are the layout name, so one `format` serves both. fcitx5 has no change signal, so while the bar is on and fcitx5 runs it is asked every 2 s (one cheap call; the rest only if it changed) (and on window focus changes, after our own switches); that stops with the bar off and never starts without fcitx5. Followed only while a layout uses the module. |
-| `idle-inhibitor` | `idle_inhibitor` | P1 | Caffeine. |
-| `dnd` | (none) | P1 | Shows Do Not Disturb when the notification daemon reports it; hidden otherwise. Tap switches it: dunst (`paused`), mako (`makoctl mode -a/-r do-not-disturb`), swaync (`swaync-client --dnd-on/--dnd-off`), KDE (holds an `Inhibit` for as long as the agent runs). mako and swaync are read through their tool at start and after our own toggles (they announce nothing on the bus). |
-| `dark-mode` | (none) | P1 | Light/dark colour scheme from the XDG portal (`color-scheme`), hidden when the portal doesn't say. Classes `.dark`/`.light`, `{state}`. Tap switches: `plasma-apply-colorscheme BreezeDark/BreezeLight` on KDE, else `gsettings set org.gnome.desktop.interface color-scheme`; the state shown is whatever the portal reports back. Context key `dark_mode` for `when`. |
-| `screenshot`, `lock`, `power` | (none) | P1 | One-shot widgets (always shown). `screenshot`: the portal's interactive screenshot (`org.freedesktop.portal.Screenshot`). `lock`: logind `Session.Lock`, the same as `loginctl lock-session`, so your locker's `lock_cmd` runs. `power`: tap opens a sub-bar with Lock and Suspend; **hold** opens Reboot and Power off, so those can't be tapped by accident. All are plain D-Bus calls; `menu = [...]` replaces the power entries. |
-| `power-profiles` | `power-profiles-daemon` | P2 | |
-| `cpu`, `memory`, `temperature`, `disk`, `load` | same | P2 | Done (`sliver-stats`). Read from /proc and /sys when drawn, refreshed on `interval` (defaults: cpu/temperature/load 10 s, memory/disk 30 s) only while on the bar and the display is on. Placeholders: cpu `{usage}` `{load}` `{avg_frequency}` `{spark}` (a text sparkline `▁▃▅█` of the last 16 samples); memory `{percentage}` `{used}` `{total}` `{avail}` (GiB) `{swapPercentage}` `{swapUsed}` `{swapTotal}` `{swapAvail}`; load `{load1}` `{load5}` `{load15}`; temperature `{temperatureC}` `{temperatureF}` `{temperatureK}`, keys `thermal-zone`, `hwmon-path`, `critical-threshold` (adds `.critical`; default source is the hottest sensor); disk `{percentage_used}` `{percentage_free}` `{used}` `{free}` `{total}` (GiB) `{path}`, key `path` (default `/`). `states` use `percentage` (cpu, memory, disk). |
-| `network` | same | P2 | Done (NetworkManager over D-Bus, `sliver-session`). `{essid}` `{ifname}` `{signalStrength}` `{ipaddr}` `{state}`; classes `.wifi` `.ethernet` `.vpn` `.disconnected` `.connecting`; percentage = Wi-Fi signal for `states`; icon follows the signal. Tap switches the Wi-Fi radio (`.off` class when it is off). Hidden without NetworkManager. Throughput placeholders `{bandwidthDownBytes}` `{bandwidthUpBytes}` `{bandwidthTotalBytes}` (e.g. `1.5MB/s`), the same with `Bits`, and `{spark}` (download history) are read from /proc/net/dev **only when the module has an explicit `interval`** (default: none, so a plain network cell never wakes the bar). |
-| `bluetooth` | same | P2 | Done (BlueZ over D-Bus). `{device_alias}` `{device_battery_percentage}` `{num_connections}` `{status}`; classes `.off` `.on` `.connected`. Tap switches the adapter on or off. Hidden without an adapter. |
-| `graph` (`custom-graph/<name>`) | `custom-graph` | P2 | Done (T137). A sparkline of another module's `percentage` (`source = "cpu"`, `"memory"`, `"battery"`, `"custom/x"`…) or of its own script (`exec` printing a number, or JSON `percentage`), sampled every `interval` (default 2 s) while the bar is on; `samples` kept (default 30, newest at the right); `min`/`max` scale it (default 0–100). `states` apply to the latest value (`.warning`, `.critical`). Hidden until the first sample, and while locked. Natural width 60 px. Built-in `graph#cpu` and `graph#memory` (just `source` set) are the settings Library's CPU and Memory graphs. |
-| `privacy` | `privacy` | P2 | Done. One icon per kind in use, nothing while idle: 🖥 screen share, 📷 camera, 🎙 microphone (default: icon only; `format = "{app}"` adds the apps' names, comma-separated; `{kind}`, `{count}` too). Classes `.privacy-screen` `.privacy-camera` `.privacy-mic`; `format-screen` etc. work (status). Source: PipeWire's own socket (`sliver-session::capture`), event-driven: a *running* `Stream/Input/Audio` is a microphone user, a running `Stream/Input/Video` is a camera when it says `media.role = Camera` and a screen share otherwise. Level meters, `stream.monitor` recorders and the two halves of loopbacks/filter chains don't count. A camera an app opens straight through V4L2 (Zoom, Chrome on Intel T2 Macs) is found too: inotify on `/dev/video*`, then a look at `/proc/*/fd` for who holds it (your own processes only; PipeWire, WirePlumber and udev probes ignored). The bar's own `icon` setting would replace all three icons, so leave it unset. Watched only while a layout uses the module. It stays on the locked screen. While the bar is off the PipeWire connection is closed and reopened on wake. |
-| `systemd-failed-units` | same | P3 | Done. Failed units of the system and user managers (systemd's `NFailedUnits` over D-Bus; event-driven, watched only while a layout uses the module). `{nr_failed}` `{nr_failed_system}` `{nr_failed_user}` `{units}` (names, comma-separated); default format `{nr_failed} failed`, `format-ok` (default `✓`); classes `.degraded`/`.ok`. Hidden while nothing failed unless `hide-on-ok = false`; `system = false` / `user = false` leave a manager out. Tap opens a sub-bar of the failed units; an entry runs `systemctl [--user] status UNIT` in your terminal (`xdg-terminal-exec`). |
-| `taskbar` | `wlr/taskbar` | P2 | Done (with `pinned = [\"org.mozilla.firefox\", \"kitty\"]`: launchers first; a running pinned app is its window's button, an idle one starts the app on tap; `.pinned` `.running` `.idle`). One icon per window of the active workspace (`all-workspaces = true` for all), icon from the app's `.desktop` entry (first letters if none); `.focused` / `.urgent`; `{title}` `{app_id}` for a custom `format`; tap focuses, hold closes the window. |
-| `notifications` | (none) | P2 | Done. A bell with the latest notification's summary (`{summary}` `{app}`; never the body) or the number of open notifications (`{count}`); classes `.pending`/`.none` and `.dnd`. Tap invokes the default action (via `makoctl` where installed, else it dismisses); swipe left/right dismisses (`CloseNotification`). Hidden while the screen is locked like every module that could leak content. |
-| `emoji` | (none) | P2 | Done. As a button (default) it opens the built-in `emoji` layer; the layer is the same module in `mode = "strip"`: 10 tabs (recents + Unicode groups), one page of emoji (`columns`, default 14), swipe left/right to page, ✕ to close. Tapping an emoji types it (`insert` = `auto` (wtype if installed, else clipboard), `wtype`, `paste` (wl-copy then Ctrl+V; replaces the clipboard) or `copy`). **Skin tones:** hold an emoji that has them (👋, 👍, people…) and the page becomes ‹, the plain emoji and its five tones; tap one to type it. Group pages then show and type each emoji in the tone you last picked for it (taken from recents; pick the plain one to go back). Styling: `.emoji-tone` cells, `.emoji-back`. Recents persist in `$XDG_STATE_HOME/sliver/emoji-recents`. Data: Unicode emoji up to 15.1 (`crates/sliver-emoji`). Open it from any button with `{ layer = "emoji", mode = "toggle" }`. **Search:** the 🔍 tab replaces the strip with a letter row (a–z and a space); the letters build the query on the bar (no keyboard is grabbed), the matches (by name, every word a prefix: `red he` finds red heart) sit to the right and swipe to page, ⌫ erases, tapping the query clears it, ✕ returns to the groups. No CLDR keyword data is bundled, so only names match. |
-| `timer` | (none) | P2 | Done. Countdown (`duration`, default 25m; `{remaining}` `{minutes}` `{seconds}`, `percentage` for `states`); tap starts/pauses, hold resets; `notify-send` at zero. Status classes `.idle` `.running` `.paused` `.finished`. |
-| `image` | `image` | P1 | Done. A picture filling the item's height at its aspect ratio (the cell is as wide as that makes it, unless `width` says otherwise), clipped to the item's rounded corners. `path` (a file: absolute, `~/…` or relative to the config; or an icon name), or `exec` printing the path (first line), re-run on `interval`/`signal` like `custom/*`. A `path` with an `interval` is read again then; a file that changes is picked up. Hidden when there's no picture. PNG, JPEG or SVG; big pictures are kept at most 120 px tall. Private while locked. |
-| `group/<name>` | `group/<name>` | P1 | §3.1. |
-| `app-controls`, `status-items` | (none) / `tray` | P1 | Placeholders for D-Bus-published items (api.md). `tray` is accepted as an alias, so StatusNotifierItems show here (gap G6). `width` sizes the **slot**: `auto` (default) is as wide as its items. A px value is a fixed slot: items lay out inside it, the rest stays empty (reserved even with no items), and when they don't fit the lowest-priority item gives way first. `fill` / `{ fill = N }` adds a share of the zone's leftover after the items. Each item keeps its own width inside the slot. |
-| `app/<provider>#<item-id>` | (none) | P1 | **Pin** one D-Bus-published item anywhere, like any module (the stable key from api.md). |
-| `custom/<name>` | `custom/<name>` | P1 | §4. Static text when only `format` is set, which is the "button" of other tools. |
+| sliver | waybar equivalent | Notes |
+|---|---|---|
+| `key/<Key>` | (none, from tiny-dfr) | Esc, F1–F24 and media keys. Emitted by sliverd through uinput. |
+| `spacer` | (CSS margins) | `width` decides its size. |
+| `clock` | `clock` | `{:%strftime}`, `locale`, `timezones` with swipe to cycle (like waybar's scroll). |
+| `battery` | `battery`, `upower` | `{capacity}`, `{time}`, `{status}` states, `format-charging`… |
+| `backlight`, `backlight/slider` | same | Slider: press-and-slide. `on-drag` gets `{value}`. |
+| `kbd-backlight`, `kbd-backlight/slider` | (none) | |
+| `audio`, `audio/slider` | `pulseaudio`, `wireplumber`, `pulseaudio/slider` | `audio#mic` with `node = "source"` for the mic. |
+| `mpris` | `mpris` | `{title}` `{artist}` `{status_icon}` `{album}` `{player}`; tap play/pause, swipe next/previous, **hold switches to the next player** when several run. Album art (`mpris:artUrl`: `file://`, or `http(s)://` fetched once with curl into `~/.cache/sliver/art`; PNG and JPEG) is the icon (`art = false` turns it off). `scrub = true` turns the module into a progress slider (position extrapolated while playing, no polling) that seeks on drag. |
+| `workspaces` | `hyprland/workspaces`, `sway/workspaces`, `niri/workspaces` | One button per workspace (the focused output's, or all with `all-outputs = true`); classes `.active` `.urgent` `.empty` `.default`, `:checked` on the active one; `{name}` `{id}` `{windows}`; tap switches workspace. The backend is chosen automatically (Hyprland, sway, niri). The waybar names are accepted as aliases. |
+| `window` | `hyprland/window`… | Focused app/title. `rewrite` rules as in waybar. |
+| `mode` | `hyprland/submap`, `sway/mode` | |
+| `language` | `hyprland/language`, `sway/language` | Tap = next layout. Hold opens a sub-bar of the configured layouts (Hyprland, sway, niri); picking one switches to it. An explicit `menu = [...]` on the module replaces it. **fcitx5** (CJK input methods): while fcitx5 is running and a window has an input method, the module shows the method's own label (`拼`, `あ`, `en`) instead of the compositor's layout; tap toggles it (fcitx5's activate/deactivate), hold lists the active group and picks one. Placeholders `{}`/`{short}` (the label), `{input_method}`/`{long}` (`Pinyin`), `{id}` (`pinyin`); with fcitx5 absent `{short}`/`{input_method}` are the layout name, so one `format` serves both. fcitx5 sends no signal when the input method changes, so sliver asks it every 2 s (one cheap call), on window focus changes and after its own switches. It only asks while the bar is on, fcitx5 is running and a layout uses the module. |
+| `idle-inhibitor` | `idle_inhibitor` | Caffeine. |
+| `dnd` | (none) | Shows Do Not Disturb when the notification daemon reports it; hidden otherwise. Tap switches it: dunst (`paused`), mako (`makoctl mode -a/-r do-not-disturb`), swaync (`swaync-client --dnd-on/--dnd-off`), KDE (holds an `Inhibit` for as long as the agent runs). mako and swaync are read through their tool at start and after our own toggles (they announce nothing on the bus). |
+| `dark-mode` | (none) | Light/dark colour scheme from the XDG portal (`color-scheme`), hidden when the portal doesn't say. Classes `.dark`/`.light`, `{state}`. Tap switches: `plasma-apply-colorscheme BreezeDark/BreezeLight` on KDE, else `gsettings set org.gnome.desktop.interface color-scheme`; the state shown is whatever the portal reports back. Context key `dark_mode` for `when`. |
+| `screenshot`, `lock`, `power` | (none) | One-shot widgets (always shown). `screenshot`: the portal's interactive screenshot (`org.freedesktop.portal.Screenshot`). `lock`: logind `Session.Lock`, the same as `loginctl lock-session`, so your locker's `lock_cmd` runs. `power`: tap opens a sub-bar with Lock and Suspend; **hold** opens Reboot and Power off, so those can't be tapped by accident. All are plain D-Bus calls; `menu = [...]` replaces the power entries. |
+| `power-profiles` | `power-profiles-daemon` | |
+| `cpu`, `memory`, `temperature`, `disk`, `load` | same | Read from /proc and /sys when drawn, refreshed on `interval` (defaults: cpu/temperature/load 10 s, memory/disk 30 s) only while on the bar and the display is on. Placeholders: cpu `{usage}` `{load}` `{avg_frequency}` `{spark}` (a text sparkline `▁▃▅█` of the last 16 samples); memory `{percentage}` `{used}` `{total}` `{avail}` (GiB) `{swapPercentage}` `{swapUsed}` `{swapTotal}` `{swapAvail}`; load `{load1}` `{load5}` `{load15}`; temperature `{temperatureC}` `{temperatureF}` `{temperatureK}`, keys `thermal-zone`, `hwmon-path`, `critical-threshold` (adds `.critical`; default source is the hottest sensor); disk `{percentage_used}` `{percentage_free}` `{used}` `{free}` `{total}` (GiB) `{path}`, key `path` (default `/`). `states` use `percentage` (cpu, memory, disk). |
+| `network` | same | NetworkManager over D-Bus. `{essid}` `{ifname}` `{signalStrength}` `{ipaddr}` `{state}`; classes `.wifi` `.ethernet` `.vpn` `.disconnected` `.connecting`; percentage = Wi-Fi signal for `states`; icon follows the signal. Tap switches the Wi-Fi radio (`.off` class when it is off). Hidden without NetworkManager. Throughput placeholders `{bandwidthDownBytes}` `{bandwidthUpBytes}` `{bandwidthTotalBytes}` (e.g. `1.5MB/s`), the same with `Bits`, and `{spark}` (download history) are read from /proc/net/dev **only when the module has an explicit `interval`** (default: none, so a plain network cell never wakes the bar). |
+| `bluetooth` | same | BlueZ over D-Bus. `{device_alias}` `{device_battery_percentage}` `{num_connections}` `{status}`; classes `.off` `.on` `.connected`. Tap switches the adapter on or off. Hidden without an adapter. |
+| `graph` (`custom-graph/<name>`) | `custom-graph` | A sparkline of another module's `percentage` (`source = "cpu"`, `"memory"`, `"battery"`, `"custom/x"`…) or of its own script (`exec` printing a number, or JSON `percentage`), sampled every `interval` (default 2 s) while the bar is on; `samples` kept (default 30, newest at the right); `min`/`max` scale it (default 0–100). `states` apply to the latest value (`.warning`, `.critical`). Hidden until the first sample, and while locked. Natural width 60 px. Built-in `graph#cpu` and `graph#memory` (just `source` set) are the settings Library's CPU and Memory graphs. |
+| `privacy` | `privacy` | One icon per kind in use, nothing while idle: 🖥 screen share, 📷 camera, 🎙 microphone (default: icon only; `format = "{app}"` adds the apps' names, comma-separated; `{kind}`, `{count}` too). Classes `.privacy-screen` `.privacy-camera` `.privacy-mic`; `format-screen` etc. work (status). Source: PipeWire's own socket (`sliver-session::capture`), event-driven: a *running* `Stream/Input/Audio` is a microphone user, a running `Stream/Input/Video` is a camera when it says `media.role = Camera` and a screen share otherwise. Level meters, `stream.monitor` recorders and the two halves of loopbacks/filter chains don't count. A camera an app opens straight through V4L2 (Zoom, Chrome on Intel T2 Macs) is found too: inotify on `/dev/video*`, then a look at `/proc/*/fd` for who holds it (your own processes only; PipeWire, WirePlumber and udev probes ignored). The bar's own `icon` setting would replace all three icons, so leave it unset. Watched only while a layout uses the module. It stays on the locked screen. While the bar is off the PipeWire connection is closed and reopened on wake. |
+| `systemd-failed-units` | same | Failed units of the system and user managers (systemd's `NFailedUnits` over D-Bus; event-driven, watched only while a layout uses the module). `{nr_failed}` `{nr_failed_system}` `{nr_failed_user}` `{units}` (names, comma-separated); default format `{nr_failed} failed`, `format-ok` (default `✓`); classes `.degraded`/`.ok`. Hidden while nothing failed unless `hide-on-ok = false`; `system = false` / `user = false` leave a manager out. Tap opens a sub-bar of the failed units; an entry runs `systemctl [--user] status UNIT` in your terminal (`xdg-terminal-exec`). |
+| `taskbar` | `wlr/taskbar` | One icon per window of the active workspace (`all-workspaces = true` for all), icon from the app's `.desktop` entry (first letters if none); `.focused` / `.urgent`; `{title}` `{app_id}` for a custom `format`; tap focuses, hold closes the window. `pinned = ["org.mozilla.firefox", "kitty"]` adds launchers first: a running pinned app is its window's button, an idle one starts the app on tap; classes `.pinned` `.running` `.idle`. |
+| `notifications` | (none) | A bell with the latest notification's summary (`{summary}` `{app}`; never the body) or the number of open notifications (`{count}`); classes `.pending`/`.none` and `.dnd`. Tap invokes the default action (via `makoctl` where installed, else it dismisses); swipe left/right dismisses (`CloseNotification`). Hidden while the screen is locked like every module that could leak content. |
+| `emoji` | (none) | As a button (default) it opens the built-in `emoji` layer; the layer is the same module in `mode = "strip"`: 10 tabs (recents + Unicode groups), one page of emoji (`columns`, default 14), swipe left/right to page, ✕ to close. Tapping an emoji types it (`insert` = `auto` (wtype if installed, else clipboard), `wtype`, `paste` (wl-copy then Ctrl+V; replaces the clipboard) or `copy`). **Skin tones:** hold an emoji that has them (👋, 👍, people…) and the page becomes ‹, the plain emoji and its five tones; tap one to type it. Group pages then show and type each emoji in the tone you last picked for it (taken from recents; pick the plain one to go back). Styling: `.emoji-tone` cells, `.emoji-back`. Recents persist in `$XDG_STATE_HOME/sliver/emoji-recents`. Data: Unicode emoji up to 15.1 (`crates/sliver-emoji`). Open it from any button with `{ layer = "emoji", mode = "toggle" }`. **Search:** the 🔍 tab replaces the strip with a letter row (a–z and a space); the letters build the query on the bar (no keyboard is grabbed), the matches (by name, every word a prefix: `red he` finds red heart) sit to the right and swipe to page, ⌫ erases, tapping the query clears it, ✕ returns to the groups. No CLDR keyword data is bundled, so only names match. |
+| `timer` | (none) | Countdown (`duration`, default 25m; `{remaining}` `{minutes}` `{seconds}`, `percentage` for `states`); tap starts/pauses, hold resets; `notify-send` at zero. Status classes `.idle` `.running` `.paused` `.finished`. |
+| `image` | `image` | A picture filling the item's height at its aspect ratio (the cell is as wide as that makes it, unless `width` says otherwise), clipped to the item's rounded corners. `path` (a file: absolute, `~/…` or relative to the config; or an icon name), or `exec` printing the path (first line), re-run on `interval`/`signal` like `custom/*`. A `path` with an `interval` is read again then; a file that changes is picked up. Hidden when there's no picture. PNG, JPEG or SVG; big pictures are kept at most 120 px tall. Private while locked. |
+| `group/<name>` | `group/<name>` | §3.1. |
+| `app-controls`, `status-items` | (none) / `tray` | Placeholders for D-Bus-published items (api.md). `tray` is accepted as an alias, so StatusNotifierItems show here. `width` sizes the **slot**: `auto` (default) is as wide as its items. A px value is a fixed slot: items lay out inside it, the rest stays empty (reserved even with no items), and when they don't fit the lowest-priority item gives way first. `fill` / `{ fill = N }` adds a share of the zone's leftover after the items. Each item keeps its own width inside the slot. |
+| `app/<provider>#<item-id>` | (none) | **Pin** one D-Bus-published item anywhere, like any module (the stable key from api.md). |
+| `custom/<name>` | `custom/<name>` | §4. Static text when only `format` is set, which is the "button" of other tools. |
 
 ### 3.1 Groups and drawers
 `group/<name>` takes `modules = [...]`, `orientation = "horizontal" | "vertical"`, `module-width`
 (the default width of its children, as on a zone), and `drawer = {...}`.
 - `vertical` stacks children as two 30 px rows. That's fine for display-only modules (cpu over
-  mem). The validator warns if a stacked child has actions, because 30 px is below the touch-target advice.
+  mem). The validator warns if a stacked child has actions, because 30 px is below the
+  touch-target advice.
 - `drawer`: the first module is the leader and the rest stay hidden until revealed. `reveal =
-  "tap" | "hold" | "swipe"` (no hover here). `mode = "inline"` expands in place and pushes neighbors
-  (the macOS control strip, Q9/H11). `mode = "bar"` opens the rest of the group as a sub-bar below the first zone, with an automatic ✕ (MTMR/BTT
-  folders; tap the leader). `reveal` is tap only for now. Also `start-expanded`, `collapse-after`, `transition-duration`, `children-class`, and
-  `transition-left-to-right`, all named as in waybar.
+  "tap" | "hold" | "swipe"` is accepted (there's no hover), but only tap is implemented: tapping
+  the leader opens and closes the drawer. `mode = "inline"` expands in place and pushes neighbors,
+  like the macOS control strip. `mode = "bar"` opens the rest of the group as a sub-bar below the
+  first zone, with an automatic ✕, like MTMR/BTT folders. The other keys are `start-expanded`,
+  `collapse-after`, `transition-duration`, `children-class` and `transition-left-to-right`, all
+  named as in waybar.
 - The default base layout's main zone is `app-controls` followed by `group/fkeys` (F1–F12,
   `module-width = "fill"`, `when = { not = { app-controls = true } }`). The bar shows F-keys
-  until the focused app publishes controls, then gives the app the space. This came from birch's
-  real-bar run: few Linux apps publish, and this Mac has no F-key row.
+  until the focused app publishes controls, then gives the app the space. This is because few
+  Linux apps publish controls, and Touch Bar Macs have no physical F-key row.
 - The collapsible control strip in the default config is just `group/control-strip`. Nothing
   about it is hard-coded.
 
@@ -337,7 +342,7 @@ edge-swipe-from-right = "notify-send hi"
   `esc`/`main`/`controls`, which is a convention, not a rule. A zone becomes a stylesheet class
   `.zone-<name>` (waybar's `.modules-left`).
 - **Layouts:** `[layouts.<name>]` with optional `extends`. A child's zone **overrides the
-  parent's zone with the same name in place** (Q5/H7: whole zones). New zone names append to the
+  parent's zone with the same name in place** (the whole zone is replaced, not merged). New zone names append to the
   end unless `zone-order = [...]` is given. Built-in layouts `fkeys` and `media` (dfr's layers)
   always exist and can be overridden by defining them.
 - **Layers:** `[layers]` maps each layer name to its default layout. `base` and `fn` are reserved
@@ -345,7 +350,7 @@ edge-swipe-from-right = "notify-send hi"
   Per-layer options (`timeout`, `close-button`) go in `[layer-options.<name>]`.
 - **Rules:** `[[rules]]` with `name`, `when`, `layer` (default `base`) and `layout`. **First match
   top to bottom wins.** If none matches, the `[layers]` default is used.
-- **The lock screen** (T88): the built-ins have one rule, `when = { locked = true }` → layout
+- **The lock screen:** the built-ins have one rule, `when = { locked = true }` → layout
   `locked` (media transport, brightness and volume sliders, mute, and Esc where there's no physical
   Esc). Like any array, your own `rules` replace it. The settings app copies it along and puts new
   rules below it, and `rules = []` means "no rules, not even that one". Privacy doesn't depend on
@@ -381,19 +386,18 @@ target = true                  # allow target-scope contexts (scripts that targe
 ```
 
 `sliver_config::Config::app_policy(app_id)` resolves `[apps.*]` with the `"*"` defaults, and
-`provider_prefs(id)` resolves `[providers.*]`. The agent turns them into the API registry's policy
-(cedar).
+`provider_prefs(id)` resolves `[providers.*]`. The agent turns them into the API registry's policy.
 
-## 7. Styling (T22 implements; renderer side)
+## 7. Styling
 
-These are the selectors sliver guarantees, mirroring waybar:
+These are the selectors sliver guarantees, mirroring waybar (full reference: `docs/styling.md`):
 - `#<type>` (`#clock`, `#custom-vpn`, `#key-f1`, `#group-control-strip`) and `#<type>.<instance>`
   (`#battery.bat2`).
 - `.<class>` from `states`, module status (`.charging`, `.muted`, `.playing`), JSON `class`,
   static `class`, and `.drawer-child`.
 - `:active` while pressed, `:disabled`, `:first-child`/`:last-child`, and `.error` for a failed script.
 - The style tree is `bar > zone > module`. The agent passes `(type, id, classes)` and the renderer
-  does the cascade (ash, T22).
+  does the cascade.
 - `.zone-<name>`, and `bar.layer-<name>`, `bar.layout-<name>`, `bar.<bar name>`, `bar.locked`,
   `bar.dimmed` on the strip root.
 - Properties (initial set): `color`, `background`/`background-color`, `border`, `border-radius`,
@@ -402,7 +406,7 @@ These are the selectors sliver guarantees, mirroring waybar:
   `mix()`. Unsupported properties or selectors warn with file:line and never fail the load.
   Themes are just stylesheets. `theme = "…"` in config.toml picks the built-in base theme; your
   stylesheet goes on top of it, and can also `@import "sliver:NAME"`. Built in:
-  - `sliver` (default; Q8/H10): the macOS look with `@accent`, which the agent defines from the desktop.
+  - `sliver` (default): the macOS look with `@accent`, which the agent defines from the desktop.
   - `light`: dark text on light keys, also with `@accent`. Lit pixels cost power on the OLED
     panel, so this one draws more than the dark themes.
   - `high-contrast`: white outlines, bold larger text, pressed inverts and "on" is solid yellow, so
@@ -428,21 +432,21 @@ These are the selectors sliver guarantees, mirroring waybar:
 - `get/set KEY.PATH VALUE` (writes the config file, which then hot-reloads)
 - `render --png` (headless preview)
 
-## 9. The only things you can't configure (GOAL invariants, enforced by sliver-config's validator and the resolver)
+## 9. The only things you can't configure (invariants, enforced by sliver-config's validator and the resolver)
 
 1. **F1–F12 and Esc stay reachable through a hard-wired hatch, not through config.** The Fn layer
-   and every layout are **fully editable** (Q2/H4, revised to "fully editable"). A config may
-   drop the F-keys and Esc entirely. Reachability is guaranteed by **the safe hatch in sliverd**:
-   double-press Fn and hold, and the built-in F1–F12 safe layer shows while Fn is held, with Esc
-   first on bars that have no physical Esc. Decided in H14 (the human delegated it; elm picked this). ≤400 ms between the two
-   presses, implemented in `sliver_ipc::hatch` (api.md §6). No
-   config can change or disable the hatch. The validator only **warns** when `base ∪ fn` has no
+   and every layout are **fully editable**, and a config may drop the F-keys and Esc entirely.
+   Reachability is guaranteed by **the safe hatch in sliverd**: double-press Fn (≤400 ms between
+   the presses) and hold, and the built-in F1–F12 safe layer shows while Fn is held, with Esc
+   first on bars that have no physical Esc. It's implemented in `sliver_ipc::hatch` (api.md §6).
+   No config can change or disable the hatch. The validator only **warns** when `base ∪ fn` has no
    F1–F12, or when a no-physical-Esc bar has no Esc.
 2. **Esc default on bars with no physical Esc** (2170 px models): the shipped default config and
    the tiny-dfr importer put `key/Esc` first in base and fn, as dfr did. Users can remove it, and
-   the hatch covers that. On this 2008 px Mac14,7 (physical Esc, H2) it's absent by default.
+   the hatch covers that. On 2008 px models such as the Mac14,7, which have a physical Esc, it's
+   absent by default.
 3. **Touch targets** are advice, not an invariant: the validator *warns* when a module with an
-   action is narrower than 80 px, and warns loudly below 60 px (birch, features.md §9). It never
+   action is narrower than 80 px, and warns loudly below 60 px (features.md §9). It never
    refuses.
 4. **Privacy while locked:** app items (`app-controls`, `status-items`, `app/*`), `custom/*` output,
    `graph`, notification text and window titles (`window`, `taskbar`) are never shown on the lock
@@ -465,20 +469,6 @@ These are the selectors sliver guarantees, mirroring waybar:
 | Mouse buttons (middle/back/forward, triple-click) | Touch has none of them | tap, double-tap, hold, swipe, drag |
 | `rotate` | The bar is 60 px tall | none |
 | `cffi` (in-process C plugins) | Crash safety: a plugin must never take the bar down | `custom/*` exec, or the D-Bus API for long-running programs |
-| `cava` | Power cost (invariant 3) | P3, maybe an opt-in with a frame-rate cap |
+| `cava` | Power cost (invariant 3) | none |
 | GtkBuilder `menu-file` | No GTK on the bar | `menu = [...]` sub-bar |
 | Pango markup | The renderer isn't Pango (ADR-0002) | A markup subset: tags `b i u s big small sub sup tt span`; `span` attributes `foreground/fgcolor/color`, `weight`, `style`, `size` (keywords, `NN%`, `larger`/`smaller`), `underline`, `strikethrough`, `font_family/face`; entities `&amp; &lt; &gt; &quot; &apos; &#N;`. Background colours, baseline shift and font descriptions are ignored (stylesheets cover them). Bad markup keeps its text and reports a warning (`markup::parse(..).warnings`); it never blanks a module. Output that must stay literal is escaped (`escape = true`) and still goes through the markup path. |
-
-## 11. Gaps → tasks
-
-| Gap | Task |
-|---|---|
-| G1 Config language: includes, deep merge, aliases, conditions, validation, resolver, tiny-dfr import | T11 (elm) |
-| G2 Module runtime for `custom/*` with the shared output contract for built-ins | T21 |
-| G3 Stylesheet engine and selectors from §7 | T22 |
-| G4 Markup subset in format strings (`<b>`, `<i>`, `<span color=…>`) | done: `sliver_render::markup` + `Content::Markup` / `IconMarkup` (T28) |
-| G5 `format` engine: placeholders, `{name:spec}`, format-icons/states/alt/status resolution, shared by all modules | done: `sliver_config::format` (T25) |
-| G6 StatusNotifierItem host → `status-items`/`tray` | done: `sliver_session::tray` |
-| G7 Hot reload watcher + last-good fallback + `sliverctl reload`/SIGUSR2 | done (T26, docs/agent.md) |
-| G8 waybar module-block importer (JSONC → TOML, alias names) | done: `crates/sliver-waybar` (`import_path`, example `waybar-import`) (T29) |
-| G9 Settings app writes these exact files with comments preserved (toml_edit), and shows unknown-key warnings | done: `sliver-settings` (via `sliver_config::edit`) |

@@ -3,6 +3,10 @@
 Sliver styles the Touch Bar with a stylesheet, like waybar's `style.css`. Decision record:
 ADR-0004. Engine: `crates/sliver-render/src/style/`.
 
+Your stylesheet is `style.css` next to the active config (usually `~/.config/sliver/style.css`), or
+whatever `stylesheet = "..."` names. `style-dark.css` and `style-light.css` follow the desktop
+color scheme when present. Edits apply on save (customization.md §1).
+
 ## Quick start
 ```css
 @import "sliver:classic";          /* start from a built-in theme, then override */
@@ -85,6 +89,11 @@ and only the offending declaration, selector or rule is dropped. The built-in sa
 uses your stylesheet.
 
 ## Built-in themes
-- `classic`: tiny-dfr's look (gray 0.2/0.4 buttons, radius 8, 16 px gaps, 32 px bold).
+Pick one with `theme = "…"` in config.toml (your stylesheet goes on top), or `@import "sliver:NAME";`.
 - `sliver` (the default): the macOS Touch Bar look. Toggles that are `.on` and slider fills use
   `@accent`, which the agent sets from your desktop's accent color (falls back to `#3584e4`).
+- `light`: dark text on light keys, also with `@accent`. Lit pixels cost power on the OLED panel,
+  so it draws more than the dark themes.
+- `high-contrast`: white outlines, bold larger text; pressed inverts and "on" is solid yellow, so
+  no state depends on hue alone. Black background, so as cheap on power as the default.
+- `classic`: tiny-dfr's look (gray 0.2/0.4 buttons, radius 8, 16 px gaps, 32 px bold).

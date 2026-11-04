@@ -41,11 +41,19 @@ sudo dnf install target/rpmbuild/RPMS/*/*.rpm   # sliver, sliverd, sliver-agent,
 ```
 `sliver-browser` (§10) is in the same folder; leave it out if you don't want it.
 
-Installing takes nothing over (no reboot needed either): sliverd takes the bar from the next boot.
-To switch right away:
+Installing doesn't take the bar from tiny-dfr right away: sliverd takes it from the next boot.
+No reboot is needed, though. To switch now:
 ```sh
 sudo systemctl start sliverd          # stops tiny-dfr and takes the bar
 systemctl --user start sliver-agent   # from the next login on, it starts with your session
+```
+The agent starts with `graphical-session.target`. GNOME, KDE and compositors started through
+uwsm activate that target. Hyprland or sway started straight from a display manager don't, so
+nothing starts the agent and the bar stays on the built-in F-keys (`sliverctl doctor` says so).
+Start it from the compositor's autostart instead:
+```
+exec-once = systemctl --user start sliver-agent   # Hyprland
+exec systemctl --user start sliver-agent          # sway
 ```
 **Back to tiny-dfr:** `sudo systemctl start tiny-dfr` stops sliverd until the next boot. For good,
 uninstall: `sudo dnf remove sliver sliverd sliver-agent sliverctl sliver-settings` hands the bar to
@@ -176,10 +184,10 @@ A preset's scripts run as you, so read the `runs` list before you say yes, or im
 ## 9. The lock screen and privacy
 
 While the screen is locked, the bar shows the `locked` layout: media controls, brightness, volume,
-mute (and Esc on Macs without one). That comes from a built-in rule; your own `rules` list replaces
-it (the settings app keeps it at the top for you, and `rules = []` removes it). Whatever your config says, it never shows buttons from apps,
-script output, notification text or window titles there. Notification text also stays off the bar
-while you share your screen.
+mute (and Esc on Macs without one). That comes from a built-in rule. Your own `rules` list replaces
+it (the settings app keeps it at the top for you), and `rules = []` removes it. Whatever your
+config says, the lock screen never shows buttons from apps, script output, notification text or
+window titles. Notification text also stays off the bar while you share your screen.
 
 ## 10. Scripts and apps
 
@@ -188,8 +196,8 @@ From the shell, buttons live as long as `sliverctl publish` runs:
 sliverctl publish --provider org.example.Build button:build:'🔨 Build' |
   while read -r item kind _; do [ "$kind" = tap ] && make; done
 ```
-Drive the bar like waybar: `sliverctl signal 8`, `sliverctl hide clock`, `sliverctl layer push media 5000`,
-`sliverctl bar toggle`. See `man sliverctl` and `examples/shell/README.md`.
+Drive the bar like waybar: `sliverctl signal 8`, `sliverctl hide clock`,
+`sliverctl layer push media 5000`, `sliverctl bar toggle`. See `man sliverctl` and `examples/shell/README.md`.
 
 Apps (any language, plain D-Bus) publish items for their own windows: buttons, toggles, sliders,
 segmented controls, scrollable strips and popovers. See `docs/api.md`, `examples/python/pomodoro.py`,
@@ -204,8 +212,9 @@ Load the extension from `/usr/share/sliver/browser/` (see `integration/browser/R
 **GNOME and KDE** need a small integration so the agent knows the focused app, workspaces and
 windows. The packages `gnome-shell-extension-sliver` and `sliver-kwin` come along automatically
 when GNOME or KWin is installed, but you enable them yourself, once:
-GNOME: `gnome-extensions enable sliver-focus@sliver.wawow830.github.io`, then log out and in.
-KDE: System Settings → Window Management → KWin Scripts → *Sliver focus*.
+- GNOME: `gnome-extensions enable sliver-focus@sliver.wawow830.github.io`, then log out and in.
+- KDE: System Settings → Window Management → KWin Scripts → *Sliver focus*.
+
 Hyprland, sway, niri and other wlroots compositors need nothing.
 
 ## 11. Troubleshooting
@@ -224,7 +233,7 @@ forced), the active profile, whether the display is on, dimmed or off, and what'
 
 | Symptom | Try |
 |---|---|
-| Bar shows only F-keys | The agent isn't driving it: `systemctl --user status sliver-agent`, `sliverctl status`. |
+| Bar shows only F-keys | The agent isn't driving it. `sliverctl doctor` says why; see §3 if it never starts at login. |
 | My change didn't apply | `sliverctl config check`. Invalid configs are never applied, and the last good one stays. |
 | The wrong layout shows | `sliverctl status` names the rule that won; rules match top to bottom. |
 | A custom module shows `!` | Its script failed or timed out (default 2 s). Run it by hand. |
@@ -238,5 +247,5 @@ forced), the active profile, whether the display is on, dimmed or off, and what'
 Logs: `journalctl -u sliverd -b` (the daemon) and `journalctl --user -u sliver-agent` (config
 errors, failing scripts, compositor connection). For a debug log from the daemon, add
 `Environment=SLIVER_LOG=debug` in a runtime drop-in
-(`/run/systemd/system/sliverd.service.d/debug.conf`) and restart it. The agent logs everything it
-has to say to its journal already.
+(`/run/systemd/system/sliverd.service.d/debug.conf`) and restart it. The agent already logs
+everything to its journal.

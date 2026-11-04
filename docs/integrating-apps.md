@@ -8,8 +8,8 @@ this page is the short path through it, with a working recipe per toolkit.
 |---|---|---|
 | Python / GLib | `examples/python/pomodoro.py` | run by a test on a private bus |
 | Node.js / **Electron** (dbus-next) | `examples/node/counter.js` | run by a test on a private bus (`node_counter`; skipped when `dbus-next` isn't installed) |
-| GTK / GNOME apps in **GJS** (Gio) | `examples/gjs/counter.js` | written against Gio, which the Python example exercises; **not run** (no `gjs` here) |
-| **Qt** 6 (QtDBus, C++) | `examples/qt/counter.cpp` | **not compiled** (no Qt headers here); please send fixes |
+| GTK / GNOME apps in **GJS** (Gio) | `examples/gjs/counter.js` | written against Gio, which the Python example exercises; **not run** by the tests |
+| **Qt** 6 (QtDBus, C++) | `examples/qt/counter.cpp` | **not compiled** by the tests; please send fixes |
 | Shell | `sliverctl publish`, `busctl` (api.md §8) | tested |
 | Rust | the `sliver-client` crate | tested |
 
@@ -25,7 +25,7 @@ this page is the short path through it, with a working recipe per toolkit.
    preferences hang on it), and a `title`. It returns the context's object path.
 3. **Publish items.** `SetItems(aa{sv})` on that path, interface `…Sliver.Context1`. Each item is a
    dictionary of variants with at least `id` (s) and `type` (s: `button`, `toggle`, `label`,
-   `slider`, `segmented`, `scrubber`, `progress`, `spacer`, `group`, `popover`). Then `label`,
+   `slider`, `segmented`, `scrubber`, `progress`, `spacer`, `image`, `group`, `popover`). Then `label`,
    `icon` (an XDG icon name), `classes`, `gestures`, `values` (named values for the user's own
    `format` string)… Keep item ids **stable between releases**: they're how users pin and style
    your items.

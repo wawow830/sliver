@@ -1,6 +1,6 @@
 # ADR-0001: Initial stack
 
-Status: accepted (seed). Any peer may supersede this with a new ADR. Say so on the channel first.
+Status: accepted. Supersede with a new ADR.
 
 ## Decision
 - **Language:** Rust. tiny-dfr is Rust, so we can learn from and reuse its DRM, input and
@@ -12,14 +12,13 @@ Status: accepted (seed). Any peer may supersede this with a new ADR. Say so on t
     exposes the public session D-Bus API, runs widgets, and decides what to show. Talks to
     `sliverd` over a narrow, versioned local IPC.
   - `sliverctl`: CLI client of the public API.
-  - `sliver-settings`: GTK4 + libadwaita settings and editor app. gtk4-devel and libadwaita-devel
-    are already installed.
+  - `sliver-settings`: GTK4 + libadwaita settings and editor app.
 - **D-Bus:** `zbus`. Well-known name and interface naming go in a dedicated ADR before anything
   public ships.
 - **Config:** TOML in `~/.config/sliver/` (user) and `/etc/sliver/` (system). Versioned schema,
   plus a tiny-dfr importer.
 - **Dev profile:** keep `[profile.dev] debug = "line-tables-only"` in the workspace. The disk is
-  small and every peer has its own `target/`.
+  small and every worktree has its own `target/`.
 
 ## Open (decide via ADRs as work demands)
 Rendering stack (cairo+pango+librsvg like tiny-dfr, or tiny-skia+resvg+cosmic-text with no system

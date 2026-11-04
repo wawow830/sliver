@@ -2,7 +2,7 @@
 
 The per-user session agent (ADR-0001). It resolves the user's config for the current context,
 runs modules, renders frames with sliver-render, and presents them to sliverd over the private
-IPC (api.md §6). Owner of the core loop: ash (T24).
+IPC (api.md §6).
 
 ## Shape
 ```
@@ -59,11 +59,15 @@ Actions (`agent.rs` → `Effect`s run by main.rs):
   their trough, other modules the bar x.
 
 ## Context and data
-The live world comes from fir's `sliver-feeds` (desktop backend, session sources, and the user
+The live world comes from `sliver-feeds` (desktop backend, session sources, and the user
 module runtime for `custom/*` with `exec`) through one wake fd the main loop polls. The rule
 context is `Aggregate::context()` plus the agent's own keys (`context.rs`: time, weekday,
-physical_esc, layer). logind's `LockedHint` is only believed on Hyprland/sway/niri while a locker
-process runs, because it's verified stale on this machine, and believed as-is on GNOME/KDE.
+physical_esc, layer).
+
+`locked` (`context::plausibly_locked`) trusts, in order: the desktop's
+`org.freedesktop.ScreenSaver` `ActiveChanged`; on GNOME/KDE, logind's `LockedHint`; elsewhere,
+whether a known locker (`hyprlock`, `swaylock`, …) is running. On other desktops the hint alone
+is not believed: lockers started from a keybind or `swayidle` never set it, and some never clear it.
 
 User modules render through `sliver_modules::view`. An action on one re-runs it (waybar
 `exec-on-event`). `{ signal = N }` and `{ update = "custom/x" }` reach the runtime, and its timers
@@ -89,7 +93,7 @@ MPRIS, the caffeine inhibitor), so the main loop never blocks on them.
 `sliver-agent --render out` uses the live sources too, and prints every cell with its rect,
 module key, CSS id/classes and content, which is handy for debugging configs and stylesheets.
 
-## Lock-screen privacy (T87)
+## Lock-screen privacy
 
 While the context says `locked` (see `context::plausibly_locked`), nothing private reaches the
 bar, whatever the layout says (ux.md §5). `privacy.rs` does this in two layers:
@@ -106,7 +110,7 @@ Keys, sliders, toggles, the clock, battery, workspaces, the keyboard layout, the
 count and media play/pause (status glyph only) stay. Both layers apply to the base and Fn
 frames. Tested in `tests/agent.rs` (`locked_screen_shows_nothing_private`).
 
-## Untrusted input (T98)
+## Untrusted input
 
 Script output, app-published items and user stylesheets are untrusted. None of them may take
 the agent down, because systemd would restart it into the same input over and over.
@@ -125,8 +129,8 @@ the agent down, because systemd would restart it into the same input over and ov
 
 ## Memory
 
-A fresh agent uses about 20 MB. Two things made it look far bigger (hazel saw systemd report a
-242–251 MB peak on the real install):
+A fresh agent uses about 20 MB. Without the measures below, systemd reported a 242–251 MB peak
+for it:
 
 - **The font scan read every font file.** fontdb maps each system font to parse it, and a plain
   mapping reads ahead around each page fault: with the usual 4 MB `read_ahead_kb`, most of the
@@ -134,13 +138,13 @@ A fresh agent uses about 20 MB. Two things made it look far bigger (hazel saw sy
   page cache charged to the unit's cgroup, though RSS stayed at 20 MB.
   `sliver_render::fontscan` scans instead, with the same fontconfig dirs and generic families.
   Each file is mapped once with `MADV_RANDOM` and kept in the database (`SharedFile`), which
-  cosmic-text reuses rather than mapping the file again. The scan now reads ~14 MB, and the
-  startup peak in a cold-cache cgroup dropped from 256 MB to ~42 MB.
+  cosmic-text reuses rather than mapping the file again. The scan reads ~14 MB, and the
+  startup peak in a cold-cache cgroup is ~42 MB (256 MB with fontdb's own scan).
 - **A glyph that's in none of the fallback fonts loads every font.** cosmic-text keeps every
   font it loads, with its shaping data. Such a glyph (an odd symbol in a song title) makes it try
   every system font, whether one has it in the end (Nerd Fonts cover most private-use
-  codepoints) or none does. That held 11 MB of heap forever, and with plain mappings it read
-  every file again. Now the search reads only each font's cmap, ~2.5 MB of page cache in all.
+  codepoints) or none does. Left alone, that holds 11 MB of heap forever, and with plain mappings
+  reads every file again. The search reads only each font's cmap, ~2.5 MB of page cache in all.
   When more than 48 font files are loaded (`fontscan::loaded_files`: each loaded font holds a
   clone of its file's mapping), `Fonts` unloads them all, and also whenever the label cache
   turns over (`trim_loaded_fonts`). That rebuilds the `FontSystem` from the same database and
@@ -149,7 +153,7 @@ A fresh agent uses about 20 MB. Two things made it look far bigger (hazel saw sy
   warm.
 - **Each new font style reads every font.** For each new family/weight/style, cosmic-text builds
   a match list and reads every font's `fvar` table to do it (a variable font may cover the
-  weight). That's a page or two of each font, ~14 MB, which used to stay in RSS (hazel's fresh
+  weight). That's a page or two of each font, ~14 MB, which would otherwise stay in RSS (a fresh
   agent showed 37 MB, 16 MB of it font pages). `Fonts` remembers the styles it has shaped and
   releases the pages after a shaping that needed a new one, so only the fonts in use stay
   resident (under 2 MB).
@@ -163,16 +167,16 @@ systemd-run --user --scope -q target/release/examples/fontscan [fontdb]   # scan
 systemd-run --user --scope -q target/release/examples/memprobe            # fallback texts
 ```
 
-**Soak (T118):** `scripts/soak` runs the release agent on private buses and churns it for a few
+**Soak:** `scripts/soak` runs the release agent on private buses and churns it for a few
 minutes. An app publishes items with fresh ids, labels (some with missing glyphs) and PNG icons,
 and drops and re-creates its context. A continuous script prints 20 lines a second, `sliverctl`
 pushes text and toggles a layer, touches go in through sliverd's `--touch-socket` (taps, slides,
 Fn presses), and the clock ticks every second. It fails if RSS grows by more
-than a budget after warm-up. First run: heap flat at 25.4–25.5 MB over 3 min (about 1,700
-publishes); RSS moves between 36 and 48 MB as fonts load and unload. No leak.
+than a budget after warm-up. Measured: heap flat at 25.4–25.5 MB over 3 min (about 1,700
+publishes); RSS moves between 36 and 48 MB as fonts load and unload.
 
 ## Public D-Bus API
-`api.rs` serves cedar's `sliver_api` on the session bus. `Host::changed` sets a flag and pokes a
+`api.rs` serves `sliver_api` on the session bus. `Host::changed` sets a flag and pokes a
 wake socket the main loop polls. `Host::control` hands `Control1` requests to the main loop and
 waits up to 2 s for the answer, so the core stays single-threaded.
 - The agent's compositor focus goes to `Api::set_focus`. `published.rs` snapshots who fills App
@@ -191,30 +195,26 @@ waits up to 2 s for the answer, so the core stays single-threaded.
   action: a config copy whose current layer shows that layout; empty name = back to rules),
   per-module show/hide/toggle/reset (runtime only), and `Update` (output pushed to exec-less
   custom modules), and profiles (`SetProfile`, persisted; also the `profile` action and
-  sliverctl). `ReloadConfig` re-reads the config at once and answers with its errors (T26).
+  sliverctl). `ReloadConfig` re-reads the config at once and answers with its errors.
 - Modal app contexts cover every zone but the user's first and get a × that sends `CloseModal`
   (`bar.modal`, `zone.zone-modal`, `#modal-close`).
 
 Tests: `tests/api.rs` runs the agent with the API on a private `dbus-daemon` and a real client
 (publish → render → tap/drag → `Event` signals).
 
-## Status
-Works: everything above, plus `--render` and the real sliverd loop. Verified end to end with
-`sliverd --fake-hardware` + `sliverctl publish/status/modules/layer`.
-
+## Previews and modules
 Previews: `World::sample(now)` (sample battery, volume, brightness, now playing, window) with
 `preview = true` draws empty App controls / Status items as outlined `.placeholder` cells.
 
 The desktop and system modules (`workspaces`, `taskbar`, `notifications`, `cpu`, memory,
 temperature, network…) are in `modules.rs`; `docs/features.md` has the full list and status.
 
-## Hot reload (T26)
-`main.rs` `Reloader` wraps `sliver-reload` (fir). inotify watches the *directories* of the
+## Hot reload
+`main.rs` `Reloader` wraps `sliver-reload`. inotify watches the *directories* of the
 config, its includes, the stylesheets (including `@import`s) and where a user config would
 appear, so atomic rename-saves and a config created later both work. Changes are debounced.
 `sliverctl reload` (Control1 `ReloadConfig`) and SIGUSR2 reload at once.
 A config with parse **or validation** errors is never applied: the last good config stays, the
 errors are logged and listed in Control1 `Errors` (`sliverctl status`) until a good save (or a
-revert). User modules restart
-only if their specs changed (`Feeds::start_modules`). The realtime-signal forwarder is installed
+revert). User modules restart only if their specs changed (`Feeds::start_modules`). The realtime-signal forwarder is installed
 once and retargeted, so replaced runtimes really stop.

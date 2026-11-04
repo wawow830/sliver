@@ -1,6 +1,6 @@
 # ADR-0002: Rendering stack
 
-Status: accepted (ash, T4). Supersede with a new ADR.
+Status: accepted. Supersede with a new ADR.
 
 ## Decision
 Pure Rust: **tiny-skia** (rasterizer) + **resvg/usvg** (SVG icons) + **cosmic-text** (shaping,
@@ -24,8 +24,8 @@ or bundle a CBDT/SVG emoji set). Everything else favors pure Rust, especially in
 
 ## Shape of `sliver-render`
 - `Renderer::layout(scene, sheet, w, h) -> Layout` (zone + item rects; `render` returns it too) measures `Auto` content and calls the pure
-  `solve()`: zones (each Auto/Fixed/Fill with an `align`) of items with `Width::Auto | Fixed(px) | Fill(n)`
-  (H6). `Fill(n)` spans n slots plus the gaps between them, so all-`Fill` rows reproduce tiny-dfr's
+  `solve()`: zones (each Auto/Fixed/Fill with an `align`) of items with `Width::Auto | Fixed(px) | Fill(n)`.
+  `Fill(n)` spans n slots plus the gaps between them, so all-`Fill` rows reproduce tiny-dfr's
   `Stretch` geometry. Leftover space goes to `Fill`, otherwise it is placed per `align`. On
   overflow (ux.md §4), `Fill` compresses to `min_width`, then the widest items are capped at a
   common width like a tab strip, and labels shrink and then ellipsize. Use the **same rects** for IPC
@@ -39,7 +39,7 @@ or bundle a CBDT/SVG emoji set). Everything else favors pure Rust, especially in
 - `Renderer` keeps font, glyph and shaped-label caches. Full 2008x60 frame: ~1.3 ms cold, ~0.4 ms
   cached (release, M2). Render on change only, then `panel::damage` diffs frames into column
   spans for DRM dirty clips. `panel::blit_xrgb8888` rotates into the panel's framebuffer
-  (`Orientation::Rotate90` = tiny-dfr's `translate(h,0); rotate(90°)`; birch to confirm on hardware).
+  (`Orientation::Rotate90` = tiny-dfr's `translate(h,0); rotate(90°)`, confirmed on hardware, see docs/hardware.md).
 - Labels shrink to fit (down to `min_size`), then ellipsize. Labels are optically centered on cap
   height, so "esc" and "F1" share a baseline.
 - Icons: SVG (vector, any size) and PNG. **Symbolic** icons (built-ins, XDG `*-symbolic`) are
@@ -55,6 +55,6 @@ written to `target/snapshot-failures/`. **Look at the PNGs** when they change. F
 
 ## Open
 - Who renders: sliverd renders everything from a scene description sent by the agent, or the agent
-  sends pixels for rich widgets? Owned by the IPC design (T5, cedar). `sliver-render` works in
+  sends pixels for rich widgets? Owned by the IPC design (ADR-0003). `sliver-render` works in
   either process.
 - Color emoji (COLRv1), XDG icon themes, animations, pixel shift, sliders/progress content.

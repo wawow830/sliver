@@ -1,6 +1,6 @@
 # sliverd internals
 
-Owner: **hazel**. Contract with the agent: `docs/api.md` §6 (cedar). Hardware: `docs/hardware.md` (birch).
+Contract with the agent: `docs/api.md` §6. Hardware: `docs/hardware.md`.
 
 ## Shape
 `crates/sliverd` is a lib + a thin bin.
@@ -48,7 +48,7 @@ backlight group-writable. Recovery: restart in 0.5 s, then after 5 crashes in 60
 The socket conflicts with tiny-dfr. Test: `packaging/itest-units.sh` (user manager, no root).
 
 ## Backends (`backend.rs`)
-| trait | real impl (birch, `sliver-hw`) | fake (`fake.rs`) |
+| trait | real impl (`sliver-hw`) | fake (`fake.rs`) |
 |---|---|---|
 | `Display::flush(&Pixmap, &[Span])`: landscape frame + damaged bar columns | `sliver_hw::panel::DrmPanel` (`real.rs`): rotate via `panel::blit_xrgb8888`, DIRTYFB | real rotated XRGB fb; `frame()` reads it back as PNG |
 | `Backlight::set(u32)`, `screen_fraction()` | sysfs fd from `OpenFile=` | records writes |
@@ -65,7 +65,7 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
 - **Media layer**: tiny-dfr's media row (Esc first on the same bars). It's the safe layer's fn.
   `Config::media_layer_default` swaps base and fn.
 - The agent drives once it has presented a `base` frame. Frames are never rejected for missing
-  Esc/F-keys (H4 revised). Both built-ins render with `Fonts::embedded()`, the built-in icons and
+  Esc/F-keys (the safe hatch covers that). Both built-ins render with `Fonts::embedded()`, the built-in icons and
   `Stylesheet::classic()`. Region ids are item indices, and gaps are split at the midpoint, so there
   are no dead zones.
 - **Safe hatch** (invariant 1, `sliver_ipc::hatch::FnHatch`): two Fn key-downs ≤ 400 ms apart, then hold.
@@ -73,12 +73,12 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
   close: `cancel_all`, then `hatch{active}`, then `fn{held}`. Agent presents are kept for later.
 
 ## Rules implemented (api.md §6)
-- Touch semantics: `sliver_ipc::router::TouchRouter` (shared with cedar's `FakeDaemon`). Any change
+- Touch semantics: `sliver_ipc::router::TouchRouter`. Any change
   of frame source (agent ⇄ built-in, agent A → B, hatch open/close) and display-off call
   `cancel_all`, which releases every held key.
 - Agent loss settle: after the agent's frames vanish (crash, hang, demotion; not the hatch), touch-downs
   are ignored for 200 ms, so a tap aimed at an agent button can't press the safe-layer key that
-  appeared under it (seen on the real bar: F10 22 ms after a hangup).
+  appeared under it (on the real bar, such a tap pressed F10 22 ms after a hangup).
 - Pressed feedback: built-ins re-render with the item pressed. Agent frames blit the region from
   `pressed`, or lighten it 25% if there's no pressed image. A region is highlighted only if its id
   **and** rect match the capture.
@@ -87,7 +87,8 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
 - Liveness: ping on display wake (to On) and on an agent-region touch-down if none in 5 s. The
   pong deadline (2 s) is the only liveness timer, and it's armed only while a ping is outstanding.
 - Display power: `idle.rs`. "Off" is backlight 0 only: CRTC `ACTIVE=0` does **not** blank the Mac14,7 bar
-  (it's a command-mode panel that keeps its own frame; measured in T48, docs/hardware.md). Dims at 30 s, off at 60 s (or per the agent's `display_policy`), and off
+  (it's a command-mode panel that keeps its own frame; measured, see docs/hardware.md). Dims at 30 s,
+  off at 60 s (or per the agent's `display_policy`), and off
   while the lid is closed. Backlight is written only on change. Nothing is flushed while off (it's
   flushed on wake). The wake touch is swallowed. No deadline while off.
 - Sessions: only `SessionChanged.active_uid` connections become active. A newer hello from the
@@ -97,13 +98,13 @@ sliver-hw stays trait-free. sliverd implements its traits for sliver-hw types.
   keys (a known edge: a finger and the agent both holding Ctrl).
 
 ## TestDaemon (`testing.rs`)
-`sliverd::testing::TestDaemon` (feature `testing`, so the daemon binary doesn't link it) is the real core in-process on fake hardware, over a real socket pair.
-It's API-compatible with the former `sliver_ipc::fake::FakeDaemon` (removed; cedar's suite runs unchanged in
-`tests/testing.rs`, and so do the agent's e2e tests with an alias import). Extras: `frame()` (the bar
-as a pixmap, incl. pressed feedback and hatch), `advance(ms)` (simulated time), `daemon()`, and
-`auto_pong` (default on: it answers the daemon's own pings, set false to test liveness).
+`sliverd::testing::TestDaemon` (feature `testing`, so the daemon binary doesn't link it) is the
+real core in-process on fake hardware, over a real socket pair. Its suite is `tests/testing.rs`, and
+the agent's e2e tests use it too. Beyond the protocol it offers `frame()` (the bar as a pixmap, incl.
+pressed feedback and hatch), `advance(ms)` (simulated time), `daemon()`, and `auto_pong` (default
+on: it answers the daemon's own pings; set false to test liveness).
 
-## Hardware report (T140)
+## Hardware report
 A connection may send `report` instead of `hello` (protocol 1.1, any uid). sliverd answers
 `hw_report` and closes. It never becomes an agent, so the bar's agent is untouched. The facts
 (gate rule, card, backlight and whether it's writable, digitizer, open inputs, hot-plug, uinput)
@@ -116,6 +117,6 @@ writes what the panel would show (through the rotated fake framebuffer).
 Tests: `crates/sliverd/tests/daemon.rs` (core), `tests/server.rs` (real socket + memfds). Snapshots are in `tests/snapshots/`
 (`SLIVER_BLESS=1` to update, then look at them).
 
-## Not yet
-- COPR (not now, H46; RPM, units and udev rules are in `packaging/`, ADR-0005). SELinux: clean
-  without a module (docs/packaging.md).
+## Packaging
+RPM, units and udev rules are in `packaging/` (ADR-0005); there is no COPR repository yet.
+SELinux: clean without a module (docs/packaging.md).

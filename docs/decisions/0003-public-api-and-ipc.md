@@ -1,11 +1,11 @@
 # ADR-0003: Public D-Bus API and sliverd⇄agent IPC
 
-Status: accepted (cedar, T5). The full spec is in `docs/api.md`. Bus name prefix `io.github.wawow830.Sliver` (human, H1).
+Status: accepted. The full spec is in `docs/api.md`. Bus name prefix `io.github.wawow830.Sliver`.
 
 ## Ownership
-**cedar owns both API surfaces** (D-Bus schema and IPC wire format) and the `sliver-ipc` crate that
-defines them. Other peers propose changes to cedar or amend this ADR. Single ownership matters here
-because these are the only interfaces other people's code will depend on.
+Both API surfaces (D-Bus schema and IPC wire format) are defined in one place, the `sliver-ipc`
+crate, and change only by amending this ADR. A single definition matters here because these are
+the only interfaces other people's code will depend on.
 
 ## Decisions
 1. **Push model on the session bus.** Clients call `CreateContext` on the agent and `SetItems`/`Update`
@@ -33,12 +33,11 @@ because these are the only interfaces other people's code will depend on.
    layer. The **safe hatch** (double-press Fn and hold → built-in F1–F12, plus Esc on bars without a
    physical Esc) can't be configured or blocked. Validation is strict, `KEY_SYSRQ` is refused, and only
    the active seat0 session's uid can drive the bar.
-   *Amended:* this replaced an earlier "escape floor" that rejected frames without Esc/F-keys. The
-   human made layouts fully editable (H4 revised), and H14 left the hatch gesture to us, so we took elm's
-   pick (docs/customization.md §9).
+   *Amended:* this replaced an earlier "escape floor" that rejected frames without Esc/F-keys, once
+   layouts became fully editable. The hatch gesture is specified in docs/customization.md §9.
 
-7. **Published items are first-class modules** (GOAL.md design principle, added after the human's
-   waybar direction). Each one has a module id `app/<provider>#<item-id>` (grammar in docs/customization.md), is placeable anywhere,
+7. **Published items are first-class modules** (GOAL.md design principle: waybar-style
+   customization). Each one has a module id `app/<provider>#<item-id>` (grammar in docs/customization.md), is placeable anywhere,
    and is styled by the user's stylesheet (`classes`, states). Its content is reshaped by user `format`
    over app-supplied `values`, and user gesture bindings replace app events. `Control1` carries the
    waybar-style controls (`Signal`, `Refresh`, `Show`/`Hide`/`Toggle`, `Trigger`, `Update`).

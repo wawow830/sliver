@@ -10,7 +10,7 @@ Everything in this repo serves that one paragraph. If a task doesn't move us tow
 
 ## Design principle: as customizable as possible (think waybar)
 
-The human's direction: **sliver should be as customizable as possible. The reference point is
+**Sliver should be as customizable as possible. The reference point is
 [waybar](https://github.com/Alexays/Waybar).** Ship great defaults so nobody *has* to configure
 anything, but never stop someone who wants to. When a choice is between hard-coding something and
 making it configurable, make it configurable. **The invariants below are the only things a user
@@ -40,9 +40,10 @@ What that means here (waybar's model, translated to a touch strip):
 
 - MacBook Pro 13" M2 (`Mac14,7`), Fedora Asahi Remix 44, aarch64, 16k pages, Hyprland.
 - Touch Bar = DRM panel `card1-DSI-1`, **60x2008** (rotated), touch = `Apple MTP multi-touch` / `Mac14,7 Touch Bar` input devices.
-- Today it's driven by `tiny-dfr` 0.3.7 (`tiny-dfr.service`, udev rule `99-touchbar-tiny-dfr.rules`,
-  config `/usr/share/tiny-dfr/config.toml` + `/etc/tiny-dfr/config.toml`).
-- This laptop **has a physical Escape key** (confirmed in H2) but **no F-key row**. The F-keys exist
+- sliverd (installed from the RPM) drives the bar. `tiny-dfr` 0.3.7 stays installed as the fallback
+  (`tiny-dfr.service`, udev rule `99-touchbar-tiny-dfr.rules`, config
+  `/usr/share/tiny-dfr/config.toml` + `/etc/tiny-dfr/config.toml`).
+- This laptop **has a physical Escape key** but **no F-key row**. The F-keys exist
   only on the Touch Bar. 2170 px Touch Bar models have no physical Esc, and there the bar *is* Escape.
 
 Targets: Apple Silicon Macs with a Touch Bar (Asahi) first, Intel T2 Macs (t2linux) second.
