@@ -637,6 +637,8 @@ impl DesktopSource for Watcher {
                 Event::ActiveWindowV2 { address: Some(_) } => {
                     let before = self.state.clone();
                     self.refresh_window();
+                    // The window list's `focused` flags (the taskbar) and urgency follow.
+                    self.mark_urgent();
                     changed = self.state != before;
                 }
                 // Our virtual keyboard switched layout: re-read its keymap (combos follow it).
@@ -888,7 +890,8 @@ mod tests {
     }
 
     /// A tiny fake compositor: serves canned replies on the command socket and pushes events on
-    /// the event socket.
+    /// the event socket. `!focus b2` in the event list moves the focus (what `j/activewindow`
+    /// answers) to that window instead of sending a line.
     struct FakeHypr {
         dir: PathBuf,
     }
@@ -905,12 +908,17 @@ mod tests {
             let paths = Paths::in_dir(&dir);
             let cmd = UnixListener::bind(&paths.command).unwrap();
             let evs = UnixListener::bind(&paths.events).unwrap();
+            let focus = std::sync::Arc::new(std::sync::Mutex::new("a1"));
+            let focus2 = focus.clone();
             std::thread::spawn(move || {
                 for conn in cmd.incoming() {
                     let Ok(mut c) = conn else { return };
                     let mut buf = [0u8; 64];
                     let n = c.read(&mut buf).unwrap_or(0);
                     let reply = match std::str::from_utf8(&buf[..n]).unwrap_or("") {
+                        "j/activewindow" if *focus.lock().unwrap() == "b2" => {
+                            r#"{"address":"0xb2","pid":8,"class":"firefox","title":"Docs","floating":false,"fullscreen":0,"xwayland":false}"#
+                        }
                         "j/activewindow" => {
                             r#"{"address":"0xa1","pid":7,"class":"kitty","title":"sh","floating":false,"fullscreen":0,"xwayland":false}"#
                         }
@@ -936,7 +944,12 @@ mod tests {
                 // Give the client time to finish its snapshot, then speak.
                 std::thread::sleep(Duration::from_millis(100));
                 for e in events {
-                    let _ = c.write_all(format!("{e}\n").as_bytes());
+                    match e.strip_prefix("!focus ") {
+                        Some(a) => *focus2.lock().unwrap() = a,
+                        None => {
+                            let _ = c.write_all(format!("{e}\n").as_bytes());
+                        }
+                    }
                 }
                 // dropping closes the stream: compositor "died"
             });
@@ -1004,6 +1017,29 @@ mod tests {
         assert_eq!(s4.submap.as_deref(), Some("resize"));
         assert_eq!(w.next_change().unwrap(), None, "EOF ends the stream");
         assert!(!w.state().connected);
+    }
+
+    #[test]
+    fn the_taskbar_follows_focus() {
+        // As Hyprland sends it: the workspace first, then the window.
+        let (_fake, paths) =
+            FakeHypr::start(vec!["!focus b2", "workspacev2>>1,1", "activewindowv2>>b2"]);
+        let mut w = Watcher::connect(&paths).unwrap();
+        let focused = |s: &DesktopState| -> Vec<String> {
+            s.windows
+                .iter()
+                .filter(|w| w.focused)
+                .map(|w| w.address.clone())
+                .collect()
+        };
+        assert_eq!(focused(w.state()), ["a1"]);
+        let s = w.next_change().unwrap().unwrap();
+        assert_eq!(s.window.as_ref().unwrap().address, "b2");
+        assert_eq!(
+            focused(&s),
+            ["b2"],
+            "the list's focus moved with the window"
+        );
     }
 
     #[test]
