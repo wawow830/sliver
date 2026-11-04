@@ -40,7 +40,7 @@ fn parse_duration_str(s: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs_f64(secs))
 }
 
-/// How wide a module or zone is (Q4/H6). The renderer turns this into pixels.
+/// How wide a module or zone is. The renderer turns this into pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Width {
     /// Fits the content.

@@ -2,7 +2,7 @@
 //!
 //! sliverd treats the agent as untrusted. A frame that fails [`validate_present`] is rejected
 //! (the previous frame stays up). [`missing_safe_keys`] is advisory only. Layouts are fully
-//! editable (H4), and invariant 1 is guaranteed by the hatch ([`crate::hatch`]).
+//! editable, and invariant 1 is guaranteed by the hatch ([`crate::hatch`]).
 
 use crate::keys;
 use crate::proto::{MAX_BUFFERS, PanelInfo, PixelFormat, Present, Region, RegionKind};

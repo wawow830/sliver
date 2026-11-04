@@ -185,7 +185,7 @@ pub fn display_page(ui: &Rc<Ui>) -> gtk::Widget {
     );
     page.add(&idle);
 
-    // [display.on-battery] (T68): each value overrides the one above while on battery.
+    // [display.on-battery]: each value overrides the one above while on battery.
     let o = &d.on_battery;
     let bat = group(
         "On battery",

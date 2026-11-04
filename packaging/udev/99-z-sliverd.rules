@@ -5,7 +5,7 @@
 # OnFailure= fallback. Removing this file gives the bar back to tiny-dfr.
 #
 # tiny-dfr is only Recommended, so the two things its package does that the bar needs whatever
-# daemon drives it are repeated here (T96). With tiny-dfr installed they are no-ops: the seat
+# daemon drives it are repeated here. With tiny-dfr installed they are no-ops: the seat
 # values are the same, and the USB switch only fires while the configuration is still 1.
 
 # T2 (USB 05ac:8302): configuration 2 exposes the display (appletbdrm); 1 is keyboard-only.

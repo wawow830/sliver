@@ -1,4 +1,4 @@
-//! cedar's `sliver_ipc::fake::FakeDaemon` test suite, run unchanged (modulo the mechanical
+//! The `sliver_ipc::fake::FakeDaemon` test suite, run unchanged (modulo the mechanical
 //! substitutions noted inline) against `sliverd::testing::TestDaemon`: the drop-in replacement
 //! built on the real daemon core behaves the same.
 
@@ -90,7 +90,7 @@ fn present_copies_and_acks() {
 #[test]
 fn layouts_without_fkeys_are_fine_and_the_hatch_brings_them_back() {
     let (mut d, a, _buf) = connect();
-    // Fully editable (H4): neither layer has F-keys. sliverd accepts that.
+    // Fully editable: neither layer has F-keys. sliverd accepts that.
     let base = vec![Region {
         id: 1,
         rect: Rect::new(0, 0, 2008, 60),

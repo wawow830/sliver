@@ -257,7 +257,7 @@ pub struct Common {
     pub format_alt: Option<String>,
     /// `format-<state>`, `format-<status>`, `format-<status>-<state>`, keyed by the suffix.
     pub format_variants: BTreeMap<String, String>,
-    /// Raw `format-icons` (array, table or string). The format engine (T25) interprets it.
+    /// Raw `format-icons` (array, table or string). The format engine interprets it.
     pub format_icons: Option<Value>,
     /// `states`, sorted by threshold.
     pub states: Vec<(String, f64)>,
@@ -520,7 +520,7 @@ fn parse_menu(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<MenuEntry> {
 }
 
 /// Type-specific keys for the module types whose schema lives in this crate. Other types are
-/// owned by their runtime (T21) and get no unknown-key warnings here.
+/// owned by their runtime and get no unknown-key warnings here.
 pub(crate) fn check_type_keys(id: &ModuleId, rest: &Table, path: &str, d: &mut Diagnostics) {
     let known: &[&str] = match id.kind.as_str() {
         "key" => &["key"],

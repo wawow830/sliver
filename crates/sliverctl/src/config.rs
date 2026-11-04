@@ -1,5 +1,5 @@
 //! `sliverctl config …`: offline config tools (customization.md §8). They only touch files, never
-//! D-Bus, because the file is the source of truth and the agent hot-reloads it. Owner: elm.
+//! D-Bus, because the file is the source of truth and the agent hot-reloads it.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

@@ -1,4 +1,4 @@
-//! Editing operations for the settings app (ux.md §4, Q3: instant apply + undo). They're pure:
+//! Editing operations for the settings app (ux.md §4: instant apply + undo). They're pure:
 //! each one takes the user's file (an `Editor`) plus the merged effective config and edits the
 //! file. No GTK here, so they're unit-tested.
 //!
@@ -6,7 +6,7 @@
 //! of a layout that comes from the built-ins or an include, we first copy that layout's whole
 //! effective zone list into the user's file ("materialize"). Otherwise the user's partial list
 //! would silently drop the other zones. A zone inherited through `extends` is copied into the
-//! child as an override (Q5: whole zones).
+//! child as an override (whole zones).
 
 use sliver_config::{Editor, ModuleId};
 use toml::{Table, Value};
@@ -95,7 +95,7 @@ pub fn ensure_zone(
     Ok(zones.len() - 1)
 }
 
-// ---- zones (T111) ---------------------------------------------------------------------------
+// ---- zones ----------------------------------------------------------------------------------
 
 /// `layout`'s `extends` chain, the layout itself first.
 fn chain(merged: &Table, layout: &str) -> Vec<String> {

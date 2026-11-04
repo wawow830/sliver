@@ -425,7 +425,7 @@ fn session_world() -> World {
 /// window or taskbar module at all. Keys, sliders and the clock stay.
 #[test]
 fn locked_screen_shows_nothing_private() {
-    // `rules = []` drops the built-in lock-screen rule (T88): enforcement must hold for any layout.
+    // `rules = []` drops the built-in lock-screen rule: enforcement must hold for any layout.
     let mut a = agent(
         r#"
         rules = []
@@ -1706,7 +1706,7 @@ fn notifications_show_latest_open_and_dismiss() {
     );
 }
 
-/// T68: `[display]` and `[display.on-battery]` reach sliverd's real idle/backlight core.
+/// `[display]` and `[display.on-battery]` reach sliverd's real idle/backlight core.
 #[test]
 fn display_config_and_battery_profile_reach_sliverd() {
     let a = agent(
@@ -1754,7 +1754,7 @@ fn display_config_and_battery_profile_reach_sliverd() {
     );
 }
 
-/// T79: with pixel shift on, the agent draws nothing within 11 px of either end, because sliverd
+/// With pixel shift on, the agent draws nothing within 11 px of either end, because sliverd
 /// moves the whole picture up to 11 px either way. (Edge touch regions may still reach the ends.)
 #[test]
 fn pixel_shift_keeps_content_off_the_ends() {
@@ -1782,7 +1782,7 @@ fn pixel_shift_keeps_content_off_the_ends() {
     }
 }
 
-/// T92: what the base layer shows and why (Control1.ActiveLayout / ActiveRule / …Source).
+/// What the base layer shows and why (Control1.ActiveLayout / ActiveRule / …Source).
 #[test]
 fn active_layout_reports_the_rule() {
     let mut a = agent(
@@ -1828,7 +1828,7 @@ fn active_layout_reports_the_rule() {
     );
 }
 
-/// T104: with an AZERTY keymap on sliverd's keyboard, a "Ctrl+Z" button sends the key that types
+/// With an AZERTY keymap on sliverd's keyboard, a "Ctrl+Z" button sends the key that types
 /// "z" there (the US "w" position), on both the fast path (key region, sliverd presses it) and the
 /// agent path (EmitKeys). Without a known keymap: plain positions, as before.
 #[test]
@@ -1887,7 +1887,7 @@ fn key_combos_follow_the_bar_keyboard_layout() {
     }
 }
 
-/// T127 Mirror touch-to-select: while a layout is held, touching an item reports which module of
+/// Mirror touch-to-select: while a layout is held, touching an item reports which module of
 /// which zone it is (`HeldPressed`), key items included (no sliverd-only fast path then), and
 /// `select_only` stops them from firing. A plain `SetLayout` reports nothing.
 #[test]
@@ -2088,7 +2088,7 @@ fn image_module() {
     );
 }
 
-/// `graph` / `custom-graph/<name>` (T137): samples another module's percentage (or its own
+/// `graph` / `custom-graph/<name>`: samples another module's percentage (or its own
 /// script's number) every `interval`, keeps `samples` of them, and draws a sparkline.
 #[test]
 fn graph_module() {

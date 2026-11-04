@@ -96,7 +96,7 @@ fn python_pomodoro() {
     );
 }
 
-/// T106: the browser integration's native-messaging host, fed the extension's messages on stdin
+/// The browser integration's native-messaging host, fed the extension's messages on stdin
 /// like a browser would, publishes tabs as a scrubber and sends taps back on stdout.
 #[test]
 fn browser_native_host() {

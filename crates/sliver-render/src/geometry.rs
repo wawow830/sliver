@@ -35,7 +35,7 @@ impl Rect {
     }
 }
 
-/// How wide an item or zone is (H6: Auto, Fixed px, or Fill).
+/// How wide an item or zone is (Auto, Fixed px, or Fill).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Width {
     /// Fits its content (and the style's `min-width`).

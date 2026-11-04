@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail (and clean up) when the checks left processes behind (T47 item 4).
+"""Fail (and clean up) when the checks left processes behind.
 
     scripts/orphans.py --since PID --root DIR [--grace SECONDS] [--report-only]
 

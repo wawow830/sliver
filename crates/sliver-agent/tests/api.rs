@@ -415,7 +415,7 @@ fn modal_context_covers_the_bar_and_closes() {
     assert!(world.published.app.is_none() || !world.published.modal);
 }
 
-/// T77: a scrubber shows a page of candidates; a swipe scrolls it (optimistically, at once), the
+/// A scrubber shows a page of candidates; a swipe scrolls it (optimistically, at once), the
 /// arrows page, and a tap picks. The app hears `scrolled` and `selected`.
 #[test]
 fn scrubber_scrolls_and_picks() {
@@ -591,7 +591,7 @@ fn scrubber_scrolls_and_picks() {
     );
 }
 
-/// T80: a popover item opens its items full-width with a ✕ (NSPopoverTouchBarItem); the app
+/// A popover item opens its items full-width with a ✕ (NSPopoverTouchBarItem); the app
 /// hears `popover open=true/false`, and taps inside reach the child items.
 #[test]
 fn popover_opens_and_closes() {
@@ -760,7 +760,7 @@ fn popover_opens_and_closes() {
     assert_eq!(keys(&mut a, &world), ["bold", "close"]);
 }
 
-/// T81: `priority` drops the lowest items when the app zone overflows (a group as a unit),
+/// `priority` drops the lowest items when the app zone overflows (a group as a unit),
 /// `width = {min, max}` bounds an item, `icon-data` takes SVG, indeterminate progress is marked.
 #[test]
 fn priority_overflow_width_svg_and_indeterminate() {
@@ -1033,7 +1033,7 @@ fn app_controls_width_is_a_slot() {
     assert!(end > 1500.0, "{end}");
 }
 
-/// T121: a published item placed by the layout (`app/<provider>#<item>`) is a module like any
+/// A published item placed by the layout (`app/<provider>#<item>`) is a module like any
 /// other: it leaves Status items, takes the user's format over its values, and a user binding
 /// replaces the app's event (unless pass-through).
 #[test]

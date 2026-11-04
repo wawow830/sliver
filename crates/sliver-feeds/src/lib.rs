@@ -256,7 +256,7 @@ impl Feeds {
     /// brightness, notifications and the tray. Each optional part that cannot start leaves a
     /// [`Feed::Note`] and its keys stay unknown.
     pub fn start_session(&mut self) {
-        // sliver-bus: connections that don't start zbus's idle `blocking` pool thread (T103).
+        // sliver-bus: connections that don't start zbus's idle `blocking` pool thread.
         let system = sliver_bus::system();
         match system {
             Ok(system) => {

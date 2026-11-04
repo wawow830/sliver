@@ -102,7 +102,7 @@ impl Config {
             .ok_or_else(|| ResolveError::UnknownLayer(layer.to_owned()))
     }
 
-    /// The zones of a layout after following `extends` (Q5/H7: whole zones override by name).
+    /// The zones of a layout after following `extends` (whole zones override by name).
     pub fn layout_zones(&self, name: &str) -> Result<Vec<Zone>, ResolveError> {
         let mut chain = vec![name.to_owned()];
         let mut cur = self

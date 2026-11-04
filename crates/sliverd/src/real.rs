@@ -1,5 +1,5 @@
 //! Real hardware: [`crate::backend`] traits implemented for `sliver_hw`'s concrete types, plus
-//! the mapping from `sliver_hw` input events to [`crate::Input`]. Owner: birch (T30).
+//! the mapping from `sliver_hw` input events to [`crate::Input`].
 //!
 //! Every constructor here refuses unless `SLIVER_SAFESWAP=1` (the safe-swap harness or, later,
 //! the real sliverd unit). Hardware facts: docs/hardware.md. Harness: docs/safe-swap.md.
@@ -126,7 +126,7 @@ pub struct RealHardware {
     pub width: u32,
     pub height: u32,
     pub max_brightness: u32,
-    /// What was found and opened (for `report`, T140). The daemon adds model, size and live state.
+    /// What was found and opened (for `report`). The daemon adds model, size and live state.
     pub facts: HwReport,
 }
 

@@ -381,7 +381,7 @@ fn t2_bar_without_physical_esc() {
     assert_eq!(rig.hw.backlight.current(), Some(1), "T2 dim step");
 }
 
-/// T96: the T2's backlight has three steps (0 off, 1 dim, 2 full). Adaptive brightness, a custom
+/// The T2's backlight has three steps (0 off, 1 dim, 2 full). Adaptive brightness, a custom
 /// curve and the timers must land on them and never turn the bar off while it's on.
 #[test]
 fn t2_three_step_backlight_with_adaptive_and_curve() {
@@ -420,7 +420,7 @@ fn t2_three_step_backlight_with_adaptive_and_curve() {
     assert_eq!(rig.hw.backlight.current(), Some(0), "off");
 }
 
-/// T120: after a suspend, s2idle may have reset the panel or its backlight behind our back. Resumed
+/// After a suspend, s2idle may have reset the panel or its backlight behind our back. Resumed
 /// repaints the whole bar and writes the backlight again even though our value didn't change;
 /// a dark bar stays dark (and is repainted in full when it wakes).
 #[test]
@@ -684,7 +684,7 @@ fn fn_layer_is_fully_editable() {
     rig.down(0, slot_x(4, 12));
     rig.up(0, slot_x(4, 12));
     assert_eq!(rig.keys(), vec![Down(KEY_F5), Up(KEY_F5)]);
-    // An fn layer without any F-keys is accepted as is (H4 revised).
+    // An fn layer without any F-keys is accepted as is.
     let out = rig.present(A, 2, Layer::Fn, 1, None, regions.clone());
     assert_eq!(sent(&out, A), vec![DaemonMsg::Presented { serial: 2 }]);
     assert_eq!(rig.d.shown_view(), View::Agent(Layer::Fn));
@@ -966,7 +966,7 @@ fn display_policy_and_wake() {
     assert_eq!(error_codes(&out, A), vec![ErrorCode::RateLimited]);
 }
 
-/// The agent re-sends its policy when the power source changes (T68, `[display.on-battery]`): the
+/// The agent re-sends its policy when the power source changes (`[display.on-battery]`): the
 /// new levels apply at once in whatever state the bar is in, and shorter timers take effect
 /// against the time already idle.
 #[test]
@@ -1103,7 +1103,7 @@ fn pixels(p: &Pixmap) -> Vec<[u8; 4]> {
         .collect()
 }
 
-/// T79: the panel shows the frame moved by the current shift, steps 1 px at a time on a slow
+/// The panel shows the frame moved by the current shift, steps 1 px at a time on a slow
 /// timer, and touches are hit-tested where the finger is on the (moved) picture.
 #[test]
 fn pixel_shift_moves_the_picture_and_the_touches() {
@@ -1163,7 +1163,7 @@ fn pixel_shift_moves_the_picture_and_the_touches() {
     assert!(pixels(&rig.hw.display.frame()) == pixels(&still));
 }
 
-/// T79: no steps (no wakeups) while the bar is dark; the built-in layers keep clear of the ends.
+/// No steps (no wakeups) while the bar is dark; the built-in layers keep clear of the ends.
 #[test]
 fn pixel_shift_sleeps_while_dark_and_insets_the_safe_layer() {
     let (mut rig, _) = rig_with_agent();

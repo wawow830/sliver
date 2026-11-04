@@ -237,7 +237,7 @@ impl Stylesheet {
         Stylesheet::builtin("classic").expect("classic theme exists")
     }
 
-    /// The default theme: macOS Touch Bar look with the `@accent` color (H10).
+    /// The default theme: macOS Touch Bar look with the `@accent` color.
     pub fn sliver() -> Stylesheet {
         Stylesheet::builtin("sliver").expect("sliver theme exists")
     }

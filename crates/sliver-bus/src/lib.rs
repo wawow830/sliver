@@ -1,4 +1,4 @@
-//! `sliver-bus`: D-Bus connections that leave an idle process asleep (invariant 3, T103).
+//! `sliver-bus`: D-Bus connections that leave an idle process asleep (invariant 3).
 //!
 //! zbus 5 (async-io) connects Unix sockets and closes them through `blocking::unblock`. The
 //! `blocking` crate then keeps an idle pool thread in a 500 ms `wait_timeout` loop that it only

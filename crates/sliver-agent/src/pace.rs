@@ -1,4 +1,4 @@
-//! Frame pacing for content that changes on its own (invariant 3, T99): published items, script
+//! Frame pacing for content that changes on its own (invariant 3): published items, script
 //! output and other feeds may change hundreds of times a second (an app calling `Update` in a
 //! loop, a script printing as fast as it can). Each change only marks the bar stale; it's
 //! redrawn at most [`CONTENT_FPS`] times a second, and the last change always gets drawn.

@@ -37,7 +37,7 @@ pub const EMIT_KEYS_PER_SEC: u32 = 100;
 pub const WAKE_MIN_INTERVAL_MS: u64 = 1_000;
 /// After the agent's frames vanish (crash, hang, demotion) touch-downs are ignored this long: the
 /// finger was aiming at an agent button, not at whatever safe-layer key now sits under it
-/// (birch saw a tap 22 ms after a hangup press F10 on the real bar).
+/// (on the real bar, a tap 22 ms after an agent hang pressed F10).
 pub const AGENT_LOSS_SETTLE_MS: u64 = 200;
 /// Damage spans closer than this are merged into one flush clip.
 const DAMAGE_MERGE_GAP: u32 = 16;
@@ -200,12 +200,12 @@ pub struct Daemon {
     frame: Pixmap,
     /// What the panel shows. `None` until the first flush.
     shown: Option<Pixmap>,
-    /// Pixel shift (T79): where the composed frame is moved to on the panel.
+    /// Pixel shift: where the composed frame is moved to on the panel.
     shift: PixelShift,
     /// Scratch for the shifted frame (reused, only while shifting).
     shifted: Option<Pixmap>,
     out: Vec<Out>,
-    /// What was found and opened at startup, for `report` (T140). Live fields are filled in per ask.
+    /// What was found and opened at startup, for `report`. Live fields are filled in per ask.
     facts: HwReport,
     started: u64,
 }
@@ -873,7 +873,7 @@ impl Daemon {
             pressed,
             regions: p.regions,
         };
-        // Layouts are fully editable (H4 revised): no safe-key check. The hatch covers invariant 1.
+        // Layouts are fully editable: no safe-key check. The hatch covers invariant 1.
         match p.layer {
             Layer::Base => c.base = Some(frame),
             Layer::Fn => c.fn_layer = Some(frame),

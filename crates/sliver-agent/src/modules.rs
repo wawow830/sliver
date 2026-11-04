@@ -2906,7 +2906,7 @@ mod tests {
         assert_eq!(labels, ["timer", "Pomodoro"]);
     }
 
-    /// T136: waybar's systemd-failed-units: counts from both managers, hidden while none failed
+    /// Waybar's systemd-failed-units: counts from both managers, hidden while none failed
     /// (unless `hide-on-ok = false`), `system`/`user` filters, and a tap lists the units.
     #[test]
     fn systemd_failed_units() {

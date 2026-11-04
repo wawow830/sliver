@@ -316,8 +316,8 @@ def restore_units(mode: Mode) -> list[str]:
 
 
 def stop_refusal(mode: Mode, by: int | None) -> str | None:
-    """Why `stop` must not end this run: someone else started it and is still there (T123: a
-    peer's stop ended the human's guided check). `bar` passes the caller's pid; --any overrides."""
+    """Why `stop` must not end this run: someone else started it and is still there (another
+    session's stop must not end a guided check). `bar` passes the caller's pid; --any overrides."""
     try:
         starter = int((mode.state_dir / "started-by").read_text())
     except (OSError, ValueError):

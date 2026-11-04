@@ -83,7 +83,7 @@ grep -qx 'Restart=always' packaging/systemd/user/sliver-agent.service \
   || { echo "sliver.spec must not trigger udev events on input devices (takes the bar over)"; exit 1; }
 
 # The Chromium extension's id comes from the public "key" in its manifest. The system
-# native-messaging manifest must allow exactly that id (T108), or the packaged host won't connect.
+# native-messaging manifest must allow exactly that id, or the packaged host won't connect.
 python3 - <<'PY'
 import base64, hashlib, json
 key = json.load(open("integration/browser/extension/manifest.chromium.json"))["key"]
@@ -94,7 +94,7 @@ assert f"chrome-extension://{ext_id}/" in allowed, f"chromium native manifest mu
 PY
 
 # Nothing the checks started may outlive them: orphaned test daemons and helpers pile up on the
-# human's machine (T47). Lists and kills leftovers, then fails.
+# developer's machine. Lists and kills leftovers, then fails.
 echo "== no orphaned processes"
 python3 scripts/orphans.py --since $$ --root "$PWD"
 

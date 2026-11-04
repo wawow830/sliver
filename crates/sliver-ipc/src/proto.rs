@@ -344,7 +344,7 @@ pub enum DaemonMsg {
     HwReport(Box<HwReport>),
 }
 
-/// What sliverd found and opened, and its state now (read-only, for `sliverctl doctor`, T140).
+/// What sliverd found and opened, and its state now (read-only, for `sliverctl doctor`).
 /// Facts are gathered once at startup, so asking costs no device or sysfs reads. Fields are added
 /// over time: missing ones read as their default.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]

@@ -1,5 +1,5 @@
 //! Spawning module commands: `sh -c`, own process group (so a timeout kills the whole tree),
-//! no stdin, `no_new_privs`, bounded output, SIGTERM when the agent dies (`sliver_proc`, T47).
+//! no stdin, `no_new_privs`, bounded output, SIGTERM when the agent dies (`sliver_proc`).
 //! Never as root.
 
 use crate::Context;

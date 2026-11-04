@@ -95,7 +95,7 @@ fn die(msg: &str) -> ! {
     std::process::exit(2)
 }
 
-/// The current config and stylesheet, hot-reloaded by `sliver-reload` (customization.md §1, T26):
+/// The current config and stylesheet, hot-reloaded by `sliver-reload` (customization.md §1):
 /// file changes (inotify, debounced), SIGUSR2 and `Control1.ReloadConfig`. A config with errors is
 /// never applied; the last good one stays and `errors` says why.
 struct Reloader {
@@ -316,11 +316,11 @@ struct Live {
     /// The public D-Bus API, if the session bus is there.
     api: Option<ApiLink>,
     published: Published,
-    /// The registry changed since `published` was copied: copy it before the next frame (T99:
-    /// not on every change, which an app may make hundreds of times a second).
+    /// The registry changed since `published` was copied: copy it before the next frame
+    /// (not on every change, which an app may make hundreds of times a second).
     published_stale: bool,
     /// Our own compositor backend (Hyprland/sway/niri IPC) is connected. Without one, what a
-    /// GNOME/KDE integration pushes over `Desktop1` is the desktop (T100).
+    /// GNOME/KDE integration pushes over `Desktop1` is the desktop.
     own_desktop: bool,
     /// cpu/memory/... sampler, kept across frames for CPU deltas.
     stats: sliver_agent::modules::Stats,
@@ -1125,10 +1125,10 @@ fn run(
     // Only pressed feedback changed: re-render just the touched layer's image (fast path).
     let mut press_dirty = false;
     let mut children = Vec::new();
-    // The display policy sliverd has from us (T68). Resent whenever the config or the power
+    // The display policy sliverd has from us. Resent whenever the config or the power
     // source changes it, and after a role change (sliverd ignores it from a standby agent).
     let mut sent_policy: Option<DisplayPolicy> = None;
-    // Content changes (published items, feeds) redraw at most 30 times a second (T99), and
+    // Content changes (published items, feeds) redraw at most 30 times a second, and
     // the registry is only copied out when a frame is actually drawn.
     let mut pacer = sliver_agent::pace::Pacer::default();
     loop {
@@ -1176,7 +1176,7 @@ fn run(
             }
         }
         // Not only after a render: with the bar off nothing renders, and the state (layer,
-        // profile, health) must still be right (T132). Sent only when it changed.
+        // profile, health) must still be right. Sent only when it changed.
         if let Some(api) = &live.api {
             api.set_control_state(control_state(&agent, reloader, link.role));
         }
@@ -1217,9 +1217,9 @@ fn run(
                 reloader.watch_fd(),
                 reloader.usr2.as_ref().map(|r| r.as_fd()),
             ];
-            // While a content change is held back (T99), more changes can't make it sooner:
+            // While a content change is held back, more changes can't make it sooner:
             // don't let a storm on the feeds or the API wake us, only touches and the deadline
-            // (idea from fir's RenderGate). Control calls wait at most one frame interval.
+            // Control calls wait at most one frame interval.
             let holding = pacer.pending() && !pacer.due(std::time::Instant::now());
             let content = if holding {
                 PollFlags::empty()

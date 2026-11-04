@@ -226,7 +226,7 @@ fn agent_over_a_real_socket() {
     assert!(rig.server.daemon().active_client().is_none());
 }
 
-/// T140: `report` instead of `hello` (sliverctl doctor, any uid) answers `hw_report` and closes,
+/// `report` instead of `hello` (sliverctl doctor, any uid) answers `hw_report` and closes,
 /// and the agent driving the bar never notices: no `role` message, still active, still presenting.
 #[test]
 fn report_connection_leaves_the_agent_alone() {

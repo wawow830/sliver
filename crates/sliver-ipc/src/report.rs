@@ -1,5 +1,5 @@
-//! Asking sliverd what it found and opened (`report`, since protocol 1.1), for `sliverctl doctor`
-//! (T140). Read-only and any uid: it never becomes an agent, so the bar's agent is unaffected.
+//! Asking sliverd what it found and opened (`report`, since protocol 1.1), for `sliverctl doctor`.
+//! Read-only and any uid: it never becomes an agent, so the bar's agent is unaffected.
 
 use std::io;
 use std::os::fd::AsFd;

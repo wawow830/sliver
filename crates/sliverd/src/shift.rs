@@ -1,4 +1,4 @@
-//! Pixel shift against OLED burn-in (T79, tiny-dfr `EnablePixelShift`).
+//! Pixel shift against OLED burn-in (tiny-dfr `EnablePixelShift`).
 //!
 //! Same path as tiny-dfr's `pixel_shift.rs`: x walks back and forth across ±11 px, y follows a
 //! triangle wave of ±2 px tied to x (with a random phase), and it rests longer at each end. tiny-dfr

@@ -148,7 +148,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     let caret: Rc<std::cell::Cell<Cue>> = Rc::default();
     // Overflow and small touch targets in the current render (ux.md §4), drawn over the preview.
     let sizes: Rc<RefCell<Feedback>> = Rc::default();
-    // The keyboard-selected module's span (bar px), ringed while the preview has focus (T114).
+    // The keyboard-selected module's span (bar px), ringed while the preview has focus.
     let frame_focus: Rc<std::cell::Cell<Option<(f32, f32)>>> = Rc::default();
     // The Shift/Ctrl-click multi-selection's spans (bar px), tinted and ringed.
     let multi_spans: Rc<RefCell<Vec<(f32, f32)>>> = Rc::default();
@@ -933,7 +933,7 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
     container.append(&add);
 }
 
-/// The ⚙ on a zone's header: its settings dialog (T111).
+/// The ⚙ on a zone's header: its settings dialog.
 fn zone_button(
     ui: &Rc<Ui>,
     layout: &str,
@@ -951,7 +951,7 @@ fn zone_button(
 }
 
 /// A zone's settings: name, width, alignment, default module width, order, removal. Each applies
-/// on its own (instant apply + undo, Q3).
+/// on its own (instant apply + undo).
 /// `pos`: the zone's index and how many zones the layout shows (for the move buttons).
 fn zone_dialog(
     ui: &Rc<Ui>,
@@ -2036,7 +2036,7 @@ fn crate_inline(v: &Value) -> String {
     sliver_config::writer::inline(v)
 }
 
-/// Keyboard and screen-reader access to the preview (ux.md §4 "Keyboard", T114). The preview is
+/// Keyboard and screen-reader access to the preview (ux.md §4 "Keyboard"). The preview is
 /// one focusable widget; ←/→ (Home/End) select a module, Alt+←/→ move it, Delete removes it,
 /// Enter or Space opens the inspector. The selection is in the widget's accessible name
 /// ("Touch Bar preview: Volume slider, Controls zone, 3 of 4"), which screen readers speak; every edit rebuilds the page, so the selection
@@ -2160,7 +2160,7 @@ fn keyboard_access(
             show(true);
         })
     };
-    // Touching the mirrored real bar selects that module here (ux.md §4 Mirror, T127).
+    // Touching the mirrored real bar selects that module here (ux.md §4 Mirror).
     *ui.on_held_pressed.borrow_mut() = Some(Box::new({
         let (ui, show, modules, picture) = (
             Rc::downgrade(ui),

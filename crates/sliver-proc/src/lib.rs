@@ -1,4 +1,4 @@
-//! Child processes that die with sliver (T47).
+//! Child processes that die with sliver.
 //!
 //! Long-lived helpers (`pactl subscribe`, exec modules, test `dbus-daemon`s) must not outlive
 //! the process that started them, whether it exits cleanly, panics, or is SIGKILLed.
@@ -13,7 +13,7 @@
 //!
 //! PDEATHSIG covers the direct child only, and it survives `exec` of a non-setuid program. The
 //! kernel clears it whenever the child changes credentials: setuid/setcap exec, or a daemon that
-//! drops privileges, like `dbus-daemon` (cedar's `sliver-testbus` uses a pipe to
+//! drops privileges, like `dbus-daemon` (`sliver-testbus` uses a pipe to
 //! `dbus-run-session` instead).
 //! Grandchildren (`sh -c 'a | b'`) need the child's process group killed ([`ChildGuard::group`]).
 //! In production, systemd's cgroup does the rest when a unit stops.

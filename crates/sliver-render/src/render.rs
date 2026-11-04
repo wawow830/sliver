@@ -362,7 +362,7 @@ impl Renderer {
             let zrect = outer.inset([zs.margin[0], zs.margin[1], zs.margin[2], zs.margin[3]]);
             let inner = zrect.inset(zs.padding.map(|p| p + zs.border_width));
             // What the items ask for: a fixed width counts as itself (its `natural` is only its
-            // content), so squeezed fixed-width items are reported too (T113).
+            // content), so squeezed fixed-width items are reported too.
             let wanted = sizes
                 .iter()
                 .map(|s| match s.width {

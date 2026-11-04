@@ -405,7 +405,7 @@ fn the_reports_carry_the_machine_and_every_check() {
     assert_eq!(json_str("a\"b\nc"), "\"a\\\"b\\nc\"");
 }
 
-// ---- hardware (T140) ------------------------------------------------------------------------
+// ---- hardware -------------------------------------------------------------------------------
 
 fn report_mut(f: &mut Fake) -> &mut sliver_ipc::proto::HwReport {
     match f.report.as_mut() {

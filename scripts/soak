@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Memory soak for sliver-agent (T118): does memory keep growing while things change?
+"""Memory soak for sliver-agent: does memory keep growing while things change?
 
 Runs `sliverd --fake-hardware` and `sliver-agent` on private session and system buses (like
 scripts/idle-wakeups) with a config that keeps the bar busy, then churns it for a while:
@@ -156,7 +156,7 @@ def ctl(bins: Path, env: dict, stop: threading.Event, stats: dict) -> None:
 
 
 def toucher(sock: Path, stop: threading.Event, stats: dict) -> None:
-    """Random taps, slides and Fn presses into the fake sliverd (T130)."""
+    """Random taps, slides and Fn presses into the fake sliverd."""
     import socket
 
     s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)

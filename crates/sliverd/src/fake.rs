@@ -276,7 +276,7 @@ impl InputSource for FakeInput {
     }
 }
 
-/// The `report` facts for a fake-hardware sliverd (T140).
+/// The `report` facts for a fake-hardware sliverd.
 pub fn facts() -> sliver_ipc::proto::HwReport {
     sliver_ipc::proto::HwReport {
         backend: "fake".into(),

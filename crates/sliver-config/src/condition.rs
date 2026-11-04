@@ -108,7 +108,7 @@ pub const CONTEXT_KEYS: &[&str] = &[
     "media_player",
     "media_title",
     "media_artist",
-    // audio/brightness/notifications (T19)
+    // audio/brightness/notifications
     "mic_muted",
     "output_muted",
     "volume",

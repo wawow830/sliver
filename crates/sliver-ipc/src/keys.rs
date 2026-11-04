@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn safe_keys_depend_on_physical_esc() {
-        assert_eq!(safe_keys_for_panel(2008), &F_KEYS); // Mac14,7: physical Esc (H2)
+        assert_eq!(safe_keys_for_panel(2008), &F_KEYS); // Mac14,7: physical Esc
         assert_eq!(safe_keys_for_panel(2170), &SAFE_KEYS);
         assert!(!emittable(KEY_SYSRQ) && !emittable(0) && emittable(KEY_ESC));
     }

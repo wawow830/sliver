@@ -1,5 +1,5 @@
 //! Whole-config checks (customization.md §9). Errors block applying the config. Everything a user
-//! may legitimately do, including removing every F-key (Q2/H4 revised), is at most a warning.
+//! may legitimately do, including removing every F-key, is at most a warning.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -14,7 +14,7 @@ use crate::module::{Common, Gesture, ModuleId, check_type_keys};
 use crate::resolve::group_members;
 use crate::values::{Width, parse_duration};
 
-/// Touch-target advice from birch (features.md §9): ~9 mm, with 60 px as the "really too small" mark.
+/// Touch-target advice (features.md §9): ~9 mm, with 60 px as the "really too small" mark.
 pub const COMFORTABLE_TARGET_PX: u32 = 80;
 pub const TINY_TARGET_PX: u32 = 60;
 

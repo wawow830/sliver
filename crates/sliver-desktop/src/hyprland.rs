@@ -1039,7 +1039,7 @@ mod tests {
 
     #[test]
     fn bar_keymap_from_hyprland_devices() {
-        // As `hyprctl devices -j` reported it on the Mac14,7 (T104), plus a second layout.
+        // As `hyprctl devices -j` reported it on the Mac14,7, plus a second layout.
         let devs = r#"{"keyboards":[
             {"name":"apple-mtp-keyboard","layout":"us","variant":"","options":"","active_layout_index":0,"main":false},
             {"name":"sliver-touch-bar-keys","rules":"","model":"","layout":"fr,us","variant":"azerty,","options":"caps:escape","active_layout_index":1,"active_keymap":"English (US)","capsLock":false,"numLock":true,"main":true}]}"#;

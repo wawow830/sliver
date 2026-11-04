@@ -1,4 +1,4 @@
-//! The bar's hardware (T140): what sysfs shows without root, whether a safe-swap test run holds
+//! The bar's hardware: what sysfs shows without root, whether a safe-swap test run holds
 //! the bar, and what sliverd itself found and opened (its read-only `report`, protocol 1.1).
 
 use std::path::Path;

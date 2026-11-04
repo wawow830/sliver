@@ -503,7 +503,7 @@ fn held_layout_dies_with_its_caller() {
     );
 }
 
-/// T127: touches on a held layout reach the holder only (`HeldPressed`), and `select-only`
+/// Touches on a held layout reach the holder only (`HeldPressed`), and `select-only`
 /// gets to the core.
 #[test]
 fn held_pressed_goes_to_the_holder() {
@@ -574,7 +574,7 @@ fn held_pressed_goes_to_the_holder() {
 }
 
 /// A second agent must not take the bus name from a running one: systemd's `Type=dbus` unit
-/// stops the installed agent when its name goes, and the name never came back (birch). Only
+/// stops the installed agent when its name goes, and the name never comes back. Only
 /// `--replace` takes it, and the replaced agent gets it back when the replacer exits.
 #[test]
 fn a_second_agent_does_not_steal_the_name() {
@@ -667,7 +667,7 @@ fn set_layout_outlives_its_caller() {
     );
 }
 
-/// T100: what a GNOME/KDE integration pushes (focus, workspaces, windows) becomes a desktop state
+/// What a GNOME/KDE integration pushes (focus, workspaces, windows) becomes a desktop state
 /// the agent uses like its own backend's.
 #[test]
 fn pushed_desktop_from_desktop1() {

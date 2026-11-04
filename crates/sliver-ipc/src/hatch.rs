@@ -1,6 +1,6 @@
 //! The safe hatch (invariant 1): **double-press Fn and hold** and sliverd shows its built-in
 //! layer ([`crate::keys::safe_keys_for_panel`]) for as long as Fn stays down, whatever the agent,
-//! the config or any app is doing. Not configurable, by design (H4 revised, H14).
+//! the config or any app is doing. Not configurable, by design.
 //!
 //! Pure state, shared by sliverd and the fake so both behave the same.
 

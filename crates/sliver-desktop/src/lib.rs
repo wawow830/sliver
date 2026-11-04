@@ -158,7 +158,7 @@ pub struct DesktopState {
     /// Position of the active layout in `keyboard_layouts`, when the backend knows it.
     pub keyboard_layout_index: Option<usize>,
     /// The xkb keymap the compositor applies to sliverd's virtual keyboard
-    /// (`sliver-touch-bar-keys`), so key combos can follow the user's layout (T104). `None` when
+    /// (`sliver-touch-bar-keys`), so key combos can follow the user's layout. `None` when
     /// the backend can't say; combos then use plain US positions.
     pub bar_keymap: Option<XkbNames>,
     /// Active keybind submap / sway mode. `None` = default.

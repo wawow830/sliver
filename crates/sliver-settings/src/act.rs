@@ -35,7 +35,7 @@ pub enum Pick {
     Layout(String),
     /// `{ profile = "work" }`.
     Profile(String),
-    /// `{ dbus = { … } }`, kept whole (fir's presets fill it).
+    /// `{ dbus = { … } }`, kept whole (the presets fill it).
     DBus(Value),
     /// `[step, step…]`: each step is an action value (shown by its own picker).
     Macro(Vec<Value>),

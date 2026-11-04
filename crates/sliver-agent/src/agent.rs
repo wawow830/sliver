@@ -105,7 +105,7 @@ pub struct Agent {
     pub config: Config,
     pub sheet: Stylesheet,
     renderer: Renderer,
-    /// Character keys in combos follow the bar keyboard's layout (T104), and the keymap they came
+    /// Character keys in combos follow the bar keyboard's layout, and the keymap they came
     /// from (rebuilt only when it changes).
     keymap: crate::keymap::KeyMapper,
     keymap_names: Option<sliver_desktop::XkbNames>,
@@ -153,7 +153,7 @@ pub struct Agent {
     pub_drag: HashMap<u32, f64>,
     /// Problems resolving layers, for logging/status. Cleared on each render.
     pub errors: Vec<String>,
-    /// `graph` modules' samples, by module id (T137): oldest first, 0..=1, and when the last
+    /// `graph` modules' samples, by module id: oldest first, 0..=1, and when the last
     /// one was taken. Sampled in [`Agent::render`] while the bar is drawn.
     graphs: HashMap<String, (std::collections::VecDeque<f32>, Option<DateTime<Local>>)>,
     /// The emoji picker's recents (shared with the worlds it draws).
@@ -323,7 +323,7 @@ impl Agent {
     /// rebuilt (callers present them; the link drops unchanged pixels).
     pub fn render(&mut self, world: &World) -> Vec<Layer> {
         self.errors.clear();
-        // Pixel shift (T79): keep content clear of the ends sliverd moves it towards.
+        // Pixel shift: keep content clear of the ends sliverd moves it towards.
         self.renderer
             .set_extra_inset(crate::display::content_inset(&self.config.display));
         let mut ctx = match &self.fixed_ctx {

@@ -1,4 +1,4 @@
-//! The public session D-Bus API (`docs/api.md` §2–5). Owner: cedar (ADR-0003).
+//! The public session D-Bus API (`docs/api.md` §2–5). See ADR-0003.
 //!
 //! - [`item`]: the published-item vocabulary, parsed leniently into typed items.
 //! - [`registry`]: the sans-IO model: clients, contexts, ownership, limits, sandbox tiers,

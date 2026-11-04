@@ -184,7 +184,7 @@ impl Handle {
                 }
                 let mut backoff = Duration::from_millis(500);
                 loop {
-                    // Tied to this process (T47): `pactl subscribe` never runs on as an orphan
+                    // Tied to this process: `pactl subscribe` never runs on as an orphan
                     // after the agent (or a test binary) exits, however it exits.
                     let mut cmd = Command::new(&tools.pactl);
                     cmd.arg("subscribe")
@@ -201,7 +201,7 @@ impl Handle {
                     };
                     // Only a pactl that stays up counts as recovered (below): without a PulseAudio
                     // server it starts fine and exits at once, and resetting the backoff here made
-                    // that a ~1 Hz respawn loop of pactl + wpctl + threads (T101, invariant 3).
+                    // that a ~1 Hz respawn loop of pactl + wpctl + threads (invariant 3).
                     let started = std::time::Instant::now();
                     // Missed events while it was down: resync once connected again.
                     if !hub.update(|s| s.audio = read(&tools)) {

@@ -498,7 +498,7 @@ fn touchviz(card: &Path, touch: &Path, secs: u64) -> std::io::Result<()> {
     use sliver_hw::input::{HwEvent, HwInput};
     use sliver_hw::mt::Phase;
     use sliver_hw::panel::DrmPanel;
-    // Diagnostic order (T30): input BEFORE the modeset, then halfway through reopen the input
+    // Diagnostic order: input BEFORE the modeset, then halfway through reopen the input
     // (i.e. after the modeset), so we learn whether open order matters for apple_z2.
     let (len, thick) = (2008, 60); // checked against the panel below
     let mut input = HwInput::open(touch, len, thick)?;

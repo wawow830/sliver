@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RPM lifecycle test (T131): installs the built sliverd and sliver-agent RPMs in a throwaway
+# RPM lifecycle test: installs the built sliverd and sliver-agent RPMs in a throwaway
 # Fedora container with systemd as PID 1 and checks what the scriptlets do to the bar's owner:
 #   A. tiny-dfr installed (a stand-in unit) and driving the bar
 #      1. install starts nothing and leaves tiny-dfr alone; the agent's user preset enables it

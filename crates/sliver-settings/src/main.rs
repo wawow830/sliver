@@ -1,7 +1,7 @@
 //! `sliver-settings`: the settings app and WYSIWYG Touch Bar editor (GTK4 + libadwaita).
 //!
 //! docs/ux.md is the design. Every edit goes through `sliver_config::Editor` on the user's config
-//! file: it's applied instantly (Q3), validated before it's written (a broken config never lands),
+//! file: it's applied instantly, validated before it's written (a broken config never lands),
 //! and can be undone from the toast. The running agent hot-reloads the file.
 
 mod act;
@@ -32,7 +32,7 @@ use toml::Table;
 
 use preview::Preview;
 
-/// D-Bus-style app id under the project prefix (H1).
+/// D-Bus-style app id under the project prefix.
 const APP_ID: &str = "io.github.wawow830.Sliver.Settings";
 
 pub(crate) struct State {
@@ -99,7 +99,7 @@ pub(crate) struct Ui {
     refresh_pending: Cell<bool>,
     /// The user file's text as we last loaded or wrote it, to tell our own saves from others'.
     last_text: RefCell<Option<String>>,
-    /// Mirror to Touch Bar (Q10: on by default) and what we last asked the agent to show.
+    /// Mirror to Touch Bar (on by default) and what we last asked the agent to show.
     pub mirror: Cell<bool>,
     /// "Select only": touches on the mirrored bar select in the editor without firing.
     pub select_only: Cell<bool>,
@@ -109,7 +109,7 @@ pub(crate) struct Ui {
     /// The layout the Bar page shows, mirrored again when the window regains focus.
     mirror_wanted: RefCell<Option<String>>,
     /// The Bar preview's keyboard selection (zone index, module index in that zone) and whether
-    /// the preview had keyboard focus, kept across the rebuild after every edit (T114).
+    /// the preview had keyboard focus, kept across the rebuild after every edit.
     pub bar_selection: Cell<Option<(usize, usize)>>,
     pub bar_focused: Cell<bool>,
     /// Modules picked with Shift/Ctrl-click on the preview, all in one zone: (zone, index).

@@ -1,5 +1,5 @@
 /* sliver: the default theme. The macOS Touch Bar look, with your desktop's accent color on
-   active toggles and sliders (H10). The agent sets @accent from the desktop; override it with
+   active toggles and sliders. The agent sets @accent from the desktop; override it with
    @define-color accent …; in your own style.css. */
 
 bar {

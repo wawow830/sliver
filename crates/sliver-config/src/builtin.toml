@@ -1,6 +1,6 @@
 # Sliver's built-in defaults. Always merged *underneath* the user's config, so every key here
 # can be overridden and every layout redefined (customization.md §1, §6).
-# The default bar is Q1/H3 option B (macOS-like): Esc · app controls · control strip, Fn → F-keys.
+# The default bar is macOS-like: Esc · app controls · control strip, Fn → F-keys.
 version = 1
 
 [layers]
@@ -18,7 +18,7 @@ modules = ["key/Esc#auto"]
 name = "main"
 width = "fill"
 # Most Linux apps publish no controls, and 2008 px Macs have no F-key row: show F1-F12 until the
-# focused app fills App controls, then give it the space (birch's real-bar run, ash's proposal).
+# focused app fills App controls, then give it the space.
 modules = ["app-controls", "group/fkeys"]
 
 [[layouts.default.zones]]
@@ -54,7 +54,7 @@ modules = ["key/BrightnessDown", "key/BrightnessUp", "key/MicMute", "key/Search"
 # Like macOS: nothing that shows content (no app controls, titles, script output or notifications),
 # just media transport, brightness, volume and mute, plus Esc where the Mac has no physical one.
 # The rule below picks it; the agent also hides private content while locked whatever the layout
-# says (T87), so a hand-written [[rules]] list that drops this rule still doesn't leak.
+# says, so a hand-written [[rules]] list that drops this rule still doesn't leak.
 [[layouts.locked.zones]]
 name = "esc"
 modules = ["key/Esc#auto"]
@@ -114,7 +114,7 @@ hide-empty-text = true
 [modules."emoji#strip"]
 mode = "strip"
 
-# Ready-made sparklines (T137) for the settings Library: CPU and memory load over the last minute.
+# Ready-made sparklines for the settings Library: CPU and memory load over the last minute.
 [modules."graph#cpu"]
 source = "cpu"
 

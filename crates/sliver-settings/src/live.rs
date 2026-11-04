@@ -109,7 +109,7 @@ pub fn agent_status(done: impl Fn(Agent) + 'static) {
 }
 
 /// The session-bus connection Mirror holds for the window's lifetime: `HoldLayout` lasts as long
-/// as the connection that asked, so a crashed or killed editor never pins the bar (cedar, 4b5b28f).
+/// as the connection that asked, so a crashed or killed editor never pins the bar.
 fn mirror_conn() -> Option<Connection> {
     static CONN: std::sync::OnceLock<Option<Connection>> = std::sync::OnceLock::new();
     CONN.get_or_init(|| Connection::session().ok()).clone()
@@ -138,7 +138,7 @@ fn hold(conn: &Connection, layout: &str, select_only: bool) {
     }
 }
 
-/// Mirror to Touch Bar (ux.md §4, Q10): show `layout` on the real bar while we hold it
+/// Mirror to Touch Bar (ux.md §4): show `layout` on the real bar while we hold it
 /// (`Control1.HoldLayoutWith`); `select_only` makes touches only select. `""` releases it back to
 /// the rules. Off the main thread; an absent agent is fine. The first hold also starts listening
 /// for touches on the held layout (`HeldPressed`, sent only to the holder).

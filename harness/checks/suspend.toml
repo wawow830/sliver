@@ -1,4 +1,4 @@
-# T120: does the bar come back after a suspend with the lid open? Runs on the installed Sliver.
+# Does the bar come back after a suspend with the lid open? Runs on the installed Sliver.
 title = "Suspend and wake with the lid open"
 minutes = 1
 

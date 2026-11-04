@@ -1,4 +1,4 @@
-//! An isolated private D-Bus for tests (T47).
+//! An isolated private D-Bus for tests.
 //!
 //! `dbus-daemon --session` loads the user's session config, standard service dirs included, so a
 //! test that merely *calls* e.g. `org.freedesktop.Notifications` D-Bus-activates real desktop

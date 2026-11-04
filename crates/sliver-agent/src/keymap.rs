@@ -1,4 +1,4 @@
-//! Layout-aware key combos (T104).
+//! Layout-aware key combos.
 //!
 //! Config key names are Linux keycodes, i.e. *positions* on a US keyboard (tiny-dfr's semantics).
 //! For F-keys, media keys, modifiers and navigation that's exactly right. For character keys it's

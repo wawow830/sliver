@@ -191,7 +191,7 @@ mod tests {
         fs::remove_dir_all(d).unwrap();
     }
 
-    /// T96: an Intel T2 MacBook Pro has the main GPU (i915, sometimes amdgpu too) plus the bar's
+    /// An Intel T2 MacBook Pro has the main GPU (i915, sometimes amdgpu too) plus the bar's
     /// USB display (appletbdrm). Only the latter is the bar.
     #[test]
     fn finds_t2_card_and_digitizer() {

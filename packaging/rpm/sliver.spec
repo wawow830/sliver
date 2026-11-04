@@ -1,7 +1,7 @@
 # Sliver: the Touch Bar platform for Linux Macs. Built from a git snapshot plus a cargo vendor
 # tarball (offline, so it works in mock/COPR). Local build: scripts/rpm-build. See docs/packaging.md.
 
-# Sliver's own license (H27: MIT OR Apache-2.0, like most Rust projects).
+# Sliver's own license (MIT OR Apache-2.0, like most Rust projects).
 %global sliver_license MIT OR Apache-2.0
 # Bundled crates (cargo tree --format '{l}', see docs/packaging.md) plus embedded assets
 # (Noto Sans: OFL-1.1, Material icons: Apache-2.0).
@@ -83,7 +83,7 @@ Requires:       sliver-agent = %{version}-%{release}
 %description -n sliver-settings
 GTK4/libadwaita settings app with a live WYSIWYG editor for Touch Bar layouts.
 
-# Desktop integrations (T122): tell the agent the focused window and workspaces on GNOME and KDE.
+# Desktop integrations: tell the agent the focused window and workspaces on GNOME and KDE.
 # Installed alongside the desktop (Supplements:) but never enabled: each user turns them on.
 %package -n gnome-shell-extension-sliver
 Summary:        GNOME Shell extension that feeds the Sliver Touch Bar agent focus and workspaces
@@ -143,7 +143,7 @@ install -Dpm0755 target/rpm/sliverd %{buildroot}%{_libexecdir}/sliverd
 install -Dpm0755 target/rpm/sliver-agent %{buildroot}%{_bindir}/sliver-agent
 install -Dpm0755 target/rpm/sliverctl %{buildroot}%{_bindir}/sliverctl
 install -Dpm0755 target/rpm/sliver-settings %{buildroot}%{_bindir}/sliver-settings
-# Browser integration (T106/T108): host, per-browser native-messaging manifests, and ready-to-load
+# Browser integration: host, per-browser native-messaging manifests, and ready-to-load
 # extension folders (what integration/browser/install.sh builds for a checkout).
 install -Dpm0755 integration/browser/host/sliver-browser-host %{buildroot}%{_libexecdir}/sliver-browser-host
 nm=io.github.wawow830.sliver_browser
@@ -223,7 +223,7 @@ udevadm trigger --action=change --subsystem-match=backlight \
     --sysname-match=appletb_backlight >/dev/null 2>&1 || :
 # Never send a udev event to the digitizers here: they carry SYSTEMD_WANTS=sliverd.service, and
 # systemd acts on it for 'change' events too, so it would take the bar from tiny-dfr at every
-# install and upgrade (measured on the Mac14,7, T115/T122). Their seat rule
+# install and upgrade (measured on the Mac14,7). Their seat rule
 # (ID_SEAT=seat-touchbar) applies from the next boot, like the rest. Without tiny-dfr our rules
 # also do the T2 USB switch to the display configuration (an add-only rule; it acts only while
 # the configuration is still 1).
@@ -252,7 +252,7 @@ fi
 %systemd_user_preun sliver-agent.service
 
 # Upgrades restart running agents (systemd-update-helper, every user manager), so nobody keeps
-# the old agent against a new sliverd until their next login (seen in T94).
+# the old agent against a new sliverd until their next login.
 %postun -n sliver-agent
 %systemd_user_postun_with_restart sliver-agent.service
 
@@ -323,5 +323,5 @@ fi
 %{_datadir}/sliver/browser
 
 %changelog
-* Mon Oct 12 2026 hazel <hazel@sliver.invalid> - 0.1.0-0.1
+* Mon Oct 12 2026 Sliver <sliver@sliver.invalid> - 0.1.0-0.1
 - First package: sliverd, sliver-agent, sliverctl, sliver-settings

@@ -1,4 +1,4 @@
-//! The public D-Bus API (`sliver_api`, cedar's) inside the agent: serving it, and the
+//! The public D-Bus API (`sliver_api`) inside the agent: serving it, and the
 //! [`Host`] side that lets D-Bus handlers reach the single-threaded agent core.
 //!
 //! zbus runs the handlers on its own executor thread. `Host::changed` only sets a flag and pokes
@@ -84,7 +84,7 @@ impl ApiLink {
     /// Serves the API on the session bus as `io.github.wawow830.Sliver`. `NameTaken` if another
     /// agent owns it, unless `replace` (`--replace`).
     pub fn start(replace: bool) -> zbus::Result<ApiLink> {
-        // sliver-bus: no zbus `blocking` pool thread waking twice a second (T103).
+        // sliver-bus: no zbus `blocking` pool thread waking twice a second.
         let conn = zbus::block_on(sliver_bus::session_async())?;
         ApiLink::serve_claiming(conn, true, replace)
     }

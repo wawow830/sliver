@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Quiet stand-ins for every service an event-driven module follows, for scripts/idle-wakeups'
-"full" phase (T143): systemd (system and user managers), NetworkManager, BlueZ, fcitx5, a tray
+"full" phase: systemd (system and user managers), NetworkManager, BlueZ, fcitx5, a tray
 watcher, a notification server, and a PipeWire socket that accepts and then says nothing.
 
 They answer what the sources ask at startup and then stay silent, like an idle desktop. So any

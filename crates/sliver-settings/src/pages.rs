@@ -204,7 +204,7 @@ pub(crate) fn status_page(state: &State) -> gtk::Widget {
                     format!(" ({version})")
                 },
                 {
-                    // Healthy = connected and driving the bar (ash, e34d1fc); problems come
+                    // Healthy = connected and driving the bar; problems come
                     // from Control1.Errors.
                     let driving = if healthy {
                         "driving the bar"

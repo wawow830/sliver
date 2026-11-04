@@ -159,7 +159,7 @@ pub enum Cmd {
         out: String,
     },
     Publish(Publish),
-    /// `config …`: offline, handled by `config::run` (elm).
+    /// `config …`: offline, handled by `config::run`.
     Config(Vec<String>),
     Doctor(Vec<String>),
     /// `preset …`: offline, handled by `preset::run`.

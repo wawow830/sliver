@@ -74,7 +74,7 @@ impl Preview {
             "base" | "fn" => Vec::new(),
             custom => vec![custom.to_owned()],
         };
-        // Sample values for data modules, and outlined placeholders for empty app slots (T44).
+        // Sample values for data modules, and outlined placeholders for empty app slots.
         self.agent.render(&World::sample(Local::now()));
         if let Some(e) = self.agent.errors.first() {
             return Err(e.clone());
@@ -125,7 +125,7 @@ impl Preview {
 
     /// The bar-x span of the cells that show the `index`-th module of zone `zone` (whose
     /// top-level module ids are `zone_ids`): a group's children together. For the keyboard
-    /// focus ring (T114).
+    /// focus ring.
     pub fn module_span(
         &self,
         zone: usize,
