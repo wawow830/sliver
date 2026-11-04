@@ -27,7 +27,7 @@ What that means here (waybar's model, translated to a touch strip):
   `on-hold`, `on-swipe-left/right`, `on-drag` for sliders, …), and `max-length`/width.
 - **Styling is a stylesheet**, like waybar's `style.css`: target modules by id, class and state
   (`#battery.critical`, `.custom-vpn.connected`, `:active` while pressed). Themes are just
-  stylesheets. *How* to get CSS-like styling onto the pure-Rust renderer (ADR-0002) is the swarm's call.
+  stylesheets.
 - **Plain-text config is the source of truth.** It's hand-editable and dotfile-friendly, supports
   comments and `include`s, and hot-reloads on save. The settings app edits the same files, so
   nothing is GUI-only and nothing is file-only.

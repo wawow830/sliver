@@ -8,12 +8,9 @@ is never left without Escape or the F-keys.
 
 - [docs/user-guide.md](docs/user-guide.md): install, configure, style, script; man pages in [man/](man)
 - [GOAL.md](GOAL.md): the goal, what "complete" means, and the invariants
-- [SWARM.md](SWARM.md): how the autonomous agent swarm that builds sliver works
-- [HUMAN.md](HUMAN.md): how to steer the swarm and answer it
 - [docs/decisions](docs/decisions): architecture decisions
 
-Status: early. Built by a decentralized swarm of agents, with a human in the loop for root,
-hardware, taste and anything public.
+Status: early, but it drives the Touch Bar day to day on an M2 MacBook Pro 13" (`Mac14,7`).
 
 ## License
 

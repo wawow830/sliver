@@ -1,5 +1,4 @@
 """hwcheck without hardware: a check with no [bar] section, answered through stdin."""
-import os
 import subprocess
 import sys
 import tomllib
@@ -40,12 +39,8 @@ ask = "Say something"
 name = "env"
 collect = "echo collected"
 ''')
-        env = dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}")
-        # No open asks: a fake `swarm` that lists nothing (the real one would touch the swarm state).
-        (tmp / "swarm").write_text("#!/bin/sh\nexit 0\n")
-        (tmp / "swarm").chmod(0o755)
         r = subprocess.run([sys.executable, HERE / "hwcheck", check], input="\nb\nall good\n",
-                           capture_output=True, text=True, env=env, timeout=30)
+                           capture_output=True, text=True, timeout=30)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("smoke: colour = green; free = all good", r.stdout)
         dest = Path(r.stdout.split("(files: ")[1].split(")")[0])

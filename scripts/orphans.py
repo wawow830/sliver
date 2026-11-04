@@ -86,7 +86,7 @@ def leftovers(since, root):
             seen += 1
         return False
 
-    # The check's own ancestors (the shell running it, `swarm land`) can start in the same clock
+    # The check's own ancestors (the shell running it, whatever called that) can start in the same clock
     # tick as `since`, so exclude them explicitly.
     ancestors, p = set(), since
     while p > 1 and len(ancestors) < 64:

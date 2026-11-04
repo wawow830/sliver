@@ -61,7 +61,7 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full rel
   had 0 restarts, and there were no AVCs. Idle cost with the display off (lid closed): sliverd 0
   wakeups/s, agent 1.45/s (within `scripts/idle-wakeups`' 3/s budget).
   Before that fix, the old agent kept running against the new sliverd until the next login.
-- The RPM's own sliverd is the only real-hardware code the swarm may restart without the harness.
+- The RPM's own sliverd is the only real-hardware code that may be restarted without the harness.
   If it fails, the fallback hands the bar to tiny-dfr. That happened on the .256 upgrade: the
   cgroup gate didn't know about the unit's private cgroup namespace (fixed in 59a1eb4).
 

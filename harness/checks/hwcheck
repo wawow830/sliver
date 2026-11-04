@@ -2,13 +2,12 @@
 """Guided hardware checks: the human starts one when convenient and is walked through it.
 
     harness/checks/hwcheck                 # list the checks
-    harness/checks/hwcheck NAME [NAME...]  # run them, then answer the swarm ask that names them
+    harness/checks/hwcheck NAME [NAME...]  # run them; results go to target/hw/checks/
 
 A check (harness/checks/NAME.toml) can build release binaries, do a bounded safe-swap run with
 an agent, and then go step by step: tell the human what to do at the moment it matters, check
 the daemon log by itself, save bar snapshots, and ask short questions. Results go to
-target/hw/checks/<stamp>/ and to the open `swarm human` ask whose question mentions "hwcheck" and
-the check's name. See docs/safe-swap.md "Guided checks".
+target/hw/checks/<stamp>/result.txt. See docs/safe-swap.md "Guided checks".
 
 Step fields, run in this order: say, confirm, shell, resume, wait, expect, snap, ask, collect.
 """
@@ -30,9 +29,6 @@ OUT = Path("/run/sliver-safeswap/out")
 UNITS = ["sliverd", "sliverd.socket", "tiny-dfr"]
 TTY = sys.stdin.isatty()
 HELPER = Path("/usr/local/libexec/sliver-safeswap")
-# The repo's own swarm tool when it isn't on PATH, so the human needs no setup.
-if not shutil.which("swarm"):
-    os.environ["PATH"] = f"{ROOT / 'swarm/bin'}:{os.environ.get('PATH', '')}"
 
 
 def c(code, s):
@@ -244,14 +240,6 @@ def check_path(name):
     return Path(name) if name.endswith(".toml") else HERE / f"{name}.toml"
 
 
-def open_ask(names):
-    r = subprocess.run(["swarm", "human", "list", "--brief"], capture_output=True, text=True)
-    for line in r.stdout.splitlines():
-        if "hwcheck" in line and any(Path(n).stem in line for n in names):
-            return line.split()[0]
-    return None
-
-
 def main():
     names = [a for a in sys.argv[1:] if not a.startswith("-")]
     if not names:
@@ -278,13 +266,6 @@ def main():
     report = "\n".join(lines) + f"\n(files: {dest})"
     (dest / "result.txt").write_text(report + "\n")
     print(c("1", "\n== Results\n") + report)
-    hid = open_ask(names)
-    if hid and lines:
-        subprocess.run(["swarm", "human", "answer", hid, "hwcheck " + " | ".join(lines) + f" (files: {dest})"],
-                       stdout=subprocess.DEVNULL)
-        print(c("32", f"\n  sent as the answer to {hid}. Thanks!"))
-    else:
-        print(c("2", "\n  No open ask names these checks; the peer can read result.txt."))
 
 
 if __name__ == "__main__":

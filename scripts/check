@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# The landing gate. `swarm land` runs this; keep it fast, deterministic, and hardware-free.
+# The gate every change to main passes (CI runs it too). Keep it fast, deterministic and hardware-free.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-
-echo "== swarm tool"
-python3 -m py_compile swarm/bin/swarm
 
 echo "== safe-swap harness"
 python3 -m unittest discover -s harness/safeswap -p 'test_*.py' -q

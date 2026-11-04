@@ -1,4 +1,4 @@
-// sliver safe-swap: let @USER@ run the helper without a password, so swarm peers (which
+// sliver safe-swap: let @USER@ run the helper without a password, so scripted runs (which
 // may not be in an "active" logind session) can do bounded Touch Bar runs.
 // Only this one action, only this one user. Remove the file to require a password again.
 polkit.addRule(function (action, subject) {
