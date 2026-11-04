@@ -1,0 +1,148 @@
+//! Specs for self-contained widgets: user module output, graphs, images, the clock, emoji, timers.
+
+use super::*;
+
+pub(super) fn custom_output(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+    let out = &world.outputs[&m.id.to_string()];
+    let v = sliver_modules::view(m, out, ui.show_alt);
+    if v.hidden {
+        return None;
+    }
+    // `view` already applied the module's format; pass the result through as-is.
+    let mut sp = Spec::new(ValueMap::new().with("", FmtValue::Text(v.text)), "{}");
+    sp.extra_classes = v.classes;
+    sp.default_icon = v.icon;
+    let slider = m
+        .config
+        .get("slider")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    if slider && let Some(value) = v.value {
+        sp.slider = Some((value / 100.0).clamp(0.0, 1.0) as f32);
+    }
+    sp.raw = true;
+    Some(sp)
+}
+
+/// The agent samples (Agent::render); here only what it has. Hidden until the first one.
+pub(super) fn graph(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+    let (samples, cap) = match ui.graph.clone() {
+        Some((s, cap)) if s.len() >= 2 || (!world.preview && !s.is_empty()) => (s, cap),
+        // Previews (settings, `--render`) have no history yet: a made-up one, so the
+        // editor shows what a graph looks like.
+        _ if world.preview => {
+            let cap = graph_params(&m.config).1;
+            let wave = (0..cap)
+                .map(|i| {
+                    let t = i as f32 / cap.max(2) as f32 * std::f32::consts::TAU * 1.5;
+                    0.45 + 0.25 * t.sin() + 0.1 * (t * 2.7).cos()
+                })
+                .collect();
+            (wave, cap)
+        }
+        _ => return None,
+    };
+    if samples.is_empty() {
+        return None;
+    }
+    let mut sp = Spec::new(ValueMap::new(), "");
+    sp.percentage = samples.last().map(|v| f64::from(*v) * 100.0);
+    sp.graph = Some((samples, cap));
+    // Wake for the next sample (never while the bar is off: Agent::next_change).
+    // `interval` is a common key, so it's parsed into `common` here.
+    sp.refresh = Some(match m.common.interval {
+        Some(sliver_config::Interval::Every(d)) => d.max(std::time::Duration::from_millis(100)),
+        _ => GRAPH_EVERY,
+    });
+    Some(sp)
+}
+
+/// waybar's `image`: `exec` prints the path (first line), else `path`. Hidden without
+/// one, like waybar.
+pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
+    let path = match world.outputs.get(&m.id.to_string()) {
+        Some(out) if out.hidden => return None,
+        Some(out) => out.text.lines().next().unwrap_or("").trim().to_owned(),
+        None => m
+            .config
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned(),
+    };
+    if path.is_empty() {
+        return None;
+    }
+    let mut sp = Spec::new(ValueMap::new(), "");
+    sp.image = Some(path);
+    // A fixed `path` with an `interval` is read again then (a script rewrites the file);
+    // with `exec`, the script's runs rebuild the cell.
+    if !m.config.contains_key("exec")
+        && let Some(sliver_config::Interval::Every(d)) = m.common.interval
+    {
+        sp.refresh = Some(d);
+    }
+    Some(sp)
+}
+
+pub(super) fn clock(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+    let (clock, zones) = Clock::new(m, world.now, ui.tz);
+    let mut sp = Spec::new(clock, CLOCK_DEFAULT);
+    if zones > 1 {
+        sp = sp
+            .on(Gesture::SwipeLeft, "tz-next")
+            .on(Gesture::SwipeRight, "tz-prev");
+    }
+    Some(sp)
+}
+
+/// The picker's entry button: opens the `emoji` layer (the strip lives there).
+pub(super) fn emoji(m: &ModuleInstance) -> Option<Spec> {
+    let layer = m
+        .config
+        .get("layer")
+        .and_then(|v| v.as_str())
+        .unwrap_or("emoji");
+    let mut sp = Spec::new(ValueMap::new(), "😀");
+    sp.defaults.push((
+        Gesture::Tap,
+        Action::Layer {
+            name: layer.into(),
+            mode: sliver_config::LayerMode::Toggle,
+        },
+    ));
+    Some(sp)
+}
+
+pub(super) fn timer(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+    let total = m
+        .config
+        .get("duration")
+        .and_then(|v| sliver_config::parse_duration(v).ok())
+        .filter(|d| !d.is_zero())
+        .unwrap_or(std::time::Duration::from_secs(25 * 60));
+    let (left, status) = match &ui.timer {
+        None => (total, "idle"),
+        Some(t) if t.finished => (std::time::Duration::ZERO, "finished"),
+        Some(t) if t.running_since.is_some() => (t.left(world.now), "running"),
+        Some(t) => (t.remaining, "paused"),
+    };
+    let pct = 100.0 * (1.0 - left.as_secs_f64() / total.as_secs_f64());
+    let v = ValueMap::new()
+        .with("remaining", clock_text(left))
+        .with("minutes", (left.as_secs() / 60) as i64)
+        .with("seconds", (left.as_secs() % 60) as i64)
+        .with("", clock_text(left));
+    let mut sp = Spec::new(v, "{remaining}")
+        .on(Gesture::Tap, "toggle")
+        .on(Gesture::Hold, "reset");
+    sp.percentage = Some(pct.clamp(0.0, 100.0));
+    sp.status = Some(status);
+    sp.checked = status == "running";
+    sp.timer_total = Some(total);
+    if status == "running" {
+        sp.refresh = Some(std::time::Duration::from_secs(1));
+    }
+    Some(sp)
+}
