@@ -255,11 +255,13 @@ impl IconLoader {
         Self::new(paths.icon_dirs(), paths.pixmap_dirs(), default_theme)
     }
 
-    /// The real environment, with the user's configured theme (see [`configured_theme`]).
+    /// The real environment, with the user's configured theme (see [`configured_theme`]). With
+    /// none configured, Adwaita, as in GTK: `hicolor` has no symbolic icons, so `go-previous-symbolic`
+    /// and friends would draw nothing. A theme that isn't installed is skipped, down to `hicolor`.
     pub fn from_env() -> Self {
         let get = |k: &str| std::env::var(k).ok();
         let paths = SearchPaths::from_env(get);
-        let theme = configured_theme(&paths).unwrap_or_else(|| "hicolor".into());
+        let theme = configured_theme(&paths).unwrap_or_else(|| "Adwaita".into());
         Self::from_paths(&paths, theme)
     }
 
