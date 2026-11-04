@@ -430,14 +430,23 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     let content_page = adw::NavigationPage::new(&toolbar(&stack, None), "Bar");
     let split = adw::NavigationSplitView::new();
     {
+        // Weak: the sidebar is inside `split`, so strong references here would keep the whole
+        // window content alive after the next rebuild replaces it.
         let (stack, content_page, split, ui) = (
-            stack.clone(),
-            content_page.clone(),
-            split.clone(),
+            stack.downgrade(),
+            content_page.downgrade(),
+            split.downgrade(),
             ui.clone(),
         );
         sidebar.connect_row_selected(move |_, row| {
-            let Some(row) = row else { return };
+            let (Some(row), Some(stack), Some(content_page), Some(split)) = (
+                row,
+                stack.upgrade(),
+                content_page.upgrade(),
+                split.upgrade(),
+            ) else {
+                return;
+            };
             let id = row.widget_name();
             stack.set_visible_child_name(&id);
             if let Some(child) = stack.child_by_name(&id) {

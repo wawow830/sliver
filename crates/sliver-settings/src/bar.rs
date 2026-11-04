@@ -150,12 +150,6 @@ impl Marks {
             }
         }
     }
-
-    /// Clears the drag cue.
-    fn clear_cue(&self, picture: &gtk::DrawingArea) {
-        self.caret.set(Cue::None);
-        picture.queue_draw();
-    }
 }
 
 /// What the preview's controllers share.
@@ -165,11 +159,24 @@ struct View {
     preview: Rc<RefCell<Preview>>,
     /// The layout the preview shows, which is what edits apply to.
     shown_layout: Rc<RefCell<String>>,
-    picture: gtk::DrawingArea,
+    /// Weak: the preview's own controllers hold a `View`, so a strong reference would keep the
+    /// page (and its renderer) alive after a rebuild replaces it.
+    picture: glib::WeakRef<gtk::DrawingArea>,
     marks: Marks,
 }
 
 impl View {
+    fn redraw(&self) {
+        if let Some(p) = self.picture.upgrade() {
+            p.queue_draw();
+        }
+    }
+
+    fn clear_cue(&self) {
+        self.marks.caret.set(Cue::None);
+        self.redraw();
+    }
+
     /// Zone `zone` of the shown layout: its name and module ids.
     fn zone(&self, zone: usize) -> Option<(String, Vec<String>)> {
         let state = self.ui.state();
@@ -348,7 +355,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             size,
         ))),
         shown_layout: Rc::default(),
-        picture: picture.clone(),
+        picture: picture.downgrade(),
         marks,
     };
 
@@ -385,12 +392,12 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         update_multi.clone(),
     );
     header.connect(&v, &refresh);
-    connect_select(&v, update_multi);
-    connect_hover(&v);
+    connect_select(&v, &picture, update_multi);
+    connect_hover(&v, &picture);
     let (drop_target, drop_module) = drop_target(&v);
     let lib = palette(ui, &v.shown_layout);
     page.insert_child_after(&lib, Some(&bar_scroll));
-    page.add_controller(drag_gesture(&v, &page, drop_module));
+    page.add_controller(drag_gesture(&v, drop_module));
     picture.add_controller(drop_target);
     keyboard_access(ui, &picture, &v.preview, &v.shown_layout, &v.marks.focus);
     refresh();
@@ -408,14 +415,20 @@ fn refresher(
     update_multi: Hook,
 ) -> Hook {
     let v = v.clone();
+    // Weak: these three run this function when they change, so they hold it.
     let (layers, layer_dd, app_entry, locked) = (
         h.layers.clone(),
-        h.layer.clone(),
-        h.app.clone(),
-        h.locked.clone(),
+        h.layer.downgrade(),
+        h.app.downgrade(),
+        h.locked.downgrade(),
     );
     let (why, size_warning, zones) = (why.clone(), size_warning.clone(), zones.clone());
     Rc::new(move || {
+        let (Some(layer_dd), Some(app_entry), Some(locked)) =
+            (layer_dd.upgrade(), app_entry.upgrade(), locked.upgrade())
+        else {
+            return;
+        };
         let ui = &v.ui;
         let state = ui.state();
         let layer = layers
@@ -466,7 +479,7 @@ fn refresher(
             &["error"]
         });
         *v.marks.sizes.borrow_mut() = fb;
-        v.picture.queue_draw();
+        v.redraw();
         let profile = sliver_config::profile::active();
         let in_profile = if profile == sliver_config::profile::DEFAULT {
             String::new()
@@ -513,7 +526,7 @@ fn multi_select(v: &View) -> (gtk::Box, Hook) {
             v.marks.multi.clone(),
         );
         let (picture, bar, label, group) = (
-            v.picture.downgrade(),
+            v.picture.clone(),
             bar.downgrade(),
             label.downgrade(),
             group.downgrade(),
@@ -581,7 +594,7 @@ fn multi_select(v: &View) -> (gtk::Box, Hook) {
 
 /// Click a module on the preview to open it in the inspector (ux.md §4 "Select"); with Shift or
 /// Ctrl, add it to (or drop it from) the multi-selection instead.
-fn connect_select(v: &View, update_multi: Hook) {
+fn connect_select(v: &View, picture: &gtk::DrawingArea, update_multi: Hook) {
     let click = gtk::GestureClick::new();
     let view = v.clone();
     click.connect_released(move |g, _, x, _| {
@@ -648,19 +661,21 @@ fn connect_select(v: &View, update_multi: Hook) {
             Some(hit.rect.1),
         );
     });
-    v.picture.add_controller(click);
-    v.picture.set_cursor_from_name(Some("pointer"));
+    picture.add_controller(click);
+    picture.set_cursor_from_name(Some("pointer"));
 }
 
 /// The width handle shows as a resize cursor on a module's right edge.
-fn connect_hover(v: &View) {
+fn connect_hover(v: &View, picture: &gtk::DrawingArea) {
     let hover = gtk::EventControllerMotion::new();
-    let (preview, picture) = (v.preview.clone(), v.picture.clone());
-    hover.connect_motion(move |_, x, _| {
+    let preview = v.preview.clone();
+    hover.connect_motion(move |c, x, _| {
         let edge = preview.borrow().edge_at(x as f32 * 2.0).is_some();
-        picture.set_cursor_from_name(Some(if edge { "col-resize" } else { "pointer" }));
+        if let Some(w) = c.widget() {
+            w.set_cursor_from_name(Some(if edge { "col-resize" } else { "pointer" }));
+        }
     });
-    v.picture.add_controller(hover);
+    picture.add_controller(hover);
 }
 
 /// Library items dropped on the preview go where the caret shows. Also returns the function that
@@ -671,19 +686,19 @@ fn drop_target(v: &View) -> (gtk::DropTarget, DropFn) {
         let v = v.clone();
         target.connect_motion(move |_, x, _| {
             v.marks.caret.set(v.insert_cue(x));
-            v.picture.queue_draw();
+            v.redraw();
             gtk::gdk::DragAction::COPY
         });
     }
     {
         let v = v.clone();
-        target.connect_leave(move |_| v.marks.clear_cue(&v.picture));
+        target.connect_leave(move |_| v.clear_cue());
     }
     // Puts Library module `module` where the caret is: at preview x-coordinate `x` (widget px).
     let drop_module: DropFn = {
         let v = v.clone();
         Rc::new(move |module: String, x: f64| {
-            v.marks.clear_cue(&v.picture);
+            v.clear_cue();
             let Some((zone, left)) = v.preview.borrow().drop_target(x as f32 * 2.0) else {
                 return false;
             };
@@ -712,15 +727,19 @@ fn drop_target(v: &View) -> (gtk::DropTarget, DropFn) {
 /// preview, so it follows the pointer between them on every GDK backend (Broadway has no implicit
 /// grab). It claims the pointer only once it has really moved, so plain clicks still reach the
 /// chips and the preview.
-fn drag_gesture(v: &View, page: &gtk::Box, drop_module: DropFn) -> gtk::GestureDrag {
+fn drag_gesture(v: &View, drop_module: DropFn) -> gtk::GestureDrag {
     let grab: Rc<RefCell<Option<Grab>>> = Rc::default();
     let drag = gtk::GestureDrag::new();
     drag.set_propagation_phase(gtk::PropagationPhase::Capture);
-    // Page coordinates -> preview (widget) coordinates.
+    // Page coordinates (the gesture's widget) -> preview (widget) coordinates.
     let to_bar = {
-        let (page, picture) = (page.clone(), v.picture.clone());
-        move |x: f64, y: f64| {
-            page.compute_point(&picture, &gtk::graphene::Point::new(x as f32, y as f32))
+        let picture = v.picture.clone();
+        move |g: &gtk::GestureDrag, x: f64, y: f64| {
+            g.widget()?
+                .compute_point(
+                    &picture.upgrade()?,
+                    &gtk::graphene::Point::new(x as f32, y as f32),
+                )
                 .map(|p| (p.x() as f64, p.y() as f64))
         }
     };
@@ -728,18 +747,22 @@ fn drag_gesture(v: &View, page: &gtk::Box, drop_module: DropFn) -> gtk::GestureD
     let over_bar = {
         let picture = v.picture.clone();
         move |(x, y): (f64, f64)| {
+            let picture = picture.upgrade()?;
             let (w, h) = (picture.width() as f64, picture.height() as f64);
             (y > -12.0 && y < h + 12.0 && x >= 0.0 && x <= w).then_some(x)
         }
     };
     {
-        let (v, grab, page, to_bar) = (v.clone(), grab.clone(), page.clone(), to_bar.clone());
-        drag.connect_drag_begin(move |_, x, y| {
+        let (v, grab, to_bar) = (v.clone(), grab.clone(), to_bar.clone());
+        drag.connect_drag_begin(move |g, x, y| {
+            let (Some(page), Some(picture)) = (g.widget(), v.picture.upgrade()) else {
+                return;
+            };
             let mut found = None;
             let mut w = page.pick(x, y, gtk::PickFlags::DEFAULT);
             while let Some(cur) = w {
-                if &cur == v.picture.upcast_ref::<gtk::Widget>() {
-                    if let Some((bx, _)) = to_bar(x, y) {
+                if &cur == picture.upcast_ref::<gtk::Widget>() {
+                    if let Some((bx, _)) = to_bar(g, x, y) {
                         let resize = v.preview.borrow().edge_at(bx as f32 * 2.0).is_some();
                         found = Some(Grab::Bar { x: bx, resize });
                     }
@@ -749,7 +772,7 @@ fn drag_gesture(v: &View, page: &gtk::Box, drop_module: DropFn) -> gtk::GestureD
                     found = Some(Grab::Chip(id.to_owned(), cur.clone()));
                     break;
                 }
-                if &cur == page.upcast_ref::<gtk::Widget>() {
+                if cur == page {
                     break;
                 }
                 w = cur.parent();
@@ -768,7 +791,7 @@ fn drag_gesture(v: &View, page: &gtk::Box, drop_module: DropFn) -> gtk::GestureD
                 return;
             }
             g.set_state(gtk::EventSequenceState::Claimed);
-            let Some(pos) = g.start_point().and_then(|(x, y)| to_bar(x + dx, y + dy)) else {
+            let Some(pos) = g.start_point().and_then(|(x, y)| to_bar(g, x + dx, y + dy)) else {
                 return;
             };
             let cue = match kind {
@@ -794,13 +817,13 @@ fn drag_gesture(v: &View, page: &gtk::Box, drop_module: DropFn) -> gtk::GestureD
                 Grab::Bar { .. } => v.insert_cue(pos.0),
             };
             v.marks.caret.set(cue);
-            v.picture.queue_draw();
+            v.redraw();
         });
     }
     {
         let v = v.clone();
         drag.connect_drag_end(move |g, dx, dy| {
-            v.marks.clear_cue(&v.picture);
+            v.clear_cue();
             let Some(kind) = grab.take() else { return };
             if let Grab::Chip(_, chip) = &kind {
                 chip.set_opacity(1.0);
@@ -810,7 +833,7 @@ fn drag_gesture(v: &View, page: &gtk::Box, drop_module: DropFn) -> gtk::GestureD
             }
             match kind {
                 Grab::Chip(id, _) => {
-                    let pos = g.start_point().and_then(|(x, y)| to_bar(x + dx, y + dy));
+                    let pos = g.start_point().and_then(|(x, y)| to_bar(g, x + dx, y + dy));
                     if let Some(x) = pos.and_then(&over_bar) {
                         drop_module(id, x);
                     }
@@ -1669,9 +1692,17 @@ fn library_button(ui: &Rc<Ui>, layout: &str, zone: &str) -> gtk::MenuButton {
         .build();
     button.add_css_class("flat");
     let add = {
-        let (ui, layout, zone, pop) = (ui.clone(), layout.to_owned(), zone.to_owned(), pop.clone());
+        // Weak: the list and entry inside the popover hold `add`.
+        let (ui, layout, zone, pop) = (
+            ui.clone(),
+            layout.to_owned(),
+            zone.to_owned(),
+            pop.downgrade(),
+        );
         Rc::new(move |m: String| {
-            pop.popdown();
+            if let Some(pop) = pop.upgrade() {
+                pop.popdown();
+            }
             let (layout, zone) = (layout.clone(), zone.clone());
             apply(&ui, move |ed, merged| {
                 edit::add_module(ed, merged, &layout, &zone, &m)
@@ -2125,14 +2156,18 @@ fn keyboard_access(
     };
     // Show (ring), describe and speak the current selection.
     let show = {
+        // Weak: the preview's key handler holds `show`.
         let (ui, picture, preview, frame_focus) = (
             ui.clone(),
-            picture.clone(),
+            picture.downgrade(),
             preview.clone(),
             frame_focus.clone(),
         );
         let (modules, zone_ids) = (modules.clone(), zone_ids.clone());
         Rc::new(move |speak: bool| {
+            let Some(picture) = picture.upgrade() else {
+                return;
+            };
             let list = modules();
             let sel = ui
                 .bar_selection
@@ -2308,10 +2343,12 @@ fn keyboard_access(
         });
     }
     {
-        let (ui, picture2) = (ui.clone(), picture.clone());
-        focus.connect_leave(move |_| {
+        let ui = ui.clone();
+        focus.connect_leave(move |c| {
             ui.bar_focused.set(false);
-            picture2.queue_draw();
+            if let Some(w) = c.widget() {
+                w.queue_draw();
+            }
         });
     }
     picture.add_controller(focus);
@@ -2319,13 +2356,8 @@ fn keyboard_access(
     // opens the inspector on release); closing the inspector returns focus here.
     let press = gtk::GestureClick::new();
     {
-        let (ui, picture2, preview, shown_layout) = (
-            ui.clone(),
-            picture.clone(),
-            preview.clone(),
-            shown_layout.clone(),
-        );
-        press.connect_pressed(move |_, _, x, _| {
+        let (ui, preview, shown_layout) = (ui.clone(), preview.clone(), shown_layout.clone());
+        press.connect_pressed(move |g, _, x, _| {
             if let Some(hit) = preview.borrow().hit(x as f32 * 2.0) {
                 let state = ui.state();
                 if let Ok(zones) = state.loaded.config.layout_zones(&shown_layout.borrow())
@@ -2337,7 +2369,9 @@ fn keyboard_access(
                     }
                 }
             }
-            picture2.grab_focus();
+            if let Some(w) = g.widget() {
+                w.grab_focus();
+            }
         });
     }
     picture.add_controller(press);

@@ -211,7 +211,7 @@ pub fn editor(ui: &Rc<Ui>, display: &Display) -> gtk::Widget {
         drag.connect_drag_begin(move |_, x, y| dragging.set(nearest(&pts.borrow(), x, y)));
     }
     {
-        let (pts, dragging, area2) = (pts.clone(), dragging.clone(), area.clone());
+        let (pts, dragging) = (pts.clone(), dragging.clone());
         drag.connect_drag_update(move |g, dx, dy| {
             let (Some(i), Some((x0, y0))) = (dragging.get(), g.start_point()) else {
                 return;
@@ -227,7 +227,9 @@ pub fn editor(ui: &Rc<Ui>, display: &Display) -> gtk::Widget {
             x = x.clamp(lo, hi.max(lo));
             p[i] = (x, y);
             drop(p);
-            area2.queue_draw();
+            if let Some(area) = g.widget() {
+                area.queue_draw();
+            }
         });
     }
     {
