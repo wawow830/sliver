@@ -10,7 +10,9 @@ is never left without Escape or the F-keys.
 - [GOAL.md](GOAL.md): the goal, what "complete" means, and the invariants
 - [docs/decisions](docs/decisions): architecture decisions
 
-Status: early, but it drives the Touch Bar day to day on an M2 MacBook Pro 13" (`Mac14,7`).
+Status: early. It drives the Touch Bar day to day on an M2 MacBook Pro 13" (`Mac14,7`) under
+Hyprland. Other compositors, desktops and Macs are experimental: see the user guide's "What's been
+tested where".
 
 ## License
 

@@ -6,8 +6,7 @@ app. Apps and scripts can put their own buttons on it, and **Escape and the F-ke
 reachable.**
 
 > Status: development snapshot (0.1.0). There are no published packages yet: you build the RPMs
-> from this repository (§3). Tested on Apple Silicon (Fedora Asahi, Mac14,7). Intel T2 Macs are
-> supported but untested (`docs/t2-testing.md`).
+> from this repository (§3). See "What's been tested where" below before relying on it.
 
 Reference: `man sliverctl`, `man sliver-config`, `man sliver-stylesheet`, `man sliver-settings`,
 `man sliver-agent`, `man sliverd` (sources in `man/`; read one without installing via
@@ -24,6 +23,27 @@ Reference: `man sliverctl`, `man sliver-config`, `man sliver-stylesheet`, `man s
 
 If the agent isn't running, crashes, or your config is broken, `sliverd` shows its built-in
 F-keys. That's the safety net.
+
+### What's been tested where
+
+Only one setup is used every day: **Hyprland on an M2 MacBook Pro 13" (`Mac14,7`) with Fedora
+Asahi Remix**, with sliverd driving the real bar and the agent in a real session. Everything below
+is **experimental**: it has automated tests against fakes or headless/nested compositors, but has
+never been used in a real desktop session or on the real machine.
+
+| Experimental | What the tests cover |
+|---|---|
+| sway, niri | the agent's IPC backends against fake servers and a headless sway / nested niri |
+| labwc and other wlroots compositors | a mock compositor and a headless labwc |
+| river | windows and focus in a headless river; no workspaces |
+| KDE Plasma 6 (KWin script) | a nested `kwin_wayland --virtual` |
+| GNOME 50 (Shell extension) | a headless gnome-shell 50.5; 45–49 untested |
+| Browser extension | the native host and a syntax check; never loaded in a real browser |
+| Other Apple Silicon Touch Bar Macs (M1 13") | nothing: only the `Mac14,7` bar has been driven |
+| Intel T2 Macs | the T2 paths, headless (`docs/t2-testing.md` explains how to help) |
+
+If you try one of these, `sliverctl doctor` is the first thing to run and the most useful thing to
+report.
 
 ## 2. The safe hatch: remember this one
 

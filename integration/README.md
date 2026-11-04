@@ -4,6 +4,9 @@ Compositors that Sliver's agent cannot query itself push focus to it instead, ov
 `io.github.wawow830.Sliver.Desktop1` (`SetFocus`, `SetWorkspaces`; docs/api.md §5).
 Hyprland, sway and niri need none of this: the agent reads their IPC (`crates/sliver-desktop`).
 
+Both are **experimental**: they're tested only in nested or headless sessions, never on a real
+desktop.
+
 | Desktop | What | Package: install path | Tested on |
 |---|---|---|---|
 | KDE Plasma 6 | KWin script `kwin/sliver-focus` | `sliver-kwin`: `/usr/share/kwin/scripts/sliver-focus/` (the only path KWin 6.0–6.3 read; 6.7 reads it too) | nested `kwin_wayland --virtual`, `kwin/test.sh` |
