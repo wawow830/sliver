@@ -311,7 +311,16 @@ impl Renderer {
                     Width::Fixed(px) => Width::Fixed(px + zs.margin[1] + zs.margin[3]),
                     w => w,
                 },
-                natural: sizes.iter().map(|s| s.natural).sum::<f32>() + gaps + chrome,
+                // A fixed-width item counts as its width (its `natural` is only its content).
+                natural: sizes
+                    .iter()
+                    .map(|s| match s.width {
+                        Width::Fixed(px) => px,
+                        _ => s.natural,
+                    })
+                    .sum::<f32>()
+                    + gaps
+                    + chrome,
                 min: sizes.iter().map(|s| s.min).sum::<f32>() + gaps + chrome,
             });
             item_sizes.push(sizes);

@@ -285,6 +285,23 @@ fn empty_zones_take_no_space() {
     assert_eq!(layout.items[0].right(), W as f32);
 }
 
+#[test]
+fn a_fixed_width_item_widens_its_auto_zone() {
+    let controls = || vec![Item::text("battery 89%"), Item::text("C")];
+    let mut r = Renderer::new(Fonts::embedded());
+    let sheet = Stylesheet::sliver();
+    let plain = r.layout(&Scene::zoned(vec![], vec![], controls()), &sheet, W, H);
+    let mut items = controls();
+    items.insert(0, Item::text("A").width(Width::Fixed(300.0)));
+    let wide = r.layout(&Scene::zoned(vec![], vec![], items), &sheet, W, H);
+    assert_eq!(wide.items[0].w, 300.0);
+    assert_eq!(
+        wide.items[1].w, plain.items[0].w,
+        "its neighbour isn't squeezed"
+    );
+    assert!(!wide.overflow.iter().any(|&o| o));
+}
+
 fn markup_items() -> Vec<Item> {
     vec![
         Item::text("plain").fill(1),
