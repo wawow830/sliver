@@ -13,7 +13,7 @@ Inspect
 
 Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.x.Y#item)
   reload                          reload config (prints errors)
-  validate FILE                   check a config file without applying it
+  validate FILE                   check a config file without applying it (= config check FILE)
   signal N                        like `pkill -RTMIN+N waybar`
   refresh MODULE                  re-run one module now
   show|hide|toggle MODULE         runtime visibility (not saved)
@@ -25,7 +25,7 @@ Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.
   layout NAME | profile NAME
   bar show|hide|toggle            the hatch (Fn Fn-hold) keeps working
   var set NAME VALUE              user variable for rules
-  render [--layout FILE] -o OUT.png
+  render [--config FILE] -o OUT.png  the bar as it is, or FILE drawn with the live state
 
 Config (offline: edits ~/.config/sliver/config.toml, keeps comments; `sliverctl config help`)
   config path|check|get|set|unset|resolve|import-tiny-dfr ...
@@ -155,7 +155,7 @@ pub enum Cmd {
     /// A `Control1` method with plain arguments.
     Call(Call),
     Render {
-        layout: Option<String>,
+        config: Option<String>,
         out: String,
     },
     Publish(Publish),
@@ -169,7 +169,6 @@ pub enum Cmd {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Call {
     Reload,
-    Validate(String),
     Signal(u32),
     Refresh(String),
     Show(String),
@@ -210,11 +209,7 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         "doctor" => Ok(Cmd::Doctor(rest.to_vec())),
         "preset" => Ok(Cmd::Preset(rest.to_vec())),
         "reload" => c(Call::Reload),
-        "validate" => {
-            let path = one(rest, "FILE")?;
-            let toml = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
-            c(Call::Validate(toml))
-        }
+        "validate" => Ok(Cmd::Config(vec!["check".into(), one(rest, "FILE")?])),
         "signal" => {
             let n = one(rest, "N")?;
             let n = n
@@ -261,17 +256,17 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
             _ => Err("usage: var set NAME VALUE".into()),
         },
         "render" => {
-            let (mut layout, mut out) = (None, None);
+            let (mut config, mut out) = (None, None);
             let mut it = rest.iter();
             while let Some(a) = it.next() {
                 match a.as_str() {
-                    "--layout" => layout = Some(it.next().ok_or("--layout needs a FILE")?.clone()),
+                    "--config" => config = Some(it.next().ok_or("--config needs a FILE")?.clone()),
                     "-o" | "--output" => out = Some(it.next().ok_or("-o needs a FILE")?.clone()),
                     other => return Err(format!("unknown render option {other:?}")),
                 }
             }
             Ok(Cmd::Render {
-                layout,
+                config,
                 out: out.ok_or("render needs -o OUT.png")?,
             })
         }
@@ -429,7 +424,7 @@ mod tests {
         assert_eq!(
             p("render -o out.png").unwrap(),
             Cmd::Render {
-                layout: None,
+                config: None,
                 out: "out.png".into()
             }
         );

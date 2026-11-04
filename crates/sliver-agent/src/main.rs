@@ -114,6 +114,14 @@ struct Reloader {
 }
 
 impl Reloader {
+    /// Config text checked and loaded as if saved over the live config (`sliver_reload::load_text`).
+    fn load_text(&self, text: &str) -> Result<sliver_reload::Applied, Vec<String>> {
+        match &self.inner {
+            Some(r) => r.load_text(text),
+            None => sliver_reload::load_text(text, self.config_path.as_deref(), None),
+        }
+    }
+
     fn start(explicit: Option<PathBuf>) -> Reloader {
         let (inner, applied) = match sliver_reload::Reloader::start(explicit.as_deref()) {
             Ok((r, a)) => (Some(r), a),
@@ -535,21 +543,33 @@ impl Live {
     }
 }
 
+/// A separate agent that draws a config without touching the live one (its frames, transitions
+/// and touch state): `--render` and `RenderPreview`.
+fn offscreen_agent(
+    config: Config,
+    sheet: Stylesheet,
+    config_path: Option<&Path>,
+    size: (u32, u32),
+) -> Agent {
+    let mut agent = Agent::new(
+        config,
+        sheet,
+        Renderer::new(Fonts::system()),
+        Icons::system(),
+        size.0,
+        size.1,
+    );
+    agent.set_config_dir(config_path.and_then(Path::parent));
+    agent
+}
+
 fn main() {
     let a = args();
     let mut reloader = Reloader::start(a.config.clone());
     let (config, sheet) = (reloader.config.clone(), reloader.sheet.clone());
 
     if let Some(out) = a.render {
-        let mut agent = Agent::new(
-            config,
-            sheet,
-            Renderer::new(Fonts::system()),
-            Icons::system(),
-            a.size.0,
-            a.size.1,
-        );
-        agent.set_config_dir(reloader.config_path.as_deref().and_then(Path::parent));
+        let mut agent = offscreen_agent(config, sheet, reloader.config_path.as_deref(), a.size);
         // Give the live sources a moment to report, so the preview shows real state.
         // No API: a headless render must never take the bus name from the running agent.
         let world = match Live::start(&agent.config, None) {
@@ -950,26 +970,31 @@ fn control(
             fx.push(Effect::Redraw);
             done
         }
-        Control::Preview(name, _) | Control::RenderPreview(name, _) => {
-            let mut frames = Vec::new();
-            let saved = std::mem::replace(&mut agent.layers, vec![name.clone()]);
-            agent.render(&live.world());
-            if let Some(f) = agent.frame(Layer::Base) {
-                frames.push(f.image.encode_png());
-            }
-            agent.layers = saved;
-            fx.push(Effect::Redraw);
-            match frames.pop() {
-                Some(Ok(png)) => Ok(ControlReply::Png(png)),
-                _ => Err(format!("can't render layer {name:?}")),
-            }
+        Control::Preview(..) => {
+            Err("Preview isn't implemented; RenderPreview draws a config".into())
         }
-        Control::ValidateConfig(path) => {
-            let l = sliver_config::load_file(Path::new(&path));
-            Ok(ControlReply::Errors(
-                l.diagnostics.errors.iter().map(|e| e.to_string()).collect(),
-            ))
-        }
+        // No config: what the bar shows now. Otherwise that config, drawn offscreen with the
+        // live state.
+        Control::RenderPreview(toml, _) if toml.is_empty() => agent
+            .frame(Layer::Base)
+            .ok_or_else(|| "nothing drawn yet".to_string())
+            .and_then(|f| f.image.encode_png().map_err(|e| e.to_string()))
+            .map(ControlReply::Png),
+        Control::RenderPreview(toml, _) => match reloader.load_text(&toml) {
+            Ok(a) => {
+                let size = (agent.width, agent.height);
+                let mut p = offscreen_agent(a.config, a.sheet, a.config_path.as_deref(), size);
+                p.render(&live.world());
+                p.frame(Layer::Base)
+                    .ok_or_else(|| "nothing to draw".to_string())
+                    .and_then(|f| f.image.encode_png().map_err(|e| e.to_string()))
+                    .map(ControlReply::Png)
+            }
+            Err(errors) => Err(errors.join("\n")),
+        },
+        Control::ValidateConfig(toml) => Ok(ControlReply::Errors(
+            reloader.load_text(&toml).err().unwrap_or_default(),
+        )),
         Control::ListModules => Ok(ControlReply::Modules(agent.list_modules())),
         Control::HoldLayout {
             layout,

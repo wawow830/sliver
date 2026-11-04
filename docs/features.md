@@ -137,7 +137,7 @@ From GOAL.md; details in api.md and integration.md.
 |---|---|---|---|
 | sliverd (system) + sliver-agent (user) under systemd, privilege separated | P0 (daemon) / P1 (agent) | done | sliverd is a DynamicUser system unit with a cgroup-checked hardware gate; the agent is a user unit. No root after start. |
 | Session D-Bus API v1: publish items/contexts, subscribe to presses, live updates | P1 | done | docs/api.md, introspection XML, drift test. |
-| `sliverctl` CLI: `show`, `set`, `push`, `layer`, `reload`, `status`, `render --png` | P1 | done |  |
+| `sliverctl` CLI: `show`, `set`, `push`, `layer`, `reload`, `status`, `render` | P1 | done |  |
 | Rust client crate, plus Python and shell examples | P1/P2 | done | `sliver-client`, Python and shell examples. |
 | Hyprland backend | P1 | done |  |
 | sway/wlroots, GNOME extension, KWin script | P2 | partial | sway, niri, KWin, GNOME and generic Wayland (labwc etc.) done. Missing: river workspaces (private `river-status`), river 0.4, wayfire (untested). |

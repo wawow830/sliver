@@ -14,5 +14,5 @@
 mod reload;
 mod watch;
 
-pub use reload::{Applied, Outcome, Reloader};
+pub use reload::{Applied, Outcome, Reloader, load_text};
 pub use watch::{DEBOUNCE, Watcher};

@@ -1,7 +1,7 @@
 //! Hot reload against real files and real inotify, in a temp directory.
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use sliver_reload::{Outcome, Reloader};
+use sliver_reload::{Outcome, Reloader, load_text};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -293,3 +293,24 @@ fn writing_active_profile_switches_the_config() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+fn config_text_loads_as_if_saved_next_to_the_live_config() {
+    let d = Dir::new("text");
+    d.write(
+        "style.css",
+        "@define-color x #123456;\nmodule { color: @x; }\n",
+    );
+    let path = d.path("config.toml");
+    let a = load_text("[bar]\nname = \"draft\"\n", Some(&path), None).unwrap();
+    assert_eq!(a.config.bar.name.as_deref(), Some("draft"));
+    assert!(
+        a.sheet.files().contains(&d.path("style.css")),
+        "style.css next to it is used"
+    );
+    let rejected = load_text("[layers]\nbase = \"nope\"\n", Some(&path), None);
+    assert!(
+        rejected.is_err_and(|e| !e.is_empty()),
+        "a config that would be rejected is reported"
+    );
+    assert!(load_text("[bar", Some(&path), None).is_err());
+}

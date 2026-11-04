@@ -90,16 +90,49 @@ fn read(explicit: Option<&Path>) -> Read {
         Some(p) => sliver_config::load_file(p),
         None => sliver_config::load(),
     };
-    // Whole-config errors (a layer pointing at a missing layout, a group containing itself) block
-    // applying just like parse errors. Without this they'd be applied and fail at render time.
-    if loaded.diagnostics.ok() {
-        let v = loaded.config.validate(sliver_config::Hardware::detect());
-        loaded.diagnostics.extend(v);
-    }
+    check(&mut loaded);
     Read {
         loaded,
         config_path: found,
     }
+}
+
+/// Whole-config errors (a layer pointing at a missing layout, a group containing itself) block
+/// applying just like parse errors. Without this they'd be applied and fail at render time.
+fn check(loaded: &mut Loaded) {
+    if loaded.diagnostics.ok() {
+        let v = loaded.config.validate(sliver_config::Hardware::detect());
+        loaded.diagnostics.extend(v);
+    }
+}
+
+/// Config text that isn't on disk (`Control1.ValidateConfig`, `RenderPreview`), loaded and checked
+/// as if it were saved at `config_path` (default: where the user's edits go), so its includes
+/// and stylesheet resolve from there. `Err` holds the reasons it would be rejected.
+pub fn load_text(
+    text: &str,
+    config_path: Option<&Path>,
+    accent: Option<sliver_render::Color>,
+) -> Result<Applied, Vec<String>> {
+    let path = config_path.map_or_else(sliver_config::edit_path, Path::to_path_buf);
+    let mut loaded = sliver_config::load_str(text, path.parent().unwrap_or(Path::new(".")));
+    check(&mut loaded);
+    if !loaded.diagnostics.ok() {
+        return Err(errors_of(&loaded));
+    }
+    let (sheet, mut warnings) =
+        load_sheet(&loaded.config, Some(&path), accent).map_err(|e| vec![e])?;
+    warnings.splice(
+        0..0,
+        loaded.diagnostics.warnings.iter().map(|w| w.to_string()),
+    );
+    Ok(Applied {
+        config: loaded.config,
+        sheet,
+        config_path: Some(path),
+        warnings,
+        errors: Vec::new(),
+    })
 }
 
 fn errors_of(l: &Loaded) -> Vec<String> {
@@ -193,6 +226,11 @@ impl Reloader {
 
     pub fn current(&self) -> &Applied {
         &self.applied
+    }
+
+    /// [`load_text`] next to the live config, with the desktop's accent.
+    pub fn load_text(&self, text: &str) -> Result<Applied, Vec<String>> {
+        load_text(text, self.applied.config_path.as_deref(), self.accent)
     }
 
     pub fn as_fd(&self) -> BorrowedFd<'_> {

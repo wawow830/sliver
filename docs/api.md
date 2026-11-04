@@ -283,9 +283,13 @@ signal HeldPressed(s module, s zone, u index)   to the holder only: the user tou
                                     popovers, the Fn layer, or after the bar switched layouts
 SetProfile(s name)                  ReloadConfig() -> (as errors)
 Bar(s action)                       show | hide | toggle the whole bar (the hatch keeps working)
-ValidateConfig(s toml) -> (as errors)
-Preview(s layout_toml, u timeout_ms)       show on the real bar, auto-revert (settings live preview)
-RenderPreview(s layout_toml, a{sv} options) -> (ay png)   same renderer, for on-screen WYSIWYG
+ValidateConfig(s toml) -> (as errors)   checked as if saved over the live config (includes and
+                                    the stylesheet resolve from its directory); empty = valid
+Preview(s layout_toml, u timeout_ms)       not implemented (an error); the settings app's Mirror
+                                    uses HoldLayout
+RenderPreview(s config_toml, a{sv} options) -> (ay png)   that config drawn offscreen with the
+                                    live state, as if saved over the live config; "" = the bar
+                                    as it is now. Errors if the config would be rejected
 SetVariable(s name, v value)        user variables usable in context conditions ("per state" layouts)
 ListContexts() -> (aa{sv})          path, provider, title, scope, visible, on-screen, items, sandboxed,
                                     target-app-id, item-ids as + item-labels as (what

@@ -87,7 +87,8 @@ Errors are printed, and the exit status is 1 if there are any.
 An invalid configuration is never applied.
 .TP
 .BI validate " file"
-Check a configuration file without applying it.
+Check a configuration file without applying it; the same as
+.BI "config check " file\fR.
 .TP
 .BI signal " n"
 Re\-run every module configured with
@@ -162,11 +163,14 @@ The safe hatch (press Fn twice and hold) still works while the bar is hidden.
 .BI "var set" " name value"
 Set a user variable, usable in rule conditions.
 .TP
-.BR render " [" \-\-layout
+.BR render " [" \-\-config
 .IR file ]
 .BR \-o | \-\-output
 .I out.png
-Render a layout with the agent's renderer and save it as PNG.
+Save what the bar shows now as PNG, or, with
+.BR \-\-config ,
+how it would look with that configuration (drawn with the live state, as if saved over the
+current configuration; the bar itself doesn't change).
 .SH PUBLISHING
 .B sliverctl publish
 creates a context, puts the given items on the bar, and keeps running.

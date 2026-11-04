@@ -434,7 +434,7 @@ These are the selectors sliver guarantees, mirroring waybar (full reference: `do
 - `layer push|pop|toggle NAME`, `layout NAME`
 - `bar show|hide|toggle`. Hiding blanks the bar, but Fn → F-keys still works (§9).
 - `get/set KEY.PATH VALUE` (writes the config file, which then hot-reloads)
-- `render --png` (headless preview)
+- `render [--config FILE] -o OUT.png`: the bar as it is, or how FILE would look, as a PNG
 
 ## 9. The only things you can't configure (invariants, enforced by sliver-config's validator and the resolver)
 

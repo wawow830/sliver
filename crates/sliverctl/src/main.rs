@@ -228,8 +228,8 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
                 out(&show_dict(d));
             }
         }
-        Cmd::Render { layout, out } => {
-            let toml = match &layout {
+        Cmd::Render { config, out } => {
+            let toml = match &config {
                 Some(f) => std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?,
                 None => String::new(),
             };
@@ -263,7 +263,6 @@ fn call_control(conn: &Connection, call: Call) -> Result<ExitCode, String> {
     };
     match call {
         Call::Reload => return errors(control(conn, "ReloadConfig", &())?),
-        Call::Validate(toml) => return errors(control(conn, "ValidateConfig", &(toml,))?),
         Call::Signal(n) => control(conn, "Signal", &(n,))?,
         Call::Refresh(m) => control(conn, "Refresh", &(m,))?,
         Call::Show(m) => control(conn, "Show", &(m,))?,
