@@ -197,6 +197,20 @@ fn a_config_created_later_is_picked_up_and_reload_now_works() {
 }
 
 #[test]
+fn a_config_in_a_directory_created_later_is_picked_up() {
+    // A fresh install: no ~/.config/sliver/ when the agent starts.
+    let d = Dir::new("nodir");
+    let (mut r, _) = Reloader::start(Some(&d.path("sliver/config.toml"))).unwrap();
+    std::fs::create_dir(d.path("sliver")).unwrap();
+    // The new directory is a change; its reload finds no config yet and watches inside it.
+    assert!(next_outcome(&mut r, 5).is_some());
+    d.write("sliver/config.toml", "[bar]\nname = \"born\"\n");
+    let o = next_outcome(&mut r, 5);
+    assert!(matches!(o, Some(Outcome::Applied(_))), "{}", describe(&o));
+    assert_eq!(bar_name(&r).as_deref(), Some("born"));
+}
+
+#[test]
 fn invalid_config_at_start_falls_back_to_the_defaults_with_reasons() {
     let d = Dir::new("bad");
     d.write("config.toml", "version = 99\n");
@@ -278,3 +292,4 @@ fn writing_active_profile_switches_the_config() {
     assert_eq!(bar_name(&r).as_deref(), Some("main"));
     let _ = std::fs::remove_dir_all(&root);
 }
+

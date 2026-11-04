@@ -34,17 +34,25 @@ pub struct Watcher {
 
 /// The directory to watch (canonical, so `profiles/../` or a symlinked config dir and the plain
 /// path share one entry: inotify gives one watch descriptor per inode, and two keys for it would
-/// lose one key's names) and the file name in it.
+/// lose one key's names) and the file name in it. A directory that doesn't exist yet can't be
+/// watched, so its nearest existing ancestor is, for the first missing name: creating
+/// `~/.config/sliver/` is then a change, and the reload it triggers rearms one level deeper.
 fn split(p: &Path) -> (PathBuf, OsString) {
-    let dir = match p.parent() {
+    let mut dir = match p.parent() {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
-    (
-        dir,
-        p.file_name().map(|n| n.to_os_string()).unwrap_or_default(),
-    )
+    let mut name = p.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    while !dir.is_dir() {
+        match (dir.parent(), dir.file_name()) {
+            (Some(up), Some(n)) if !up.as_os_str().is_empty() => {
+                name = n.to_os_string();
+                dir = up.to_path_buf();
+            }
+            _ => break,
+        }
+    }
+    (std::fs::canonicalize(&dir).unwrap_or(dir), name)
 }
 
 impl Watcher {
@@ -66,8 +74,7 @@ impl Watcher {
     }
 
     /// (Re)arm for exactly these files: new directories are watched, directories nobody needs any
-    /// more are released. Call it after every reload, because includes come and go. Files whose
-    /// directory does not exist yet are skipped quietly and retried on the next call.
+    /// more are released. Call it after every reload, because includes come and go.
     pub fn set_files<'a>(&mut self, files: impl IntoIterator<Item = &'a Path>) {
         let mut want: HashMap<PathBuf, HashSet<OsString>> = HashMap::new();
         for f in files {
@@ -131,9 +138,6 @@ impl Watcher {
                         // The directory itself went away: forget it and treat it as a change.
                         gone.push(ev.wd());
                         touched = true;
-                        continue;
-                    }
-                    if flags.contains(ReadFlags::ISDIR) {
                         continue;
                     }
                     let (Some(dir), Some(name)) = (self.by_wd.get(&ev.wd()), ev.file_name()) else {
@@ -201,11 +205,8 @@ mod tests {
         w.set_files([a.join("x").as_path(), a.join("z").as_path()]);
         assert_eq!(w.watched_dirs(), 1);
         w.set_files([root.join("missing/dir/file").as_path()]);
-        assert_eq!(
-            w.watched_dirs(),
-            0,
-            "a missing directory is skipped, not an error"
-        );
+        assert_eq!(w.watched_dirs(), 1, "the nearest existing ancestor");
+        assert_eq!(split(&root.join("missing/dir/file")).1, "missing");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
