@@ -44,13 +44,16 @@ fn split(p: &Path) -> (PathBuf, OsString) {
     };
     let mut name = p.file_name().map(|n| n.to_os_string()).unwrap_or_default();
     while !dir.is_dir() {
-        match (dir.parent(), dir.file_name()) {
-            (Some(up), Some(n)) if !up.as_os_str().is_empty() => {
-                name = n.to_os_string();
-                dir = up.to_path_buf();
-            }
-            _ => break,
-        }
+        let (Some(up), Some(n)) = (dir.parent(), dir.file_name()) else {
+            break;
+        };
+        name = n.to_os_string();
+        // A relative path's top directory has an empty parent: the current directory.
+        dir = if up.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            up.to_path_buf()
+        };
     }
     (std::fs::canonicalize(&dir).unwrap_or(dir), name)
 }
@@ -207,6 +210,12 @@ mod tests {
         w.set_files([root.join("missing/dir/file").as_path()]);
         assert_eq!(w.watched_dirs(), 1, "the nearest existing ancestor");
         assert_eq!(split(&root.join("missing/dir/file")).1, "missing");
+        let (dir, name) = split(Path::new("sliver-no-such-dir/config.toml"));
+        assert_eq!(
+            (dir, name.to_str()),
+            (std::env::current_dir().unwrap(), Some("sliver-no-such-dir")),
+            "a relative path's missing top directory is watched for in the current one"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

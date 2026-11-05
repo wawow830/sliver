@@ -42,7 +42,9 @@ pub use condition::{CONTEXT_KEYS, Condition, Context, CtxValue, Matcher, canonic
 pub use diag::{Diagnostics, Issue};
 pub use format::{FmtValue, Formatted, IconRef, State, Template, ValueMap, Values, format_module};
 pub use keys::Key;
-pub use load::{Loaded, edit_path, find_config, load, load_file, load_str, search_path};
+pub use load::{
+    Loaded, edit_path, find_config, load, load_file, load_str, load_str_as, search_path,
+};
 pub use model::{
     ApiPrefs, AppPolicy, AppPrefs, BAR_GESTURES, BUILTIN, Bar, Config, Display, DisplayOverride,
     FnMode, LayerOptions, Layout, ModuleRef, ProviderPrefs, Rule, SCHEMA_VERSION, Zone,

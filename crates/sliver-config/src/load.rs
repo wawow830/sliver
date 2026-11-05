@@ -78,10 +78,23 @@ pub fn load_file(path: &Path) -> Loaded {
 
 /// Loads config text that isn't a file yet (settings preview, tests). `base_dir` resolves includes.
 pub fn load_str(text: &str, base_dir: &Path) -> Loaded {
+    load_text(text, base_dir, "<config>", Vec::new())
+}
+
+/// Loads `text` as if it were the contents of `path` (a draft about to be saved there): its
+/// includes resolve from `path`'s directory, and including `path` itself is a cycle, as it will
+/// be once saved.
+pub fn load_str_as(text: &str, path: &Path) -> Loaded {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let dir = path.parent().unwrap_or(Path::new("."));
+    load_text(text, dir, &path.display().to_string(), vec![canonical])
+}
+
+fn load_text(text: &str, base_dir: &Path, shown: &str, mut stack: Vec<PathBuf>) -> Loaded {
     let mut d = Diagnostics::default();
     let mut files = Vec::new();
     let tree = match text.parse::<Table>() {
-        Ok(t) => merge_includes(t, base_dir, "<config>", &mut vec![], &mut files, &mut d),
+        Ok(t) => merge_includes(t, base_dir, shown, &mut stack, &mut files, &mut d),
         Err(e) => {
             d.error("", format!("TOML syntax: {e}"));
             Table::new()

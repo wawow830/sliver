@@ -115,7 +115,7 @@ pub fn load_text(
     accent: Option<sliver_render::Color>,
 ) -> Result<Applied, Vec<String>> {
     let path = config_path.map_or_else(sliver_config::edit_path, Path::to_path_buf);
-    let mut loaded = sliver_config::load_str(text, path.parent().unwrap_or(Path::new(".")));
+    let mut loaded = sliver_config::load_str_as(text, &path);
     check(&mut loaded);
     if !loaded.diagnostics.ok() {
         return Err(errors_of(&loaded));

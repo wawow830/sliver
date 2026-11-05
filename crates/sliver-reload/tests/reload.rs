@@ -313,4 +313,11 @@ fn config_text_loads_as_if_saved_next_to_the_live_config() {
         "a config that would be rejected is reported"
     );
     assert!(load_text("[bar", Some(&path), None).is_err());
+    // Saved over config.toml, this would include itself.
+    d.write("config.toml", "");
+    let cycle = load_text("include = [\"config.toml\"]\n", Some(&path), None);
+    assert!(
+        cycle.is_err_and(|e| e.iter().any(|e| e.contains("cycle"))),
+        "a draft that includes the file it replaces is a cycle"
+    );
 }
