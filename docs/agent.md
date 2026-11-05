@@ -17,6 +17,8 @@ agent.rs: the sans-IO core that ties it together. main.rs: config/stylesheet loa
 - **Key modules are key regions.** A module whose only binding is "tap → key, fire on press"
   becomes a sliverd `key` region, so Esc and the F-keys never wait on the agent and keep working
   if it hangs. Everything else interactive becomes an `agent` region for gesture recognition.
+  There a tap that sends keys also fires on press, unless the module has a swipe, hold,
+  double-tap or drag bound: then it fires on release, so those can still start.
 - **Regions** are full height and reach up to 12 px into neighbouring gaps (split in the middle),
   so near-misses count but empty bar space doesn't.
 - **Touch feedback** on agent regions: a press re-renders only that frame's image (`Frame::repress`, ~0.9 ms release vs ~2 ms for a full redraw; `cargo run --release -p sliver-agent --example bench`). Run release builds on hardware: debug renders are ~10x slower.

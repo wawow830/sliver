@@ -1967,20 +1967,24 @@ fn bindings(c: &Cell) -> Bindings {
                 }
             )
     });
+    let swipe = has(CGesture::SwipeLeft) || has(CGesture::SwipeRight);
+    // Keys fire on press, for latency, unless the module waits to see what the finger does.
+    let waits = swipe || has(CGesture::Hold) || has(CGesture::DoubleTap) || has(CGesture::Drag);
     Bindings {
         tap: has(CGesture::Tap) || c.drawer.is_some(),
         double_tap: has(CGesture::DoubleTap),
         hold: has(CGesture::Hold),
         release: has(CGesture::Release),
-        swipe: has(CGesture::SwipeLeft) || has(CGesture::SwipeRight),
+        swipe,
         drag: has(CGesture::Drag),
         // A collapsed slider opens on press, so the same touch can slide it.
         slide: collapsed_slider(c),
         on_press: collapsed_slider(c)
             || hold_layer
-            || c.on
-                .iter()
-                .any(|(g, a)| *g == CGesture::Tap && matches!(a, Action::Key(_) | Action::Keys(_))),
+            || !waits
+                && c.on.iter().any(|(g, a)| {
+                    *g == CGesture::Tap && matches!(a, Action::Key(_) | Action::Keys(_))
+                }),
         swipe_threshold: None,
     }
 }

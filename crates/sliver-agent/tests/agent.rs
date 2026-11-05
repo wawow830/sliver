@@ -2407,3 +2407,55 @@ noise_reduction = 0.5
     a.display = DisplayState::Off;
     assert_eq!(a.spectrum_config(), None);
 }
+
+/// A key bound to a tap fires on press, unless the module also has a swipe: then a swipe must
+/// be able to start, so the tap waits for the release.
+#[test]
+fn a_key_tap_waits_when_the_module_can_be_swiped() {
+    use sliver_agent::agent::Effect;
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        r#"
+[[layouts.default.zones]]
+name = "main"
+width = "fill"
+modules = ["custom/both", "custom/tap"]
+[modules."custom/both"]
+width = 400
+on-tap = { keys = ["PlayPause"] }
+on-swipe-left = { keys = ["NextSong"] }
+[modules."custom/tap"]
+width = 400
+on-tap = { keys = ["PlayPause"] }
+"#,
+    );
+    a.render(&world(9, 41));
+    let keys = |fx: &[Effect]| -> Vec<Vec<u16>> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::EmitKeys(k, _) => Some(k.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (id, x) = region(&a, "custom/both");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000_000);
+    assert!(keys(&fx).is_empty(), "nothing on press");
+    for i in 1..=6 {
+        fx.extend(a.touch(
+            id,
+            0,
+            TouchPhase::Move,
+            x - 20.0 * i as f32,
+            1_000_000 + i * 16_000,
+        ));
+    }
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x - 120.0, 1_120_000));
+    assert_eq!(keys(&fx), [vec![163]], "the swipe, and no tap");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 2_000_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 2_050_000));
+    assert_eq!(keys(&fx), [vec![164]], "a tap still taps, on release");
+    let (id, x) = region(&a, "custom/tap");
+    let fx = a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
+    assert_eq!(keys(&fx), [vec![164]], "a plain key tap fires on press");
+}
