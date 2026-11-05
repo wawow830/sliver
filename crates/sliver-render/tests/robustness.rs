@@ -276,14 +276,14 @@ fn spectrum_bars_grow_from_the_middle() {
     }
 }
 
-/// A slider with levels draws its rail as the spectrum: bars up to the value in the
-/// highlight colour, the rest in the trough's.
+/// A slider with levels draws the spectrum behind its rail, in the item's colour; the rail and
+/// its fill stay on top.
 #[test]
-fn a_spectrum_rail_is_lit_up_to_the_value() {
+fn a_spectrum_sits_behind_the_rail() {
     let mut r = Renderer::new(Fonts::embedded());
     let (sheet, _) = Stylesheet::parse(
         "t.css",
-        "module { background: transparent; padding: 0; } trough { background: #0000ff; min-width: 100px; } highlight { background: #ff0000; }",
+        "module { background: transparent; padding: 0; color: #00ff00; } trough { background: #0000ff; min-width: 100px; min-height: 10px; } highlight { background: #ff0000; }",
         None,
     );
     let mut item = Item::new(Content::Slider {
@@ -294,16 +294,14 @@ fn a_spectrum_rail_is_lit_up_to_the_value() {
     item.width = sliver_render::Width::Fixed(100.0);
     let mut p = Pixmap::new(100, 60).unwrap();
     r.render(&Scene::new(vec![item]), &sheet, &mut p);
-    let px = |x: u32| {
-        let c = p.pixel(x, 10).unwrap();
-        (c.red(), c.blue())
+    let px = |x: u32, y: u32| {
+        let c = p.pixel(x, y).unwrap();
+        (c.red(), c.green(), c.blue())
     };
     assert!(
-        px(12).0 > 128 && px(37).0 > 128,
-        "bars before the value are lit"
+        px(12, 8).1 > 128 && px(87, 8).1 > 128,
+        "bars above the rail"
     );
-    assert!(
-        px(62).1 > 128 && px(87).1 > 128,
-        "bars after it are the trough's"
-    );
+    assert!(px(12, 30).0 > 128, "the fill up to the value");
+    assert!(px(87, 30).2 > 128, "the rail after it");
 }
