@@ -461,6 +461,7 @@ fn push(
             };
             out.push(base(
                 Content::Slider {
+                    levels: Vec::new(),
                     icon,
                     value: v as f32,
                 },
@@ -481,6 +482,7 @@ fn push(
             // `indeterminate` class, which themes draw muted.
             let mut c = base(
                 Content::Slider {
+                    levels: Vec::new(),
                     icon,
                     value: if *indeterminate {
                         1.0

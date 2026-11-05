@@ -297,6 +297,25 @@ pub fn cava_config(block: &toml::Table) -> String {
         .collect()
 }
 
+/// `spectrum = true` on a slider: its rail is the live spectrum (`cava`'s keys apply), at rest
+/// until cava's first frame. Empty: a plain rail.
+fn spectrum_rail(m: &ModuleInstance, world: &World) -> Vec<f32> {
+    if m.config.get("spectrum").and_then(|v| v.as_bool()) != Some(true) {
+        return Vec::new();
+    }
+    let n = cava_bars(&m.config);
+    if world.spectrum.len() == n {
+        world.spectrum.clone()
+    } else {
+        vec![0.0; n]
+    }
+}
+
+/// Does this cell show the spectrum (a `cava` module, or a slider with `spectrum = true`)?
+pub fn shows_spectrum(c: &Cell) -> bool {
+    c.kind == "cava" || matches!(&c.content, Content::Slider { levels, .. } if !levels.is_empty())
+}
+
 /// The value a `graph` plots now, scaled to 0..=1 by `min`/`max` (default 0 and 100): from its
 /// own script (`exec`: a number, or JSON `percentage`), or else another module's `percentage`
 /// (`source = "cpu"`, `"memory"`, `"battery"`, `"custom/x"`…). `None`: nothing to plot yet.
@@ -1679,7 +1698,11 @@ fn cell(
         let icon = icon_name.and_then(|n| icons.get(&n, c.icon_theme.as_deref(), size));
         // Format strings are Pango-style markup, like waybar (values from outside are escaped).
         match (sp.slider, icon, f.text.is_empty()) {
-            (Some(value), icon, _) => Content::Slider { icon, value },
+            (Some(value), icon, _) => Content::Slider {
+                icon,
+                value,
+                levels: spectrum_rail(m, world),
+            },
             (None, Some(i), true) => Content::Icon(i),
             (None, Some(i), false) => Content::IconMarkup(i, f.text),
             (None, None, false) => Content::Markup(f.text),

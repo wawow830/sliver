@@ -212,6 +212,7 @@ fn mangled_stylesheets_never_panic() {
                     vec![
                         Item::text("x").id("a").pressed(true),
                         Item::new(Content::Slider {
+                            levels: Vec::new(),
                             icon: None,
                             value: 0.5,
                         }),
@@ -273,4 +274,36 @@ fn spectrum_bars_grow_from_the_middle() {
     for levels in [vec![], vec![f32::NAN, -1.0, 9.0], vec![0.5; 500]] {
         render(&mut r, &sheet, vec![Item::new(Content::Bars(levels))]);
     }
+}
+
+/// A slider with levels draws its rail as the spectrum: bars up to the value in the
+/// highlight colour, the rest in the trough's.
+#[test]
+fn a_spectrum_rail_is_lit_up_to_the_value() {
+    let mut r = Renderer::new(Fonts::embedded());
+    let (sheet, _) = Stylesheet::parse(
+        "t.css",
+        "module { background: transparent; padding: 0; } trough { background: #0000ff; min-width: 100px; } highlight { background: #ff0000; }",
+        None,
+    );
+    let mut item = Item::new(Content::Slider {
+        icon: None,
+        value: 0.5,
+        levels: vec![1.0; 4],
+    });
+    item.width = sliver_render::Width::Fixed(100.0);
+    let mut p = Pixmap::new(100, 60).unwrap();
+    r.render(&Scene::new(vec![item]), &sheet, &mut p);
+    let px = |x: u32| {
+        let c = p.pixel(x, 10).unwrap();
+        (c.red(), c.blue())
+    };
+    assert!(
+        px(12).0 > 128 && px(37).0 > 128,
+        "bars before the value are lit"
+    );
+    assert!(
+        px(62).1 > 128 && px(87).1 > 128,
+        "bars after it are the trough's"
+    );
 }

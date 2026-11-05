@@ -38,6 +38,10 @@ pub enum Content {
     Slider {
         icon: Option<Icon>,
         value: f32,
+        /// A live spectrum to draw the rail as (see [`Content::Bars`]), across the item's
+        /// height: the bars up to `value` in the `highlight` colour, the rest in the `trough`'s.
+        /// Empty: a plain rail.
+        levels: Vec<f32>,
     },
 }
 

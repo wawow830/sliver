@@ -540,7 +540,7 @@ impl Renderer {
                 // inset from the item's left edge and stretches with it.
                 let drawn = self.anim.geometry(&scene_id, &key, *rect, s, now);
                 self.draw_item(item, drawn, s, opacity, pixmap);
-                if let (Content::Slider { value, .. }, Some(parts), Some(track)) =
+                if let (Content::Slider { value, levels, .. }, Some(parts), Some(track)) =
                     (&item.content, parts, track)
                 {
                     let track = Rect {
@@ -548,7 +548,18 @@ impl Renderer {
                         w: (track.w + drawn.w - rect.w).max(0.0),
                         ..*track
                     };
-                    draw_slider(pixmap, track, *value, parts, opacity);
+                    if levels.is_empty() {
+                        draw_slider(pixmap, track, *value, parts, opacity);
+                    } else {
+                        // The spectrum spans the item's content height, not the rail's.
+                        let content = drawn.inset(s.padding.map(|p| p + s.border_width));
+                        let area = Rect {
+                            y: content.y,
+                            h: content.h,
+                            ..track
+                        };
+                        draw_spectrum_slider(pixmap, area, *value, levels, parts, opacity);
+                    }
                 }
             }
         }
@@ -615,7 +626,7 @@ impl Renderer {
                     fg,
                 );
             }
-            Content::Bars(levels) => draw_bars(pixmap, content, levels, fg),
+            Content::Bars(levels) => draw_bars(pixmap, content, levels, fg, None),
             Content::Image(icon) => {
                 let (x, y) = (content.x.round(), content.y.round());
                 let (w, h) = (content.w.floor(), content.h.floor());
@@ -875,35 +886,90 @@ fn draw_graph(pixmap: &mut Pixmap, r: Rect, values: &[f32], capacity: usize, col
 const BAR_PITCH: f32 = 12.0;
 
 /// One bar per level across `r`, each half its slot wide with round ends, centred on the middle
-/// line and at least as tall as it is wide.
-fn draw_bars(pixmap: &mut Pixmap, r: Rect, levels: &[f32], color: Color) {
-    if levels.is_empty() || r.w < 1.0 || r.h < 1.0 || color.a == 0 {
+/// line and at least as tall as it is wide. With `lit = (x, colour)`, bars whose middle is left
+/// of `x` take that colour instead.
+fn draw_bars(
+    pixmap: &mut Pixmap,
+    r: Rect,
+    levels: &[f32],
+    color: Color,
+    lit: Option<(f32, Color)>,
+) {
+    if levels.is_empty() || r.w < 1.0 || r.h < 1.0 {
         return;
     }
     let pitch = r.w / levels.len() as f32;
     let w = (pitch / 2.0).min(r.h).max(1.0);
-    let mut paint = Paint {
-        anti_alias: true,
-        ..Paint::default()
-    };
-    paint.set_color(color.to_skia());
-    let mut pb = PathBuilder::new();
+    let mut paths = [PathBuilder::new(), PathBuilder::new()];
     for (i, v) in levels.iter().enumerate() {
         let h = w + v.clamp(0.0, 1.0) * (r.h - w);
-        let x = r.x + (i as f32 + 0.5) * pitch - w / 2.0;
+        let mid = r.x + (i as f32 + 0.5) * pitch;
         let y = r.y + (r.h - h) / 2.0;
-        if let Some(path) = rounded_rect(Rect { x, y, w, h }, w / 2.0) {
-            pb.push_path(&path);
+        if let Some(path) = rounded_rect(
+            Rect {
+                x: mid - w / 2.0,
+                y,
+                w,
+                h,
+            },
+            w / 2.0,
+        ) {
+            let on = lit.is_some_and(|(x, _)| mid < x);
+            paths[usize::from(on)].push_path(&path);
         }
     }
-    if let Some(path) = pb.finish() {
-        pixmap.fill_path(
-            &path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
+    let colors = [color, lit.map_or(color, |(_, c)| c)];
+    for (pb, c) in paths.into_iter().zip(colors) {
+        if c.a == 0 {
+            continue;
+        }
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Paint::default()
+        };
+        paint.set_color(c.to_skia());
+        if let Some(path) = pb.finish() {
+            pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    }
+}
+
+/// A slider whose rail is a spectrum (`Content::Slider` with levels): bars across `area`, lit
+/// in the `highlight` colour up to `value`, then the knob as on a plain rail.
+fn draw_spectrum_slider(
+    pixmap: &mut Pixmap,
+    area: Rect,
+    value: f32,
+    levels: &[f32],
+    parts: &[Arc<Style>; 3],
+    opacity: f32,
+) {
+    let [trough, hl, knob] = parts;
+    let value = if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let o = opacity * trough.opacity;
+    draw_bars(
+        pixmap,
+        area,
+        levels,
+        fade(trough.background, o),
+        Some((area.x + area.w * value, fade(hl.background, o * hl.opacity))),
+    );
+    let (kw, kh) = (knob.min_width, knob.min_height.max(knob.min_width));
+    let (lo, hi) = (area.x + kw / 2.0, area.right() - kw / 2.0);
+    if kw > 0.0 && lo <= hi {
+        let cx = (area.x + area.w * value).clamp(lo, hi);
+        let r = Rect::new(cx - kw / 2.0, area.center().1 - kh / 2.0, kw, kh);
+        draw_box(pixmap, r, knob, None, o * knob.opacity);
     }
 }
 

@@ -2459,3 +2459,34 @@ on-tap = { keys = ["PlayPause"] }
     let fx = a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
     assert_eq!(keys(&fx), [vec![164]], "a plain key tap fires on press");
 }
+
+/// `spectrum = true` makes a slider's rail the live spectrum, and it runs cava like a `cava`
+/// module does.
+#[test]
+fn a_slider_can_be_a_spectrum() {
+    let mut a = agent(
+        r#"
+[[layouts.default.zones]]
+name = "main"
+modules = ["audio/slider"]
+[modules."audio/slider"]
+collapsed = false
+spectrum = true
+bars = 3
+"#,
+    );
+    let levels = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
+        Content::Slider { levels, .. } => levels.clone(),
+        other => panic!("{other:?}"),
+    };
+    let mut w = session_world();
+    a.render(&w);
+    assert_eq!(levels(&a), [0.0; 3], "at rest until cava's first frame");
+    assert!(
+        a.spectrum_config()
+            .is_some_and(|c| c.lines().any(|l| l == "bars = 3"))
+    );
+    w.spectrum = vec![0.2, 0.4, 0.6];
+    a.render(&w);
+    assert_eq!(levels(&a), [0.2, 0.4, 0.6]);
+}

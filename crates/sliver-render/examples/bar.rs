@@ -53,6 +53,7 @@ fn parse_content(arg: &str) -> Item {
             let spec = &rest["slider:".len()..];
             let (icon, value) = spec.rsplit_once(':').unwrap_or(("", spec));
             Content::Slider {
+                levels: Vec::new(),
                 icon: (!icon.is_empty()).then(|| Icon::builtin(icon).expect("built-in icon")),
                 value: value.parse().expect("slider value 0..1"),
             }

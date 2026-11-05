@@ -40,7 +40,9 @@ Pictures (`image` modules and items) fill the module's content box (inside `padd
 aspect ratio and are clipped to its `border-radius`. A `graph` draws its line in `color` over an
 area filled with the same color at a quarter of its alpha, inside the content box with 15% of its
 height free above and below; `width`/`min-width` make it wider than its natural 60 px. A `cava`
-spectrum draws its bars in `color` too, across the content box: each half its slot wide.
+spectrum draws its bars in `color` too, across the content box: each half its slot wide. A slider
+with `spectrum = true` draws them instead of its rail, over the item's content height: the bars up
+to its value in the `highlight` background, the rest in the `trough`'s, then its `slider` knob.
 
 ## Selectors
 `*`, `bar`/`zone`/`module`, `#id`, `.class`, `:active` (pressed), `:checked` (a toggle that is on; the `.on` class is equivalent in the built-in themes),

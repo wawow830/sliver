@@ -315,14 +315,14 @@ impl Agent {
         Some((samples.iter().copied().collect(), cap))
     }
 
-    /// The config `cava` should run with: while a `cava` module is on the layer being shown and
-    /// the bar is lit. `None` stops it.
+    /// The config `cava` should run with: while a spectrum (a `cava` module, a slider with
+    /// `spectrum = true`) is on the layer being shown and the bar is lit. `None` stops it.
     pub fn spectrum_config(&self) -> Option<String> {
         if self.display == DisplayState::Off {
             return None;
         }
         let shown = self.frame(if self.fn_held { Layer::Fn } else { Layer::Base })?;
-        let cell = shown.cells.iter().find(|c| c.kind == "cava")?;
+        let cell = shown.cells.iter().find(|c| modules::shows_spectrum(c))?;
         let id = sliver_config::ModuleId::parse(&cell.id).ok()?;
         let block = self
             .config
