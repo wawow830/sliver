@@ -71,6 +71,10 @@ pub struct Style {
     pub font_weight: u16,
     /// `-sliver-icon-size` (alias `-gtk-icon-size`).
     pub icon_size: f32,
+    /// `-sliver-icon-fit: content`: size icons by their visible artwork, not their canvas, so
+    /// app icons drawn with different amounts of padding look the same size. `canvas` (the
+    /// default) is the icon as its file draws it.
+    pub icon_fit_content: bool,
     // Not inherited.
     pub background: Color,
     /// `None` means `currentColor`.
@@ -101,6 +105,7 @@ impl Style {
             font_size: 24.0,
             font_weight: 400,
             icon_size: 32.0,
+            icon_fit_content: false,
             background: Color::TRANSPARENT,
             border_color: None,
             border_width: 0.0,
@@ -128,6 +133,7 @@ enum Prop {
     FontSize,
     FontWeight,
     IconSize,
+    IconFit,
     Background,
     BorderColor,
     BorderWidth,
@@ -150,6 +156,7 @@ enum Value {
     Family(Vec<String>),
     Weight(u16),
     Number(f32),
+    Flag(bool),
     Transitions(Vec<Transition>),
     Layer(Option<LayerTransition>),
     Inherit,
@@ -484,6 +491,7 @@ impl Stylesheet {
             "font-size" => vec![Prop::FontSize],
             "font-weight" => vec![Prop::FontWeight],
             "-sliver-icon-size" | "-gtk-icon-size" => vec![Prop::IconSize],
+            "-sliver-icon-fit" => vec![Prop::IconFit],
             "background-color" | "background" => vec![Prop::Background],
             "border-color" => vec![Prop::BorderColor],
             "border-width" => vec![Prop::BorderWidth],
@@ -536,6 +544,11 @@ impl Stylesheet {
             },
             "font-family" => one(Prop::FontFamily, value::font_family(raw).map(Value::Family)),
             "font-weight" => one(Prop::FontWeight, value::font_weight(raw).map(Value::Weight)),
+            "-sliver-icon-fit" => match kw.as_str() {
+                "content" => one(Prop::IconFit, Ok(Value::Flag(true))),
+                "canvas" => one(Prop::IconFit, Ok(Value::Flag(false))),
+                _ => Err(ctx(format!("'content' or 'canvas', got '{raw}'"))),
+            },
             "transition" => transition::parse(raw)
                 .map(|t| vec![(Prop::Transition, Value::Transitions(t))])
                 .map_err(ctx),
@@ -615,6 +628,7 @@ impl Stylesheet {
         s.font_size = parent.font_size;
         s.font_weight = parent.font_weight;
         s.icon_size = parent.icon_size;
+        s.icon_fit_content = parent.icon_fit_content;
 
         let get = |p: Prop| -> Option<&Value> {
             match specified.get(&p).copied() {
@@ -658,6 +672,11 @@ impl Stylesheet {
             _ => {}
         }
         s.icon_size = len(get(Prop::IconSize), initial.icon_size, s.icon_size);
+        match get(Prop::IconFit) {
+            Some(Value::Flag(f)) => s.icon_fit_content = *f,
+            Some(Value::Initial) => s.icon_fit_content = initial.icon_fit_content,
+            _ => {}
+        }
 
         s.background = match get(Prop::Background) {
             Some(Value::Color(c)) => *c,

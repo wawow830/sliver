@@ -25,7 +25,14 @@ pub enum IconError {
 pub struct Icon {
     pub(crate) image: Image,
     pub symbolic: bool,
+    /// Where its visible pixels are, measured once on first use and shared between clones.
+    content: Arc<std::sync::OnceLock<Option<Rect>>>,
+    /// Drawn as just this part of the canvas ([`Icon::fit_content`]).
+    view: Option<Rect>,
 }
+
+/// A part of an icon's canvas, in its intrinsic units: x, y, width, height.
+type Rect = [f32; 4];
 
 #[derive(Clone)]
 pub(crate) enum Image {
@@ -112,12 +119,18 @@ fn too_big(w: u32, h: u32) -> Option<IconError> {
 }
 
 impl Icon {
+    fn new(image: Image, symbolic: bool) -> Icon {
+        Icon {
+            image,
+            symbolic,
+            content: Arc::default(),
+            view: None,
+        }
+    }
+
     pub fn from_svg(data: &[u8]) -> Result<Icon, IconError> {
         let tree = usvg::Tree::from_data(data, &usvg::Options::default())?;
-        Ok(Icon {
-            image: Image::Svg(Arc::new(tree)),
-            symbolic: false,
-        })
+        Ok(Icon::new(Image::Svg(Arc::new(tree)), false))
     }
 
     pub fn from_png(data: &[u8]) -> Result<Icon, IconError> {
@@ -125,10 +138,7 @@ impl Icon {
             return Err(e);
         }
         let pixmap = Pixmap::decode_png(data).map_err(|e| IconError::Png(e.to_string()))?;
-        Ok(Icon {
-            image: Image::Raster(Arc::new(pixmap)),
-            symbolic: false,
-        })
+        Ok(Icon::new(Image::Raster(Arc::new(pixmap)), false))
     }
 
     /// A JPEG photo (album art), as an opaque raster icon.
@@ -160,10 +170,7 @@ impl Icon {
             .get(..n)
             .ok_or_else(|| IconError::Png("jpeg: truncated pixel data".into()))?;
         pm.data_mut().copy_from_slice(src);
-        Ok(Icon {
-            image: Image::Raster(Arc::new(pm)),
-            symbolic: false,
-        })
+        Ok(Icon::new(Image::Raster(Arc::new(pm)), false))
     }
 
     /// Loads an `.svg`, `.png` or `.jpg` file. Files named `*-symbolic.*` are symbolic.
@@ -233,26 +240,107 @@ impl Icon {
         }
         let w = (cur.width() as f32 * max_h as f32 / cur.height() as f32).round() as u32;
         match scaled(&cur, w, max_h) {
-            Some(p) => Icon {
-                image: Image::Raster(Arc::new(p)),
-                symbolic: self.symbolic,
-            },
+            Some(p) => Icon::new(Image::Raster(Arc::new(p)), self.symbolic),
             None => self,
         }
     }
 
-    /// Intrinsic size in pixels.
+    /// Intrinsic size in pixels (of the [`Icon::fit_content`] view, if it is one).
     pub fn size(&self) -> (f32, f32) {
+        match self.view {
+            Some([_, _, w, h]) => (w, h),
+            None => self.canvas_size(),
+        }
+    }
+
+    fn canvas_size(&self) -> (f32, f32) {
         match &self.image {
             Image::Svg(t) => (t.size().width(), t.size().height()),
             Image::Raster(p) => (p.width() as f32, p.height() as f32),
         }
+    }
+
+    /// Where on the canvas drawing starts: the view's corner, else the origin.
+    pub(crate) fn origin(&self) -> (f32, f32) {
+        self.view.map_or((0.0, 0.0), |[x, y, _, _]| (x, y))
+    }
+
+    /// The icon cropped to its visible artwork (`-sliver-icon-fit: content`), so icons whose
+    /// files have different transparent margins come out the same size. Unchanged if nothing
+    /// in it is visible.
+    pub fn fit_content(&self) -> Icon {
+        let mut icon = self.clone();
+        icon.view = self.content_box().or(self.view);
+        icon
+    }
+
+    /// The part of the canvas its visible pixels cover. Measured on the pixels, not the SVG's
+    /// shapes, because app icons often carry invisible backgrounds the size of the canvas.
+    pub fn content_box(&self) -> Option<Rect> {
+        *self.content.get_or_init(|| self.measure())
+    }
+
+    fn measure(&self) -> Option<Rect> {
+        // Rasters by their own pixels; SVGs drawn once, 128 px on the long side.
+        let (w, h) = self.canvas_size();
+        let drawn;
+        let (pm, scale) = match &self.image {
+            Image::Raster(p) => (&**p, 1.0),
+            Image::Svg(tree) => {
+                let scale = 128.0 / w.max(h).max(1.0);
+                let mut p = Pixmap::new((w * scale).ceil() as u32, (h * scale).ceil() as u32)?;
+                let t = tiny_skia::Transform::from_scale(scale, scale);
+                resvg::render(tree, t, &mut p.as_mut());
+                drawn = p;
+                (&drawn, scale)
+            }
+        };
+        let pw = pm.width();
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for (i, px) in pm.data().chunks_exact(4).enumerate() {
+            // Nearly transparent pixels (soft shadows, antialiasing haze) don't count.
+            if px[3] > 24 {
+                let (x, y) = (i as u32 % pw, i as u32 / pw);
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+            }
+        }
+        (x1 > x0).then(|| [x0, y0, x1 - x0, y1 - y0].map(|v| v as f32 / scale))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_box_is_the_visible_artwork() {
+        // A 10×10 raster with a 4×4 opaque square at (3, 3).
+        let mut p = Pixmap::new(10, 10).unwrap();
+        p.fill_rect(
+            tiny_skia::Rect::from_xywh(3.0, 3.0, 4.0, 4.0).unwrap(),
+            &tiny_skia::Paint::default(),
+            tiny_skia::Transform::identity(),
+            None,
+        );
+        let icon = Icon::new(Image::Raster(Arc::new(p)), false);
+        assert_eq!(icon.content_box(), Some([3.0, 3.0, 4.0, 4.0]));
+        let fit = icon.fit_content();
+        assert_eq!((fit.size(), fit.origin()), ((4.0, 4.0), (3.0, 3.0)));
+        assert_eq!(icon.size(), (10.0, 10.0), "the original keeps its canvas");
+        // An SVG with an invisible full-canvas background: only the circle counts.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+            <rect width="64" height="64" fill="#000" fill-opacity="0"/>
+            <circle cx="32" cy="32" r="16"/></svg>"##;
+        let [x, y, w, h] = Icon::from_svg(svg).unwrap().content_box().unwrap();
+        assert!((x - 16.0).abs() < 1.0 && (y - 16.0).abs() < 1.0, "{x} {y}");
+        assert!((w - 32.0).abs() < 1.0 && (h - 32.0).abs() < 1.0, "{w} {h}");
+        let blank = Icon::new(Image::Raster(Arc::new(Pixmap::new(4, 4).unwrap())), false);
+        assert_eq!(
+            blank.fit_content().size(),
+            (4.0, 4.0),
+            "nothing visible: unchanged"
+        );
+    }
 
     #[test]
     fn all_builtin_icons_parse() {

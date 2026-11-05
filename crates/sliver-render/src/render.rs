@@ -583,6 +583,13 @@ impl Renderer {
             .floor();
         let (cx, cy) = content.center();
         let clip = rect.inset([0.0, s.border_width, 0.0, s.border_width]);
+        let fit = |icon: &Icon| {
+            if s.icon_fit_content {
+                icon.fit_content()
+            } else {
+                icon.clone()
+            }
+        };
         match &item.content {
             Content::Spacer | Content::Blank => {}
             Content::Text(t) | Content::Markup(t) => {
@@ -594,7 +601,7 @@ impl Renderer {
             Content::Icon(icon) => {
                 let x = (cx - icon_size / 2.0).round();
                 let y = (cy - icon_size / 2.0).round();
-                draw_icon(icon, x, y, icon_size, fg, opacity, pixmap);
+                draw_icon(&fit(icon), x, y, icon_size, fg, opacity, pixmap);
             }
             Content::Graph { values, capacity } => {
                 // Some room above the highest value and below the area, inside any padding.
@@ -626,7 +633,15 @@ impl Renderer {
             Content::Slider { icon, .. } => {
                 if let Some(icon) = icon {
                     let y = (cy - icon_size / 2.0).round();
-                    draw_icon(icon, content.x.round(), y, icon_size, fg, opacity, pixmap);
+                    draw_icon(
+                        &fit(icon),
+                        content.x.round(),
+                        y,
+                        icon_size,
+                        fg,
+                        opacity,
+                        pixmap,
+                    );
                 }
             }
             Content::IconText(icon, t) | Content::IconMarkup(icon, t) => {
@@ -635,7 +650,7 @@ impl Renderer {
                 let total = icon_size + s.gap + label.width;
                 let x = (cx - total / 2.0).round().max(content.x.floor());
                 let y = (cy - icon_size / 2.0).round();
-                draw_icon(icon, x, y, icon_size, fg, opacity, pixmap);
+                draw_icon(&fit(icon), x, y, icon_size, fg, opacity, pixmap);
                 self.draw_label(&label, x + icon_size + s.gap, cy, fg, clip, pixmap);
             }
         }
@@ -953,8 +968,9 @@ fn draw_icon_in(
         return;
     }
     let scale = (bw / w).min(bh / h);
-    let dx = (bw - w * scale) / 2.0;
-    let dy = (bh - h * scale) / 2.0;
+    let (vx, vy) = icon.origin();
+    let dx = (bw - w * scale) / 2.0 - vx * scale;
+    let dy = (bh - h * scale) / 2.0 - vy * scale;
     let draw = |target: &mut Pixmap, ox: f32, oy: f32| {
         let transform = Transform::from_row(scale, 0.0, 0.0, scale, ox + dx, oy + dy);
         match &icon.image {

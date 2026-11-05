@@ -63,6 +63,7 @@ Precedence is standard CSS: `!important`, then specificity, then later rules win
 | `font-size` | length | yes | Labels shrink (down to half) to fit, then ellipsize |
 | `font-weight` | `normal`, `bold`, 100–900 | yes | |
 | `-sliver-icon-size` (`-gtk-icon-size`) | length | yes | |
+| `-sliver-icon-fit` | `canvas`, `content` | yes | `content` sizes an icon by its visible artwork instead of its canvas, so icons whose files have different transparent margins (app icons especially) come out the same size. Measured once per icon. |
 | `opacity` | 0–1 or % | multiplies down the tree | |
 | `min-width` | length | no | Floor for `auto`-width modules. On `trough`: its natural length. On `slider`: knob width |
 | `min-height` | length | no | On `trough`: thickness (default 6 px). On `slider`: knob height |

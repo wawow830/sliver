@@ -106,6 +106,15 @@ fn inheritance_and_em() {
 }
 
 #[test]
+fn icon_fit_is_inherited() {
+    let s = sheet("zone { -sliver-icon-fit: content }");
+    let [b, z, m] = styles(&s, &tree(&[]), "x", false);
+    assert!(!b.icon_fit_content && z.icon_fit_content && m.icon_fit_content);
+    let s = sheet("bar { -sliver-icon-fit: content } module { -sliver-icon-fit: canvas }");
+    assert!(!styles(&s, &tree(&[]), "x", false)[2].icon_fit_content);
+}
+
+#[test]
 fn active_and_bar_classes() {
     let s = sheet(
         "@define-color accent #3584e4;
