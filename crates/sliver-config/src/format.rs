@@ -230,7 +230,7 @@ pub fn standard_spec(v: &FmtValue, spec: &str) -> String {
 
 fn plain(v: &FmtValue, precision: Option<usize>) -> String {
     match (v, precision) {
-        (FmtValue::Text(s), Some(p)) => s.chars().take(p).collect(),
+        (FmtValue::Text(s), Some(p)) => take_shown(s, p).0,
         (FmtValue::Text(s), None) => s.clone(),
         (FmtValue::Num(n), Some(p)) => format!("{n:.p$}"),
         (FmtValue::Num(n), None) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
@@ -421,28 +421,30 @@ fn apply_lengths(text: String, min: Option<u32>, max: Option<u32>) -> String {
     let n = shown(&text).count();
     match (min, max) {
         (_, Some(max)) if n > max as usize => {
-            let keep = (max as usize).saturating_sub(1);
-            let mut out = String::new();
-            let mut kept = 0;
-            for (piece, visible) in shown_pieces(&text) {
-                if !visible {
-                    out.push_str(piece);
-                } else if kept < keep {
-                    out.push_str(piece);
-                    kept += 1;
-                    if kept == keep {
-                        out.push('…');
-                    }
-                }
-            }
-            if keep == 0 {
-                out.insert(0, '…');
-            }
+            let (mut out, at) = take_shown(&text, (max as usize).saturating_sub(1));
+            out.insert(at, '…');
             out
         }
         (Some(min), _) if n < min as usize => format!("{text}{}", " ".repeat(min as usize - n)),
         _ => text,
     }
+}
+
+/// The first `n` shown characters of markup `text`, with all of its tags (so it stays balanced),
+/// and the byte offset just after the last character kept.
+fn take_shown(text: &str, n: usize) -> (String, usize) {
+    let mut out = String::new();
+    let (mut kept, mut at) = (0, 0);
+    for (piece, visible) in shown_pieces(text) {
+        if !visible {
+            out.push_str(piece);
+        } else if kept < n {
+            out.push_str(piece);
+            kept += 1;
+            at = out.len();
+        }
+    }
+    (out, at)
 }
 
 /// The characters of markup `text` that are shown.
@@ -617,6 +619,13 @@ mod tests {
             "a bare & is a character"
         );
         assert_eq!(apply_lengths("abc".into(), None, Some(1)), "…");
+        // A precision counts the same way: it never splits an entity.
+        let v = ValueMap::new().with("t", "Tom &amp; Jerry");
+        let c = common(r#"format = "{t:.5} ›""#);
+        assert_eq!(
+            format_module(&c, "{}", &State::default(), &v).text,
+            "Tom &amp; ›"
+        );
     }
 
     #[test]
