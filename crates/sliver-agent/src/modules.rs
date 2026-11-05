@@ -1214,21 +1214,33 @@ fn pinned_cell(
             )
         });
     let name = entry.map_or(id, |e| e.name.as_str());
-    let content = icon.map_or_else(
-        || {
-            Content::Markup(sliver_render::markup::escape(
-                &name.chars().take(2).collect::<String>(),
-            ))
-        },
-        Content::Icon,
-    );
     let win = window.map(|i| &world.desktop.windows[i]);
+    let focused = win.is_some_and(|w| w.focused);
+    // The same `format` as the window buttons (icon only by default).
+    let esc = |s: &str| FmtValue::Text(sliver_render::markup::escape(s));
+    let values = ValueMap::new()
+        .with("name", esc(name))
+        .with("title", esc(win.map_or("", |w| w.title.as_str())))
+        .with("app_id", esc(win.map_or(id, |w| w.class.as_str())));
+    let st = State {
+        status: focused.then_some("focused"),
+        ..Default::default()
+    };
+    let label = format_module(&m.common, "", &st, &values).text;
+    let content = match icon {
+        Some(icon) if label.is_empty() => Content::Icon(icon),
+        Some(icon) => Content::IconMarkup(icon, label),
+        None if label.is_empty() => Content::Markup(sliver_render::markup::escape(
+            &name.chars().take(2).collect::<String>(),
+        )),
+        None => Content::Markup(label),
+    };
     let target = win.map(|w| sliver_desktop::control::Action::FocusWindow {
         address: w.address.clone(),
     });
     let mut classes = vec!["pinned".to_string(), app_class(id)];
     classes.push(if win.is_some() { "running" } else { "idle" }.to_string());
-    if win.is_some_and(|w| w.focused) {
+    if focused {
         classes.push("focused".into());
     }
     if win.is_some_and(|w| w.urgent) {
@@ -2351,6 +2363,22 @@ mod tests {
                     && matches!(a, sliver_config::Action::Open(id) if id == "kitty")),
             "an idle launcher starts the app"
         );
+        // `format-focused` labels only the app you're in, with its name (`{name}`): a pinned
+        // app by its desktop entry, a window without one by its class.
+        let label = |c: &Cell| match &c.content {
+            Content::IconMarkup(_, t) | Content::Markup(t) => t.clone(),
+            _ => String::new(),
+        };
+        let conf = "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"taskbar\"]\n[modules.taskbar]\npinned = [\"org.mozilla.firefox.desktop\", \"kitty\"]\nformat-focused = \"{name}\"\n";
+        let cells = stat_cells(conf, &w);
+        let labels: Vec<String> = cells.iter().map(label).collect();
+        // No icons here: the others fall back to their first letters.
+        assert_eq!(labels, ["Firefox", "ki", "mp"]);
+        w.desktop.windows = vec![win("a1", "mpv", true), win("b2", "firefox", false)];
+        let cells = stat_cells(conf, &w);
+        assert!(cells[2].classes.contains(&"focused".to_string()));
+        let labels: Vec<String> = cells.iter().map(label).collect();
+        assert_eq!(labels, ["Fi", "ki", "mpv"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

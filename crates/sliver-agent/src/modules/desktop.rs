@@ -110,22 +110,25 @@ pub(super) fn workspaces(world: &World, item: Option<usize>) -> Option<Spec> {
 
 pub(super) fn taskbar(world: &World, item: Option<usize>) -> Option<Spec> {
     let w = world.desktop.windows.get(item?)?;
+    let entry = world.apps.find_by_app_id(&w.class);
     let v = ValueMap::new()
         .with("title", esc(&w.title))
         .with("app_id", esc(&w.class))
+        .with("name", esc(entry.map_or(&w.class, |e| &e.name)))
         .with("", esc(&w.title));
     // Icon only by default: the bar is too narrow for titles.
     let mut sp = Spec::new(v, "")
         .on(Gesture::Tap, "focus")
         .on(Gesture::Hold, "close");
-    let entry = world.apps.find_by_app_id(&w.class);
+    // `format-focused` labels just the window you're in.
+    sp.status = w.focused.then_some("focused");
     sp.default_icon = Some(
         entry
             .and_then(|e| e.icon.clone())
             .unwrap_or_else(|| w.class.clone()),
     );
     sp.checked = w.focused;
-    sp.extra_classes = [(w.focused, "focused"), (w.urgent, "urgent")]
+    sp.extra_classes = [(w.urgent, "urgent")]
         .into_iter()
         .filter(|(on, _)| *on)
         .map(|(_, c)| c.to_string())
