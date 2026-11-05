@@ -129,6 +129,7 @@ pub(super) fn taskbar(world: &World, item: Option<usize>) -> Option<Spec> {
         .into_iter()
         .filter(|(on, _)| *on)
         .map(|(_, c)| c.to_string())
+        .chain([super::app_class(entry.map_or(&w.class, |e| &e.id))])
         .collect();
     sp.target = Some(sliver_desktop::control::Action::FocusWindow {
         address: w.address.clone(),

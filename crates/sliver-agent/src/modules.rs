@@ -1083,6 +1083,24 @@ fn pinned_window(world: &World, id: &str) -> Option<usize> {
     })
 }
 
+/// The class a taskbar button gets for its app, so a stylesheet can treat one app's icon
+/// differently: `app-` and its desktop id (else its app id), lowercased, other characters as
+/// `-` (`app-org-kde-dolphin`). Pinned or not, an app gets the same one.
+pub(crate) fn app_class(id: &str) -> String {
+    let id: String = id
+        .trim_end_matches(".desktop")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("app-{id}")
+}
+
 /// A launcher for a pinned app: tap focuses its window when it is running, else starts it
 /// (`gtk-launch`); hold closes the running window.
 #[allow(clippy::too_many_arguments)]
@@ -1120,7 +1138,7 @@ fn pinned_cell(
     let target = win.map(|w| sliver_desktop::control::Action::FocusWindow {
         address: w.address.clone(),
     });
-    let mut classes = vec!["pinned".to_string()];
+    let mut classes = vec!["pinned".to_string(), app_class(id)];
     classes.push(if win.is_some() { "running" } else { "idle" }.to_string());
     if win.is_some_and(|w| w.focused) {
         classes.push("focused".into());
@@ -2222,6 +2240,9 @@ mod tests {
         assert!(
             cells[0].classes.contains(&"running".to_string())
                 && cells[0].classes.contains(&"focused".to_string())
+                && cells[0]
+                    .classes
+                    .contains(&"app-org-mozilla-firefox".to_string())
                 && cells[0].checked
         );
         assert!(
