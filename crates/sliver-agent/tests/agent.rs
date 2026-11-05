@@ -1738,6 +1738,32 @@ fn player(
     }
 }
 
+/// `{position}` and `{length}` show where playback is, moving on while playing.
+#[test]
+fn now_playing_position_and_length() {
+    use sliver_session::PlaybackStatus::{Paused, Playing};
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"mpris\"]\n[modules.mpris]\nformat = \"{position} / {length}\"\nart = false\n",
+    );
+    let text = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
+        sliver_render::Content::Markup(t) | sliver_render::Content::Text(t) => t.clone(),
+        other => panic!("{other:?}"),
+    };
+    let mut w = world(9, 41);
+    let mut p = player("one", "Song", Paused);
+    p.position_us = Some(65_000_000);
+    w.session.media = Some(p.clone());
+    a.render(&w);
+    assert_eq!(text(&a), "1:05 / 3:20");
+    // Playing, reported 10 s ago: it has moved on, and the bar redraws as it does.
+    p.status = Playing;
+    p.position_at_ms = Some(w.now.timestamp_millis() as u64 - 10_000);
+    w.session.media = Some(p);
+    a.render(&w);
+    assert_eq!(text(&a), "1:15 / 3:20");
+    assert!(a.next_change().is_some(), "redraws while playing");
+}
+
 /// Album art shows as the module's icon; holding switches players; `scrub = true` makes a
 /// progress slider that seeks on drag.
 #[test]

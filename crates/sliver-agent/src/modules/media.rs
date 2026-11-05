@@ -11,7 +11,17 @@ pub(super) fn mpris(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
         .and_then(|p| s.players.iter().find(|m| m.player == p))
         .or(s.media.as_ref())?;
     let status = crate::context::media_status(media.status);
-    let glyph = if status == "playing" { "⏸" } else { "▶" };
+    let playing = media.status == sliver_session::PlaybackStatus::Playing;
+    let glyph = if playing { "⏸" } else { "▶" };
+    // Where playback is now: the last reported position, moved on by the time since while
+    // playing (players report on seeks and state changes, not continuously).
+    let length = media.length_us.filter(|l| *l > 0);
+    let mut pos = media.position_us.unwrap_or(0).max(0);
+    if playing && let Some(at) = media.position_at_ms {
+        let now_ms = world.now.timestamp_millis().max(0) as u64;
+        pos += (now_ms.saturating_sub(at) as i64) * 1000;
+    }
+    let pos = length.map_or(pos, |l| pos.min(l));
     let v = ValueMap(
         [
             ("title", esc(&media.title)),
@@ -20,6 +30,11 @@ pub(super) fn mpris(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
             ("player", esc(&media.identity)),
             ("status", FmtValue::Text(status.into())),
             ("status_icon", FmtValue::Text(glyph.into())),
+            ("position", FmtValue::Text(clock_time(pos))),
+            (
+                "length",
+                FmtValue::Text(length.map(clock_time).unwrap_or_default()),
+            ),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v))
@@ -55,16 +70,20 @@ pub(super) fn mpris(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
             Action::ModuleAction(format!("player:{next}")),
         ));
     }
+    // `{position}` moves while playing: redraw each second (only while it's on the bar).
+    let c = &m.common;
+    let shows_position = c
+        .format
+        .iter()
+        .chain(&c.format_alt)
+        .chain(c.format_variants.values())
+        .any(|f| f.contains("{position"));
+    if playing && shows_position {
+        sp.refresh = Some(std::time::Duration::from_secs(1));
+    }
     // `scrub = true`: a progress slider; drag to seek.
     if m.config.get("scrub").and_then(|v| v.as_bool()) == Some(true) {
-        if let Some(len) = media.length_us.filter(|l| *l > 0) {
-            let now_ms = world.now.timestamp_millis().max(0) as u64;
-            let mut pos = media.position_us.unwrap_or(0).max(0);
-            if media.status == sliver_session::PlaybackStatus::Playing {
-                if let Some(at) = media.position_at_ms {
-                    pos += (now_ms.saturating_sub(at) as i64) * 1000;
-                }
-            }
+        if let Some(len) = length {
             sp.slider = Some((pos as f64 / len as f64).clamp(0.0, 1.0) as f32);
             sp.percentage = Some(pos as f64 * 100.0 / len as f64);
             if media.can_seek {
@@ -73,10 +92,31 @@ pub(super) fn mpris(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
                 sp.defaults
                     .push((Gesture::Drag, Action::ModuleAction("seek".into())));
             }
-            if media.status == sliver_session::PlaybackStatus::Playing {
+            if playing {
                 sp.refresh = Some(std::time::Duration::from_secs(1));
             }
         }
     }
     Some(sp)
+}
+
+/// `m:ss`, or `h:mm:ss` from an hour.
+fn clock_time(us: i64) -> String {
+    let s = us.max(0) / 1_000_000;
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn clock_time() {
+        assert_eq!(super::clock_time(65_400_000), "1:05");
+        assert_eq!(super::clock_time(0), "0:00");
+        assert_eq!(super::clock_time(3_725_000_000), "1:02:05");
+    }
 }
