@@ -990,6 +990,50 @@ fn workspaces_and_taskbar_buttons_drive_the_compositor() {
     );
 }
 
+/// A menu's module actions act on the button that opened it: a taskbar item whose hold asks
+/// first closes its own window only when "Close window" is tapped.
+#[test]
+fn a_menu_entry_acts_on_the_button_that_opened_it() {
+    use sliver_agent::agent::Effect;
+    use sliver_desktop::WindowInfo;
+    use sliver_desktop::control::Action as Desk;
+    use sliver_ipc::proto::TouchPhase;
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"taskbar\"]\n[modules.taskbar]\nmenu = [{ label = \"Close window\", on-tap = { module-action = \"close\" } }]\n",
+    );
+    let mut w = world(9, 41);
+    w.desktop.connected = true;
+    w.desktop.windows = ["ab12", "cd34"]
+        .map(|address| WindowInfo {
+            address: address.into(),
+            class: "kitty".into(),
+            title: "sh".into(),
+            workspace: 1,
+            ..Default::default()
+        })
+        .into();
+    a.render(&w);
+    let closes = |fx: &[Effect]| {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::Desktop(Desk::CloseWindow { address }) => Some(address.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (id, x) = region(&a, "taskbar/cd34");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000);
+    fx.extend(a.tick(2_000_000));
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 2_100_000));
+    assert!(closes(&fx).is_empty(), "hold only asks: {fx:?}");
+    a.render(&w);
+    let (id, x) = region(&a, "menu/0");
+    let mut fx = a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
+    fx.extend(a.touch(id, 0, TouchPhase::Up, x, 3_040_000));
+    fx.extend(a.tick(3_400_000));
+    assert_eq!(closes(&fx), ["cd34"], "{fx:?}");
+}
+
 /// The timer module: tap starts, tap pauses, hold resets, and reaching zero notifies once.
 #[test]
 fn timer_counts_down_and_notifies() {

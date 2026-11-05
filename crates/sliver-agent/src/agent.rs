@@ -160,6 +160,9 @@ pub struct Agent {
     emoji: modules::EmojiHandle,
     /// An open `menu` sub-bar: the entries it shows.
     menu: Option<Vec<sliver_config::MenuEntry>>,
+    /// The button whose `menu` is open: its entries' module actions act on it (which window to
+    /// close, for instance).
+    menu_owner: Option<Cell>,
     /// An open popover a published item showed (api.md §3): context, popover item id, and the
     /// context's class (`app` / `status`).
     popover: Option<(sliver_api::registry::ContextId, String, String)>,
@@ -250,6 +253,7 @@ impl Agent {
             graphs: HashMap::new(),
             emoji: Default::default(),
             menu: None,
+            menu_owner: None,
             popover: None,
             subbar: None,
         }
@@ -1707,6 +1711,7 @@ impl Agent {
             (_, "menu:open", _) => {
                 if !cell.menu.is_empty() {
                     self.menu = Some(cell.menu.clone());
+                    self.menu_owner = Some(cell.clone());
                     fx.extend(self.cancel_touches());
                     fx.push(Effect::Redraw);
                 }
@@ -1714,6 +1719,7 @@ impl Agent {
             }
             ("menu", "menu:close", _) => {
                 self.menu = None;
+                self.menu_owner = None;
                 self.subbar = None;
                 fx.extend(self.cancel_touches());
                 fx.push(Effect::Redraw);
@@ -1743,7 +1749,12 @@ impl Agent {
                         )));
                         return;
                     }
-                    self.execute(&entry.on_tap, None, None, now, fx);
+                    match (&entry.on_tap, self.menu_owner.take()) {
+                        (sliver_config::Action::ModuleAction(name), Some(owner)) => {
+                            self.module_action(&owner, name, None, now, fx)
+                        }
+                        (a, _) => self.execute(a, None, None, now, fx),
+                    }
                 }
                 return;
             }

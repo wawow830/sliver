@@ -1208,6 +1208,37 @@ pub(crate) fn app_class(id: &str) -> String {
     format!("app-{id}")
 }
 
+/// A cell's gestures: user bindings first, then `actions = { on-x = "name" }`, then the module's
+/// `defaults`. With a menu, its trigger (default: tap, or hold when the module also taps) opens
+/// the sub-bar instead of whatever that gesture did.
+fn bindings(
+    m: &ModuleInstance,
+    defaults: Vec<(Gesture, Action)>,
+    menu: bool,
+) -> Vec<(Gesture, Action)> {
+    let c = &m.common;
+    let mut on: Vec<(Gesture, Action)> = c.on.iter().map(|(g, a)| (*g, a.clone())).collect();
+    for (g, name) in &c.actions {
+        if !on.iter().any(|(x, _)| x == g) {
+            on.push((*g, Action::ModuleAction(name.clone())));
+        }
+    }
+    for (g, a) in defaults {
+        if !on.iter().any(|(x, _)| *x == g) {
+            on.push((g, a));
+        }
+    }
+    if menu {
+        let has_tap = on.iter().any(|(g, _)| *g == Gesture::Tap);
+        let trigger = c
+            .menu_trigger
+            .unwrap_or(if has_tap { Gesture::Hold } else { Gesture::Tap });
+        on.retain(|(g, _)| *g != trigger);
+        on.push((trigger, Action::ModuleAction("menu:open".into())));
+    }
+    on
+}
+
 /// A launcher for a pinned app: tap focuses its window when it is running, else starts it
 /// (`gtk-launch`); hold closes the running window.
 #[allow(clippy::too_many_arguments)]
@@ -1271,10 +1302,12 @@ fn pinned_cell(
     } else {
         Action::Open(id.to_string())
     };
-    let mut on = vec![(Gesture::Tap, tap)];
+    let mut defaults = vec![(Gesture::Tap, tap)];
     if win.is_some() {
-        on.push((Gesture::Hold, Action::ModuleAction("close".into())));
+        defaults.push((Gesture::Hold, Action::ModuleAction("close".into())));
     }
+    // The module's own bindings and `menu` apply to its launchers too.
+    let on = bindings(m, defaults, !m.common.menu.is_empty());
     Cell {
         key: format!("{key}/pin{index}"),
         id: m.id.to_string(),
@@ -1297,7 +1330,7 @@ fn pinned_cell(
         pass_through: false,
         target,
         timer_total: None,
-        menu: Vec::new(),
+        menu: m.common.menu.clone(),
         slot: None,
     }
 }
@@ -1722,34 +1755,12 @@ fn cell(
                 .map_or(Content::Blank, |t| Content::Markup(t.into())),
         }
     };
-    // User bindings first, then `actions = { on-x = "name" }`, then the module's defaults.
-    let mut on: Vec<(Gesture, Action)> = c.on.iter().map(|(g, a)| (*g, a.clone())).collect();
-    for (g, name) in &c.actions {
-        if !on.iter().any(|(x, _)| x == g) {
-            on.push((*g, Action::ModuleAction(name.clone())));
-        }
-    }
-    for (g, a) in sp.defaults {
-        if !on.iter().any(|(x, _)| *x == g) {
-            on.push((g, a));
-        }
-    }
-    // `menu = [...]`: the trigger gesture (default: tap, or hold when the module also taps) opens
-    // the sub-bar instead of whatever that gesture did.
     let menu = if m.common.menu.is_empty() {
         std::mem::take(&mut sp.menu)
     } else {
         m.common.menu.clone()
     };
-    if !menu.is_empty() {
-        let has_tap = on.iter().any(|(g, _)| *g == Gesture::Tap);
-        let trigger =
-            m.common
-                .menu_trigger
-                .unwrap_or(if has_tap { Gesture::Hold } else { Gesture::Tap });
-        on.retain(|(g, _)| *g != trigger);
-        on.push((trigger, Action::ModuleAction("menu:open".into())));
-    }
+    let on = bindings(m, sp.defaults, !menu.is_empty());
     let collapsed_slider = m.id.kind.ends_with("/slider") && sp.slider.is_none();
     let mut touch = touch_kind(m, &on);
     if collapsed_slider {
