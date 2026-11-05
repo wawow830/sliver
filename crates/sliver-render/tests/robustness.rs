@@ -249,3 +249,28 @@ fn unloading_fonts_after_a_missing_glyph_keeps_drawing_right() {
     draw(&mut r, "x\u{10fffd}"); // cached: no new search
     assert_eq!(draw(&mut r, "F1").data(), want.data());
 }
+
+/// A spectrum's bars grow out from the middle line; a silent one is a row of dots. Odd levels
+/// (out of range, NaN, none, hundreds) never panic.
+#[test]
+fn spectrum_bars_grow_from_the_middle() {
+    let mut r = Renderer::new(Fonts::embedded());
+    let (sheet, _) = Stylesheet::parse(
+        "t.css",
+        "module { background: transparent; padding: 0; color: white; }",
+        None,
+    );
+    let mut item = Item::new(Content::Bars(vec![0.0, 1.0]));
+    item.width = sliver_render::Width::Fixed(100.0);
+    let mut p = Pixmap::new(100, 60).unwrap();
+    r.render(&Scene::new(vec![item]), &sheet, &mut p);
+    let lit = |x: u32, y: u32| p.pixel(x, y).unwrap().red() > 128;
+    assert!(lit(25, 30) && !lit(25, 10), "a silent bar is a dot");
+    assert!(
+        lit(75, 30) && lit(75, 5) && lit(75, 55),
+        "a full bar spans the height"
+    );
+    for levels in [vec![], vec![f32::NAN, -1.0, 9.0], vec![0.5; 500]] {
+        render(&mut r, &sheet, vec![Item::new(Content::Bars(levels))]);
+    }
+}

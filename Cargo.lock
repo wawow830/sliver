@@ -1660,6 +1660,7 @@ dependencies = [
  "sliver-desktop",
  "sliver-icons",
  "sliver-modules",
+ "sliver-proc",
  "sliver-session",
  "zbus",
 ]

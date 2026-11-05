@@ -8,7 +8,7 @@ const SAMPLE: &str = r##"
   "height": 30,
   "spacing": 6,
   "name": "main",
-  "modules-left": ["hyprland/workspaces", "hyprland/window", "cava"],
+  "modules-left": ["hyprland/workspaces", "hyprland/window", "sway/scratchpad"],
   "modules-center": ["clock"],
   "modules-right": ["pulseaudio", "custom/vpn", "battery#bat2", "tray", "mpd", "group/power"],
   "hyprland/workspaces": { "format": "{name}", "on-click": "activate", },
@@ -62,7 +62,7 @@ fn builds_a_layout_with_the_esc_zone_and_filtered_modules() {
     assert_eq!(
         i.dropped
             .iter()
-            .filter(|d| *d == "cava" || *d == "mpd" || *d == "cffi/foo")
+            .filter(|d| *d == "sway/scratchpad" || *d == "mpd" || *d == "cffi/foo")
             .count(),
         3
     );
@@ -109,7 +109,7 @@ fn reports_what_does_not_apply() {
     };
     assert!(has("layer"), "{:#?}", i.notes);
     assert!(has("height"));
-    assert!(has("cava"));
+    assert!(has("sway/scratchpad"));
     assert!(has("cffi/foo"));
     assert!(has("mpd"));
     assert!(has("rotate_nonsense"));

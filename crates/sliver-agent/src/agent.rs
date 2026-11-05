@@ -315,6 +315,21 @@ impl Agent {
         Some((samples.iter().copied().collect(), cap))
     }
 
+    /// The config `cava` should run with: while a `cava` module is on the layer being shown and
+    /// the bar is lit. `None` stops it.
+    pub fn spectrum_config(&self) -> Option<String> {
+        if self.display == DisplayState::Off {
+            return None;
+        }
+        let shown = self.frame(if self.fn_held { Layer::Fn } else { Layer::Base })?;
+        let cell = shown.cells.iter().find(|c| c.kind == "cava")?;
+        let id = sliver_config::ModuleId::parse(&cell.id).ok()?;
+        let block = self
+            .config
+            .module_block(&sliver_config::ModuleRef::Named(id));
+        Some(crate::modules::cava_config(&block))
+    }
+
     pub fn ui(&mut self, key: &str) -> &mut UiState {
         self.ui.entry(key.to_owned()).or_default()
     }

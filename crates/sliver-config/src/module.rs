@@ -54,6 +54,7 @@ pub const MODULE_TYPES: &[&str] = &[
     "notifications",
     "emoji",
     "timer",
+    "cava",
     "image",
     "group",
     "app-controls",

@@ -427,7 +427,7 @@ impl Live {
                     }
                 }
                 Feed::Note(n) => eprintln!("sliver-agent: {n}"),
-                Feed::Art { .. } => {}
+                Feed::Art { .. } | Feed::Spectrum(_) => {}
             }
             self.agg.apply(f);
         }
@@ -509,6 +509,7 @@ impl Live {
             apps: self.apps.clone(),
             emoji: self.emoji.clone(),
             media_art: self.agg.media_art().map(std::path::Path::to_path_buf),
+            spectrum: self.agg.spectrum.clone(),
         }
     }
 
@@ -1204,6 +1205,9 @@ fn run(
                 api.set_on_screen(drawn);
             }
         }
+        // A spectrum on the lit bar runs cava; anything else stops it (the bar going dark,
+        // another layout, Fn held).
+        live.feeds.run_spectrum(agent.spectrum_config().as_deref());
         // Not only after a render: with the bar off nothing renders, and the state (layer,
         // profile, health) must still be right. Sent only when it changed.
         if let Some(api) = &live.api {

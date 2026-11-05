@@ -2358,3 +2358,52 @@ fn graph_module() {
     a.render(&w);
     assert!(graphs(&a).is_empty(), "graphs are private while locked");
 }
+
+#[test]
+fn a_spectrum_runs_cava_only_while_it_is_shown() {
+    use sliver_ipc::proto::DisplayState;
+    let mut a = agent(
+        r#"
+[[layouts.default.zones]]
+name = "main"
+modules = ["cava"]
+[[layouts.fkeys.zones]]
+name = "main"
+modules = ["key/F1"]
+[modules.cava]
+bars = 4
+framerate = 60
+stereo = true
+source = "evil\n[output]"
+noise_reduction = 0.5
+"#,
+    );
+    let bars = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
+        Content::Bars(l) => l.clone(),
+        other => panic!("{other:?}"),
+    };
+    let mut w = world(9, 41);
+    a.render(&w);
+    // Before cava's first frame the bars rest at 0, so the module already has its size.
+    assert_eq!(bars(&a), [0.0; 4]);
+    let conf = a.spectrum_config().expect("on the lit bar");
+    for line in [
+        "bars = 4",
+        "framerate = 30",
+        "method = raw",
+        "channels = stereo",
+        "noise_reduction = 0.5",
+    ] {
+        assert!(conf.lines().any(|l| l == line), "{line} in {conf}");
+    }
+    assert!(!conf.contains("evil"), "{conf}");
+    w.spectrum = vec![0.25, 0.5, 0.75, 1.0];
+    a.render(&w);
+    assert_eq!(bars(&a), [0.25, 0.5, 0.75, 1.0]);
+    // Fn shows the F-keys: no spectrum on screen, so no cava.
+    a.fn_held = true;
+    assert_eq!(a.spectrum_config(), None);
+    a.fn_held = false;
+    a.display = DisplayState::Off;
+    assert_eq!(a.spectrum_config(), None);
+}

@@ -427,6 +427,7 @@ impl Renderer {
             Content::Icon(_) => s.icon_size,
             // Wide enough to read a trend; `width`/`min-width` make it wider.
             Content::Graph { .. } => GRAPH_WIDTH,
+            Content::Bars(levels) => levels.len() as f32 * BAR_PITCH,
             // As tall as the item's content box, as wide as its aspect ratio makes it.
             Content::Image(icon) => match icon.size() {
                 (w, h) if w > 0.0 && h > 0.0 => (content_h.max(0.0) * w / h).ceil(),
@@ -614,6 +615,7 @@ impl Renderer {
                     fg,
                 );
             }
+            Content::Bars(levels) => draw_bars(pixmap, content, levels, fg),
             Content::Image(icon) => {
                 let (x, y) = (content.x.round(), content.y.round());
                 let (w, h) = (content.w.floor(), content.h.floor());
@@ -867,6 +869,42 @@ fn draw_graph(pixmap: &mut Pixmap, r: Rect, values: &[f32], capacity: usize, col
         ..Stroke::default()
     };
     pixmap.stroke_path(&line, &paint, &stroke, Transform::identity(), None);
+}
+
+/// Natural spacing of `Bars`, per level.
+const BAR_PITCH: f32 = 12.0;
+
+/// One bar per level across `r`, each half its slot wide with round ends, centred on the middle
+/// line and at least as tall as it is wide.
+fn draw_bars(pixmap: &mut Pixmap, r: Rect, levels: &[f32], color: Color) {
+    if levels.is_empty() || r.w < 1.0 || r.h < 1.0 || color.a == 0 {
+        return;
+    }
+    let pitch = r.w / levels.len() as f32;
+    let w = (pitch / 2.0).min(r.h).max(1.0);
+    let mut paint = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
+    paint.set_color(color.to_skia());
+    let mut pb = PathBuilder::new();
+    for (i, v) in levels.iter().enumerate() {
+        let h = w + v.clamp(0.0, 1.0) * (r.h - w);
+        let x = r.x + (i as f32 + 0.5) * pitch - w / 2.0;
+        let y = r.y + (r.h - h) / 2.0;
+        if let Some(path) = rounded_rect(Rect { x, y, w, h }, w / 2.0) {
+            pb.push_path(&path);
+        }
+    }
+    if let Some(path) = pb.finish() {
+        pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    }
 }
 
 /// Background and border of a bar, zone or module.

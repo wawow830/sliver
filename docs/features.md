@@ -57,6 +57,7 @@ Rules, **Pock**, **dfr** = tiny-dfr 0.3.7 (config in `/usr/share/tiny-dfr/config
 | Emoji picker: scrolling strip, recents, category tabs | P2 | done | mac | tap = type, swipe = scroll | wtype or the clipboard | Tabs, paging, recents, skin tones, name search with an on-bar letter row (`sliver-emoji`). |
 | App switcher / dock: running and pinned apps | P2 | done | Pock, MTMR dock | tap = focus, long-press = close | compositor plus icon lookup | `taskbar`: windows of the active workspace plus `pinned` launchers. Hyprland, sway, niri, generic Wayland, KDE (no close) and GNOME. |
 | Scrubber / candidate strip for apps (text suggestions, tabs) | P2 | done | mac (NSScrubber) | swipe, tap | public API | `scrubber` item (api.md §3): paged candidates, tap picks, `selected`/`scrolled` events. `sliverctl publish scrubber:ID:a\|b\|c`. |
+| Audio spectrum | P3 | done | waybar cava | any, user-bound | the `cava` program | `cava`: drawn bars, waybar's keys. cava runs only while the module is shown on a lit bar and sleeps on silence. |
 | Weather, currency, calendar "up next" | P3 | done | MTMR |  | script widget | Presets only: `examples/config/{weather,currency,calendar}.toml` on `custom/*` scripts. Offline they keep the last reading (`stale`). |
 
 ## 3. Actions

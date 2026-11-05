@@ -231,3 +231,78 @@ fn hermetic_session_options_start_nothing_real() {
     let d = SessionOptions::default();
     assert!(d.audio.is_some(), "the default is the real desktop");
 }
+
+#[test]
+fn a_spectrum_frame_is_levels_from_0_to_1() {
+    assert_eq!(spectrum::parse("0 500 1000 \n"), [0.0, 0.5, 1.0]);
+    assert_eq!(spectrum::parse("1200 x 250"), [1.0, 0.25]);
+    assert!(spectrum::parse("").is_empty());
+}
+
+#[test]
+fn cava_runs_while_asked_and_repeats_are_dropped() {
+    // A stand-in that checks it got the config on stdin, then sends two equal frames and one
+    // new one, and stays up.
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../target/test-tmp/cava-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fake = dir.join("cava");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\n[ \"$1 $2\" = '-p /dev/stdin' ] || exit 1\ngrep -q '^bars = 3$' || exit 1\n\
+         echo '0 0 0'; echo '0 0 0'; echo '100 900 0'; exec sleep 30\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut f = Feeds::new().unwrap();
+    f.cava = fake.to_string_lossy().into_owned();
+    f.run_spectrum(Some("[general]\nbars = 3\n"));
+    let mut frames = Vec::new();
+    while frames.len() < 2 {
+        assert!(wait_readable(&f), "cava's frames arrive");
+        frames.extend(f.drain().into_iter().filter_map(|x| match x {
+            Feed::Spectrum(l) => Some(l),
+            _ => None,
+        }));
+    }
+    assert_eq!(frames, [vec![0.0; 3], vec![0.1, 0.9, 0.0]]);
+    // The same config again leaves it running; none stops it, and an empty spectrum follows.
+    f.run_spectrum(Some("[general]\nbars = 3\n"));
+    f.run_spectrum(None);
+    let mut got = Vec::new();
+    while !got
+        .iter()
+        .any(|x| matches!(x, Feed::Spectrum(l) if l.is_empty()))
+    {
+        assert!(wait_readable(&f));
+        got.extend(f.drain());
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_missing_cava_is_a_note_not_a_retry() {
+    let mut f = Feeds::new().unwrap();
+    f.cava = "/nonexistent/cava".into();
+    f.run_spectrum(Some("x"));
+    f.run_spectrum(Some("x"));
+    assert!(wait_readable(&f));
+    let notes = f
+        .drain()
+        .into_iter()
+        .filter(|x| matches!(x, Feed::Note(n) if n.starts_with("cava:")))
+        .count();
+    assert_eq!(notes, 1);
+}
+
+#[test]
+fn a_new_spectrum_frame_redraws_the_cava_module() {
+    let mut a = Aggregate::new(None);
+    assert_eq!(
+        a.apply(Feed::Spectrum(vec![0.5])),
+        Changed::Module("cava".into())
+    );
+    assert_eq!(a.apply(Feed::Spectrum(vec![0.5])), Changed::Nothing);
+    assert_eq!(a.spectrum, [0.5]);
+}

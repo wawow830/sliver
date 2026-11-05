@@ -75,9 +75,7 @@ fn bar_option(key: &str) -> Option<Option<&'static str>> {
 
 fn why_unsupported(reference: &str) -> &'static str {
     let base = reference.split('#').next().unwrap_or(reference);
-    if base == "cava" {
-        "dropped: a visualizer polls constantly (power invariant); maybe an opt-in later"
-    } else if base.starts_with("cffi/") {
+    if base.starts_with("cffi/") {
         "dropped: in-process plugins could take the bar down; use a custom/* exec module"
     } else if base == "mpd" {
         "dropped: no mpd module; the `mpris` module covers most players (mpd needs mpd-mpris)"

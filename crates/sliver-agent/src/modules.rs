@@ -106,6 +106,8 @@ pub struct World {
     pub emoji: EmojiHandle,
     /// Local file of the current player's album art (fetched by the feeds).
     pub media_art: Option<std::path::PathBuf>,
+    /// The latest spectrum from `cava` (0..=1 per bar), empty while it isn't running.
+    pub spectrum: Vec<f32>,
     /// Installed applications, for taskbar icons.
     pub apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
 }
@@ -125,6 +127,7 @@ impl World {
             apps: Default::default(),
             emoji: Default::default(),
             media_art: None,
+            spectrum: Vec::new(),
         }
     }
 
@@ -207,6 +210,91 @@ pub fn graph_params(block: &toml::Table) -> (std::time::Duration, usize) {
         .and_then(|v| v.as_integer())
         .map_or(GRAPH_SAMPLES, |n| n.clamp(2, 600) as usize);
     (every, samples)
+}
+
+/// `cava` defaults: 20 bars at 30 frames a second, the most the bar draws while animating.
+pub const CAVA_BARS: usize = 20;
+pub const CAVA_FPS: i64 = 30;
+
+/// How many bars a `cava` module draws (`bars`, 1–128).
+pub fn cava_bars(block: &toml::Table) -> usize {
+    block
+        .get("bars")
+        .and_then(|v| v.as_integer())
+        .map_or(CAVA_BARS, |n| n.clamp(1, 128) as usize)
+}
+
+/// The config `cava` runs with for this module: waybar's `cava` keys in cava's own sections,
+/// and raw output (one line of `bars` numbers, 0–1000, per frame) that the agent reads. Keys of
+/// the wrong type, and strings that would break out of their line, are left out.
+pub fn cava_config(block: &toml::Table) -> String {
+    const KEYS: &[(&str, &str, &str)] = &[
+        ("general", "autosens", "autosens"),
+        ("general", "sensitivity", "sensitivity"),
+        ("general", "lower_cutoff_freq", "lower_cutoff_freq"),
+        ("general", "higher_cutoff_freq", "higher_cutoff_freq"),
+        ("input", "method", "method"),
+        ("input", "source", "source"),
+        ("output", "reverse", "reverse"),
+        ("smoothing", "monstercat", "monstercat"),
+        ("smoothing", "waves", "waves"),
+        ("smoothing", "noise_reduction", "noise_reduction"),
+    ];
+    let value = |v: &toml::Value| match v {
+        toml::Value::Boolean(b) => Some(u8::from(*b).to_string()),
+        toml::Value::Integer(i) => Some(i.to_string()),
+        toml::Value::Float(f) => Some(f.to_string()),
+        toml::Value::String(s) if !s.contains(['\n', '\r', '[', ';', '#']) => Some(s.clone()),
+        _ => None,
+    };
+    let fps = block
+        .get("framerate")
+        .and_then(|v| v.as_integer())
+        .map_or(CAVA_FPS, |n| n.clamp(1, CAVA_FPS));
+    // A second of silence puts cava to sleep: no frames, and no work, until sound comes back.
+    let sleep = block
+        .get("sleep_timer")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(1);
+    let stereo = block
+        .get("stereo")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut sections: Vec<(&str, Vec<String>)> = vec![
+        (
+            "general",
+            vec![
+                format!("bars = {}", cava_bars(block)),
+                format!("framerate = {fps}"),
+                format!("sleep_timer = {sleep}"),
+            ],
+        ),
+        ("input", Vec::new()),
+        (
+            "output",
+            vec![
+                "method = raw".into(),
+                "raw_target = /dev/stdout".into(),
+                "data_format = ascii".into(),
+                "ascii_max_range = 1000".into(),
+                "bar_delimiter = 32".into(),
+                "frame_delimiter = 10".into(),
+                format!("channels = {}", if stereo { "stereo" } else { "mono" }),
+            ],
+        ),
+        ("smoothing", Vec::new()),
+    ];
+    for (section, key, cava_key) in KEYS {
+        if let Some(v) = block.get(*key).and_then(value)
+            && let Some((_, lines)) = sections.iter_mut().find(|(s, _)| s == section)
+        {
+            lines.push(format!("{cava_key} = {v}"));
+        }
+    }
+    sections
+        .iter()
+        .map(|(s, lines)| format!("[{s}]\n{}\n", lines.join("\n")))
+        .collect()
 }
 
 /// The value a `graph` plots now, scaled to 0..=1 by `min`/`max` (default 0 and 100): from its
@@ -1246,6 +1334,8 @@ struct Spec {
     image: Option<String>,
     /// `graph`: samples (oldest first, 0..=1) and how many fit.
     graph: Option<(Vec<f32>, usize)>,
+    /// `cava`: the spectrum's levels, 0..=1.
+    bars: Option<Vec<f32>>,
 }
 
 impl Spec {
@@ -1269,6 +1359,7 @@ impl Spec {
             fallback_text: None,
             image: None,
             graph: None,
+            bars: None,
         }
     }
 
@@ -1309,6 +1400,7 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
         }
         "key" | "custom" | "spacer" => Some(Spec::new(ValueMap::new(), "")),
         "graph" | "custom-graph" => widgets::graph(m, world, ui),
+        "cava" => widgets::cava(m, world),
         "image" => widgets::image(m, world),
         "clock" => widgets::clock(m, world, ui),
         "battery" => system::battery(world),
@@ -1551,6 +1643,8 @@ fn cell(
         let f = format_module(c, "", &st, sp.values.as_ref());
         classes.extend(f.classes);
         Content::Graph { values, capacity }
+    } else if let Some(levels) = sp.bars.take() {
+        Content::Bars(levels)
     } else if let Some(name) = sp.image.take() {
         // A missing or unreadable picture hides the module (it may not exist yet).
         Content::Image(icons.image(&name, IMAGE_MAX_HEIGHT)?)

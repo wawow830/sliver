@@ -62,6 +62,8 @@ systemd hands the bar back to tiny-dfr.
 Summary:        Sliver Touch Bar session agent
 License:        (%{sliver_license}) AND %{bundled_licenses}
 Requires:       sliverd = %{version}-%{release}
+# The `cava` module's spectrum; nothing else needs it.
+Suggests:       cava
 
 %description -n sliver-agent
 The per-user agent: reads ~/.config/sliver, follows the focused app, workspace and system state,
