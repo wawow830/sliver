@@ -415,18 +415,58 @@ pub fn format_module(
     }
 }
 
+/// `max-length` and `min-length` count what's shown. The text is markup, so tags don't count and
+/// an entity (`&amp;`) is one character; a cut keeps the tags after it, so markup stays balanced.
 fn apply_lengths(text: String, min: Option<u32>, max: Option<u32>) -> String {
-    let n = text.chars().count();
+    let n = shown(&text).count();
     match (min, max) {
         (_, Some(max)) if n > max as usize => {
             let keep = (max as usize).saturating_sub(1);
-            let mut s: String = text.chars().take(keep).collect();
-            s.push('…');
-            s
+            let mut out = String::new();
+            let mut kept = 0;
+            for (piece, visible) in shown_pieces(&text) {
+                if !visible {
+                    out.push_str(piece);
+                } else if kept < keep {
+                    out.push_str(piece);
+                    kept += 1;
+                    if kept == keep {
+                        out.push('…');
+                    }
+                }
+            }
+            if keep == 0 {
+                out.insert(0, '…');
+            }
+            out
         }
         (Some(min), _) if n < min as usize => format!("{text}{}", " ".repeat(min as usize - n)),
         _ => text,
     }
+}
+
+/// The characters of markup `text` that are shown.
+fn shown(text: &str) -> impl Iterator<Item = &str> {
+    shown_pieces(text).filter(|(_, v)| *v).map(|(p, _)| p)
+}
+
+/// Markup `text` in pieces: a tag (not shown), an entity or a character (shown).
+fn shown_pieces(text: &str) -> impl Iterator<Item = (&str, bool)> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        let c = rest.chars().next()?;
+        let end = match c {
+            '<' => rest.find('>').map_or(rest.len(), |i| i + 1),
+            '&' => rest
+                .find(';')
+                .filter(|&i| i <= 10 && !rest[1..i].contains(['&', '<', ' ']))
+                .map_or(1, |i| i + 1),
+            c => c.len_utf8(),
+        };
+        let (piece, tail) = rest.split_at(end);
+        rest = tail;
+        Some((piece, c != '<'))
+    })
 }
 
 #[cfg(test)]
@@ -554,6 +594,29 @@ mod tests {
             format_module(&c, "", &st(10.4), &ValueMap::new()).text,
             "10%"
         );
+    }
+
+    #[test]
+    fn lengths_count_what_is_shown() {
+        // Tags don't count, an entity is one character, and a cut keeps the markup balanced.
+        assert_eq!(
+            apply_lengths("<b>Tom &amp; Jerry</b> ›".into(), None, Some(8)),
+            "<b>Tom &amp; J…</b>"
+        );
+        assert_eq!(
+            apply_lengths("Song  <big>›</big>".into(), None, Some(18)),
+            "Song  <big>›</big>"
+        );
+        assert_eq!(
+            apply_lengths("<i>ab</i>".into(), Some(4), None),
+            "<i>ab</i>  "
+        );
+        assert_eq!(
+            apply_lengths("a & b".into(), None, Some(5)),
+            "a & b",
+            "a bare & is a character"
+        );
+        assert_eq!(apply_lengths("abc".into(), None, Some(1)), "…");
     }
 
     #[test]
