@@ -864,3 +864,59 @@ fn drawer_options_class_direction_and_start() {
     assert!(out.iter().all(|c| c.classes.contains(&"kid".to_string())
         && !c.classes.contains(&"drawer-child".to_string())));
 }
+
+/// A user module's output is formatted like any module's: `format`, `format-alt`,
+/// `format-icons`, `states` and `hide-empty-text` over its text, alt and percentage.
+#[test]
+fn user_module_output_is_formatted_like_any_module() {
+    let cell = |block: &str, out: sliver_modules::Output, alt: bool| {
+        let toml = format!(
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"custom/x\"]\n[modules.\"custom/x\"]\nexec = \"x\"\n{block}\n"
+        );
+        let loaded = load_str(&toml, std::path::Path::new("."));
+        assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
+        let r = loaded.config.resolve("base", &Context::new()).unwrap();
+        let mut w = world();
+        w.outputs.insert("custom/x".into(), out);
+        let ui = |_: &str| UiState {
+            show_alt: alt,
+            ..UiState::default()
+        };
+        let mut out = Vec::new();
+        cells(
+            &r.zones[0].modules,
+            &w,
+            &mut Icons::builtin_only(),
+            36,
+            &ui,
+            &mut out,
+        );
+        out.into_iter().next()
+    };
+    let text = |c: &Cell| c.content.label_text().unwrap_or_default().to_owned();
+    let plain = sliver_modules::Output {
+        text: "hi".into(),
+        ..Default::default()
+    };
+    assert_eq!(text(&cell("", plain, false).unwrap()), "hi");
+
+    let block = "format = \"{icon} {text} {percentage}%\"\nformat-alt = \"{alt}!\"\nformat-icons = [\"a\", \"b\", \"c\"]\nstates = { warning = 70, critical = 90 }";
+    let busy = sliver_modules::Output {
+        text: "cpu".into(),
+        alt: Some("busy".into()),
+        percentage: Some(95.0),
+        classes: vec!["mine".into()],
+        ..Default::default()
+    };
+    let c = cell(block, busy.clone(), false).unwrap();
+    assert_eq!(text(&c), "c cpu 95%");
+    assert!(c.classes.contains(&"mine".into()) && c.classes.contains(&"critical".into()));
+    assert_eq!(text(&cell(block, busy, true).unwrap()), "busy!");
+
+    let empty = sliver_modules::Output::default();
+    assert!(
+        cell("hide-empty-text = true", empty, false).is_none(),
+        "no text: hidden"
+    );
+    assert!(cell("", sliver_modules::Output::hidden(), false).is_none());
+}

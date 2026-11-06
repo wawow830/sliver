@@ -523,8 +523,8 @@ struct Spec {
     defaults: Vec<(Gesture, &'static str)>,
     /// Classes from the module's own output.
     extra_classes: Vec<String>,
-    /// The text is already formatted (user modules): don't apply `format` again.
-    raw: bool,
+    /// waybar's `alt`: picks a `format-alt` / `format-icons` entry (user modules).
+    alt: Option<String>,
     /// Polled modules: redraw after this long.
     refresh: Option<std::time::Duration>,
     /// A sub-bar built from live data (the `language` picker), used when the config has no `menu`.
@@ -554,7 +554,7 @@ impl Spec {
             verbs: Vec::new(),
             defaults: Vec::new(),
             extra_classes: Vec::new(),
-            raw: false,
+            alt: None,
             refresh: None,
             menu: Vec::new(),
             fallback_text: None,
@@ -679,7 +679,7 @@ fn source(at: &At) -> Option<Spec> {
     let (m, world, ui, item) = (at.m, at.world, at.ui, at.item);
     match m.id.kind.as_str() {
         "custom" if world.outputs.contains_key(&m.id.to_string()) => {
-            widgets::custom_output(m, world, ui)
+            widgets::custom_output(m, world)
         }
         "key" | "custom" | "spacer" => Some(Spec::new(ValueMap::new(), "")),
         "graph" | "custom-graph" => widgets::graph(m, world, ui),
@@ -769,9 +769,9 @@ fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
     let st = State {
         percentage: sp.percentage,
         status: sp.status,
+        alt: sp.alt.as_deref(),
         show_alt: ui.show_alt,
         lower_is_worse: sp.lower_is_worse,
-        ..State::default()
     };
     let mut classes = m.classes.clone();
     let content = if m.id.kind == "spacer" {
@@ -787,11 +787,8 @@ fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
         // A missing or unreadable picture hides the module (it may not exist yet).
         Content::Image(icons.image(&name, IMAGE_MAX_HEIGHT)?)
     } else {
-        // User module output is already formatted (`sliver_modules::view`): pass it through.
-        let plain = sliver_config::Common::default();
-        let fc = if sp.raw { &plain } else { c };
         let f = present(
-            fc,
+            c,
             sp.default_format,
             &st,
             sp.values.as_ref(),
@@ -799,8 +796,12 @@ fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
             icons,
             icon_size,
         )?;
-        classes.extend(f.classes);
         classes.extend(sp.extra_classes.iter().cloned());
+        classes.extend(
+            f.classes
+                .into_iter()
+                .filter(|c| !sp.extra_classes.contains(c)),
+        );
         match (sp.slider, f.icon, f.text.is_empty()) {
             (Some(value), icon, _) => Content::Slider { icon, value },
             (None, None, true) => Content::text(sp.fallback_text.as_deref().unwrap_or_default()),

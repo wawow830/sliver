@@ -2,18 +2,30 @@
 
 use super::*;
 
-pub(super) fn custom_output(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+/// A user module's latest output, as values like any module's: `{text}` (also `{}`), `{alt}`,
+/// `{tooltip}` and `{percentage}`, its classes and icon, and `value` as a slider's level. Its
+/// text is markup already (`escape = true` escaped it in the runtime).
+pub(super) fn custom_output(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let out = &world.outputs[&m.id.to_string()];
-    let v = sliver_modules::view(m, out, ui.show_alt);
-    if v.hidden {
+    if out.hidden {
         return None;
     }
-    // `view` already applied the module's format; pass the result through as-is.
-    let mut sp = Spec::new(ValueMap::new().with("", FmtValue::Text(v.text)), "{}");
-    sp.extra_classes = v.classes;
-    sp.default_icon = v.icon;
-    sp.level = v.value.map(|value| (value / 100.0).clamp(0.0, 1.0) as f32);
-    sp.raw = true;
+    let text = FmtValue::Text(out.text.clone());
+    let mut v = ValueMap::new().with("", text.clone()).with("text", text);
+    if let Some(a) = &out.alt {
+        v = v.with("alt", a.as_str());
+    }
+    if let Some(d) = &out.detail {
+        v = v.with("tooltip", d.as_str());
+    }
+    let mut sp = Spec::new(v, "{}");
+    sp.percentage = out.percentage;
+    sp.alt = out.alt.clone();
+    sp.extra_classes = out.classes.clone();
+    sp.default_icon = out.icon.clone();
+    sp.level = out
+        .value
+        .map(|value| (value / 100.0).clamp(0.0, 1.0) as f32);
     Some(sp)
 }
 
