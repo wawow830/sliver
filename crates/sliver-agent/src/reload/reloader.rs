@@ -48,11 +48,13 @@ fn fingerprint(files: &[PathBuf]) -> u64 {
     h.finish()
 }
 
-/// `stylesheet = …` (relative to the config), else `style.css` next to it, on top of the default
-/// theme. The file must be readable; its own diagnostics are warnings.
-fn load_sheet(
+/// The stylesheet a config asks for: its `theme` (the default `sliver` one with the desktop's
+/// `accent`), then `stylesheet = …` (relative to `dir`, the config's directory) or else
+/// `style.css` there, on top. That file must be readable; its own diagnostics are warnings. The
+/// agent and the settings preview both draw with this.
+pub fn stylesheet(
     config: &Config,
-    config_path: Option<&Path>,
+    dir: Option<&Path>,
     accent: Option<sliver_render::Color>,
 ) -> Result<(Stylesheet, Vec<String>), String> {
     // The base theme (`theme = "classic"`), then the user's stylesheet on top. The default
@@ -60,7 +62,6 @@ fn load_sheet(
     let mut warnings = Vec::new();
     let (mut sheet, warning) = Stylesheet::theme(config.theme.as_deref(), accent);
     warnings.extend(warning);
-    let dir = config_path.and_then(Path::parent);
     let user = match (&config.stylesheet, dir) {
         (Some(s), Some(d)) => Some(d.join(s)),
         (Some(s), None) => Some(PathBuf::from(s)),
@@ -121,7 +122,7 @@ pub fn load_text(
         return Err(errors_of(&loaded));
     }
     let (sheet, mut warnings) =
-        load_sheet(&loaded.config, Some(&path), accent).map_err(|e| vec![e])?;
+        stylesheet(&loaded.config, path.parent(), accent).map_err(|e| vec![e])?;
     warnings.splice(
         0..0,
         loaded.diagnostics.warnings.iter().map(|w| w.to_string()),
@@ -158,7 +159,11 @@ impl Reloader {
         } else {
             sliver_config::load_str("", Path::new(".")).config
         };
-        let (sheet, sheet_warnings) = match load_sheet(&config, r.config_path.as_deref(), None) {
+        let (sheet, sheet_warnings) = match stylesheet(
+            &config,
+            r.config_path.as_deref().and_then(Path::parent),
+            None,
+        ) {
             Ok(s) => s,
             Err(e) => {
                 errors.push(e);
@@ -277,11 +282,14 @@ impl Reloader {
             self.watch(&files);
             return Outcome::Rejected(errors_of(&r.loaded));
         }
-        let (sheet, sheet_warnings) =
-            match load_sheet(&r.loaded.config, r.config_path.as_deref(), self.accent) {
-                Ok(s) => s,
-                Err(e) => return Outcome::Rejected(vec![e]),
-            };
+        let (sheet, sheet_warnings) = match stylesheet(
+            &r.loaded.config,
+            r.config_path.as_deref().and_then(Path::parent),
+            self.accent,
+        ) {
+            Ok(s) => s,
+            Err(e) => return Outcome::Rejected(vec![e]),
+        };
         let mut warnings: Vec<String> = r
             .loaded
             .diagnostics

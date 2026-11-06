@@ -45,25 +45,13 @@ impl Preview {
     }
 
     /// The user's stylesheet on top of the default theme, plus any problems for the Status page.
+    /// The agent's (`sliver_agent::reload::stylesheet`); an unreadable stylesheet leaves the
+    /// theme alone, and the reason is a problem.
     pub fn stylesheet(config: &Config, config_dir: Option<&Path>) -> (Stylesheet, Vec<String>) {
-        let mut problems = Vec::new();
-        let (mut sheet, warning) = Stylesheet::theme(config.theme.as_deref(), None);
-        problems.extend(warning);
-        // Like the agent's reload: `stylesheet = …`, else `style.css` beside the config.
-        let path = match (&config.stylesheet, config_dir) {
-            (Some(s), Some(d)) => d.join(s),
-            (Some(s), None) => s.into(),
-            (None, Some(d)) if d.join("style.css").is_file() => d.join("style.css"),
-            (None, _) => return (sheet, problems),
-        };
-        match Stylesheet::load(&path) {
-            Ok((user, diags)) => {
-                problems.extend(diags.iter().map(|d| d.to_string()));
-                sheet.extend(&user);
-            }
-            Err(e) => problems.push(format!("{}: {e}", path.display())),
+        match sliver_agent::reload::stylesheet(config, config_dir, None) {
+            Ok(s) => s,
+            Err(e) => (Stylesheet::theme(config.theme.as_deref(), None).0, vec![e]),
         }
-        (sheet, problems)
     }
 
     /// Renders config layer `layer` for `ctx`. Custom layers are shown the way the agent shows
