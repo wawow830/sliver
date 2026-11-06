@@ -177,7 +177,15 @@ impl Daemon {
                 height,
                 stride,
                 format,
-            } => self.attach(client, id, width, height, stride, format, fd),
+            } => {
+                let shape = validate::BufferShape {
+                    width,
+                    height,
+                    stride,
+                    format,
+                };
+                self.attach(client, id, shape, fd)
+            }
             AgentMsg::DetachBuffer { id } => {
                 if let Some(c) = self.clients.get_mut(&client) {
                     c.buffers.remove(&id);

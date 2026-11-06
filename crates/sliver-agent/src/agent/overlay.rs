@@ -81,15 +81,7 @@ pub(super) fn cover(
         && let Some(ctx) = &world.published.app
     {
         let mut cells = Vec::new();
-        crate::published::cells(
-            ctx,
-            "app",
-            true,
-            icons,
-            ICON_LOOKUP_SIZE,
-            &|_| false,
-            &mut cells,
-        );
+        crate::published::cells(ctx, "app", icons, ICON_LOOKUP_SIZE, &|_| false, &mut cells);
         cells.push(crate::published::close_cell(ctx, icons, ICON_LOOKUP_SIZE));
         return Some(Cover {
             zone: zone("modal", &["modal"]),
@@ -102,8 +94,13 @@ pub(super) fn cover(
         Overlay::Menu { items, slot } => modules::menu_cells(items, *slot, icons, ICON_LOOKUP_SIZE),
         // Looked up in the layout's zones: the drawer's group sits in one the overlay covers.
         Overlay::Drawer(key) => {
-            modules::subbar_cells(zones, key, world, icons, ICON_LOOKUP_SIZE, ui)
-                .unwrap_or_default()
+            let mut b = modules::Build {
+                world,
+                icons,
+                icon_size: ICON_LOOKUP_SIZE,
+                ui,
+            };
+            modules::subbar_cells(zones, key, &mut b).unwrap_or_default()
         }
         Overlay::Popover { .. } => return None,
     };

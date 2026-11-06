@@ -70,10 +70,7 @@ pub fn start_expanded_drawers(zones: &[sliver_config::ResolvedZone]) -> Vec<Stri
 pub fn subbar_cells(
     zones: &[sliver_config::ResolvedZone],
     key: &str,
-    world: &World,
-    icons: &mut Icons,
-    icon_size: u32,
-    ui: &dyn Fn(&str) -> UiState,
+    b: &mut Build,
 ) -> Option<Vec<Cell>> {
     fn find<'a>(ms: &'a [ModuleInstance], prefix: &str, key: &str) -> Option<&'a ModuleInstance> {
         for m in ms {
@@ -91,33 +88,17 @@ pub fn subbar_cells(
     }
     let group = zones.iter().find_map(|z| find(&z.modules, "", key))?;
     let mut out = Vec::new();
-    cells_in(
-        group.children.get(1..).unwrap_or_default(),
-        &format!("{key}/"),
-        world,
-        icons,
-        icon_size,
-        ui,
-        &mut out,
-    );
-    out.extend(menu_cells(&[], None, icons, icon_size));
+    let members = group.children.get(1..).unwrap_or_default();
+    cells_in(members, &format!("{key}/"), b, &mut out);
+    out.extend(menu_cells(&[], None, b.icons, b.icon_size));
     Some(out)
 }
 
 /// A group's members, flattened: all of them, or a closed drawer's handle alone (a bar-mode
 /// drawer's rest shows as a sub-bar), with the group's classes.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn group_cells(
-    m: &ModuleInstance,
-    key: &str,
-    world: &World,
-    icons: &mut Icons,
-    icon_size: u32,
-    ui: &dyn Fn(&str) -> UiState,
-    out: &mut Vec<Cell>,
-) {
+pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mut Vec<Cell>) {
     let drawer = m.config.contains_key("drawer");
-    let open = ui(key).expanded;
+    let open = (b.ui)(key).expanded;
     // A closed drawer shows only its first module (the handle).
     // (a bar-mode drawer never grows in place: its rest shows in the sub-bar)
     let bar = drawer && is_bar_drawer(m);
@@ -136,11 +117,11 @@ pub(super) fn group_cells(
     let mut handle_at = start;
     if rtl && children.len() > 1 {
         let (leader, rest) = children.split_at(1);
-        cells_in(rest, &child_prefix, world, icons, icon_size, ui, out);
+        cells_in(rest, &child_prefix, b, out);
         handle_at = out.len();
-        cells_in(leader, &child_prefix, world, icons, icon_size, ui, out);
+        cells_in(leader, &child_prefix, b, out);
     } else {
-        cells_in(children, &child_prefix, world, icons, icon_size, ui, out);
+        cells_in(children, &child_prefix, b, out);
     }
     if drawer && let Some(handle) = out.get_mut(handle_at) {
         let collapse_after =

@@ -65,8 +65,8 @@ pub(super) fn emoji_strip(
         c
     };
     let act = |op: EmojiOp| emoji_act(key, op);
-    if let Some(query) = ui.search.as_ref().filter(|_| ui.tones.is_none()) {
-        search_strip(m, key, world, ui, query, insert, &bare, out);
+    if ui.search.is_some() && ui.tones.is_none() {
+        search_strip(key, world, ui, insert, &bare, out);
         return;
     }
     for t in 0..=Group::ALL.len() {
@@ -159,17 +159,15 @@ fn pick(key: &str, insert: Insert, text: &str) -> Do {
 /// Emoji search: no keyboard is grabbed. A row of letters (and a space) builds the query on the
 /// bar itself; the matches (names, word prefixes) sit at the right, swipe to page. ⌫ erases,
 /// tapping the query clears it, ✕ goes back to the groups.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn search_strip(
-    m: &ModuleInstance,
     key: &str,
     world: &World,
     ui: &EmojiUi,
-    query: &str,
     insert: Insert,
     bare: &Bare<'_>,
     out: &mut Vec<Cell>,
 ) {
+    let query = ui.search.as_deref().unwrap_or_default();
     let act = |op: EmojiOp| emoji_act(key, op);
     let shown = if query.is_empty() {
         "🔍".to_string()
@@ -228,7 +226,6 @@ pub(super) fn search_strip(
             Vec::new(),
         ));
     }
-    let _ = m;
     out.push(bare(
         format!("{key}/close"),
         "✕",

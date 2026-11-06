@@ -138,43 +138,35 @@ pub enum Opens {
     Slider,
 }
 
-/// Builds the cells for one zone's modules. Hidden modules produce nothing; groups flatten.
-pub fn cells(
-    modules: &[ModuleInstance],
-    world: &World,
-    icons: &mut Icons,
-    icon_size: u32,
-    ui: &dyn Fn(&str) -> UiState,
-    out: &mut Vec<Cell>,
-) {
-    cells_in(modules, "", world, icons, icon_size, ui, out);
+/// What building cells takes besides the modules: the world they show, where icons come from
+/// and the size they're looked up at, and each cell's agent-side state (by key).
+pub struct Build<'a> {
+    pub world: &'a World,
+    pub icons: &'a mut Icons,
+    pub icon_size: u32,
+    pub ui: &'a dyn Fn(&str) -> UiState,
 }
 
-fn cells_in(
-    modules: &[ModuleInstance],
-    prefix: &str,
-    world: &World,
-    icons: &mut Icons,
-    icon_size: u32,
-    ui: &dyn Fn(&str) -> UiState,
-    out: &mut Vec<Cell>,
-) {
+/// Builds the cells for one zone's modules. Hidden modules produce nothing; groups flatten.
+pub fn cells(modules: &[ModuleInstance], b: &mut Build, out: &mut Vec<Cell>) {
+    cells_in(modules, "", b, out);
+}
+
+fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut Vec<Cell>) {
     for m in modules {
         let key = format!("{prefix}{}", m.id);
         let strip = m.config.get("mode").and_then(|v| v.as_str()) == Some("strip");
         match m.id.kind.as_str() {
-            "group" => group_cells(m, &key, world, icons, icon_size, ui, out),
-            "app-controls" | "status-items" => {
-                placeholder_cells(m, &key, prefix, world, icons, icon_size, out)
-            }
+            "group" => group_cells(m, &key, b, out),
+            "app-controls" | "status-items" => placeholder_cells(m, &key, prefix, b, out),
             // A published item (or a whole context) placed by the layout: `app/<provider>#<item>`
             // (api.md §3.1). It's styled, bound and formatted like any module.
-            "app" => pinned_app(m, &key, world, icons, icon_size, out),
-            "emoji" if strip => emoji_strip(m, &key, world, &ui(&key).emoji, out),
+            "app" => pinned_app(m, &key, b, out),
+            "emoji" if strip => emoji_strip(m, &key, b.world, &(b.ui)(&key).emoji, out),
             // Any other module is a cell, or one per item it lists (workspaces, windows, who's
             // recording).
             _ => {
-                let cells: Vec<(String, Option<Item>)> = match items(m, world) {
+                let cells: Vec<(String, Option<Item>)> = match items(m, b.world) {
                     Some(list) => list
                         .into_iter()
                         .map(|(suffix, item)| (format!("{key}/{suffix}"), Some(item)))
@@ -182,15 +174,15 @@ fn cells_in(
                     None => vec![(key, None)],
                 };
                 for (key, item) in cells {
-                    let ui = ui(&key);
+                    let ui = (b.ui)(&key);
                     let at = At {
                         m,
                         key: &key,
-                        world,
+                        world: b.world,
                         ui: &ui,
                         item,
                     };
-                    out.extend(cell(at, icons, icon_size));
+                    out.extend(cell(at, b.icons, b.icon_size));
                 }
             }
         }

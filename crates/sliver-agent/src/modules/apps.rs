@@ -18,14 +18,8 @@ pub(super) fn user_bindings(m: &ModuleInstance) -> Vec<(Gesture, Do)> {
 /// to the app), with the module's classes, `on-*` bindings (`pass-through`), `width` and
 /// `format` (over the item's values) applied on top. Nothing while it isn't published; an
 /// outlined placeholder in the settings preview.
-pub(super) fn pinned_app(
-    m: &ModuleInstance,
-    key: &str,
-    world: &World,
-    icons: &mut Icons,
-    icon_size: u32,
-    out: &mut Vec<Cell>,
-) {
+pub(super) fn pinned_app(m: &ModuleInstance, key: &str, b: &mut Build, out: &mut Vec<Cell>) {
+    let (world, icons, icon_size) = (b.world, &mut *b.icons, b.icon_size);
     let Some(provider) = m.id.name.as_deref() else {
         return;
     };
@@ -107,27 +101,25 @@ pub(super) fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &st
 /// App controls / Status items: the items apps publish for it (the focused app's, or the status
 /// contexts'), with the placeholder module's classes, bindings and `width` on them; an outlined
 /// placeholder in previews while there are none.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn placeholder_cells(
     m: &ModuleInstance,
     key: &str,
     prefix: &str,
-    world: &World,
-    icons: &mut Icons,
-    icon_size: u32,
+    b: &mut Build,
     out: &mut Vec<Cell>,
 ) {
+    let (world, icons, icon_size) = (b.world, &mut *b.icons, b.icon_size);
     let start = out.len();
     let p = &world.published;
     if m.id.kind == "app-controls" {
         if let Some(ctx) = &p.app {
             let skip = |id: &str| p.is_pinned(&ctx.provider, id);
-            crate::published::cells(ctx, "app", true, icons, icon_size, &skip, out);
+            crate::published::cells(ctx, "app", icons, icon_size, &skip, out);
         }
     } else {
         for ctx in &p.status {
             let skip = |id: &str| p.is_pinned(&ctx.provider, id);
-            crate::published::cells(ctx, "status", false, icons, icon_size, &skip, out);
+            crate::published::cells(ctx, "status", icons, icon_size, &skip, out);
         }
     }
     let class = if m.id.kind == "app-controls" {

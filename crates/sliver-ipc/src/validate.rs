@@ -76,14 +76,26 @@ impl Invalid {
 
 /// Checks an `attach_buffer` header. The fd's seals and size (≥ [`required_len`]) are checked by
 /// sliverd itself.
+/// What an attached buffer holds: its pixels' size and format, and the bytes per row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferShape {
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub format: PixelFormat,
+}
+
 pub fn validate_buffer(
     panel: &PanelInfo,
     attached: usize,
-    width: u32,
-    height: u32,
-    stride: u32,
-    format: PixelFormat,
+    shape: BufferShape,
 ) -> Result<(), Invalid> {
+    let BufferShape {
+        width,
+        height,
+        stride,
+        format,
+    } = shape;
     if attached >= MAX_BUFFERS {
         return Err(Invalid::TooManyBuffers);
     }
@@ -316,16 +328,25 @@ mod tests {
         assert_eq!(validate_present(&p, &f), Err(Invalid::BadDamage));
     }
 
+    fn shape(width: u32, height: u32, stride: u32, format: PixelFormat) -> BufferShape {
+        BufferShape {
+            width,
+            height,
+            stride,
+            format,
+        }
+    }
+
     #[test]
     fn buffers() {
         let p = panel();
         let x = PixelFormat::Xrgb8888;
-        validate_buffer(&p, 0, 2008, 60, 8032, x).unwrap();
-        validate_buffer(&p, 0, 2008, 60, 8192, x).unwrap();
-        assert!(validate_buffer(&p, 0, 60, 2008, 240, x).is_err());
-        assert!(validate_buffer(&p, 0, 2008, 60, 8000, x).is_err());
+        validate_buffer(&p, 0, shape(2008, 60, 8032, x)).unwrap();
+        validate_buffer(&p, 0, shape(2008, 60, 8192, x)).unwrap();
+        assert!(validate_buffer(&p, 0, shape(60, 2008, 240, x)).is_err());
+        assert!(validate_buffer(&p, 0, shape(2008, 60, 8000, x)).is_err());
         assert_eq!(
-            validate_buffer(&p, MAX_BUFFERS, 2008, 60, 8032, x),
+            validate_buffer(&p, MAX_BUFFERS, shape(2008, 60, 8032, x)),
             Err(Invalid::TooManyBuffers)
         );
         assert_eq!(required_len(8032, 60), 481_920);

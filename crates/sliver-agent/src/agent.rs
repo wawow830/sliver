@@ -562,14 +562,13 @@ impl Agent {
                     Some(c) => std::mem::take(&mut c.cells),
                     None => {
                         let mut cells = Vec::new();
-                        modules::cells(
-                            &z.modules,
+                        let mut b = modules::Build {
                             world,
-                            &mut self.icons,
-                            ICON_LOOKUP_SIZE,
-                            &lookup,
-                            &mut cells,
-                        );
+                            icons: &mut self.icons,
+                            icon_size: ICON_LOOKUP_SIZE,
+                            ui: &lookup,
+                        };
+                        modules::cells(&z.modules, &mut b, &mut cells);
                         cells.retain(|c| !hidden.contains(&c.id) && !hidden.contains(&c.key));
                         cells
                     }

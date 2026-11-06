@@ -224,16 +224,7 @@ pub fn popover_cells(
     };
     let mut out = Vec::new();
     for child in items {
-        push(
-            ctx,
-            child,
-            None,
-            class,
-            class == "app",
-            icons,
-            icon_size,
-            &mut out,
-        );
+        push(ctx, child, None, class, icons, icon_size, &mut out);
     }
     for c in &mut out {
         c.classes.push("popover-item".into());
@@ -248,20 +239,18 @@ pub fn popover_cells(
     Some(out)
 }
 
-/// Cells for a context's items. `class` is `app` or `status`; `focused` adds `.focused-app`.
-/// Items in `skip` (placed elsewhere by the layout) are left out.
-#[allow(clippy::too_many_arguments)]
+/// Cells for a context's items. `class` is `app` (the focused app's, `.focused-app` too) or
+/// `status`. Items in `skip` (placed elsewhere by the layout) are left out.
 pub fn cells(
     ctx: &PubContext,
     class: &str,
-    focused: bool,
     icons: &mut Icons,
     icon_size: u32,
     skip: &dyn Fn(&str) -> bool,
     out: &mut Vec<Cell>,
 ) {
     for item in ctx.items.iter().filter(|i| !skip(&i.id)) {
-        push(ctx, item, None, class, focused, icons, icon_size, out);
+        push(ctx, item, None, class, icons, icon_size, out);
     }
 }
 
@@ -323,17 +312,17 @@ pub fn pinned_cells(
         .iter()
         .filter(|i| item.is_none_or(|id| i.id == id))
     {
-        push(ctx, it, None, class, class == "app", icons, icon_size, out);
+        push(ctx, it, None, class, icons, icon_size, out);
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// `item`'s cells (several for segmented controls, scrubbers and groups; none while hidden).
+/// `group` is the group it's in; `class` the context's (`app`, the focused app's, or `status`).
 fn push(
     ctx: &PubContext,
     item: &Item,
     group: Option<&Item>,
     class: &str,
-    focused: bool,
     icons: &mut Icons,
     icon_size: u32,
     out: &mut Vec<Cell>,
@@ -362,7 +351,7 @@ fn push(
         Content::label(icon, sliver_render::markup::escape(&text))
     };
     let mut classes = vec![class.to_owned(), item.kind.type_name().to_owned()];
-    if focused {
+    if class == "app" {
         classes.push("focused-app".into());
     }
     classes.extend(item.classes.iter().cloned());
@@ -552,16 +541,7 @@ fn push(
         }
         ItemKind::Group { items } => {
             for child in items {
-                push(
-                    ctx,
-                    child,
-                    Some(item),
-                    class,
-                    focused,
-                    icons,
-                    icon_size,
-                    out,
-                );
+                push(ctx, child, Some(item), class, icons, icon_size, out);
             }
         }
     }

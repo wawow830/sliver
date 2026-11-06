@@ -86,7 +86,14 @@ impl Renderer {
                         m.fill_path(&path, FillRule::Winding, true, Transform::identity());
                         Some(m)
                     });
-                draw_icon_in(icon, x, y, w, h, fg, opacity, mask.as_ref(), pixmap);
+                draw_icon_in(
+                    icon,
+                    Rect::new(x, y, w, h),
+                    fg,
+                    opacity,
+                    mask.as_ref(),
+                    pixmap,
+                );
             }
             Content::Slider { icon, .. } => {
                 if let Some(icon) = icon {
@@ -478,22 +485,19 @@ pub(super) fn draw_icon(
     opacity: f32,
     pixmap: &mut Pixmap,
 ) {
-    draw_icon_in(icon, x, y, size, size, fg, opacity, None, pixmap);
+    draw_icon_in(icon, Rect::new(x, y, size, size), fg, opacity, None, pixmap);
 }
 
-/// Draws `icon` fitted inside the `bw` x `bh` box at `x`, `y` (aspect ratio kept, centered).
-#[allow(clippy::too_many_arguments)]
+/// Draws `icon` fitted inside `area` (aspect ratio kept, centered).
 pub(super) fn draw_icon_in(
     icon: &Icon,
-    x: f32,
-    y: f32,
-    bw: f32,
-    bh: f32,
+    area: Rect,
     fg: Color,
     opacity: f32,
     mask: Option<&tiny_skia::Mask>,
     pixmap: &mut Pixmap,
 ) {
+    let Rect { x, y, w: bw, h: bh } = area;
     let (w, h) = icon.size();
     if w <= 0.0 || h <= 0.0 || bw <= 0.0 || bh <= 0.0 {
         return;

@@ -16,10 +16,12 @@ fn build(toml: &str, layer: &str) -> Vec<Cell> {
     for z in &r.zones {
         cells(
             &z.modules,
-            &world(),
-            &mut icons,
-            36,
-            &|_| UiState::default(),
+            &mut Build {
+                world: &world(),
+                icons: &mut icons,
+                icon_size: 36,
+                ui: &|_| UiState::default(),
+            },
             &mut out,
         );
     }
@@ -45,10 +47,12 @@ fn stat_cells(toml: &str, w: &World) -> Vec<Cell> {
     for z in &r.zones {
         cells(
             &z.modules,
-            w,
-            &mut icons,
-            36,
-            &|_| UiState::default(),
+            &mut Build {
+                world: w,
+                icons: &mut icons,
+                icon_size: 36,
+                ui: &|_| UiState::default(),
+            },
             &mut out,
         );
     }
@@ -79,7 +83,16 @@ fn clock_time_zones_and_locale() {
             ..UiState::default()
         };
         let mut icons = Icons::builtin_only();
-        cells(&r.zones[0].modules, &world(), &mut icons, 36, &ui, &mut out);
+        cells(
+            &r.zones[0].modules,
+            &mut Build {
+                world: &world(),
+                icons: &mut icons,
+                icon_size: 36,
+                ui: &ui,
+            },
+            &mut out,
+        );
         out.iter()
             .map(|c| match &c.content {
                 Content::Label { text: t, .. } => t.clone(),
@@ -99,10 +112,12 @@ fn clock_time_zones_and_locale() {
     let mut icons = Icons::builtin_only();
     cells(
         &r.zones[0].modules,
-        &world(),
-        &mut icons,
-        36,
-        &|_| UiState::default(),
+        &mut Build {
+            world: &world(),
+            icons: &mut icons,
+            icon_size: 36,
+            ui: &|_| UiState::default(),
+        },
         &mut out,
     );
     let swipes = |c: &Cell| {
@@ -541,10 +556,12 @@ fn preview_shows_samples_and_placeholders() {
     for z in &r.zones {
         cells(
             &z.modules,
-            &w,
-            &mut icons,
-            36,
-            &|_| UiState::default(),
+            &mut Build {
+                world: &w,
+                icons: &mut icons,
+                icon_size: 36,
+                ui: &|_| UiState::default(),
+            },
             &mut out,
         );
     }
@@ -594,10 +611,12 @@ fn slider_is_one_switch_for_every_module_with_a_level() {
         let ui = |_: &str| UiState::default();
         cells(
             &z.modules,
-            &w,
-            &mut Icons::builtin_only(),
-            36,
-            &ui,
+            &mut Build {
+                world: &w,
+                icons: &mut Icons::builtin_only(),
+                icon_size: 36,
+                ui: &ui,
+            },
             &mut out,
         );
     }
@@ -628,10 +647,12 @@ fn graphs_preview_with_a_made_up_history() {
     for z in &r.zones {
         cells(
             &z.modules,
-            &w,
-            &mut icons,
-            36,
-            &|_| UiState::default(),
+            &mut Build {
+                world: &w,
+                icons: &mut icons,
+                icon_size: 36,
+                ui: &|_| UiState::default(),
+            },
             &mut out,
         );
     }
@@ -658,10 +679,12 @@ fn pinned_app_placeholders_have_short_labels() {
     for z in &r.zones {
         cells(
             &z.modules,
-            &w,
-            &mut icons,
-            36,
-            &|_| UiState::default(),
+            &mut Build {
+                world: &w,
+                icons: &mut icons,
+                icon_size: 36,
+                ui: &|_| UiState::default(),
+            },
             &mut out,
         );
     }
@@ -698,10 +721,12 @@ fn systemd_failed_units() {
         for z in &r.zones {
             cells(
                 &z.modules,
-                &w,
-                &mut icons,
-                36,
-                &|_| UiState::default(),
+                &mut Build {
+                    world: &w,
+                    icons: &mut icons,
+                    icon_size: 36,
+                    ui: &|_| UiState::default(),
+                },
                 &mut out,
             );
         }
@@ -784,10 +809,12 @@ fn placeholders_take_the_module_width() {
     for z in &r.zones {
         cells(
             &z.modules,
-            &w,
-            &mut icons,
-            36,
-            &|_| UiState::default(),
+            &mut Build {
+                world: &w,
+                icons: &mut icons,
+                icon_size: 36,
+                ui: &|_| UiState::default(),
+            },
             &mut out,
         );
     }
@@ -847,10 +874,12 @@ fn drawer_options_class_direction_and_start() {
     let mut icons = Icons::builtin_only();
     cells(
         &r.zones[0].modules,
-        &world(),
-        &mut icons,
-        36,
-        &open,
+        &mut Build {
+            world: &world(),
+            icons: &mut icons,
+            icon_size: 36,
+            ui: &open,
+        },
         &mut out,
     );
     let keys: Vec<&str> = out.iter().map(|c| c.key.as_str()).collect();
@@ -885,10 +914,12 @@ fn user_module_output_is_formatted_like_any_module() {
         let mut out = Vec::new();
         cells(
             &r.zones[0].modules,
-            &w,
-            &mut Icons::builtin_only(),
-            36,
-            &ui,
+            &mut Build {
+                world: &w,
+                icons: &mut Icons::builtin_only(),
+                icon_size: 36,
+                ui: &ui,
+            },
             &mut out,
         );
         out.into_iter().next()

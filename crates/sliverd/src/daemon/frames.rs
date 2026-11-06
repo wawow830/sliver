@@ -3,15 +3,11 @@
 use super::*;
 
 impl Daemon {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn attach(
         &mut self,
         client: ClientId,
         id: u32,
-        width: u32,
-        height: u32,
-        stride: u32,
-        format: sliver_ipc::proto::PixelFormat,
+        shape: validate::BufferShape,
         fd: Attachment,
     ) {
         let c = self.clients.get_mut(&client).expect("checked");
@@ -22,12 +18,10 @@ impl Daemon {
             Attachment::Buffer(buf) => validate::validate_buffer(
                 &self.panel,
                 c.buffers.len() - usize::from(c.buffers.contains_key(&id)),
-                width,
-                height,
-                stride,
-                format,
+                shape,
             )
             .map(|()| {
+                let (width, height) = (shape.width, shape.height);
                 c.buffers.insert(id, Attached { width, height, buf });
             })
             .map_err(|e| e.to_string()),
