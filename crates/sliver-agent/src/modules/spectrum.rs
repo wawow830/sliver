@@ -3,11 +3,6 @@
 
 use super::*;
 
-/// Is this a `graph` module kind (`graph`, waybar-style `custom-graph/<name>`)?
-pub fn is_graph(kind: &str) -> bool {
-    matches!(kind, "graph" | "custom-graph")
-}
-
 /// `graph` defaults: a sample every 2 s, 30 kept.
 pub const GRAPH_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 pub const GRAPH_SAMPLES: usize = 30;
@@ -20,7 +15,6 @@ pub fn graph_params(m: &ModuleInstance) -> (std::time::Duration, usize) {
     }
     .max(std::time::Duration::from_millis(100));
     let samples = m
-        .config
         .get("samples")
         .and_then(|v| v.as_integer())
         .map_or(GRAPH_SAMPLES, |n| n.clamp(2, 600) as usize);
@@ -33,9 +27,8 @@ pub const CAVA_BARS: usize = 20;
 pub const CAVA_FPS: i64 = 60;
 
 /// How many bars a `cava` module draws (`bars`, 1–128).
-pub fn cava_bars(block: &toml::Table) -> usize {
-    block
-        .get("bars")
+pub fn cava_bars(m: &ModuleInstance) -> usize {
+    m.get("bars")
         .and_then(|v| v.as_integer())
         .map_or(CAVA_BARS, |n| n.clamp(1, 128) as usize)
 }
@@ -43,7 +36,7 @@ pub fn cava_bars(block: &toml::Table) -> usize {
 /// The config `cava` runs with for this module: waybar's `cava` keys in cava's own sections,
 /// and raw output (one line of `bars` numbers, 0–1000, per frame) that the agent reads. Keys of
 /// the wrong type, and strings that would break out of their line, are left out.
-pub fn cava_config(block: &toml::Table) -> String {
+pub fn cava_config(block: &ModuleInstance) -> String {
     const KEYS: &[(&str, &str, &str)] = &[
         ("general", "autosens", "autosens"),
         ("general", "sensitivity", "sensitivity"),
@@ -101,7 +94,7 @@ pub fn cava_config(block: &toml::Table) -> String {
         ("smoothing", Vec::new()),
     ];
     for (section, key, cava_key) in KEYS {
-        if let Some(v) = block.get(*key).and_then(value)
+        if let Some(v) = block.get(key).and_then(value)
             && let Some((_, lines)) = sections.iter_mut().find(|(s, _)| s == section)
         {
             lines.push(format!("{cava_key} = {v}"));
@@ -116,10 +109,10 @@ pub fn cava_config(block: &toml::Table) -> String {
 /// `spectrum = true`: the live spectrum under the module's content (`cava`'s keys apply), at
 /// rest until cava's first frame. Empty: none.
 pub(super) fn spectrum(m: &ModuleInstance, world: &World) -> Vec<f32> {
-    if m.config.get("spectrum").and_then(|v| v.as_bool()) != Some(true) {
+    if m.get("spectrum").and_then(|v| v.as_bool()) != Some(true) {
         return Vec::new();
     }
-    let n = cava_bars(&m.config);
+    let n = cava_bars(m);
     if world.spectrum.len() == n {
         world.spectrum.clone()
     } else {
@@ -141,7 +134,7 @@ pub fn graph_sample(
     world: &World,
 ) -> Option<f32> {
     use sliver_config::{ModuleId, ModuleRef};
-    let block = &m.config;
+    let block = m;
     let from_output = |out: &crate::scripts::Output| {
         out.percentage.or_else(|| {
             out.text
@@ -154,7 +147,7 @@ pub fn graph_sample(
                 .ok()
         })
     };
-    let raw = if block.contains_key("exec") {
+    let raw = if block.has("exec") {
         from_output(world.outputs.get(&m.id.to_string())?)?
     } else {
         let src = ModuleId::parse(block.get("source")?.as_str()?).ok()?;

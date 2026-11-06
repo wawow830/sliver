@@ -556,10 +556,7 @@ mod tests {
             (m[2].id.kind.as_str(), m[2].common.width),
             ("clock", Width::Fill(3))
         );
-        assert_eq!(
-            m[2].config.get("locale").and_then(Value::as_str),
-            Some("en_IN")
-        );
+        assert_eq!(m[2].get("locale").and_then(Value::as_str), Some("en_IN"));
         assert_eq!(m[3].id.kind, "battery");
         assert_eq!(
             (m[4].id.kind.as_str(), m[4].common.width),

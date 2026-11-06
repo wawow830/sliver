@@ -35,10 +35,32 @@ pub struct ModuleInstance {
     /// The instance name (waybar puts it on as a class) plus static `class`es.
     pub classes: Vec<String>,
     pub common: Common,
-    /// Type-specific keys, for the module runtime.
-    pub config: Table,
+    /// Type-specific keys, read through [`ModuleInstance::get`].
+    config: Table,
     /// Children of a `group/*`, in order.
     pub children: Vec<ModuleInstance>,
+}
+
+impl ModuleInstance {
+    /// A type-specific key. Every one the runtime reads is declared in [`crate::MODULE_TYPES`],
+    /// which is what validation and the man page go by.
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        debug_assert!(
+            crate::module::takes_key(&self.id.kind, key) != Some(false),
+            "{} modules don't take {key:?}: declare it in MODULE_TYPES",
+            self.id.kind
+        );
+        self.config.get(key)
+    }
+
+    /// Does this module's type take `key` at all (a `clock` is never a slider)?
+    pub fn takes(&self, key: &str) -> bool {
+        crate::module::takes_key(&self.id.kind, key) == Some(true)
+    }
+
+    pub fn has(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

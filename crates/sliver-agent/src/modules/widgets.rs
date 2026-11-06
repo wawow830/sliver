@@ -69,7 +69,7 @@ pub(super) fn graph(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
 /// waybar's `cava`: the spectrum the agent's `cava` process reports. Until its first frame every
 /// bar rests at 0, so the module keeps its size; previews get a made-up shape.
 pub(super) fn cava(m: &ModuleInstance, world: &World) -> Option<Spec> {
-    let n = super::cava_bars(&m.config);
+    let n = super::cava_bars(m);
     let levels = if world.spectrum.len() == n {
         world.spectrum.clone()
     } else if world.preview {
@@ -94,7 +94,6 @@ pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
         Some(out) if out.hidden => return None,
         Some(out) => out.text.lines().next().unwrap_or("").trim().to_owned(),
         None => m
-            .config
             .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -108,7 +107,7 @@ pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
     sp.face = Face::Image(path);
     // A fixed `path` with an `interval` is read again then (a script rewrites the file);
     // with `exec`, the script's runs rebuild the cell.
-    if !m.config.contains_key("exec")
+    if !m.has("exec")
         && let Some(sliver_config::Interval::Every(d)) = m.common.interval
     {
         sp.redraw(world.now.wall, d);
@@ -139,11 +138,7 @@ pub(super) fn clock(at: &At) -> Option<Spec> {
 
 /// The picker's entry button: opens the `emoji` layer (the strip lives there).
 pub(super) fn emoji(m: &ModuleInstance) -> Option<Spec> {
-    let layer = m
-        .config
-        .get("layer")
-        .and_then(|v| v.as_str())
-        .unwrap_or("emoji");
+    let layer = m.get("layer").and_then(|v| v.as_str()).unwrap_or("emoji");
     let open = Action::Layer {
         name: layer.into(),
         mode: sliver_config::LayerMode::Toggle,
@@ -154,7 +149,6 @@ pub(super) fn emoji(m: &ModuleInstance) -> Option<Spec> {
 pub(super) fn timer(at: &At) -> Option<Spec> {
     let (m, world, ui) = (at.m, at.world, at.ui);
     let total = m
-        .config
         .get("duration")
         .and_then(|v| sliver_config::parse_duration(v).ok())
         .filter(|d| !d.is_zero())

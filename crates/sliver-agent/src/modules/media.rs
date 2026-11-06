@@ -59,11 +59,7 @@ pub(super) fn mpris(at: &At) -> Option<Spec> {
         .does(Gesture::SwipeRight, "previous", command(Command::Previous));
     sp.status = Some(status);
     // Album art as the icon (when it is the session's own player and has been fetched).
-    let art = m
-        .config
-        .get("art")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
+    let art = m.get("art").and_then(|v| v.as_bool()).unwrap_or(true);
     let is_session_player = s.media.as_ref().is_some_and(|x| x.player == media.player);
     if art && is_session_player {
         if let Some(p) = &world.media_art {
@@ -96,7 +92,7 @@ pub(super) fn mpris(at: &At) -> Option<Spec> {
         sp.redraw(world.now.wall, std::time::Duration::from_secs(1));
     }
     // `scrub = true`: a progress slider; drag to seek.
-    if m.config.get("scrub").and_then(|v| v.as_bool()) == Some(true) {
+    if m.get("scrub").and_then(|v| v.as_bool()) == Some(true) {
         if let Some(len) = length {
             sp.face = Face::Slider((pos as f64 / len as f64).clamp(0.0, 1.0) as f32);
             sp.percentage = Some(pos as f64 * 100.0 / len as f64);

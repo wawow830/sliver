@@ -16,12 +16,10 @@ pub(super) fn emoji_strip(
 ) {
     use sliver_emoji::Group;
     let cols = m
-        .config
         .get("columns")
         .and_then(|v| v.as_integer())
         .map_or(14, |n| n.clamp(4, 40) as usize);
     let insert = m
-        .config
         .get("insert")
         .and_then(|v| v.as_str())
         .and_then(Insert::parse)

@@ -13,55 +13,107 @@ use crate::keys::Key;
 use crate::values::{FireOn, Interval, Width};
 
 /// Namespaces whose second part is a *name*, not part of the type (`custom/vpn`, `key/F1`).
-const PARAMETRIC: &[&str] = &["custom", "key", "group", "app", "custom-graph"];
+const PARAMETRIC: &[&str] = &["custom", "key", "group", "app"];
 
-/// Built-in module types (sliver-config(5)). Unknown types are a warning, because a newer
-/// agent may know them.
-pub const MODULE_TYPES: &[&str] = &[
-    "key",
-    "spacer",
-    "clock",
-    "battery",
-    "backlight",
-    "backlight/slider",
-    "kbd-backlight",
-    "kbd-backlight/slider",
-    "audio",
-    "audio/slider",
-    "mpris",
-    "workspaces",
-    "window",
-    "mode",
-    "language",
-    "idle-inhibitor",
-    "dnd",
-    "dark-mode",
-    "screenshot",
-    "lock",
-    "power",
-    "power-profiles",
-    "cpu",
-    "memory",
-    "temperature",
-    "disk",
-    "load",
-    "network",
-    "bluetooth",
-    "graph",
-    "privacy",
-    "systemd-failed-units",
-    "taskbar",
-    "notifications",
-    "emoji",
-    "timer",
-    "cava",
-    "image",
-    "group",
-    "app-controls",
-    "status-items",
-    "app",
-    "custom",
+/// What a script behind a module takes (`custom`, and `image` and `graph` fed by one).
+const SCRIPT: &[&str] = &[
+    "exec",
+    "exec-if",
+    "restart-interval",
+    "signal",
+    "exec-on-event",
+    "return-type",
+    "escape",
+    "timeout",
+    "env",
 ];
+/// A module with a value drawn as a slider.
+const SLIDER: &[&str] = &["slider", "collapsed"];
+/// waybar's `cava` keys. Every module takes them: `spectrum = true` draws cava under any module.
+pub const CAVA: &[&str] = &[
+    "bars",
+    "framerate",
+    "sleep_timer",
+    "stereo",
+    "autosens",
+    "sensitivity",
+    "lower_cutoff_freq",
+    "higher_cutoff_freq",
+    "method",
+    "source",
+    "reverse",
+    "monstercat",
+    "waves",
+    "noise_reduction",
+];
+
+/// Every built-in module type (sliver-config(5)) and the keys it takes besides [`COMMON_KEYS`],
+/// `spectrum` and [`CAVA`]'s. Validation warns about any other key, and the runtime reads only
+/// these ([`crate::ModuleInstance::get`]). Unknown types are a warning, because a newer agent may
+/// know them.
+pub const MODULE_TYPES: &[(&str, &[&[&str]])] = &[
+    ("key", &[&["key"]]),
+    ("spacer", &[]),
+    ("clock", &[&["locale", "timezone", "timezones"]]),
+    ("battery", &[]),
+    ("backlight", &[SLIDER]),
+    ("kbd-backlight", &[SLIDER]),
+    ("audio", &[&["node"], SLIDER]),
+    ("mpris", &[&["art", "scrub"]]),
+    ("workspaces", &[&["all-outputs"]]),
+    ("window", &[&["rewrite"]]),
+    ("mode", &[]),
+    ("language", &[]),
+    ("idle-inhibitor", &[]),
+    ("dnd", &[]),
+    ("dark-mode", &[]),
+    ("screenshot", &[]),
+    ("lock", &[]),
+    ("power", &[]),
+    ("power-profiles", &[]),
+    ("cpu", &[]),
+    ("memory", &[]),
+    (
+        "temperature",
+        &[&["thermal-zone", "hwmon-path", "critical-threshold"]],
+    ),
+    ("disk", &[&["path"]]),
+    ("load", &[]),
+    ("network", &[]),
+    ("bluetooth", &[]),
+    ("graph", &[&["source", "samples", "min", "max"], SCRIPT]),
+    ("privacy", &[]),
+    ("systemd-failed-units", &[&["hide-on-ok", "system", "user"]]),
+    ("taskbar", &[&["all-workspaces", "pinned"]]),
+    ("notifications", &[]),
+    ("emoji", &[&["mode", "columns", "insert"]]),
+    ("timer", &[&["duration"]]),
+    ("cava", &[]),
+    ("image", &[&["path"], SCRIPT]),
+    (
+        "group",
+        &[&["modules", "orientation", "drawer", "module-width"]],
+    ),
+    ("app-controls", &[]),
+    ("status-items", &[]),
+    ("app", &[]),
+    ("custom", &[SLIDER, SCRIPT]),
+];
+
+/// The keys type `kind` declares for itself in [`MODULE_TYPES`] (none for an unknown type).
+pub fn own_keys(kind: &str) -> impl Iterator<Item = &'static str> {
+    let groups = MODULE_TYPES
+        .iter()
+        .find(|(t, _)| *t == kind)
+        .map(|(_, g)| *g);
+    groups.into_iter().flatten().flat_map(|g| g.iter().copied())
+}
+
+/// Does a module of type `kind` take `key` (besides the common keys)? `None`: an unknown type.
+pub fn takes_key(kind: &str, key: &str) -> Option<bool> {
+    MODULE_TYPES.iter().find(|(t, _)| *t == kind)?;
+    Some(own_keys(kind).any(|k| k == key) || key == "spectrum" || CAVA.contains(&key))
+}
 
 /// waybar type names → sliver type names, so ported configs work.
 fn type_alias(t: &str) -> Option<&'static str> {
@@ -85,8 +137,10 @@ fn type_alias(t: &str) -> Option<&'static str> {
     })
 }
 
-/// Types that waybar also names as `<type>/slider`.
-const SLIDER_KINDS: &[&str] = &["backlight", "kbd-backlight", "audio"];
+/// Types that waybar also names as `<type>/slider`: the named ones that can be sliders.
+fn slider_kind(t: &str) -> bool {
+    !PARAMETRIC.contains(&t) && takes_key(t, "slider") == Some(true)
+}
 
 /// A parsed module reference: `battery#bat2`, `custom/vpn`, `key/F1#auto`, `backlight/slider`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -115,7 +169,7 @@ impl ModuleId {
             return Err("empty module name".into());
         }
         let (base, slider) = match base.strip_suffix("/slider") {
-            Some(b) if SLIDER_KINDS.contains(&type_alias(b).unwrap_or(b)) => (b, true),
+            Some(b) if slider_kind(type_alias(b).unwrap_or(b)) => (b, true),
             _ => (base, false),
         };
         let base = type_alias(base).unwrap_or(base);
@@ -155,7 +209,7 @@ impl ModuleId {
     }
 
     pub fn is_known_type(&self) -> bool {
-        MODULE_TYPES.contains(&self.kind.as_str())
+        takes_key(&self.kind, "").is_some()
     }
 
     /// For `key/<Key>` modules, the key.
@@ -538,29 +592,10 @@ fn parse_menu(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<MenuEntry> {
         .collect()
 }
 
-/// Type-specific keys for the module types whose schema lives in this crate. Other types are
-/// owned by their runtime and get no unknown-key warnings here.
+/// Warns about keys a known module type doesn't take ([`MODULE_TYPES`]).
 pub(crate) fn check_type_keys(id: &ModuleId, rest: &Table, path: &str, d: &mut Diagnostics) {
-    let known: &[&str] = match id.kind.as_str() {
-        "key" => &["key"],
-        "spacer" | "app-controls" | "status-items" => &[],
-        "group" => &["modules", "orientation", "drawer", "module-width"],
-        "custom" => &[
-            "exec",
-            "exec-if",
-            "restart-interval",
-            "signal",
-            "exec-on-event",
-            "return-type",
-            "escape",
-            "timeout",
-            "env",
-            "slider",
-        ],
-        _ => return,
-    };
     for k in rest.keys() {
-        if !known.contains(&k.as_str()) {
+        if takes_key(&id.kind, k) == Some(false) {
             d.warn(
                 crate::diag::join(path, k),
                 format!("unknown key for {} modules (ignored)", id.kind),

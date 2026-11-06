@@ -330,14 +330,14 @@ impl Agent {
     /// that often while the bar is on: the graph's cell asks for it), and forgets graphs no
     /// longer placed.
     fn sample_graphs(&mut self, world: &World) {
-        use crate::modules::{graph_params, graph_sample, is_graph};
-        if !self.config.modules.keys().any(|id| is_graph(&id.kind)) {
+        use crate::modules::{graph_params, graph_sample};
+        if !self.config.modules.keys().any(|id| id.kind == "graph") {
             self.graphs.clear();
             return;
         }
         let placed: Vec<_> = crate::modules::placed_modules(&self.config)
             .into_iter()
-            .filter(|m| is_graph(&m.id.kind))
+            .filter(|m| m.id.kind == "graph")
             .collect();
         self.graphs
             .retain(|k, _| placed.iter().any(|m| m.id.to_string() == *k));
@@ -381,10 +381,8 @@ impl Agent {
         let shown = self.frame(if self.fn_held { Layer::Fn } else { Layer::Base })?;
         let cell = shown.cells.iter().find(|c| modules::shows_spectrum(c))?;
         let id = sliver_config::ModuleId::parse(&cell.id).ok()?;
-        let block = self
-            .config
-            .module_block(&sliver_config::ModuleRef::Named(id));
-        Some(crate::modules::cava_config(&block))
+        let m = self.config.module(&sliver_config::ModuleRef::Named(id));
+        Some(crate::modules::cava_config(&m))
     }
 
     pub fn ui(&mut self, key: &str) -> &mut UiState {

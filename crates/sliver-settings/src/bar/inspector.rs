@@ -225,27 +225,26 @@ pub(super) fn inspector(
         sliver_config::ModuleId::parse(target.member.as_ref().map_or(title, |(_, id)| id.as_str()))
             .map(|id| id.kind)
             .unwrap_or_default();
-    let mut update_fields: Vec<(&str, &str)> = Vec::new();
-    let graph = kind == "graph" || kind == "custom-graph";
-    if graph {
-        update_fields.push((
+    // The type's own keys that the inspector edits as text, in this order.
+    const UPDATE_FIELDS: &[(&str, &str)] = &[
+        (
             "source",
             "Graph of: cpu, memory, battery, custom/x… (empty: its own command)",
-        ));
-    }
-    if kind == "custom" || kind == "custom-graph" {
-        update_fields.push(("exec", "Command whose output it shows"));
-    }
-    if graph {
-        update_fields.push(("samples", "Samples kept (default 30, newest at the right)"));
-        update_fields.push(("min", "Bottom of the scale (default 0)"));
-        update_fields.push(("max", "Top of the scale (default 100)"));
-    }
-    if kind == "custom" || graph || block.contains_key("interval") {
+        ),
+        ("exec", "Command whose output it shows"),
+        ("samples", "Samples kept (default 30, newest at the right)"),
+        ("min", "Bottom of the scale (default 0)"),
+        ("max", "Top of the scale (default 100)"),
+        ("timeout", "Time limit for one run: seconds or \"2s\""),
+    ];
+    let own: Vec<&str> = sliver_config::own_keys(&kind).collect();
+    let mut update_fields: Vec<(&str, &str)> = UPDATE_FIELDS
+        .iter()
+        .copied()
+        .filter(|(k, _)| own.contains(k))
+        .collect();
+    if own.contains(&"exec") || block.contains_key("interval") {
         update_fields.push(("interval", "Refresh every: seconds, \"5s\", \"1m\"…"));
-    }
-    if kind == "custom" {
-        update_fields.push(("timeout", "Time limit for one run: seconds or \"2s\""));
     }
     let updates = (!update_fields.is_empty()).then(|| {
         let g = group("Updates", None);

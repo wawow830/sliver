@@ -132,14 +132,15 @@ pub fn cells(modules: &[ModuleInstance], b: &mut Build, out: &mut Vec<Cell>) {
 fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut Vec<Cell>) {
     for m in modules {
         let key = format!("{prefix}{}", m.id);
-        let strip = m.config.get("mode").and_then(|v| v.as_str()) == Some("strip");
         match m.id.kind.as_str() {
             "group" => group_cells(m, &key, b, out),
             "app-controls" | "status-items" => placeholder_cells(m, &key, prefix, b, out),
             // A published item (or a whole context) placed by the layout: `app/<provider>#<item>`.
             // It's styled, bound and formatted like any module.
             "app" => pinned_app(m, &key, b, out),
-            "emoji" if strip => emoji_strip(m, &key, b.world, &(b.ui)(&key).emoji, out),
+            "emoji" if m.get("mode").and_then(|v| v.as_str()) == Some("strip") => {
+                emoji_strip(m, &key, b.world, &(b.ui)(&key).emoji, out)
+            }
             // Any other module is a cell, or one per item it lists (workspaces, windows, who's
             // recording).
             _ => {

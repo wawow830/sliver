@@ -43,7 +43,7 @@ pub(super) fn is_bar_drawer(m: &ModuleInstance) -> bool {
 
 /// A drawer group's `drawer.<key>` setting.
 pub(super) fn drawer_opt<'a>(m: &'a ModuleInstance, key: &str) -> Option<&'a toml::Value> {
-    m.config.get("drawer").and_then(|d| d.get(key))
+    m.get("drawer").and_then(|d| d.get(key))
 }
 
 /// The cell keys of drawer groups with `start-expanded = true`, in `zones`. The agent opens each
@@ -97,7 +97,7 @@ pub fn subbar_cells(
 /// A group's members, flattened: all of them, or a closed drawer's handle alone (a bar-mode
 /// drawer's rest shows as a sub-bar), with the group's classes.
 pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mut Vec<Cell>) {
-    let drawer = m.config.contains_key("drawer");
+    let drawer = m.has("drawer");
     let open = (b.ui)(key).expanded;
     // A closed drawer shows only its first module (the handle).
     // (a bar-mode drawer never grows in place: its rest shows in the sub-bar)

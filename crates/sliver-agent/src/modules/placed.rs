@@ -21,7 +21,7 @@ pub fn placed_modules(config: &sliver_config::Config) -> Vec<ModuleInstance> {
         }
         let m = config.module(&r);
         if m.id.kind == "group" {
-            let members = m.config.get("modules").and_then(|v| v.as_array());
+            let members = m.get("modules").and_then(|v| v.as_array());
             todo.extend(
                 members
                     .into_iter()
@@ -50,9 +50,7 @@ pub fn user_module_specs(
 ) -> (Vec<crate::scripts::Spec>, Vec<String>) {
     let (mut specs, mut errors) = (Vec::new(), Vec::new());
     for m in placed_modules(config) {
-        if !matches!(m.id.kind.as_str(), "custom" | "image" | "graph")
-            || !m.config.contains_key("exec")
-        {
+        if !matches!(m.id.kind.as_str(), "custom" | "image" | "graph") || !m.has("exec") {
             continue;
         }
         match crate::scripts::Spec::from_instance(&m) {
@@ -74,13 +72,10 @@ mod spec_tests {
         // Composed in `cells_in`.
         let composed = ["group", "app", "app-controls", "status-items"];
         let mut ours: Vec<&str> = SOURCES.iter().map(|(k, _)| *k).chain(composed).collect();
-        // waybar's `custom-graph/<name>`, read as a graph.
-        ours.retain(|k| *k != "custom-graph");
         ours.sort();
         let mut config: Vec<&str> = sliver_config::MODULE_TYPES
             .iter()
-            .copied()
-            .filter(|k| !k.ends_with("/slider"))
+            .map(|(k, _)| *k)
             .collect();
         config.sort();
         assert_eq!(ours, config);

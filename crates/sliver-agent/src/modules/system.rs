@@ -57,7 +57,7 @@ pub(super) fn backlight(m: &ModuleInstance, world: &World) -> Option<Spec> {
 pub(super) fn audio(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let s = &world.session;
     let a = &s.audio;
-    let mic = m.config.get("node").and_then(|v| v.as_str()) == Some("source");
+    let mic = m.get("node").and_then(|v| v.as_str()) == Some("source");
     let (vol, muted) = if mic {
         (a.mic_volume_pct?, a.mic_muted.unwrap_or(false))
     } else {
@@ -286,7 +286,7 @@ pub(super) fn notifications(world: &World) -> Option<Spec> {
 pub(super) fn failed_units(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let s = &world.session;
     let f = &s.failed_units;
-    let want = |k: &str| m.config.get(k).and_then(|v| v.as_bool()) != Some(false);
+    let want = |k: &str| m.get(k).and_then(|v| v.as_bool()) != Some(false);
     let sys = f.system.as_ref().filter(|_| want("system"));
     let user = f.user.as_ref().filter(|_| want("user"));
     if sys.is_none() && user.is_none() {
@@ -523,14 +523,13 @@ pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
                 .with("", c.round());
             let mut sp = Spec::new(v, "{temperatureC}°C");
             let critical = m
-                .config
                 .get("critical-threshold")
                 .and_then(|t| t.as_float().or(t.as_integer().map(|i| i as f64)));
             sp.status = critical.filter(|t| c >= *t).map(|_| "critical");
             sp
         }
         "disk" => {
-            let path = m.config.get("path").and_then(|p| p.as_str()).unwrap_or("/");
+            let path = m.get("path").and_then(|p| p.as_str()).unwrap_or("/");
             let d = *stats.disks.get(path)?;
             let v = ValueMap::new()
                 .with("percentage_used", pct0(d.percent_used()))

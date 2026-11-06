@@ -201,16 +201,16 @@ pub(super) fn spec(at: &At) -> Option<Spec> {
 /// Does the module draw as a slider? `slider = true`, which the resolver also sets for a module
 /// written as waybar's `<type>/slider`.
 pub(super) fn is_slider(m: &ModuleInstance) -> bool {
-    flag(m, "slider")
+    m.takes("slider") && flag(m, "slider")
 }
 
 /// `collapsed = true`: a slider shows just its icon until it's tapped open.
 pub(super) fn is_collapsible(m: &ModuleInstance) -> bool {
-    flag(m, "collapsed")
+    m.takes("collapsed") && flag(m, "collapsed")
 }
 
 pub(super) fn flag(m: &ModuleInstance, key: &str) -> bool {
-    m.config.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+    m.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
 /// The slider presentation, for any module with a [`Spec::level`]: no text, a drag sets the level
@@ -258,7 +258,6 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
         }
     }),
     ("graph", |at| widgets::graph(at.m, at.world, at.ui)),
-    ("custom-graph", |at| widgets::graph(at.m, at.world, at.ui)),
     ("cava", |at| widgets::cava(at.m, at.world)),
     ("image", |at| widgets::image(at.m, at.world)),
     ("clock", widgets::clock),

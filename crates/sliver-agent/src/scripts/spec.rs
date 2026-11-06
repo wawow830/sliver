@@ -58,7 +58,7 @@ impl Spec {
 
     /// Read the runtime keys of a resolved `custom/*` module.
     pub fn from_instance(m: &ModuleInstance) -> Result<Spec, String> {
-        let t = &m.config;
+        let t = m;
         let exec = match t.get("exec") {
             None => None,
             Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),

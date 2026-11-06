@@ -72,7 +72,7 @@ pub(super) fn language(world: &World) -> Option<Spec> {
 pub(super) fn window(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let w = world.desktop.window.as_ref()?;
     // waybar's `rewrite`; bad rules were already reported by the config validator.
-    let title = match m.config.get("rewrite") {
+    let title = match m.get("rewrite") {
         Some(r) => sliver_config::Rewrite::parse(r, "", &mut Default::default()).apply(&w.title),
         None => w.title.clone(),
     };
@@ -163,8 +163,7 @@ pub(super) fn taskbar(m: &ModuleInstance, world: &World, item: Option<Part>) -> 
 
 /// `pinned = ["org.mozilla.firefox", "kitty"]`: desktop ids (with or without `.desktop`).
 pub(super) fn pinned_ids(m: &ModuleInstance) -> Vec<String> {
-    m.config
-        .get("pinned")
+    m.get("pinned")
         .and_then(|v| v.as_array())
         .into_iter()
         .flatten()
@@ -274,7 +273,7 @@ pub(super) fn taskbar_items(m: &ModuleInstance, world: &World) -> Vec<(String, P
 /// Waybar semantics: workspaces of the focused output unless `all-outputs`; windows of the
 /// active workspace unless `all-workspaces`.
 pub(super) fn listed(m: &ModuleInstance, world: &World) -> Vec<usize> {
-    let flag = |k: &str| m.config.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let flag = |k: &str| m.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
     let d = &world.desktop;
     if m.id.kind == "workspaces" {
         let here = d.monitor.as_deref();

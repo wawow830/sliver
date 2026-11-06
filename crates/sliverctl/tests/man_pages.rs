@@ -1,5 +1,5 @@
 //! The man pages in `man/` must cover what the code knows about, so they can't silently drift:
-//! every `sliverctl` command and option in `sliverctl help`, every module type, common module
+//! every `sliverctl` command and option in `sliverctl help`, every module type and its keys, common module
 //! key, context key and bar gesture in `sliver-config`, and every sidebar page and option of
 //! `sliver-settings`. Also lints the pages with groff if it's
 //! installed.
@@ -207,8 +207,31 @@ fn settings_page_covers_pages_and_flags() {
 #[test]
 fn config_page_covers_the_schema() {
     let man = page("sliver-config.5");
+    // Every module type, its `/slider` form, and every key it takes.
+    let types = sliver_config::MODULE_TYPES;
+    let sliders: Vec<String> = types
+        .iter()
+        .filter(|(t, _)| {
+            sliver_config::ModuleId::parse(&format!("{t}/slider")).is_ok_and(|i| i.slider)
+        })
+        .map(|(t, _)| format!("{t}/slider"))
+        .collect();
+    let keys = types
+        .iter()
+        .flat_map(|(_, groups)| groups.iter().copied().flatten());
+    let words: Vec<&str> = types
+        .iter()
+        .map(|(t, _)| *t)
+        .chain(sliders.iter().map(String::as_str))
+        .chain(keys.copied())
+        .chain(sliver_config::CAVA.iter().copied())
+        .collect();
+    assert_eq!(
+        missing(&man, &words),
+        Vec::<String>::new(),
+        "module types and keys missing from man/sliver-config.5"
+    );
     for (what, words) in [
-        ("module types", sliver_config::MODULE_TYPES),
         ("common module keys", sliver_config::COMMON_KEYS),
         ("context keys", sliver_config::CONTEXT_KEYS),
         ("bar gestures", sliver_config::BAR_GESTURES),

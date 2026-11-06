@@ -13,7 +13,7 @@
 mod jsonc;
 
 use serde_json::{Map, Value as Json};
-use sliver_config::{MODULE_TYPES, ModuleId};
+use sliver_config::ModuleId;
 use std::path::{Path, PathBuf};
 use toml::{Table, Value};
 
@@ -121,7 +121,7 @@ fn to_toml(v: &Json, path: &str, notes: &mut Vec<Note>) -> Option<Value> {
 /// Is `reference` something sliver can place on the bar? Returns the canonical id if so.
 fn resolve_ref(reference: &str) -> Option<ModuleId> {
     let id = ModuleId::parse(reference).ok()?;
-    (id.kind == "custom" || MODULE_TYPES.contains(&id.kind.as_str())).then_some(id)
+    id.is_known_type().then_some(id)
 }
 
 /// Keep the supported references of a module list; report and drop the rest.
