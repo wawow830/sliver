@@ -10,10 +10,20 @@ env:
 
 jobs:
   check:
-    # Native aarch64, like the Apple Silicon Macs we target.
+    # Native aarch64 on the distro sliver targets: the settings app needs GTK 4.22 and
+    # libadwaita 1.8, which Fedora 44 ships and Ubuntu doesn't.
     runs-on: ubuntu-24.04-arm
+    container: fedora:44
     steps:
+      - name: System packages
+        run: >
+          dnf install -y --setopt=install_weak_deps=False
+          git gcc pkgconf-pkg-config gtk4-devel libadwaita-devel libxkbcommon-devel
+          dbus-daemon groff systemd systemd-udev rpm-build desktop-file-utils libxml2
+          nodejs python3 procps-ng fontconfig dejavu-sans-fonts
       - uses: actions/checkout@v4
+      # The checkout belongs to another uid than the container's root.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
