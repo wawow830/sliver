@@ -2,7 +2,7 @@
 //!
 //! GNOME (`org.gnome.ScreenSaver`), KDE and others (`org.freedesktop.ScreenSaver`) announce when
 //! the lock screen comes up and goes away. Unlike logind's `LockedHint` (which depends on the
-//! locker calling `unlock-session`, see integration.md §3) this is the shell's own truth, so
+//! locker calling `unlock-session`) this is the shell's own truth, so
 //! when it exists it wins. Nothing here polls: one signal subscription and a thread that sleeps
 //! in it.
 //!

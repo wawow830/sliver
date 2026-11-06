@@ -1,8 +1,9 @@
 //! logind: `LockedHint`, `IdleHint`, `Lock`/`Unlock`, `PrepareForSleep`.
 //!
-//! `LockedHint` is only a hint set by the screen locker. On the dev machine it read `true`
-//! while the session was unlocked, so consumers should treat `locked` as advisory until a
-//! per-compositor cross-check exists (docs/integration.md §3).
+//! `LockedHint` is only a hint set by the screen locker. A locker that calls
+//! `loginctl lock-session` but never `unlock-session` leaves it `true` after unlocking, and one
+//! started from a keybind never sets it, so the agent treats it as advisory
+//! (`sliver_agent::context::plausibly_locked`).
 
 use crate::{Hub, SessionState, props};
 use zbus::Message;

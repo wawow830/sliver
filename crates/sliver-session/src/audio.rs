@@ -4,8 +4,10 @@
 //! sink/source". Change events come from `pactl subscribe` (pipewire-pulse), a long-lived
 //! child that prints one line per change, so the agent sleeps until something happens. No
 //! build-time dependencies, nothing polled. Both tools are injectable ([`Tools`]) for tests.
-//! A native `pipewire` crate backend can replace this behind the same [`Audio`] state later
-//! (docs/integration.md §3).
+//! The native `pipewire` crate would need libpipewire's development files and bindgen at build
+//! time, and reading the default sink means following WirePlumber's `default` metadata. Without a
+//! PulseAudio server `pactl` exits at once, so its restart backoff only resets after it has
+//! stayed up 10 s.
 
 use crate::Handle;
 use serde::{Deserialize, Serialize};

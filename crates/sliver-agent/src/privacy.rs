@@ -5,7 +5,8 @@
 //!    media title/artist/album/art, the latest notification's text, window titles and the
 //!    window list, script output, everything apps published.
 //! 2. [`allowed`]: cells of kinds that exist to show private things are dropped: `custom/*`
-//!    (arbitrary script output, and running commands from a locked bar), app-published items and
+//!    (arbitrary script output, and running commands from a locked bar), `image` and `graph` (a
+//!    picture or a history a script picked), app-published items and
 //!    their App controls / Status items slots, `window`, `taskbar`, and the emoji picker (its
 //!    recents are a history).
 //!

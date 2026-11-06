@@ -1,4 +1,4 @@
-//! fcitx5 as a second source for the `language` module (integration.md §3): the current input
+//! fcitx5 as a second source for the `language` module: the current input
 //! method (`pinyin`, `mozc`, `keyboard-us`...) with its short label (拼, あ, en) and the others in
 //! the active group, for CJK users whose "layout" is an input method, not a keymap.
 //!
@@ -7,7 +7,7 @@
 //! `None` and the compositor's layout is shown as before.
 //!
 //! **No change signal exists.** `CurrentInputMethod` is a method, and fcitx5 emits nothing when the
-//! user switches with the hotkey (checked on fcitx5 5.1.23: `Controller1` has only
+//! user switches with the hotkey (as of fcitx5 5.1.23, `Controller1` has only
 //! `InputMethodGroupsChanged`, and the tray item sends no `NewToolTip` without a real UI).
 //! So the state is re-read
 //!

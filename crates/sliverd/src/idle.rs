@@ -1,5 +1,9 @@
 //! Display power: on → dimmed → off after inactivity, off while the lid is closed.
 //!
+//! "Off" is backlight 0. The Mac14,7 panel is a command-mode panel that keeps showing its last
+//! frame, so CRTC `ACTIVE=0` doesn't blank it. Nothing is flushed while off, and the touch that
+//! wakes the bar is swallowed.
+//!
 //! Event-driven (invariant 3): the daemon asks for [`Idle::deadline`] and arms one timer for it.
 //! While off with the lid closed or no timeouts set, there's no deadline at all, so the daemon
 //! sleeps until input arrives. (tiny-dfr polls every 10 s instead.)

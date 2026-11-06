@@ -4,6 +4,25 @@
 //! for [`Daemon::next_deadline`], and carries out the returned [`Out`]s on the agent sockets.
 //! Hardware effects (frames, backlight, keys) go straight to the [`Backends`]. Nothing here
 //! blocks, sleeps or polls, so tests drive it with simulated time and fake hardware.
+//!
+//! The rules it keeps:
+//! - **Who drives.** Only connections of the seat's active uid become active; a newer hello from
+//!   that uid replaces the old connection, and others wait in standby (their presents are
+//!   answered `not_active`). The agent drives once it has presented a `base` frame. Frames are
+//!   never refused for lacking Esc or F-keys: the safe hatch covers that.
+//! - **Touch.** Any change of frame source (agent ⇄ built-in, one agent to another, the hatch)
+//!   and the display turning off cancel every touch and release every held key. After the agent's
+//!   frames vanish, touch-downs are ignored for [`AGENT_LOSS_SETTLE_MS`], so a tap aimed at an
+//!   agent button can't press the safe-layer key that appears under it. A pressed region is lit
+//!   only if both its id and its rect still match what the finger went down on.
+//! - **Faults.** An unknown message is an error and the connection carries on. A malformed packet,
+//!   a missing hello, a protocol major mismatch, `bye`, a pong timeout or a hangup closes it and
+//!   brings back the safe layer. An invalid frame is an error and the previous frame stays.
+//! - **Liveness.** A ping goes out when the display wakes and on an agent-region touch-down after
+//!   5 s without one. The pong deadline is the only liveness timer, armed only while a ping waits.
+//! - **`emit_keys`.** Validated (SysRq refused) and capped at [`EMIT_KEYS_PER_SEC`]. Keys an agent
+//!   holds are released when it goes, and are counted apart from touch keys, so a finger and the
+//!   agent both holding Ctrl are two holds.
 
 use std::collections::{BTreeMap, HashMap};
 

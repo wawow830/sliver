@@ -47,7 +47,7 @@ const LOCKERS: &[&str] = &[
 /// 2. On GNOME and KDE without it: logind's `LockedHint`, which those shells keep honest.
 /// 3. Elsewhere, whether a known locker process is running: lockers started by a keybind or
 ///    `swayidle` never touch logind (the hint stays `false`: a leak), and others never clear it
-///    (integration.md §3: the hint stays `yes` after unlocking: a stuck privacy layout). The
+///    (the hint stays `yes` after unlocking: a stuck privacy layout). The
 ///    hint alone is not believed.
 ///
 /// `running` lists process names (`/proc/*/comm`; injectable for tests); it is only called when

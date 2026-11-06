@@ -6,7 +6,13 @@
 //! compositor. Backends are blocking and runtime-agnostic (plain threads, no busy loops): they
 //! sleep in `read(2)` until the compositor says something changed.
 //!
-//! Survey and rationale for the other backends: `docs/integration.md`.
+//! No portal or cross-desktop standard says which window is focused (Wayland withholds it on
+//! purpose), so each desktop needs its own backend; [`Backend::detect`] picks one from the
+//! environment. GNOME and KDE have no in-process backend: an extension or KWin script pushes their
+//! focus through the agent's `Desktop1` instead. A dead compositor connection is
+//! `DesktopState { connected: false, .. }`, never an error, and every backend subscribes to events
+//! before its first read so no change falls between the two. Actions (switch workspace, focus or
+//! close a window, change layout) are only ever sent for an explicit user action ([`control`]).
 
 pub mod control;
 pub mod fake;
@@ -123,7 +129,7 @@ pub struct WindowInfo {
 }
 
 /// Everything the compositor tells us. Only fields that changed behaviour-relevantly are here;
-/// system signals (power, media, lock...) come from other sources, see `docs/integration.md`.
+/// system signals (power, media, lock...) come from `sliver-session`.
 /// An xkb keymap by RMLVO names, plus the active layout (group) index.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct XkbNames {

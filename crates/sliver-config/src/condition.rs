@@ -45,7 +45,7 @@ impl From<String> for CtxValue {
     }
 }
 
-/// The agent's flat state: compositor + session + agent keys (integration.md §1).
+/// The agent's flat state: compositor + session + agent keys ([`CONTEXT_KEYS`]).
 /// Missing keys mean "unknown", which never matches.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Context {

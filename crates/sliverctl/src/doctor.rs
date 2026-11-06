@@ -4,7 +4,7 @@
 //! The checks are plain functions over [`Sys`], the facts about the machine (units, bus names,
 //! files, the agent's properties), so they are tested against a fake; [`Real`] gathers the real
 //! ones. Reading only: nothing is started, changed or written. Checks that need root (the
-//! daemon's hardware side) are not here; they come from sliverd itself (see docs/sliverd.md).
+//! daemon's hardware side) are not here; they come from sliverd itself (its hardware report, sliverd(8)).
 
 mod hardware;
 

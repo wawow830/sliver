@@ -3,8 +3,18 @@
 //! Lock/idle/sleep (logind), power (UPower, power-profiles-daemon) and media (MPRIS) reduced to
 //! one flat, comparable [`SessionState`]. Sources are event driven: a thread sleeps in a D-Bus
 //! read and re-reads a handful of properties when a relevant signal arrives. Downstream only
-//! hears about real changes. Compositor state lives in `sliver-desktop`; the design and what is
-//! still missing (audio, brightness, notifications) is in `docs/integration.md`.
+//! hears about real changes. Compositor state lives in `sliver-desktop`.
+//!
+//! Every source follows the same rules:
+//! - **Event driven.** A socket read, a D-Bus signal or a long-lived child's output wakes it.
+//!   Where only polling exists, it polls only while a module showing the value is on the lit bar
+//!   (invariant 3). [`Handle::set_awake`] drops the chatty system-bus match rules (NetworkManager,
+//!   BlueZ, UPower) while the bar is off and re-reads them on wake; logind's stay, since lock and
+//!   sleep must always work.
+//! - **Subscribe before the first read**, or a change between the two is lost.
+//! - **Unknown, never an error.** A missing service leaves its fields unknown, and a context key
+//!   with no known value is left out, so it never matches a rule.
+//! - **Never start a service** just by reading it (`NoAutoStart`).
 //!
 //! Testing: [`fake::ScriptedSession`] replays states; the real sources are tested against mock
 //! services on a private `dbus-daemon` (see `tests/`).
@@ -111,7 +121,8 @@ pub struct Media {
 /// Everything in this crate, flat and comparable.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionState {
-    /// logind `LockedHint` plus `Lock`/`Unlock` edges. A hint, not a fact: see integration.md §3.
+    /// logind `LockedHint` plus `Lock`/`Unlock` edges. A hint the locker sets, not a fact: the agent
+    /// weighs it against the desktop's own signal and running lockers (`plausibly_locked`).
     pub locked: bool,
     /// The desktop's own lock/screen-saver state (`ActiveChanged`), when it has one. Unlike
     /// `locked` this is not a hint: it wins over it.
