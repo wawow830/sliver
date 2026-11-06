@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Memory soak for sliver-agent: does memory keep growing while things change?
 
-Runs `sliverd --fake-hardware` and `sliver-agent` on private session and system buses (like
-scripts/idle-wakeups) with a config that keeps the bar busy, then churns it for a while:
+Runs `sliverd --fake-hardware` and `sliver-agent` in a sandbox (scripts/sandbox.py) with a
+config that keeps the bar busy, then churns it for a while:
 
   * an app publishing status items with fresh ids, random labels (now and then a glyph no font
     has) and a fresh random PNG icon on every update, and dropping and re-creating its context;
@@ -20,10 +20,7 @@ fill up during the warm-up; anything that keeps growing shows. ~4 min by default
 """
 
 import argparse
-import os
 import random
-import shutil
-import signal
 import statistics
 import struct
 import subprocess
@@ -32,6 +29,8 @@ import threading
 import time
 import zlib
 from pathlib import Path
+
+from sandbox import Sandbox
 
 ROOT = Path(__file__).resolve().parent.parent
 WARMUP_S = 60
@@ -192,99 +191,58 @@ def main() -> int:
     subprocess.run(build + ([] if a.debug else ["--release"]), cwd=ROOT, check=True)
     bins = ROOT / "target" / profile
 
-    tmp = ROOT / "target" / "test-tmp" / f"soak.{os.getpid()}"
-    shutil.rmtree(tmp, ignore_errors=True)
-    (tmp / "config" / "sliver").mkdir(parents=True)
-    (tmp / "run").mkdir(mode=0o700)
-    (tmp / "config" / "sliver" / "config.toml").write_text(CONFIG)
-    procs: list[subprocess.Popen] = []
     stop = threading.Event()
     stats: dict = {}
-    ok = False
+    with Sandbox("soak", CONFIG, bins) as sb:
+        try:
+            return soak(sb, a, profile, stop, stats)
+        finally:
+            stop.set()
 
-    def start(cmd: list[str], env: dict[str, str], log: str) -> subprocess.Popen:
-        p = subprocess.Popen(cmd, env=env, stdout=open(tmp / log, "w"), stderr=subprocess.STDOUT,
-                             stdin=subprocess.DEVNULL, start_new_session=True)
-        procs.append(p)
-        return p
 
-    try:
-        conf = str(ROOT / "integration" / "kwin" / "session.conf")
-        base = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/"), "LANG": "C.UTF-8"}
-        for bus in ("session", "system"):
-            start(["dbus-daemon", f"--config-file={conf}", "--nofork",
-                   f"--address=unix:path={tmp / bus}"], base, f"{bus}-bus.log")
-        sock = tmp / "sliverd.sock"
-        touch = tmp / "touch.sock"
-        start([str(bins / "sliverd"), "--fake-hardware", "--socket", str(sock),
-               "--touch-socket", str(touch)], base, "sliverd.log")
-        for _ in range(100):
-            if sock.exists() and (tmp / "session").exists() and (tmp / "system").exists():
-                break
-            time.sleep(0.05)
-        env = base | {
-            "XDG_CONFIG_HOME": str(tmp / "config"),
-            "XDG_RUNTIME_DIR": str(tmp / "run"),
-            "XDG_STATE_HOME": str(tmp / "state"),
-            "DBUS_SESSION_BUS_ADDRESS": f"unix:path={tmp / 'session'}",
-            "DBUS_SYSTEM_BUS_ADDRESS": f"unix:path={tmp / 'system'}",
-        }
-        agent = start([str(bins / "sliver-agent"), "--socket", str(sock)], env, "agent.log")
-        time.sleep(3)
+def soak(sb: Sandbox, a: argparse.Namespace, profile: str, stop: threading.Event, stats: dict) -> int:
+    touch = sb.dir / "touch.sock"
+    sb.sliverd("--touch-socket", str(touch))
+    agent = sb.agent()
+    time.sleep(3)
+    if agent.poll() is not None:
+        print(f"soak: sliver-agent exited early; see {sb.dir}", file=sys.stderr)
+        return 1
+    env = sb.env
+    for target, args in ((publisher, (env["DBUS_SESSION_BUS_ADDRESS"], stop, stats)),
+                         (ctl, (sb.bins, env, stop, stats)),
+                         (toucher, (touch, stop, stats))):
+        threading.Thread(target=target, args=args).start()
+
+    print(f"soak: warming up {WARMUP_S} s, then measuring {a.minutes:g} min ({profile})")
+    time.sleep(WARMUP_S)
+    samples: list[dict[str, int]] = []
+    end = time.time() + a.minutes * 60
+    while time.time() < end:
         if agent.poll() is not None:
-            print(f"soak: sliver-agent exited early; see {tmp}", file=sys.stderr)
+            print(f"soak: sliver-agent died; see {sb.dir}", file=sys.stderr)
             return 1
-        threads = [
-            threading.Thread(target=publisher, args=(env["DBUS_SESSION_BUS_ADDRESS"], stop, stats)),
-            threading.Thread(target=ctl, args=(bins, env, stop, stats)),
-            threading.Thread(target=toucher, args=(touch, stop, stats)),
-        ]
-        for t in threads:
-            t.start()
-
-        print(f"soak: warming up {WARMUP_S} s, then measuring {a.minutes:g} min ({profile})")
-        time.sleep(WARMUP_S)
-        samples: list[dict[str, int]] = []
-        end = time.time() + a.minutes * 60
-        while time.time() < end:
-            if agent.poll() is not None:
-                print(f"soak: sliver-agent died; see {tmp}", file=sys.stderr)
-                return 1
-            m = mem(agent.pid)
-            samples.append(m)
-            print(f"  RSS {m.get('VmRSS', 0) / 1024:6.1f} MB  anon {m.get('RssAnon', 0) / 1024:6.1f} MB"
-                  f"  peak {m.get('VmHWM', 0) / 1024:6.1f} MB   published {stats.get('published', 0)}"
-                  f"  ctl {stats.get('ctl', 0)}  touches {stats.get('touches', 0)}", flush=True)
-            time.sleep(SAMPLE_S)
-        if stats.get("published", 0) < 100:
-            print(f"soak: the publisher barely ran ({stats}); see {tmp}", file=sys.stderr)
-            return 1
-        k = max(1, len(samples) // 3)
-        first = statistics.median(s.get("VmRSS", 0) for s in samples[:k]) / 1024
-        last = statistics.median(s.get("VmRSS", 0) for s in samples[-k:]) / 1024
-        growth = last - first
-        ok = growth <= a.budget_mb
-        verdict = "ok" if ok else "GROWING"
-        print(f"soak: RSS {first:.1f} -> {last:.1f} MB ({growth:+.1f} MB, budget {a.budget_mb:g}) {verdict}")
-        if stats.get("errors"):
-            print(f"soak: publisher errors: {stats['errors']} (last: {stats.get('last_error')})")
-        if not ok:
-            print(f"soak: logs kept in {tmp}", file=sys.stderr)
-        return 0 if ok else 1
-    finally:
-        stop.set()
-        for p in reversed(procs):
-            try:
-                os.killpg(p.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        for p in procs:
-            try:
-                p.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(p.pid, signal.SIGKILL)
-        if ok:
-            shutil.rmtree(tmp, ignore_errors=True)
+        m = mem(agent.pid)
+        samples.append(m)
+        print(f"  RSS {m.get('VmRSS', 0) / 1024:6.1f} MB  anon {m.get('RssAnon', 0) / 1024:6.1f} MB"
+              f"  peak {m.get('VmHWM', 0) / 1024:6.1f} MB   published {stats.get('published', 0)}"
+              f"  ctl {stats.get('ctl', 0)}  touches {stats.get('touches', 0)}", flush=True)
+        time.sleep(SAMPLE_S)
+    if stats.get("published", 0) < 100:
+        print(f"soak: the publisher barely ran ({stats}); see {sb.dir}", file=sys.stderr)
+        return 1
+    k = max(1, len(samples) // 3)
+    first = statistics.median(s.get("VmRSS", 0) for s in samples[:k]) / 1024
+    last = statistics.median(s.get("VmRSS", 0) for s in samples[-k:]) / 1024
+    growth = last - first
+    sb.ok = growth <= a.budget_mb
+    verdict = "ok" if sb.ok else "GROWING"
+    print(f"soak: RSS {first:.1f} -> {last:.1f} MB ({growth:+.1f} MB, budget {a.budget_mb:g}) {verdict}")
+    if stats.get("errors"):
+        print(f"soak: publisher errors: {stats['errors']} (last: {stats.get('last_error')})")
+    if not sb.ok:
+        print(f"soak: logs kept in {sb.dir}", file=sys.stderr)
+    return 0 if sb.ok else 1
 
 
 if __name__ == "__main__":

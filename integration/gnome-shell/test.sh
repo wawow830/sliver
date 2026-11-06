@@ -30,4 +30,4 @@ if [ -n "$root" ] && [ -z "${SLIVER_IN_NS:-}" ] && [ ! -f /usr/share/gnome-shell
 fi
 client=$(command -v kitty || command -v foot || true)
 command -v gnome-shell >/dev/null && [ -n "$client" ] || { echo "SKIP: gnome-shell and a Wayland client (kitty/foot) are needed"; exit 0; }
-exec dbus-run-session --config-file="$here/../kwin/session.conf" -- bash ${BASH_FLAGS:-} "$here/test-inner.sh" "$here" "$client"
+exec dbus-run-session --config-file="$here/../bus.conf" -- bash ${BASH_FLAGS:-} "$here/test-inner.sh" "$here" "$client"

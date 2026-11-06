@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Drive sliver-settings headlessly and screenshot it. Never touches the live
-# session: a private D-Bus (so Mirror, live status and profiles can't reach an installed agent),
-# a sandboxed XDG_CONFIG_HOME, and GTK's Broadway backend in a browser via agent-browser.
+# Drive sliver-settings headlessly and screenshot it. Never touches the live session: the
+# integration/lib.sh sandbox (a private D-Bus, so Mirror, live status and profiles can't reach an
+# installed agent), a sandboxed XDG_CONFIG_HOME, and GTK's Broadway backend in a browser via
+# agent-browser.
 #
 #   scripts/settings-headless OUT.png [STEP...]
 #
@@ -25,59 +26,42 @@
 #
 # Broadway has no implicit pointer grab: a drag that leaves the widget it started on is lost unless
 # a common ancestor handles it (see crates/sliver-settings/src/bar.rs, the page-level drag).
-set -euo pipefail
 out=${1:?usage: scripts/settings-headless OUT.png [STEP...]}
 shift
-root=$(cd "$(dirname "$0")/.." && pwd)
+. "$(dirname "$0")/../integration/lib.sh"
+need agent-browser gtk4-broadwayd dbus-daemon
+setup settings
 sandbox=${SANDBOX:-$root/target/test-tmp/xdg-ui}
 session=${SESSION:-${USER:-me}-settings-$$}
-tmp=$root/target/test-tmp/headless.$$
-mkdir -p "$tmp" "$sandbox"
-pids=()
-cleanup() {
-    agent-browser --session "$session" close >/dev/null 2>&1 || true
-    for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
-    wait 2>/dev/null || true
-    rm -rf "$tmp"
-}
-trap cleanup EXIT
+mkdir -p "$sandbox"
+on_exit() { agent-browser --session "$session" close >/dev/null 2>&1; }
+bin=$root/target/debug
 
-dbus-daemon --config-file="$root/integration/kwin/session.conf" --nofork \
-    --address="unix:path=$tmp/bus" >/dev/null 2>&1 &
-pids+=($!)
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$tmp/bus"
+bus
 if [ -n "${WITH_AGENT:-}" ]; then
     # A fake bar and the agent, on the private bus and the sandboxed config.
-    "$root/target/debug/sliverd" --fake-hardware --socket "$tmp/sliverd.sock" \
-        --touch-socket "$tmp/touch.sock" --exit-after 600 >"$tmp/sliverd.log" 2>&1 &
-    pids+=($!)
-    sleep 1
-    XDG_CONFIG_HOME="$sandbox" "$root/target/debug/sliver-agent" --socket "$tmp/sliverd.sock" \
-        >"$tmp/agent.log" 2>&1 &
-    pids+=($!)
+    spawn "$bin/sliverd" --fake-hardware --socket "$work/sliverd.sock" --touch-socket "$work/touch.sock" \
+        --exit-after 600
+    wait_until "sliverd is up" test -S "$work/sliverd.sock"
+    spawn env XDG_CONFIG_HOME="$sandbox" "$bin/sliver-agent" --socket "$work/sliverd.sock"
     sleep 2
     if [ -n "${PUBLISH:-}" ]; then
         # shellcheck disable=SC2086 # PUBLISH is a word list on purpose
-        "$root/target/debug/sliverctl" publish $PUBLISH >"$tmp/publish.log" 2>&1 &
-        pids+=($!)
+        spawn "$bin/sliverctl" publish $PUBLISH
         sleep 1
     fi
 fi
 if [ -n "${BUS_HELPER:-}" ]; then
     # Any helper that should live on the private bus (e.g. a fake agent emitting signals).
-    sh -c "$BUS_HELPER" >"$tmp/bus-helper.log" 2>&1 &
-    pids+=($!)
+    spawn sh -c "$BUS_HELPER"
     sleep 1
 fi
 display=$((20 + $$ % 50))
-gtk4-broadwayd ":$display" >/dev/null 2>&1 &
-pids+=($!)
+spawn gtk4-broadwayd ":$display"
 sleep 1
-DBUS_SESSION_BUS_ADDRESS="unix:path=$tmp/bus" XDG_CONFIG_HOME="$sandbox" GDK_DEBUG=no-portals \
-    GDK_BACKEND=broadway BROADWAY_DISPLAY=":$display" \
-    "$root/target/debug/sliver-settings" ${OPEN:+"$OPEN"} >"$tmp/app.log" 2>&1 &
-app=$!
-pids+=($app)
+spawn env XDG_CONFIG_HOME="$sandbox" GDK_DEBUG=no-portals GDK_BACKEND=broadway BROADWAY_DISPLAY=":$display" \
+    "$bin/sliver-settings" ${OPEN:+"$OPEN"}
+app=$last_pid
 sleep 3
 
 a() { agent-browser --session "$session" "$@" >/dev/null; }
@@ -91,7 +75,7 @@ for step in "$@"; do
         key=*) a press "${step#key=}"; sleep 1.5 ;;
         sleep=*) sleep "${step#sleep=}" ;;
         touch=*) # WITH_AGENT: a touch on the fake bar (sliverd inject.rs), e.g. touch="tap 168"
-            printf '%s\n' "${step#touch=}" | socat - "UNIX-SENDTO:$tmp/touch.sock"; sleep 1.5 ;;
+            printf '%s\n' "${step#touch=}" | socat - "UNIX-SENDTO:$work/touch.sock"; sleep 1.5 ;;
         wheel=*)
             IFS=, read -r x y dy <<<"${step#wheel=}"
             a mouse move "$x" "$y"; a mouse wheel "$dy"; sleep 1 ;;
@@ -118,9 +102,9 @@ sleep 1
 if ! kill -0 "$app" 2>/dev/null; then
     wait "$app"; status=$?
     echo "settings-headless: sliver-settings exited (status $status); its log:" >&2
-    cat "$tmp/app.log" >&2
+    cat "$work/sliver-settings.log" >&2
 fi
 a screenshot "$out"
 [ -s "$out" ] || { echo "settings-headless: no screenshot at $out" >&2; exit 1; }
-grep -v -e '^$' -e 'Theme parser' "$tmp/app.log" >&2 || true
+grep -v -e '^$' -e 'Theme parser' "$work/sliver-settings.log" >&2 || true
 echo "$out"

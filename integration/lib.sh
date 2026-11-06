@@ -1,13 +1,14 @@
-# Sourced by the compositor tests (integration/*/test.sh): one private runtime directory, every
-# process started through `spawn` stopped on exit, and waits on the JSON states a backend example
-# prints, one per line, into $work/states.jsonl. The live session is never touched: the
-# environment that would reach it is cleared (`$clean`).
+# Sourced by the integration tests and scripts/settings-headless: one private runtime directory,
+# every process started through `spawn` stopped on exit, a private D-Bus, and waits on the JSON
+# states a backend example prints, one per line, into $work/states.jsonl. The live session is never
+# touched: the environment that would reach it is cleared (`$clean`).
 #
 #   . "$(dirname "$0")/../lib.sh"
 #   need sway foot                 # skip (exit 0) unless installed
-#   setup sway                     # $root, $work, $clean; examples built
+#   setup sway sliver-desktop      # $root, $work, $clean; that crate's examples built
+#   bus                            # a private session bus (nothing can be activated on it)
 #   spawn sway -c "$work/config"   # background, under $clean, stopped on exit
-#   watch                          # the desktop-watch example into states.jsonl
+#   watch desktop-watch            # an example ($examples) writing states.jsonl
 #   wait_for "focus moved" "s['window']['class']=='a'"
 #
 # Packages not installed? Without root: `dnf download --resolve` the rpms, `rpm2cpio | cpio -idm`
@@ -26,19 +27,37 @@ need() {
     done
 }
 
+examples=$root/target/debug/examples
 pids=()
-stop_all() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; wait 2>/dev/null || true; rm -rf "$work"; }
+# On exit: `on_exit` (if defined), then every spawned process, then $work.
+stop_all() {
+    if declare -F on_exit >/dev/null; then on_exit || true; fi
+    for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
+    wait 2>/dev/null || true
+    rm -rf "$work"
+}
 
-# setup NAME: the private runtime dir and the cleared environment, and the backend examples.
+# setup NAME [CRATE...]: the private runtime dir ($work), the cleared environment ($clean), and
+# the crates' examples, in $examples.
 setup() {
-    cargo build -q -p sliver-desktop --examples --manifest-path "$root/Cargo.toml"
-    examples=$root/target/debug/examples
+    local crate
+    for crate in "${@:2}"; do
+        cargo build -q -p "$crate" --examples --manifest-path "$root/Cargo.toml"
+    done
     work=$(mktemp -d "/tmp/sliver-$1.XXXX")
     chmod 700 "$work"
     trap stop_all EXIT
     clean=(env -u SWAYSOCK -u WAYLAND_DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE -u NIRI_SOCKET -u DISPLAY
            -u XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR="$work" WLR_BACKENDS=headless WLR_RENDERER=pixman
            WLR_LIBINPUT_NO_DEVICES=1)
+}
+
+# bus: a private dbus-daemon (integration/bus.conf) as the session and system bus.
+bus() {
+    spawn dbus-daemon --config-file="$root/integration/bus.conf" --nofork --print-address=3 3>"$work/bus.addr"
+    wait_until "the private bus is up" test -s "$work/bus.addr"
+    DBUS_SESSION_BUS_ADDRESS=$(head -1 "$work/bus.addr")
+    export DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS
 }
 
 # spawn CMD...: run it in the background under $clean (its output in $work/<program>.log; a

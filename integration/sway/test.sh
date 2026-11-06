@@ -11,7 +11,7 @@
 # Skips (exit 0) when sway or foot is missing.
 . "$(dirname "$0")/../lib.sh"
 need sway foot
-setup sway
+setup sway sliver-desktop
 on_fail() { echo "sway's own tree:"; "${clean[@]}" swaymsg -t get_tree | grep -E '"app_id": "sliver' || true; }
 
 printf 'output HEADLESS-1 resolution 1280x720\nfloating_modifier Mod4\n' >"$work/config"

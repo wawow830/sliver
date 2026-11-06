@@ -7,7 +7,7 @@
 # and set SLIVER_TEST_ROOT. Skips (exit 0) when either is missing.
 . "$(dirname "$0")/../lib.sh"
 need labwc foot
-setup labwc
+setup labwc sliver-desktop
 
 mkdir -p "$work/cfg"
 cat >"$work/cfg/rc.xml" <<'XML'

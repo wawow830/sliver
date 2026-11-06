@@ -6,25 +6,15 @@
 # the real frontend, reaches a backend with its options intact, and the Response comes back.
 #
 # Needs xdg-desktop-portal (/usr/libexec), python3-gobject, dbus-daemon. Skips (exit 0) without.
-set -euo pipefail
-root=$(cd "$(dirname "$0")/../.." && pwd)
+. "$(dirname "$0")/../lib.sh"
 here=$root/integration/portal
 portal=${XDG_DESKTOP_PORTAL_BIN:-/usr/libexec/xdg-desktop-portal}
 [ -x "$portal" ] || { echo "SKIP: $portal not installed"; exit 0; }
-command -v dbus-daemon >/dev/null && command -v gdbus >/dev/null || { echo "SKIP: dbus-daemon and gdbus are needed"; exit 0; }
+need dbus-daemon gdbus
 python3 -c 'import gi; from gi.repository import Gio' 2>/dev/null || { echo "SKIP: python3-gobject is needed"; exit 0; }
+setup portal sliver-agent
 
-cargo build -q -p sliver-agent --example oneshot --manifest-path "$root/Cargo.toml"
-oneshot=$root/target/debug/examples/oneshot
-
-work=$(mktemp -d /tmp/sliver-portal.XXXX)
-chmod 700 "$work"
-pids=()
-cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; wait 2>/dev/null || true; rm -rf "$work"; }
-trap cleanup EXIT
-
-mkdir -p "$work"/{portals,cfg/xdg-desktop-portal,data,cache,run}
-chmod 700 "$work/run"
+mkdir -p "$work"/{portals,cfg/xdg-desktop-portal,data,cache}
 cat >"$work/portals/sliver_test.portal" <<'P'
 [portal]
 DBusName=org.freedesktop.impl.portal.desktop.sliver_test
@@ -33,25 +23,22 @@ UseIn=sliver-test
 P
 printf '[preferred]\ndefault=sliver_test\n' >"$work/cfg/xdg-desktop-portal/sliver-test-portals.conf"
 
-dbus-daemon --config-file="$root/integration/kwin/session.conf" --nofork --print-address=3 3>"$work/addr" >/dev/null 2>&1 &
-pids+=($!)
-for _ in $(seq 1 50); do [ -s "$work/addr" ] && break; sleep 0.1; done
-export DBUS_SESSION_BUS_ADDRESS=$(cat "$work/addr")
-env -u WAYLAND_DISPLAY -u DISPLAY XDG_RUNTIME_DIR="$work/run" python3 "$here/mock-backend.py" "$work/calls.jsonl" 2>"$work/backend.err" &
-pids+=($!)
-env XDG_RUNTIME_DIR="$work/run" XDG_CONFIG_HOME="$work/cfg" XDG_DATA_HOME="$work/data" XDG_CACHE_HOME="$work/cache" \
-    XDG_CURRENT_DESKTOP=sliver-test XDG_DESKTOP_PORTAL_DIR="$work/portals" "$portal" -v >"$work/portal.log" 2>&1 &
-pids+=($!)
+bus
+spawn python3 "$here/mock-backend.py" "$work/calls.jsonl"
+wait_until "the mock backend is on the bus" sh -c \
+    'gdbus introspect --session --dest org.freedesktop.impl.portal.desktop.sliver_test --object-path / >/dev/null 2>&1'
+spawn env XDG_CONFIG_HOME="$work/cfg" XDG_DATA_HOME="$work/data" XDG_CACHE_HOME="$work/cache" \
+    XDG_CURRENT_DESKTOP=sliver-test XDG_DESKTOP_PORTAL_DIR="$work/portals" "$portal" -v
 for _ in $(seq 1 100); do
     gdbus introspect --session --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop 2>/dev/null \
         | grep -q 'interface org.freedesktop.portal.Screenshot' && break
     sleep 0.1
 done
-fail() { echo "FAIL: $1"; tail -15 "$work/portal.log"; cat "$work/backend.err" 2>/dev/null; cat "$work/calls.jsonl" 2>/dev/null; exit 1; }
+fail() { echo "FAIL: $1"; tail -15 "$work/xdg-desktop-portal.log"; cat "$work/python3.log" 2>/dev/null; cat "$work/calls.jsonl" 2>/dev/null; exit 1; }
 gdbus introspect --session --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop 2>/dev/null \
     | grep -q 'interface org.freedesktop.portal.Screenshot' || fail "the portal never offered Screenshot"
 
-out=$(timeout 20 "$oneshot" screenshot 5000) || fail "the agent's screenshot call failed: $out"
+out=$(timeout 20 "$examples/oneshot" screenshot 5000) || fail "the agent's screenshot call failed: $out"
 printf '%s\n' "$out" | head -1 | grep -qx ok || fail "unexpected result: $out"
 printf '%s\n' "$out" | grep -q '^response 0 .*uri=.*sliver-test-shot.png' || fail "no successful Response with the uri: $out"
 python3 - "$work/calls.jsonl" <<'PY' || fail "the backend did not get the options"

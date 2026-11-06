@@ -8,7 +8,7 @@
 # rpm2cpio into a prefix, SLIVER_TEST_ROOT). Skips (exit 0) when one is missing.
 . "$(dirname "$0")/../lib.sh"
 need niri sway foot
-setup niri
+setup niri sliver-desktop
 on_fail() { tail -5 "$work/niri.log"; }
 
 # niri runs nested in a headless sway.

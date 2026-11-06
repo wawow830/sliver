@@ -12,7 +12,7 @@
 . "$(dirname "$0")/../lib.sh"
 need river foot
 river -version 2>/dev/null | grep -q '^0\.3' || { echo "SKIP: this river is not river-classic 0.3 (0.4 needs a separate window manager)"; exit 0; }
-setup river
+setup river sliver-desktop
 
 spawn river
 wait_until "river is up" test -S "$work/wayland-1"
