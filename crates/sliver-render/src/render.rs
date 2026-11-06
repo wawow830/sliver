@@ -581,8 +581,21 @@ impl Renderer {
                         },
                         None => content,
                     };
+                    // On a slider, the bars up to its value take the highlight's colour, so the
+                    // spectrum can be the rail itself (with a trough of no height).
+                    let played = match (&item.content, parts, track) {
+                        (Content::Slider { value, .. }, Some([t, hl, _]), Some(tr)) => Some((
+                            tr.x + tr.w * value.clamp(0.0, 1.0),
+                            fade(hl.background, opacity * t.opacity * hl.opacity),
+                        )),
+                        _ => None,
+                    };
                     // Its own padding narrows it: a band under a button's icon, say.
-                    (area.inset(ss.padding), fade(ss.color, opacity * ss.opacity))
+                    Bars {
+                        area: area.inset(ss.padding),
+                        color: fade(ss.color, opacity * ss.opacity),
+                        played,
+                    }
                 });
                 self.draw_item(item, drawn, s, opacity, spectrum, pixmap);
                 if let (Content::Slider { value, .. }, Some(parts), Some(track)) =
@@ -615,15 +628,15 @@ impl Renderer {
         rect: Rect,
         s: &Style,
         opacity: f32,
-        spectrum: Option<(Rect, Color)>,
+        spectrum: Option<Bars>,
         pixmap: &mut Pixmap,
     ) {
         if matches!(item.content, Content::Spacer) || opacity <= 0.0 {
             return;
         }
         draw_box(pixmap, rect, s, item.background, opacity);
-        if let Some((area, color)) = spectrum {
-            draw_bars(pixmap, area, &item.spectrum, color);
+        if let Some(b) = spectrum {
+            draw_bars_split(pixmap, b.area, &item.spectrum, b.color, b.played);
         }
         let fg = fade(item.foreground.unwrap_or(s.color), opacity);
         let content = rect.inset(s.padding.map(|p| p + s.border_width));
@@ -927,34 +940,71 @@ const BAR_PITCH: f32 = 12.0;
 
 /// One bar per level across `r`, each half its slot wide with round ends, centred on the middle
 /// line and at least as tall as it is wide.
+/// Where and how an item's spectrum is drawn: in `color`, except bars left of `played`'s x,
+/// which take its colour (a slider's part up to its value).
+#[derive(Clone, Copy)]
+struct Bars {
+    area: Rect,
+    color: Color,
+    played: Option<(f32, Color)>,
+}
+
 fn draw_bars(pixmap: &mut Pixmap, r: Rect, levels: &[f32], color: Color) {
-    if levels.is_empty() || r.w < 1.0 || r.h < 1.0 || color.a == 0 {
+    draw_bars_split(pixmap, r, levels, color, None);
+}
+
+fn draw_bars_split(
+    pixmap: &mut Pixmap,
+    r: Rect,
+    levels: &[f32],
+    color: Color,
+    played: Option<(f32, Color)>,
+) {
+    if levels.is_empty() || r.w < 1.0 || r.h < 1.0 {
         return;
     }
     let pitch = r.w / levels.len() as f32;
     let w = (pitch / 2.0).min(r.h).max(1.0);
-    let mut pb = PathBuilder::new();
+    let (mut rest, mut before) = (PathBuilder::new(), PathBuilder::new());
     for (i, v) in levels.iter().enumerate() {
         let h = w + v.clamp(0.0, 1.0) * (r.h - w);
-        let x = r.x + (i as f32 + 0.5) * pitch - w / 2.0;
+        let cx = r.x + (i as f32 + 0.5) * pitch;
         let y = r.y + (r.h - h) / 2.0;
-        if let Some(path) = rounded_rect(Rect { x, y, w, h }, w / 2.0) {
+        let pb = match played {
+            Some((x, _)) if cx < x => &mut before,
+            _ => &mut rest,
+        };
+        if let Some(path) = rounded_rect(
+            Rect {
+                x: cx - w / 2.0,
+                y,
+                w,
+                h,
+            },
+            w / 2.0,
+        ) {
             pb.push_path(&path);
         }
     }
-    let mut paint = Paint {
-        anti_alias: true,
-        ..Paint::default()
-    };
-    paint.set_color(color.to_skia());
-    if let Some(path) = pb.finish() {
-        pixmap.fill_path(
-            &path,
-            &paint,
-            FillRule::Winding,
-            Transform::identity(),
-            None,
-        );
+    let played_color = played.map_or(color, |(_, c)| c);
+    for (pb, c) in [(rest, color), (before, played_color)] {
+        if c.a == 0 {
+            continue;
+        }
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Paint::default()
+        };
+        paint.set_color(c.to_skia());
+        if let Some(path) = pb.finish() {
+            pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
     }
 }
 

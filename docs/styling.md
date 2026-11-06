@@ -44,7 +44,8 @@ height free above and below; `width`/`min-width` make it wider than its natural 
 spectrum draws its bars in `color` too, across the content box: each half its slot wide. Any module
 with `spectrum = true` draws them under its content, over its content height (along a slider's
 rail), in the `color` of its `spectrum` node, which inherits the module's; the node's `padding`
-narrows that area. Something faint, or a band clear of the icon, keeps the content readable:
+narrows that area. On a slider, the bars up to its value take the `highlight` background, so with
+`trough { min-height: 0; }` the spectrum is the rail itself. Something faint, or a band clear of the icon, keeps the content readable:
 `#mpris.toggle spectrum { color: alpha(@on_primary, 0.4); padding: 38px 0 0 0; }`.
 
 ## Selectors

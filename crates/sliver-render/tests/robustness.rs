@@ -276,8 +276,8 @@ fn spectrum_bars_grow_from_the_middle() {
 }
 
 /// An item's spectrum is drawn under its content, in its `spectrum` node's colour (else the
-/// item's): along a slider's rail with the rail and fill on top, or across a button's content
-/// box with its icon or label on top.
+/// item's): along a slider's rail with the rail and fill on top and the bars up to its value in
+/// the highlight's colour, or across a button's content box with its icon or label on top.
 #[test]
 fn a_spectrum_sits_under_the_content() {
     let mut r = Renderer::new(Fonts::embedded());
@@ -299,9 +299,10 @@ fn a_spectrum_sits_under_the_content() {
         (c.red(), c.green(), c.blue())
     };
     assert!(
-        px(&p, 12, 8).1 > 128 && px(&p, 87, 8).1 > 128,
-        "bars above the rail, in the item's colour"
+        px(&p, 12, 8).0 > 128 && px(&p, 12, 8).1 < 128,
+        "bars up to the value, in the highlight's colour"
     );
+    assert!(px(&p, 87, 8).1 > 128, "the rest in the item's colour");
     assert!(px(&p, 12, 30).0 > 128, "the fill up to the value");
     assert!(px(&p, 87, 30).2 > 128, "the rail after it");
 
