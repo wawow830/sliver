@@ -104,38 +104,12 @@ impl Config {
 
     /// The zones of a layout after following `extends` (whole zones override by name).
     pub fn layout_zones(&self, name: &str) -> Result<Vec<Zone>, ResolveError> {
-        let mut chain = vec![name.to_owned()];
-        let mut cur = self
-            .layouts
-            .get(name)
-            .ok_or_else(|| ResolveError::UnknownLayout(name.to_owned()))?;
-        while let Some(parent) = &cur.extends {
-            if chain.contains(parent) || chain.len() > MAX_DEPTH {
-                chain.push(parent.clone());
-                return Err(ResolveError::ExtendsCycle(chain));
-            }
-            chain.push(parent.clone());
-            cur = self
-                .layouts
-                .get(parent)
-                .ok_or_else(|| ResolveError::UnknownLayout(parent.clone()))?;
-        }
-        let mut zones: Vec<Zone> = Vec::new();
-        for l in chain.iter().rev().map(|n| &self.layouts[n]) {
-            for z in &l.zones {
-                match zones.iter_mut().find(|o| o.name == z.name) {
-                    Some(slot) => *slot = z.clone(),
-                    None => zones.push(z.clone()),
-                }
-            }
-            if let Some(order) = &l.zone_order {
-                zones = order
-                    .iter()
-                    .filter_map(|n| zones.iter().find(|z| &z.name == n).cloned())
-                    .collect();
-            }
-        }
-        Ok(zones)
+        let chain = extends_chain(name, |l| self.layouts.get(l).map(|l| l.extends.clone()))?;
+        let levels = chain.iter().rev().map(|n| {
+            let l = &self.layouts[n];
+            (l.zones.clone(), l.zone_order.clone())
+        });
+        Ok(inherit_zones(levels, |z| &z.name))
     }
 
     /// The merged config block for a module reference: built-in defaults, then
@@ -277,6 +251,52 @@ impl Config {
         }
         Some(inst)
     }
+}
+
+/// `name` and the layouts it `extends`, itself first. `parent` says what a layout extends
+/// (`None`: there's no such layout).
+pub fn extends_chain(
+    name: &str,
+    parent: impl Fn(&str) -> Option<Option<String>>,
+) -> Result<Vec<String>, ResolveError> {
+    let mut chain = vec![name.to_owned()];
+    let unknown = |l: &str| ResolveError::UnknownLayout(l.to_owned());
+    let mut next = parent(name).ok_or_else(|| unknown(name))?;
+    while let Some(p) = next {
+        let cycle = chain.contains(&p) || chain.len() > MAX_DEPTH;
+        chain.push(p.clone());
+        if cycle {
+            return Err(ResolveError::ExtendsCycle(chain));
+        }
+        next = parent(&p).ok_or_else(|| unknown(&p))?;
+    }
+    Ok(chain)
+}
+
+/// The zones a layout shows, from its `extends` chain's levels, farthest parent first (each its
+/// zones and `zone-order`): a zone replaces the one of the same name or is added, and a level's
+/// `zone-order` reorders and filters what there is so far. Generic over the zone, so editors
+/// working on the raw TOML inherit exactly like the parsed config.
+pub fn inherit_zones<Z: Clone>(
+    levels: impl IntoIterator<Item = (Vec<Z>, Option<Vec<String>>)>,
+    name: impl Fn(&Z) -> &str,
+) -> Vec<Z> {
+    let mut zones: Vec<Z> = Vec::new();
+    for (own, order) in levels {
+        for z in own {
+            match zones.iter_mut().find(|o| name(o) == name(&z)) {
+                Some(slot) => *slot = z,
+                None => zones.push(z),
+            }
+        }
+        if let Some(order) = order {
+            zones = order
+                .iter()
+                .filter_map(|n| zones.iter().find(|z| name(z) == n.as_str()).cloned())
+                .collect();
+        }
+    }
+    zones
 }
 
 /// The `modules = [...]` of a group block, parsed (invalid names skipped; `validate` reports them).
