@@ -992,7 +992,7 @@ fn workspaces_and_taskbar_buttons_drive_the_compositor() {
 
 /// A menu's module actions act on the button that opened it: a taskbar item whose hold asks
 /// first closes its own window only when its "Close" entry is tapped. The entry is named after
-/// the button, and the layout's last zone stays beside it.
+/// the button, the menu's ✕ takes the button's place, and the layout's last zone stays.
 #[test]
 fn a_menu_entry_acts_on_the_button_that_opened_it() {
     use sliver_agent::agent::Effect;
@@ -1022,6 +1022,12 @@ fn a_menu_entry_acts_on_the_button_that_opened_it() {
             })
             .collect::<Vec<_>>()
     };
+    let rect = |a: &Agent, key: &str| {
+        let f = a.frame(Layer::Base).unwrap();
+        let i = f.cells.iter().position(|c| c.key == key).unwrap();
+        f.layout.items[i]
+    };
+    let held = rect(&a, "taskbar/cd34");
     let (id, x) = region(&a, "taskbar/cd34");
     let mut fx = a.touch(id, 0, TouchPhase::Down, x, 1_000);
     fx.extend(a.tick(2_000_000));
@@ -1030,17 +1036,54 @@ fn a_menu_entry_acts_on_the_button_that_opened_it() {
     a.render(&w);
     let cells = &a.frame(Layer::Base).unwrap().cells;
     let keys: Vec<&str> = cells.iter().map(|c| c.key.as_str()).collect();
-    assert_eq!(keys, ["custom/a", "menu/close", "menu/0", "custom/z"]);
+    assert_eq!(
+        keys,
+        [
+            "custom/a",
+            "menu/before",
+            "menu/close",
+            "menu/0",
+            "menu/after",
+            "custom/z"
+        ]
+    );
     assert!(
-        matches!(&cells[2].content, sliver_render::Content::Markup(t) if t == "Close kitty"),
+        matches!(&cells[3].content, sliver_render::Content::Markup(t) if t == "Close kitty"),
         "{:?}",
-        cells[2].content
+        cells[3].content
+    );
+    let x = rect(&a, "menu/close");
+    assert!(
+        (x.x - held.x).abs() < 0.5 && (x.w - held.w).abs() < 0.5,
+        "the ✕ takes the held button's place: {x:?} vs {held:?}"
     );
     let (id, x) = region(&a, "menu/0");
     let mut fx = a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
     fx.extend(a.touch(id, 0, TouchPhase::Up, x, 3_040_000));
     fx.extend(a.tick(3_400_000));
     assert_eq!(closes(&fx), ["cd34"], "{fx:?}");
+    let region_of = |a: &Agent, key: &str| {
+        a.frame(Layer::Base)
+            .unwrap()
+            .cells
+            .iter()
+            .any(|c| c.key == key)
+    };
+
+    // Left alone, it closes on its own.
+    a.render(&w);
+    let (id, x) = region(&a, "taskbar/ab12");
+    a.touch(id, 0, TouchPhase::Down, x, 4_000_000);
+    a.tick(5_000_000);
+    a.touch(id, 0, TouchPhase::Up, x, 5_100_000);
+    a.render(&w);
+    assert!(region_of(&a, "menu/0"), "open");
+    a.tick(9_900_000);
+    a.render(&w);
+    assert!(region_of(&a, "menu/0"), "still open before the timeout");
+    assert!(a.tick(10_200_000).contains(&Effect::Redraw));
+    a.render(&w);
+    assert!(!region_of(&a, "menu/0"), "closed after it");
 }
 
 /// The timer module: tap starts, tap pauses, hold resets, and reaching zero notifies once.
@@ -1465,7 +1508,10 @@ fn menu_sub_bar_opens_runs_and_closes() {
     assert!(fx.contains(&Effect::Redraw), "{fx:?}");
     a.render(&w);
     // like a modal context, the sub-bar covers everything but the layout's first zone
-    assert_eq!(keys(&a), ["custom/pw", "menu/close", "menu/0", "menu/1"]);
+    assert_eq!(
+        keys(&a),
+        ["custom/pw", "menu/close", "menu/0", "menu/1", "menu/after"]
+    );
     // picking runs the action and closes
     let fx = tap(&mut a, "menu/1", 2_000_000);
     assert!(
@@ -1541,7 +1587,14 @@ fn language_hold_lists_and_picks_a_layout() {
     a.render(&w);
     assert_eq!(
         keys(&a),
-        ["language", "menu/close", "menu/0", "menu/1", "menu/2"]
+        [
+            "language",
+            "menu/close",
+            "menu/0",
+            "menu/1",
+            "menu/2",
+            "menu/after"
+        ]
     );
     let (id, x) = region(&a, "menu/2");
     let mut fx = a.touch(id, 0, TouchPhase::Down, x, 2_000_000);

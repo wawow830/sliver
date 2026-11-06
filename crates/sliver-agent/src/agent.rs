@@ -23,6 +23,9 @@ const ICON_LOOKUP_SIZE: u32 = 48;
 pub const FN_REGION_BASE: u32 = 10_000;
 /// Drag actions (`on-drag` commands) run at most this often; the final value always runs.
 const DRAG_INTERVAL_US: u64 = 50_000;
+/// An open menu closes on its own after this long, so an entry like "Close window" doesn't
+/// stay armed on a bar nobody is looking at.
+const MENU_TIMEOUT_US: u64 = 5_000_000;
 
 /// Something for the caller to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -163,6 +166,9 @@ pub struct Agent {
     /// The button whose `menu` is open: its entries' module actions act on it (which window to
     /// close, for instance).
     menu_owner: Option<Cell>,
+    /// Where that button was among the zones the menu covers (offset from the menu's start,
+    /// width): the menu's ✕ takes its place, under the finger that opened it.
+    menu_slot: Option<(f32, f32)>,
     /// An open popover a published item showed (api.md §3): context, popover item id, and the
     /// context's class (`app` / `status`).
     popover: Option<(sliver_api::registry::ContextId, String, String)>,
@@ -187,6 +193,7 @@ pub struct Agent {
 enum Scheduled {
     Action(Action),
     CloseDrawer(String),
+    CloseMenu,
     /// A running timer reaches zero (ignored if it was paused or reset since).
     TimerDone {
         key: String,
@@ -254,6 +261,7 @@ impl Agent {
             emoji: Default::default(),
             menu: None,
             menu_owner: None,
+            menu_slot: None,
             popover: None,
             subbar: None,
         }
@@ -575,8 +583,8 @@ impl Agent {
             .flatten();
         if (menu.is_some() || subbar.is_some()) && !zones.is_empty() {
             // A menu's entries fit their labels, so the layout's last zone (volume, say) stays
-            // too; a drawer's items take the room.
-            let last = (menu.is_some() && zones.len() > 1)
+            // too, unless it's the only one to cover; a drawer's items take the room.
+            let last = (menu.is_some() && zones.len() > 2)
                 .then(|| zones.pop())
                 .flatten();
             zones.truncate(1);
@@ -642,8 +650,12 @@ impl Agent {
                 if z.name == "menu"
                     && let Some(entries) = &menu
                 {
-                    let mut cells =
-                        crate::modules::menu_cells(entries, &mut self.icons, ICON_LOOKUP_SIZE);
+                    let mut cells = crate::modules::menu_cells(
+                        entries,
+                        self.menu_slot,
+                        &mut self.icons,
+                        ICON_LOOKUP_SIZE,
+                    );
                     for c in &mut cells {
                         c.pressed = self.pressed.contains(&c.key);
                     }
@@ -938,6 +950,13 @@ impl Agent {
                 }
                 Scheduled::CloseDrawer(g) => {
                     if std::mem::take(&mut self.ui(&g).expanded) {
+                        fx.push(Effect::Redraw);
+                    }
+                }
+                Scheduled::CloseMenu => {
+                    if self.menu.take().is_some() {
+                        self.menu_owner = None;
+                        self.menu_slot = None;
                         fx.push(Effect::Redraw);
                     }
                 }
@@ -1624,6 +1643,39 @@ impl Agent {
     }
 
     /// A built-in module's own action (`actions = { on-hold = "…" }`, or its default bindings).
+    /// Opens `entries` as `cell`'s menu: their module actions act on it, the ✕ takes its place
+    /// if the menu covers it, and it closes on its own after [`MENU_TIMEOUT_US`].
+    fn open_menu(
+        &mut self,
+        cell: &Cell,
+        entries: Vec<sliver_config::MenuEntry>,
+        now: u64,
+        fx: &mut Vec<Effect>,
+    ) {
+        self.scheduled
+            .retain(|s| !matches!(s.1, Scheduled::CloseMenu));
+        self.scheduled
+            .push((now + MENU_TIMEOUT_US, Scheduled::CloseMenu));
+        self.menu_slot = self.frame(Layer::Base).and_then(|f| {
+            let i = f.cells.iter().position(|c| c.key == cell.key)?;
+            let (r, zones) = (*f.layout.items.get(i)?, &f.layout.zones);
+            let zi = zones.iter().position(|z| r.x >= z.x && r.x < z.x + z.w)?;
+            // The menu covers every zone but the first, and the last when there are more.
+            let covered = zi >= 1 && (zi + 1 < zones.len() || zones.len() <= 2);
+            // The menu's items are spaced like the button's own zone.
+            let gap = f.layout.items[..i]
+                .iter()
+                .rev()
+                .find(|p| p.x >= zones[zi].x && p.x < r.x)
+                .map_or(0.0, |p| r.x - (p.x + p.w));
+            covered.then(|| ((r.x - zones[1].x - gap).max(0.0), r.w))
+        });
+        self.menu = Some(entries);
+        self.menu_owner = Some(cell.clone());
+        fx.extend(self.cancel_touches());
+        fx.push(Effect::Redraw);
+    }
+
     fn module_action(
         &mut self,
         cell: &Cell,
@@ -1716,16 +1768,14 @@ impl Agent {
             }
             (_, "menu:open", _) => {
                 if !cell.menu.is_empty() {
-                    self.menu = Some(cell.menu.clone());
-                    self.menu_owner = Some(cell.clone());
-                    fx.extend(self.cancel_touches());
-                    fx.push(Effect::Redraw);
+                    self.open_menu(cell, cell.menu.clone(), now, fx);
                 }
                 return;
             }
             ("menu", "menu:close", _) => {
                 self.menu = None;
                 self.menu_owner = None;
+                self.menu_slot = None;
                 self.subbar = None;
                 fx.extend(self.cancel_touches());
                 fx.push(Effect::Redraw);
@@ -1737,6 +1787,7 @@ impl Agent {
                     pick.and_then(|i| self.menu.as_ref().and_then(|m| m.get(i)).cloned())
                 {
                     self.menu = None;
+                    self.menu_slot = None;
                     fx.extend(self.cancel_touches());
                     fx.push(Effect::Redraw);
                     // The `language` picker's entries are not config actions.
@@ -1775,9 +1826,7 @@ impl Agent {
                 return;
             }
             ("power", "power:hold", _) => {
-                self.menu = Some(crate::modules::power_menu(true));
-                fx.extend(self.cancel_touches());
-                fx.push(Effect::Redraw);
+                self.open_menu(cell, crate::modules::power_menu(true), now, fx);
                 return;
             }
             ("language", "im-toggle", _) => {

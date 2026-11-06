@@ -600,7 +600,7 @@ pub fn subbar_cells(
         ui,
         &mut out,
     );
-    out.extend(menu_cells(&[], icons, icon_size));
+    out.extend(menu_cells(&[], None, icons, icon_size));
     Some(out)
 }
 
@@ -1108,10 +1108,12 @@ pub fn oneshot_action(name: &str) -> Option<Action> {
 }
 
 /// The cells of an open `menu` sub-bar: a ✕, then one per entry (label and/or icon, as wide as
-/// that needs). The ✕ comes first, where the finger that opened the menu usually is, so tapping
-/// there again dismisses instead of acting.
+/// that needs). The ✕ comes first and, given the opening button's `slot` (offset, width), takes
+/// its place, so tapping there again dismisses instead of acting; so does any space around the
+/// entries.
 pub fn menu_cells(
     entries: &[sliver_config::MenuEntry],
+    slot: Option<(f32, f32)>,
     icons: &mut Icons,
     icon_size: u32,
 ) -> Vec<Cell> {
@@ -1144,13 +1146,23 @@ pub fn menu_cells(
     let x = icons
         .get("window-close-symbolic", None, icon_size)
         .map_or_else(|| Content::Markup("✕".into()), Content::Icon);
-    let mut out = vec![cell(
+    let mut out = Vec::new();
+    if let Some((offset, _)) = slot.filter(|s| s.0 > 0.0) {
+        out.push(cell(
+            "menu/before".into(),
+            Content::Spacer,
+            Width::Fixed(offset),
+            &["menu-spacer"],
+            "menu:close".into(),
+        ));
+    }
+    out.push(cell(
         "menu/close".into(),
         x,
-        Width::Fixed(72.0),
+        Width::Fixed(slot.map_or(72.0, |s| s.1)),
         &["menu-close"],
         "menu:close".into(),
-    )];
+    ));
     for (i, e) in entries.iter().enumerate() {
         let icon = e
             .icon
@@ -1168,6 +1180,15 @@ pub fn menu_cells(
             Width::Auto,
             &["menu-item"],
             format!("menu:pick:{i}"),
+        ));
+    }
+    if !entries.is_empty() {
+        out.push(cell(
+            "menu/after".into(),
+            Content::Spacer,
+            Width::Fill(1),
+            &["menu-spacer"],
+            "menu:close".into(),
         ));
     }
     out
