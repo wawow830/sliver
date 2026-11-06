@@ -90,5 +90,6 @@ class Sandbox:
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 os.killpg(p.pid, signal.SIGKILL)
+                p.wait()
         if self.ok:
             shutil.rmtree(self.dir, ignore_errors=True)

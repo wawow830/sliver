@@ -1,14 +1,15 @@
 # Sliver: the Touch Bar platform for Linux Macs. Built from a git snapshot plus a cargo vendor
 # tarball (offline, so it works in mock/COPR). Local build: scripts/rpm-build.
 
-# Rendered by packaging/rpm/spec.py (scripts/rpm-build does): @...@ come from Cargo.
-%global sliver_license @LICENSE@
+# Rendered by packaging/rpm/spec.py (scripts/rpm-build does): @CARGO_*@ and @BUNDLED_LICENSES@
+# come from Cargo.
+%global sliver_license @CARGO_LICENSE@
 %global bundled_licenses @BUNDLED_LICENSES@
 
 %bcond check 1
 
 Name:           sliver
-Version:        @VERSION@
+Version:        @CARGO_VERSION@
 Release:        0.1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Touch Bar platform and customizer for Linux Macs
 URL:            https://github.com/wawow830/sliver
@@ -226,12 +227,7 @@ udevadm trigger --action=change --subsystem-match=backlight \
     --sysname-match=appletb_backlight >/dev/null 2>&1 || :
 # Never send a udev event to the digitizers here: they carry SYSTEMD_WANTS=sliverd.service, and
 # systemd acts on it for 'change' events too, so it would take the bar from tiny-dfr at every
-# install and upgrade. Their seat rule
-# (ID_SEAT=seat-touchbar) applies from the next boot, like the rest. Without tiny-dfr our rules
-# also do the T2 USB switch to the display configuration (an add-only rule; it acts only while
-# the configuration is still 1).
-udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=05ac \
-    --attr-match=idProduct=8302 >/dev/null 2>&1 || :
+# install and upgrade.
 udevadm settle --timeout=5 >/dev/null 2>&1 || :
 # No takeover at install time: the bar switches to sliverd at the next boot, or now with
 # `systemctl start sliverd` (its ExecStartPre stops tiny-dfr).

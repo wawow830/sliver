@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prints sliver.spec: sliver.spec.in with what it states filled in from where it's true.
 
-@VERSION@ and @LICENSE@ are Cargo.toml's [workspace.package] version and license.
+@CARGO_VERSION@ and @CARGO_LICENSE@ are Cargo.toml's [workspace.package] version and license.
 @BUNDLED_LICENSES@ is every license the shipped binaries' dependencies are under (`cargo
 metadata`: normal dependencies of our crates, transitively, proc-macros aside), plus the embedded
 assets': Noto Sans (OFL-1.1) and Material icons (Apache-2.0). Each crate's expression is kept as
@@ -50,7 +50,7 @@ def bundled() -> str:
 def render() -> str:
     ws = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]
     text = (ROOT / "packaging/rpm/sliver.spec.in").read_text()
-    for k, v in {"@VERSION@": ws["version"], "@LICENSE@": ws["license"],
+    for k, v in {"@CARGO_VERSION@": ws["version"], "@CARGO_LICENSE@": ws["license"],
                  "@BUNDLED_LICENSES@": bundled()}.items():
         text = text.replace(k, v)
     return text
