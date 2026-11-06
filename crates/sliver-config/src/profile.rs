@@ -1,4 +1,4 @@
-//! Profiles (customization.md §1b, ux.md §9): named full configs, one active at a time.
+//! Profiles (sliver-config(5)): named full configs, one active at a time.
 //!
 //! - `default` is the ordinary config (`config.toml`, found on the search path).
 //! - Any other profile is `profiles/<name>.toml` in the user's config dir. A new profile starts as
@@ -144,8 +144,8 @@ pub fn create(name: &str, from: Option<&str>) -> Result<PathBuf, String> {
 
 fn overlay_text(name: &str) -> String {
     let mut t = format!(
-        "# Profile {name:?}: your main config plus what you change here (sliver profiles,\n\
-         # customization.md §1b). Switch with `sliverctl profile {name}` or in Sliver's settings.\n\
+        "# Profile {name:?}: your main config plus what you change here (see sliver-config(5)).\n\
+         # Switch with `sliverctl profile {name}` or in Sliver's settings.\n\
          version = 1\n"
     );
     let Some(dir) = user_dir() else { return t };

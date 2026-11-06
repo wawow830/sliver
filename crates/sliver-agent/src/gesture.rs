@@ -1,4 +1,4 @@
-//! Gesture recognition for touches on agent regions (customization.md §3). Sans-IO: feed it
+//! Gesture recognition for touches on agent regions (sliver-config(5)). Sans-IO: feed it
 //! touch phases with sliverd's timestamps (µs, monotonic) and call [`Recognizer::tick`] at
 //! [`Recognizer::next_deadline`].
 //!

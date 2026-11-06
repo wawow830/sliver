@@ -1,4 +1,4 @@
-//! Finding and reading config files, with `include` (customization.md §1).
+//! Finding and reading config files, with `include` (sliver-config(5)).
 //!
 //! Precedence, lowest to highest: the built-in defaults, then the last include, ..., the first
 //! include, then the including file itself. Tables deep-merge and arrays are replaced.

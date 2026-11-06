@@ -1,5 +1,5 @@
 //! What the bar shows right now: rule selection, zone inheritance, module instantiation
-//! (customization.md §6, ux.md §2). Runs in the agent. Pixel layout is the renderer's job.
+//! (sliver-config(5)). Runs in the agent. Pixel layout is the renderer's job.
 
 use toml::{Table, Value};
 
@@ -12,7 +12,7 @@ use crate::values::{Align, Width};
 /// Deepest `extends` chain and group nesting we follow.
 pub const MAX_DEPTH: usize = 8;
 
-/// Module types that never show while the session is locked (customization.md §9.4).
+/// Module types that never show while the session is locked (sliver-config(5)).
 /// Whatever the layout says: published items, script output, notification text, and window titles
 /// (a stale focus can still name the last window, e.g. an email subject).
 pub const HIDDEN_WHILE_LOCKED: &[&str] = &[

@@ -1,4 +1,4 @@
-//! Editing config files while keeping the user's comments and formatting (customization.md G9).
+//! Editing config files while keeping the user's comments and formatting (sliver-config(5)).
 //! The settings app and `sliverctl config set` go through this, and nothing else writes config.
 //!
 //! Key paths use the spelling from diagnostics: `bar.spacing`, `modules."custom/vpn".format`,

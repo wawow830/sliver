@@ -1,4 +1,4 @@
-//! The icon picker (ux.md §4 Look): a dialog with three tabs: the icon theme (searchable, with
+//! The icon picker: a dialog with three tabs: the icon theme (searchable, with
 //! the icons built into the bar), an emoji list, and a file chooser. It only reports a [`Choice`];
 //! the inspector decides which keys to write.
 

@@ -1,4 +1,4 @@
-//! The read-only pages (ux.md §3) and small widget helpers.
+//! The read-only pages and small widget helpers.
 
 use adw::prelude::*;
 use gtk::glib;

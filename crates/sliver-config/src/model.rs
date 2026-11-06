@@ -1,4 +1,4 @@
-//! The parsed config (customization.md §2, §6).
+//! The parsed config (sliver-config(5)).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -148,7 +148,7 @@ pub struct Rule {
     pub layout: String,
 }
 
-/// Bar-wide gestures (customization.md §5).
+/// Bar-wide gestures (sliver-config(5)).
 pub const BAR_GESTURES: &[&str] = &[
     "two-finger-swipe-left",
     "two-finger-swipe-right",
@@ -180,7 +180,7 @@ pub struct Config {
 }
 
 /// Always merged *underneath* every config, so built-in layers and layouts always exist and any
-/// of them can be redefined (customization.md §6).
+/// of them can be redefined (sliver-config(5)).
 pub const BUILTIN: &str = include_str!("builtin.toml");
 
 impl Config {

@@ -1,6 +1,6 @@
 //! `sliver-settings`: the settings app and WYSIWYG Touch Bar editor (GTK4 + libadwaita).
 //!
-//! docs/ux.md is the design. Every edit goes through `sliver_config::Editor` on the user's config
+//! Every edit goes through `sliver_config::Editor` on the user's config
 //! file: it's applied instantly, validated before it's written (a broken config never lands),
 //! and can be undone from the toast. The running agent hot-reloads the file.
 
@@ -236,7 +236,7 @@ fn main() -> glib::ExitCode {
             bar_focused: Cell::new(false),
             bar_multi: RefCell::default(),
         });
-        // Mirroring only while the window is focused, and never after it closes (ux.md §4).
+        // Mirroring only while the window is focused, and never after it closes.
         {
             let ui = ui.clone();
             win.connect_is_active_notify(move |w| {
@@ -483,7 +483,7 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     ui.toasts.set_child(Some(&root));
 }
 
-/// Things worth saying above every page (ux.md §7, §10), each with the one button that fixes it.
+/// Things worth saying above every page, each with the one button that fixes it.
 fn banners(ui: &Rc<Ui>, state: &Rc<State>) -> Vec<adw::Banner> {
     let mut out = Vec::new();
     // The config can't be used: the agent keeps the last good one, but the user should know.
@@ -581,7 +581,7 @@ fn shortcuts(ui: &Rc<Ui>) {
     ui.win.add_controller(controller);
 }
 
-/// First launch (ux.md §8): no config file of the user's yet. Explains the safe hatch and offers a
+/// First launch: no config file of the user's yet. Explains the safe hatch and offers a
 /// starting point. Either choice writes the user's config, so this shows only once.
 fn onboarding(ui: &Rc<Ui>) {
     let state = ui.state();

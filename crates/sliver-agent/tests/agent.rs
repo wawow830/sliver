@@ -420,7 +420,7 @@ fn session_world() -> World {
     w
 }
 
-/// Lock-screen privacy (ux.md §5): whatever the layout says, a locked bar shows no media
+/// Lock-screen privacy: whatever the layout says, a locked bar shows no media
 /// title, notification text, window title, script output or app items, and no custom/*,
 /// window or taskbar module at all. Keys, sliders and the clock stay.
 #[test]

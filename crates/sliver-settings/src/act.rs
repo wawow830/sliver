@@ -1,5 +1,5 @@
-//! The action picker (ux.md §4 "Actions"): what a gesture does, chosen from a list instead of
-//! typed as TOML. The common forms of customization.md §5, and macros made of them; anything else
+//! The action picker: what a gesture does, chosen from a list instead of
+//! typed as TOML. The common forms of sliver-config(5), and macros made of them; anything else
 //! (argv `exec`, signals…) stays editable as TOML under Advanced and is never rewritten.
 
 use std::cell::RefCell;
@@ -359,7 +359,7 @@ fn build(
     let ks = kinds(step);
     let g = adw::PreferencesGroup::builder().title(title).build();
     let advanced = adw::EntryRow::builder()
-        .title("Advanced: the action as TOML (customization.md §5)")
+        .title("Advanced: the action as TOML (sliver-config(5))")
         .show_apply_button(true)
         // A step not filled in yet is blank, not `""`.
         .text(

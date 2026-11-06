@@ -1,5 +1,5 @@
 //! Module references, waybar aliases, gestures and the keys every module shares
-//! (customization.md §3).
+//! (sliver-config(5)).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -15,7 +15,7 @@ use crate::values::{FireOn, Interval, Width};
 /// Namespaces whose second part is a *name*, not part of the type (`custom/vpn`, `key/F1`).
 const PARAMETRIC: &[&str] = &["custom", "key", "group", "app", "custom-graph"];
 
-/// Built-in module types (customization.md §3). Unknown types are a warning, because a newer
+/// Built-in module types (sliver-config(5)). Unknown types are a warning, because a newer
 /// agent may know them.
 pub const MODULE_TYPES: &[&str] = &[
     "key",
@@ -141,7 +141,7 @@ impl ModuleId {
         })
     }
 
-    /// The CSS id (customization.md §7): `custom/vpn` → `custom-vpn`, `key/F1` → `key-f1`.
+    /// The CSS id (sliver-stylesheet(5)): `custom/vpn` → `custom-vpn`, `key/F1` → `key-f1`.
     pub fn css_id(&self) -> String {
         let mut s = self.kind.replace('/', "-");
         if self.slider {
@@ -182,7 +182,7 @@ impl fmt::Display for ModuleId {
     }
 }
 
-/// Touch gestures a module can bind (customization.md §3).
+/// Touch gestures a module can bind (sliver-config(5)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Gesture {
     Tap,
@@ -417,7 +417,7 @@ impl Common {
             if r.get(key).is_some() {
                 d.warn(
                     r.path(key),
-                    "this mouse gesture has no touch equivalent (customization.md §10)",
+                    "this mouse gesture has no touch equivalent (sliver-config(5))",
                 );
             }
         }

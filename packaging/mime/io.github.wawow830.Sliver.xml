@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Sliver preset bundles (.sliver): one readable TOML file holding a whole Touch Bar setup
-     (docs/ux.md §9, sliver_config::preset). Opens in Sliver's settings for review. -->
+     (sliver_config::preset). Opens in Sliver's settings for review. -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-sliver-preset">
     <comment>Sliver Touch Bar preset</comment>

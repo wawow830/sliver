@@ -1,7 +1,7 @@
 //! Folding the desktop and session state into the rule [`Context`] (`CONTEXT_KEYS`).
 //!
 //! Unknown values are left out, never defaulted: in a rule, "unknown never matches"
-//! (customization.md §6), so a missing UPower doesn't make `on-battery = false` true.
+//! (sliver-config(5)), so a missing UPower doesn't make `on-battery = false` true.
 
 use sliver_config::Context;
 use sliver_desktop::DesktopState;

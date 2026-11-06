@@ -1,4 +1,4 @@
-//! `sliverctl config …`: offline config tools (customization.md §8). They only touch files, never
+//! `sliverctl config …`: offline config tools (sliver-config(5)). They only touch files, never
 //! D-Bus, because the file is the source of truth and the agent hot-reloads it.
 
 use std::path::{Path, PathBuf};

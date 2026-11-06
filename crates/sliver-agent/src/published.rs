@@ -1,5 +1,5 @@
 //! Items that apps publish over the public D-Bus API (api.md §3) as bar cells: the App controls
-//! and Status items placeholders (customization.md §5) fill from here.
+//! and Status items placeholders (sliver-config(5)) fill from here.
 
 use sliver_api::item::{Item, ItemKind, SpacerSize};
 use sliver_api::registry::ContextId;

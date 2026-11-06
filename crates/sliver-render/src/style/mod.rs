@@ -1,4 +1,4 @@
-//! Waybar-style stylesheets for the bar (ADR-0004, reference in docs/styling.md).
+//! Waybar-style stylesheets for the bar (ADR-0004, reference in sliver-stylesheet(5)).
 //!
 //! The style tree is `bar > zone > module`. Selectors match by tag, `#id`, `.class`, `:active`
 //! (pressed), `:first-child`/`:last-child` and `:not()`, with descendant and child combinators.

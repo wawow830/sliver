@@ -1,4 +1,4 @@
-//! The Layouts & Rules page (ux.md §5), editable: layer defaults, and rules in priority order
+//! The Layouts & Rules page, editable: layer defaults, and rules in priority order
 //! (first match wins) that can be added, moved, removed and edited. Layouts are listed with
 //! their inheritance. They're edited on the Bar page.
 
@@ -261,7 +261,7 @@ fn rule_dialog(ui: &Rc<Ui>, index: usize, title: &str) {
             .unwrap_or_default(),
     ));
     page.add(&g);
-    // When: the condition builder (ux.md §5).
+    // When: the condition builder.
     let write: Rc<dyn Fn(Option<Value>)> = {
         let ui = ui.clone();
         Rc::new(move |v| {

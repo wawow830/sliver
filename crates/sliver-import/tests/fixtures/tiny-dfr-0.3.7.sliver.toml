@@ -1,4 +1,4 @@
-# Imported from tiny-dfr by sliver. Edit freely; see docs/customization.md.
+# Imported from tiny-dfr by sliver. Edit freely; see sliver-config(5).
 # As in tiny-dfr, the bar shows F-keys and holding Fn shows media keys.
 version = 1
 theme = "classic"

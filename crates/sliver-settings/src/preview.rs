@@ -1,6 +1,6 @@
 //! The Bar page preview: the agent's own pipeline (`sliver_agent::Agent`) rendering the user's
 //! config for a simulated context. It's the same code path that draws the real bar, so the
-//! preview is WYSIWYG (ux.md §1.1).
+//! preview is WYSIWYG.
 
 use std::path::Path;
 
@@ -275,13 +275,13 @@ impl Preview {
     }
 }
 
-/// Touch targets (ux.md §4 "Size limits", from the real panel: 2008 px over the digitizer's
+/// Touch targets (from the real panel: 2008 px over the digitizer's
 /// 230 mm, ≈ 8.7 px/mm). Narrower items still work; the editor only warns.
 pub const COMFORT_PX: f32 = 80.0;
 pub const MIN_PX: f32 = 60.0;
 pub const PX_PER_MM: f32 = 2008.0 / 230.0;
 
-/// Size problems in the last render (ux.md §4 "Size limits" and "Overflow").
+/// Size problems in the last render: targets too small to touch, and items that overflow.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Feedback {
     /// Zones whose items wanted more room than they got: `(name, x, w)` in bar px.

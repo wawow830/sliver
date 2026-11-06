@@ -8,7 +8,7 @@
 //! * [`Recents`]: the last emoji used, optionally persisted to a small text file.
 //!
 //! How a chosen emoji is typed into the focused app is the agent's job (`wtype`, or `wl-copy`
-//! plus Ctrl+V); see `docs/customization.md` for the `emoji` module.
+//! plus Ctrl+V); see `sliver-config(5)` for the `emoji` module.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

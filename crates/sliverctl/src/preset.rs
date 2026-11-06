@@ -1,4 +1,4 @@
-//! `sliverctl preset …`: offline `.sliver` bundles (ux.md §9, `sliver_config::preset`). Like
+//! `sliverctl preset …`: offline `.sliver` bundles (`sliver_config::preset`). Like
 //! `config`, this only touches files; the agent hot-reloads what `import` writes.
 
 use std::io::{BufRead, IsTerminal, Write};

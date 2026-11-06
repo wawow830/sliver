@@ -1,4 +1,4 @@
-//! The Appearance page's "Look" controls (ux.md §3), stored as a managed block at the top of the
+//! The Appearance page's "Look" controls, stored as a managed block at the top of the
 //! user's `style.css`:
 //!
 //! ```css

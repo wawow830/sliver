@@ -1,4 +1,4 @@
-//! The format engine (customization.md §3): waybar format strings, `states`,
+//! The format engine (sliver-config(5)): waybar format strings, `states`,
 //! `format-<status>-<state>` selection, `format-icons`, and `max-length`. Every module uses it,
 //! built-in or `custom/*` (no special powers).
 //!

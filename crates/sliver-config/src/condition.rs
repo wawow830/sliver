@@ -1,4 +1,4 @@
-//! `when = { … }` conditions over the agent's flat context (customization.md §6).
+//! `when = { … }` conditions over the agent's flat context (sliver-config(5)).
 
 use std::collections::BTreeMap;
 

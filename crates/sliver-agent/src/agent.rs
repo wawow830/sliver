@@ -388,7 +388,7 @@ impl Agent {
             edge_right: bound(BG::EdgeSwipeFromRight),
             width: self.width as f32,
         });
-        // Locked: modules only ever see the sanitized world (lock-screen privacy, ux.md §5).
+        // Locked: modules only ever see the sanitized world (lock-screen privacy).
         let sanitized;
         let world = if self.ctx.flag("locked") {
             sanitized = crate::privacy::sanitize(world);

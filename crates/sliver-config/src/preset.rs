@@ -1,4 +1,4 @@
-//! Preset bundles (`.sliver`, ux.md §9): a whole setup in one file you can share.
+//! Preset bundles (`.sliver`): a whole setup in one file you can share.
 //!
 //! A bundle is a TOML document, so you can read it before using it:
 //!

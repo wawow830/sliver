@@ -1,4 +1,4 @@
-//! Profiles & Presets (ux.md §8, §9): import a tiny-dfr or waybar setup, and export/import a
+//! Profiles & Presets: import a tiny-dfr or waybar setup, and export/import a
 //! config as a preset file. Imports replace the config through `apply`: validated, with Undo.
 
 use std::path::{Path, PathBuf};
@@ -185,7 +185,7 @@ fn profile_op(ui: &Rc<Ui>, done: String, op: impl FnOnce() -> Result<(), String>
     crate::rebuild(ui);
 }
 
-/// Profiles (ux.md §9): whole configs, one active. Switching rewrites `active-profile`, which the
+/// Profiles: whole configs, one active. Switching rewrites `active-profile`, which the
 /// agent watches, so the bar follows at once.
 fn profiles_group(ui: &Rc<Ui>) -> adw::PreferencesGroup {
     let g = group(
@@ -375,7 +375,7 @@ fn export_preset(ui: &Rc<Ui>) {
     });
 }
 
-/// Shows everything the preset would run (ux.md §9) and installs it only after a choice.
+/// Shows everything the preset would run and installs it only after a choice.
 /// A free profile name from a preset's name: `My desk` → `my-desk`, then `my-desk-2`, ….
 fn profile_name_for(preset_name: &str) -> String {
     let mut base: String = preset_name
@@ -412,7 +412,7 @@ fn profile_name_for(preset_name: &str) -> String {
         .expect("some name is free")
 }
 
-/// Shows everything the preset would run (ux.md §9) and installs it only after a choice. By
+/// Shows everything the preset would run and installs it only after a choice. By
 /// default it becomes a new profile, so trying one never overwrites your setup.
 fn review_preset(ui: &Rc<Ui>, b: Bundle) {
     let runs = b.runs();

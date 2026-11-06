@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drive sliver-settings headlessly and screenshot it (docs/ux.md §12). Never touches the live
+# Drive sliver-settings headlessly and screenshot it. Never touches the live
 # session: a private D-Bus (so Mirror, live status and profiles can't reach an installed agent),
 # a sandboxed XDG_CONFIG_HOME, and GTK's Broadway backend in a browser via agent-browser.
 #

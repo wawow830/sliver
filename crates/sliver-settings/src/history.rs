@@ -1,4 +1,4 @@
-//! Undo and redo of the edits the window makes (ux.md §10). Each entry is the whole text of the
+//! Undo and redo of the edits the window makes. Each entry is the whole text of the
 //! user's file on one side of an edit (`None` = the file didn't exist), so going back and forth
 //! is exact, whatever the edit was.
 

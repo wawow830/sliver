@@ -1,5 +1,5 @@
 //! The module runtime: turns resolved [`ModuleInstance`]s into drawable [`Cell`]s
-//! (customization.md §3–4).
+//! (sliver-config(5)).
 //!
 //! Every module goes through the same path: gather values → `format_module` (waybar's
 //! format/format-icons/states engine) → content + classes. Built-ins differ only in where their

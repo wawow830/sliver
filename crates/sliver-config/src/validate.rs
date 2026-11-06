@@ -1,4 +1,4 @@
-//! Whole-config checks (customization.md §9). Errors block applying the config. Everything a user
+//! Whole-config checks (sliver-config(5)). Errors block applying the config. Everything a user
 //! may legitimately do, including removing every F-key, is at most a warning.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,7 +14,7 @@ use crate::module::{Common, Gesture, ModuleId, check_type_keys};
 use crate::resolve::group_members;
 use crate::values::{Width, parse_duration};
 
-/// Touch-target advice (features.md §9): ~9 mm, with 60 px as the "really too small" mark.
+/// Touch-target advice: ~9 mm, with 60 px as the "really too small" mark.
 pub const COMFORTABLE_TARGET_PX: u32 = 80;
 pub const TINY_TARGET_PX: u32 = 60;
 
@@ -326,7 +326,7 @@ impl Config {
     }
 
     /// GOAL invariant 1 is guaranteed by sliverd's safe hatch, not by config. Here we only warn
-    /// when the config itself leaves F-keys or Esc off the bar (customization.md §9.1).
+    /// when the config itself leaves F-keys or Esc off the bar (sliver-config(5)).
     fn check_reachability(&self, hw: Hardware, d: &mut Diagnostics) {
         let candidates = |layer: &str| -> BTreeSet<&str> {
             let mut s: BTreeSet<&str> = self

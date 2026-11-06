@@ -209,7 +209,7 @@ impl Scene {
         }
     }
 
-    /// The default layout (ux.md §2): `esc` (Auto), `main` (Fill, items from the left),
+    /// The default layout: `esc` (Auto), `main` (Fill, items from the left),
     /// `controls` (Auto, pushed to the right edge).
     pub fn zoned(esc: Vec<Item>, main: Vec<Item>, controls: Vec<Item>) -> Scene {
         Scene {

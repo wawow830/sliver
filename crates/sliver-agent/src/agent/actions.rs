@@ -90,7 +90,7 @@ impl Agent {
     }
 
     /// What the base layer shows and why: `(layout, rule index, rule name, source)`, the source
-    /// being `rule`, `default` or `forced` (`Control1.ActiveLayout…`, ux.md §5 "Active now").
+    /// being `rule`, `default` or `forced` (`Control1.ActiveLayout…`).
     pub fn active_layout(&self) -> Option<(String, Option<usize>, String, &'static str)> {
         let (layout, rule) = self.active.clone()?;
         let name = rule

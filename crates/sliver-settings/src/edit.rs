@@ -1,4 +1,4 @@
-//! Editing operations for the settings app (ux.md §4: instant apply + undo). They're pure:
+//! Editing operations for the settings app (instant apply + undo). They're pure:
 //! each one takes the user's file (an `Editor`) plus the merged effective config and edits the
 //! file. No GTK here, so they're unit-tested.
 //!
@@ -487,7 +487,7 @@ pub fn move_module_to(
     Ok(format!("Moved {label} to {to_zone}"))
 }
 
-// --- groups (ux.md §4 "Group", customization.md §3.1) -------------------------------------------
+// --- groups (sliver-config(5)) -------------------------------------------
 
 fn group_path(group: &str) -> String {
     format!("modules.{}.modules", key(group))
@@ -565,7 +565,7 @@ pub fn move_group_member(
 }
 
 /// Makes `group/<name>` from the modules at `indices` of `zone` (in zone order) and puts it in
-/// the zone where the first of them was (ux.md §4 "Group").
+/// the zone where the first of them was.
 pub fn make_group(
     ed: &mut Editor,
     merged: &Table,
@@ -701,7 +701,7 @@ pub fn set_module_key(
     }
 }
 
-/// "Customize for app…" (ux.md §4): a layout extending the one shown now, plus a rule at the top
+/// "Customize for app…": a layout extending the one shown now, plus a rule at the top
 /// that picks it for `app_id`. Returns the new layout's name.
 pub fn customize_for_app(
     ed: &mut Editor,
@@ -744,7 +744,7 @@ pub fn customize_for_app(
         rule.insert("name".into(), Value::String(app_id.to_owned()));
         rule.insert("when".into(), Value::Table(when));
         rule.insert("layout".into(), Value::String(name.clone()));
-        // New app rules go first (ux.md §2: settings inserts by specificity; app rules are
+        // New app rules go first (settings inserts by specificity; app rules are
         // specific), but below the lock-screen rule, which must keep winning.
         rules.insert(top_slot(&rules), rule);
         ed.set_tables("rules", &rules)?;
@@ -777,7 +777,7 @@ fn rule_label(r: &Table, i: usize) -> String {
         .map_or_else(|| format!("rules[{i}]"), str::to_owned)
 }
 
-/// Where new rules go: the top (they're usually the most specific, ux.md §2), below any leading
+/// Where new rules go: the top (they're usually the most specific), below any leading
 /// lock-screen rules (`when = { locked = true }`), so an app's layout never shows while locked.
 fn top_slot(rules: &[Table]) -> usize {
     rules

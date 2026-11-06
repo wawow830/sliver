@@ -254,7 +254,7 @@ pub enum AppSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPolicy {
     pub source: AppSource,
-    /// "May take the whole bar" (docs/ux.md §6). Default on.
+    /// "May take the whole bar". Default on.
     pub allow_modal: bool,
 }
 

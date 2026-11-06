@@ -46,7 +46,7 @@ impl From<ApiError> for Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-/// Requests the agent core answers (`Control1`). Module ids follow docs/customization.md.
+/// Requests the agent core answers (`Control1`). Module ids follow sliver-config(5).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Control {
     SwitchLayer(String),
@@ -787,7 +787,7 @@ impl ControlIface {
     }
     /// A touch on the held layout (`HoldLayout`), sent to the holder only: the touched
     /// module's key (`clock`, `group/tools/key/Mute`), its zone, and its index in that zone's
-    /// `modules` list in the config. Settings selects it (ux.md §4 Mirror).
+    /// `modules` list in the config. Settings selects it.
     #[zbus(signal)]
     async fn held_pressed(
         emitter: &SignalEmitter<'_>,

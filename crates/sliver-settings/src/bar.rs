@@ -1,4 +1,4 @@
-//! The Bar page (ux.md §4): live preview of any layer in a simulated context, and editing of the
+//! The Bar page: live preview of any layer in a simulated context, and editing of the
 //! layout it shows (add from the Library, reorder, remove, inspect), plus "Customize for app…".
 
 use std::cell::{Cell, RefCell};
@@ -31,7 +31,7 @@ const OFF_BAR: f64 = 40.0;
 /// The narrowest width the edge handle sets (bar px).
 const MIN_WIDTH: f32 = 30.0;
 
-/// What the Library offers (ux.md §4). Anything else can be typed as a module reference.
+/// What the Library offers. Anything else can be typed as a module reference.
 const LIBRARY: &[(&str, &str)] = &[
     ("clock", "Clock"),
     ("battery", "Battery"),
@@ -68,7 +68,7 @@ struct Marks {
     frame: Rc<RefCell<Option<gtk::cairo::ImageSurface>>>,
     /// Feedback while dragging (widget px).
     caret: Rc<Cell<Cue>>,
-    /// Overflow and small touch targets in the current render (ux.md §4).
+    /// Overflow and small touch targets in the current render.
     sizes: Rc<RefCell<Feedback>>,
     /// The keyboard-selected module's span (bar px), ringed while the preview has focus.
     focus: Rc<Cell<Option<(f32, f32)>>>,
@@ -498,7 +498,7 @@ fn refresher(
     })
 }
 
-/// The bar under the preview for a Shift/Ctrl-click multi-selection (ux.md §4 "Group"), and the
+/// The bar under the preview for a Shift/Ctrl-click multi-selection, and the
 /// function that redraws it and its rings from `ui.bar_multi` (dropping what no longer exists).
 fn multi_select(v: &View) -> (gtk::Box, Hook) {
     let label = gtk::Label::builder().xalign(0.0).hexpand(true).build();
@@ -592,7 +592,7 @@ fn multi_select(v: &View) -> (gtk::Box, Hook) {
     (bar, update)
 }
 
-/// Click a module on the preview to open it in the inspector (ux.md §4 "Select"); with Shift or
+/// Click a module on the preview to open it in the inspector; with Shift or
 /// Ctrl, add it to (or drop it from) the multi-selection instead.
 fn connect_select(v: &View, picture: &gtk::DrawingArea, update_multi: Hook) {
     let click = gtk::GestureClick::new();
@@ -967,7 +967,7 @@ fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
         }
         container.append(&g);
     }
-    // Zones are user-defined (customization.md §6): add one at the end.
+    // Zones are user-defined (sliver-config(5)): add one at the end.
     let add = group(
         "Add a zone",
         Some("Zones become the stylesheet class .zone-<name>."),
@@ -1330,7 +1330,7 @@ fn palette(ui: &Rc<Ui>, shown_layout: &Rc<RefCell<String>>) -> gtk::Widget {
 /// Holds a list's refill closure for the buttons it creates (they can only hold it weakly).
 type FillCell = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
-/// A group's members and drawer options (ux.md §4 "Group"): reorder, remove, add from the
+/// A group's members and drawer options: reorder, remove, add from the
 /// Library. Edits copy the effective member list into the user's file first (arrays replace).
 fn group_dialog(ui: &Rc<Ui>, group_id: &str) {
     let dialog = adw::PreferencesDialog::builder()
@@ -1473,7 +1473,7 @@ fn group_dialog(ui: &Rc<Ui>, group_id: &str) {
     members.add(&add_list);
     page.add(&members);
 
-    // Drawer (customization.md §3.1): the first member opens the rest.
+    // Drawer (sliver-config(5)): the first member opens the rest.
     let state = ui.state();
     let block = state
         .loaded
@@ -1657,7 +1657,7 @@ fn make_group_dialog(ui: &Rc<Ui>, layout: &str, zone: &str, ids: &[String], chec
     dialog.present(Some(&ui.win_widget()));
 }
 
-/// "+" on a zone: the Library (ux.md §4), plus a field for any module reference.
+/// "+" on a zone: the Library, plus a field for any module reference.
 fn library_button(ui: &Rc<Ui>, layout: &str, zone: &str) -> gtk::MenuButton {
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
@@ -1802,7 +1802,7 @@ impl Target {
     }
 }
 
-/// The inspector (ux.md §4): the common keys as text fields. Each applies on its own.
+/// The inspector: the common keys as text fields. Each applies on its own.
 fn inspector(
     ui: &Rc<Ui>,
     target: Target,
@@ -1885,14 +1885,14 @@ fn inspector(
         });
         g.add(&entry);
     }
-    // Touch (ux.md §4.2): one action picker per gesture.
+    // Touch: one action picker per gesture.
     let state = ui.state();
     let choices = Rc::new(crate::act::Choices {
         layers: state.loaded.config.layers.keys().cloned().collect(),
         layouts: state.loaded.config.layouts.keys().cloned().collect(),
         profiles: sliver_config::profile::list(),
     });
-    // One picker per gesture (ux.md §4.2). A waybar spelling (on-click…) shows under its
+    // One picker per gesture. A waybar spelling (on-click…) shows under its
     // gesture and moves to the canonical key on the first edit.
     let picker = |g: Gesture, label: &str| {
         let alias = g.waybar_alias().filter(|a| block.contains_key(*a));
@@ -1940,7 +1940,7 @@ fn inspector(
         .build();
     let more_group = adw::PreferencesGroup::new();
     more_group.add(&more_gestures);
-    // Updates: what a script runs and how often (ux.md §4.4).
+    // Updates: what a script runs and how often.
     let kind =
         sliver_config::ModuleId::parse(target.member.as_ref().map_or(title, |(_, id)| id.as_str()))
             .map(|id| id.kind)
@@ -2052,7 +2052,7 @@ fn inspector(
         let size = group("Size", Some(&note));
         page.add(&size);
     }
-    // A group's member (ux.md §4 "Group"): its own settings here, the member list there.
+    // A group's member: its own settings here, the member list there.
     if let Some((g, _)) = &target.member {
         let name = g.trim_start_matches("group/");
         let in_group = group(
@@ -2078,7 +2078,7 @@ fn inspector(
     if let Some(u) = &updates {
         page.add(u);
     }
-    // Visibility (ux.md §4.3): the condition builder, as on rules.
+    // Visibility: the condition builder, as on rules.
     let write: Rc<dyn Fn(Option<Value>)> = {
         let (ui, target) = (ui.clone(), target.clone());
         Rc::new(move |v| {
@@ -2100,7 +2100,7 @@ fn crate_inline(v: &Value) -> String {
     sliver_config::writer::inline(v)
 }
 
-/// Keyboard and screen-reader access to the preview (ux.md §4 "Keyboard"). The preview is
+/// Keyboard and screen-reader access to the preview. The preview is
 /// one focusable widget; ←/→ (Home/End) select a module, Alt+←/→ move it, Delete removes it,
 /// Enter or Space opens the inspector. The selection is in the widget's accessible name
 /// ("Touch Bar preview: Volume slider, Controls zone, 3 of 4"), which screen readers speak; every edit rebuilds the page, so the selection
@@ -2228,7 +2228,7 @@ fn keyboard_access(
             show(true);
         })
     };
-    // Touching the mirrored real bar selects that module here (ux.md §4 Mirror).
+    // Touching the mirrored real bar selects that module here.
     *ui.on_held_pressed.borrow_mut() = Some(Box::new({
         let (ui, show, modules, picture) = (
             Rc::downgrade(ui),

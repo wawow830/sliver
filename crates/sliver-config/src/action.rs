@@ -1,4 +1,4 @@
-//! What a gesture does (customization.md §5).
+//! What a gesture does (sliver-config(5)).
 
 use std::time::Duration;
 
@@ -8,7 +8,7 @@ use crate::diag::{Diagnostics, Reader};
 use crate::keys::Key;
 use crate::values::parse_duration;
 
-/// Macro caps (customization.md §5).
+/// Macro caps (sliver-config(5)).
 pub const MAX_MACRO_STEPS: usize = 32;
 pub const MAX_MACRO_TIME: Duration = Duration::from_secs(10);
 

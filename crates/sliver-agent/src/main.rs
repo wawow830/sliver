@@ -96,7 +96,7 @@ fn die(msg: &str) -> ! {
     std::process::exit(2)
 }
 
-/// The current config and stylesheet, hot-reloaded by [`sliver_agent::reload`] (customization.md §1):
+/// The current config and stylesheet, hot-reloaded by [`sliver_agent::reload`] (sliver-config(5)):
 /// file changes (inotify, debounced), SIGUSR2 and `Control1.ReloadConfig`. A config with errors is
 /// never applied; the last good one stays and `errors` says why.
 struct Reloader {

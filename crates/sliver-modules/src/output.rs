@@ -1,4 +1,4 @@
-//! The output contract every module shares (customization.md §4): what a script prints, and what
+//! The output contract every module shares (sliver-config(5)): what a script prints, and what
 //! built-ins produce too. Plain text is i3blocks-style (`text\ndetail\nclass`); JSON is one
 //! object per line with waybar's fields plus the sliver extensions `icon`, `value`, `hidden`.
 

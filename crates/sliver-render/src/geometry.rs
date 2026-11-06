@@ -72,8 +72,8 @@ pub struct Sizing {
 /// Lays out children along a span of `width` px with `gap` between them. Returns `(x, w)` per
 /// child, relative to the span's start, in floating point (round at the end).
 ///
-/// Leftover space goes to `Fill` children, otherwise it's distributed by `align`. On overflow
-/// (ux.md §4), `Fill` children compress to their minimum first, then the widest children are capped
+/// Leftover space goes to `Fill` children, otherwise it's distributed by `align`. On overflow,
+/// `Fill` children compress to their minimum first, then the widest children are capped
 /// at a common width like a tab strip (never below their minimum), and as a last resort everything
 /// scales to fit. Children never leave the span.
 pub fn solve(children: &[Sizing], width: f32, gap: f32, align: Align) -> Vec<(f32, f32)> {

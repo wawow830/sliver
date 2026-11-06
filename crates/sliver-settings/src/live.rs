@@ -1,4 +1,4 @@
-//! Live agent status for the Status page (ux.md §3): the agent's Control1/TouchBar1 properties
+//! Live agent status for the Status page: the agent's Control1/TouchBar1 properties
 //! on the session bus, read on a background thread so the window never blocks on D-Bus.
 
 use std::sync::mpsc;
@@ -138,7 +138,7 @@ fn hold(conn: &Connection, layout: &str, select_only: bool) {
     }
 }
 
-/// Mirror to Touch Bar (ux.md §4): show `layout` on the real bar while we hold it
+/// Mirror to Touch Bar: show `layout` on the real bar while we hold it
 /// (`Control1.HoldLayoutWith`); `select_only` makes touches only select. `""` releases it back to
 /// the rules. Off the main thread; an absent agent is fine. The first hold also starts listening
 /// for touches on the held layout (`HeldPressed`, sent only to the holder).

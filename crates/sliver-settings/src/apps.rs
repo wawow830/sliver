@@ -1,5 +1,5 @@
-//! The Apps page (ux.md §6, api.md §4): which apps and providers may put things on the bar.
-//! It writes `[apps."…"]`, `[providers."…"]` and `[api]` (customization.md §6b).
+//! The Apps page (api.md §4): which apps and providers may put things on the bar.
+//! It writes `[apps."…"]`, `[providers."…"]` and `[api]` (sliver-config(5)).
 
 use std::collections::BTreeSet;
 use std::rc::Rc;

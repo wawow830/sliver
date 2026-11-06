@@ -91,7 +91,7 @@ pub fn import(base: &str, overlay: Option<&str>) -> Result<Import, String> {
         ("tiny-dfr", "tiny-dfr-media")
     };
     let mut config = format!(
-        "# Imported from tiny-dfr by sliver. Edit freely; see docs/customization.md.\n\
+        "# Imported from tiny-dfr by sliver. Edit freely; see sliver-config(5).\n\
          # As in tiny-dfr, the bar shows {} and holding Fn shows {}.\n\
          version = 1\n\
          theme = \"classic\"\n\

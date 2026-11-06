@@ -1,4 +1,4 @@
-//! Lock-screen privacy (ux.md §5): while the screen is locked, nothing private reaches the bar,
+//! Lock-screen privacy: while the screen is locked, nothing private reaches the bar,
 //! whatever the layout says. Two layers, so a new module or a clever format string can't leak:
 //!
 //! 1. [`sanitize`]: modules are built from a copy of the world with the private data removed:

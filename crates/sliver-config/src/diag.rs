@@ -1,6 +1,6 @@
 //! Diagnostics collected while reading a config, plus a small key-tracking table reader.
 //!
-//! Errors mean "don't apply this config". Warnings never block (customization.md §1).
+//! Errors mean "don't apply this config". Warnings never block (sliver-config(5)).
 
 use std::collections::BTreeSet;
 use std::fmt;

@@ -1,5 +1,5 @@
-//! The condition builder (ux.md §5): rules' `when` and modules' "Show only when" as rows of
-//! pickers instead of TOML. One level, all-of or any-of, as ux.md asks; anything the builder can't
+//! The condition builder: rules' `when` and modules' "Show only when" as rows of
+//! pickers instead of TOML. One level, all-of or any-of; anything the builder can't
 //! show (`not`, regexes, nesting, other keys) stays editable as TOML under Advanced.
 
 use std::cell::RefCell;
@@ -379,7 +379,7 @@ pub fn editor(
 ) -> adw::PreferencesGroup {
     let g = adw::PreferencesGroup::builder().title(title).build();
     let advanced = adw::EntryRow::builder()
-        .title("Advanced: the condition as TOML (customization.md §6)")
+        .title("Advanced: the condition as TOML (sliver-config(5))")
         .show_apply_button(true)
         .text(current.map(inline).unwrap_or_default())
         .build();

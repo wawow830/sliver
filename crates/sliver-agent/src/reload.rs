@@ -1,4 +1,4 @@
-//! Hot reload for the config and the stylesheet (customization.md §1).
+//! Hot reload for the config and the stylesheet (sliver-config(5)).
 //!
 //! * [`Watcher`]: inotify on the watched files' directories (survives atomic-rename saves, sees a
 //!   config being created), debounced; one fd to poll, one deadline for the poll timeout.

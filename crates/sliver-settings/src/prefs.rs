@@ -1,4 +1,4 @@
-//! Simple settings pages (ux.md §3): Display & Power, Appearance, Gestures. Every control writes
+//! Simple settings pages: Display & Power, Appearance, Gestures. Every control writes
 //! one config key through `apply` (validated, instant, undoable).
 
 use std::rc::Rc;
@@ -520,7 +520,7 @@ pub fn appearance_page(ui: &Rc<Ui>) -> gtk::Widget {
     let css = group(
         "Stylesheet",
         Some(
-            "waybar-style CSS: #clock, #battery.critical, .zone-main, :active, @define-color accent … (customization.md §7).",
+            "waybar-style CSS: #clock, #battery.critical, .zone-main, :active, @define-color accent … (sliver-stylesheet(5)).",
         ),
     );
     let open = adw::ActionRow::builder()

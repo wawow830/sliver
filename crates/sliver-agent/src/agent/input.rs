@@ -30,7 +30,7 @@ impl Agent {
             }
             return fx;
         };
-        // Mirror: the editor selects what was touched (ux.md §4); select only fires nothing.
+        // Mirror: the editor selects what was touched; select only fires nothing.
         if let Some(select_only) = self.held
             && self.on_held(region)
         {

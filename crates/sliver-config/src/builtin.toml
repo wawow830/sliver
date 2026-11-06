@@ -1,5 +1,5 @@
 # Sliver's built-in defaults. Always merged *underneath* the user's config, so every key here
-# can be overridden and every layout redefined (customization.md §1, §6).
+# can be overridden and every layout redefined (sliver-config(5)).
 # The default bar is macOS-like: Esc · app controls · control strip, Fn → F-keys.
 version = 1
 
@@ -50,7 +50,7 @@ modules = ["key/BrightnessDown", "key/BrightnessUp", "key/MicMute", "key/Search"
            "key/IllumDown", "key/IllumUp", "key/PreviousSong", "key/PlayPause",
            "key/NextSong", "key/Mute", "key/VolumeDown", "key/VolumeUp"]
 
-# --- locked: what the bar shows on the lock screen (ux.md §5) --------------------------------------
+# --- locked: what the bar shows on the lock screen --------------------------------------
 # Like macOS: nothing that shows content (no app controls, titles, script output or notifications),
 # just media transport, brightness, volume and mute, plus Esc where the Mac has no physical one.
 # The rule below picks it; the agent also hides private content while locked whatever the layout
@@ -122,7 +122,7 @@ source = "cpu"
 source = "memory"
 
 # Notification text stays off the bar while the screen is shared: a camera or the person next to
-# you can see the bar (ux.md §5). Remove it with `when = {}` in your [modules.notifications].
+# you can see the bar. Remove it with `when = {}` in your [modules.notifications].
 [modules.notifications]
 when = { not = { screencast = true } }
 

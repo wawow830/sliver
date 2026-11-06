@@ -1,4 +1,4 @@
-//! `sliver-modules`: the runtime for user modules (`custom/*`), customization.md §4.
+//! `sliver-modules`: the runtime for user modules (`custom/*`), described in sliver-config(5).
 //!
 //! A module is a shell command plus how often to run it ([`Spec`]). [`Runtime`] schedules them
 //! (once, every N, as a continuous stream, or on a real-time signal), parses what they print

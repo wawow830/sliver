@@ -10,7 +10,7 @@ use crate::text::{self, Label};
 use crate::{Align, Color, Content, Fonts, Icon, Item, Rect, Scene, Sizing, Width, solve};
 
 /// Items are never squeezed narrower than this on overflow unless they're naturally narrower
-/// (ux.md §4: 60 px is the smallest usable touch target).
+/// (60 px is the smallest usable touch target).
 const OVERFLOW_MIN: f32 = 60.0;
 
 /// Natural trough length when the stylesheet doesn't set `trough { min-width }`.
