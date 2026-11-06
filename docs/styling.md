@@ -30,6 +30,7 @@ bar   classes: layer-<name>, layout-<name>, <bar name>, locked, dimmed (set by t
                .<instance> (battery#bat2 → .bat2), state classes (.charging .warning
                .critical .muted .playing, .on for toggles that are on …), script JSON
                `class`, config `class`
+      ├─ spectrum        modules with `spectrum = true`: its bars' `color`
       └─ trough          sliders only (GTK/waybar node names)
          ├─ highlight    the filled part, up to the value
          └─ slider       the knob (drawn only if it has a min-width)
@@ -40,9 +41,10 @@ Pictures (`image` modules and items) fill the module's content box (inside `padd
 aspect ratio and are clipped to its `border-radius`. A `graph` draws its line in `color` over an
 area filled with the same color at a quarter of its alpha, inside the content box with 15% of its
 height free above and below; `width`/`min-width` make it wider than its natural 60 px. A `cava`
-spectrum draws its bars in `color` too, across the content box: each half its slot wide. A slider
-with `spectrum = true` draws them behind its rail, over the item's content height, in its `color`
-(something faint, such as `alpha(@accent, 0.3)`, keeps the rail readable).
+spectrum draws its bars in `color` too, across the content box: each half its slot wide. Any module
+with `spectrum = true` draws them under its content, over its content height (along a slider's
+rail), in the `color` of its `spectrum` node, which inherits the module's. Something faint keeps
+the content readable: `#mpris.toggle spectrum { color: alpha(@on_primary, 0.3); }`.
 
 ## Selectors
 `*`, `bar`/`zone`/`module`, `#id`, `.class`, `:active` (pressed), `:checked` (a toggle that is on; the `.on` class is equivalent in the built-in themes),

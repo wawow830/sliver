@@ -200,6 +200,7 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
         timer_total: None,
         menu: Vec::new(),
         slot: None,
+        spectrum: Vec::new(),
     }
 }
 
@@ -420,6 +421,7 @@ fn push(
         timer_total: None,
         menu: Vec::new(),
         slot: None,
+        spectrum: Vec::new(),
     };
     match &item.kind {
         ItemKind::Button => out.push(base(
@@ -461,7 +463,6 @@ fn push(
             };
             out.push(base(
                 Content::Slider {
-                    levels: Vec::new(),
                     icon,
                     value: v as f32,
                 },
@@ -482,7 +483,6 @@ fn push(
             // `indeterminate` class, which themes draw muted.
             let mut c = base(
                 Content::Slider {
-                    levels: Vec::new(),
                     icon,
                     value: if *indeterminate {
                         1.0

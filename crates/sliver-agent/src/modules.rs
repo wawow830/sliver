@@ -297,9 +297,9 @@ pub fn cava_config(block: &toml::Table) -> String {
         .collect()
 }
 
-/// `spectrum = true` on a slider: its rail is the live spectrum (`cava`'s keys apply), at rest
-/// until cava's first frame. Empty: a plain rail.
-fn spectrum_rail(m: &ModuleInstance, world: &World) -> Vec<f32> {
+/// `spectrum = true`: the live spectrum under the module's content (`cava`'s keys apply), at
+/// rest until cava's first frame. Empty: none.
+fn spectrum(m: &ModuleInstance, world: &World) -> Vec<f32> {
     if m.config.get("spectrum").and_then(|v| v.as_bool()) != Some(true) {
         return Vec::new();
     }
@@ -311,9 +311,9 @@ fn spectrum_rail(m: &ModuleInstance, world: &World) -> Vec<f32> {
     }
 }
 
-/// Does this cell show the spectrum (a `cava` module, or a slider with `spectrum = true`)?
+/// Does this cell show the spectrum (a `cava` module, or any with `spectrum = true`)?
 pub fn shows_spectrum(c: &Cell) -> bool {
-    c.kind == "cava" || matches!(&c.content, Content::Slider { levels, .. } if !levels.is_empty())
+    c.kind == "cava" || !c.spectrum.is_empty()
 }
 
 /// The value a `graph` plots now, scaled to 0..=1 by `min`/`max` (default 0 and 100): from its
@@ -477,6 +477,8 @@ pub struct Cell {
     /// Part of a sized App controls / Status items slot (`width` = px or fill), by the slot's
     /// key: its published items, and the trailing `kind = "slot"` spacer that reserves the rest.
     pub slot: Option<String>,
+    /// `spectrum = true`: the live spectrum's levels, drawn under the content. Empty: none.
+    pub spectrum: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -865,6 +867,7 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         timer_total: None,
         menu: Vec::new(),
         slot: None,
+        spectrum: Vec::new(),
     };
     let act = |name: String| Action::ModuleAction(name);
     if let Some(query) = ui.search.as_ref().filter(|_| ui.tones.is_none()) {
@@ -1136,6 +1139,7 @@ pub fn menu_cells(
         timer_total: None,
         menu: Vec::new(),
         slot: None,
+        spectrum: Vec::new(),
     };
     let x = icons
         .get("window-close-symbolic", None, icon_size)
@@ -1350,6 +1354,7 @@ fn pinned_cell(
         timer_total: None,
         menu: button_menu(&m.common.menu, &values),
         slot: None,
+        spectrum: Vec::new(),
     }
 }
 
@@ -1749,11 +1754,7 @@ fn cell(
         let icon = icon_name.and_then(|n| icons.get(&n, c.icon_theme.as_deref(), size));
         // Format strings are Pango-style markup, like waybar (values from outside are escaped).
         match (sp.slider, icon, f.text.is_empty()) {
-            (Some(value), icon, _) => Content::Slider {
-                icon,
-                value,
-                levels: spectrum_rail(m, world),
-            },
+            (Some(value), icon, _) => Content::Slider { icon, value },
             (None, Some(i), true) => Content::Icon(i),
             (None, Some(i), false) => Content::IconMarkup(i, f.text),
             (None, None, false) => Content::Markup(f.text),
@@ -1808,6 +1809,7 @@ fn cell(
         timer_total: sp.timer_total,
         menu,
         slot: None,
+        spectrum: spectrum(m, world),
         drawer: (collapsed_slider
             || m.id.kind.ends_with("/slider") && ui.expanded && is_collapsible(m))
         .then(|| Drawer {
@@ -2906,6 +2908,7 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
         timer_total: None,
         menu: Vec::new(),
         slot: None,
+        spectrum: Vec::new(),
     }
 }
 

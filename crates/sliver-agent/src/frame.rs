@@ -119,6 +119,7 @@ pub fn scene(zones: &[ResolvedZone], cells: &[Vec<Cell>], bar_classes: Vec<Strin
                         item.foreground = c.foreground;
                         item.background = c.background;
                         item.classes = c.classes.clone();
+                        item.spectrum = c.spectrum.clone();
                         item
                     })
                     .collect(),

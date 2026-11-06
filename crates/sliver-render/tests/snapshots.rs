@@ -209,13 +209,11 @@ fn theme_controls() -> Scene {
         vec![
             Item::icon(icon("brightness_high")).class("on"),
             Item::new(Content::Slider {
-                levels: Vec::new(),
                 icon: Some(icon("brightness_low")),
                 value: 0.6,
             })
             .id("backlight-slider"),
             Item::new(Content::Slider {
-                levels: Vec::new(),
                 icon: Some(icon("volume_up")),
                 value: 0.25,
             })
@@ -259,7 +257,6 @@ fn slider_track_is_in_layout() {
     let scene = Scene::new(vec![
         Item::text("a"),
         Item::new(Content::Slider {
-            levels: Vec::new(),
             icon: None,
             value: 0.5,
         }),
@@ -503,7 +500,6 @@ fn indeterminate_progress_is_muted_in_every_theme() {
     // A full track with `.indeterminate` must not look like a full (100%) one.
     let track = |class: Option<&str>| {
         let mut it = Item::new(Content::Slider {
-            levels: Vec::new(),
             icon: None,
             value: 1.0,
         });

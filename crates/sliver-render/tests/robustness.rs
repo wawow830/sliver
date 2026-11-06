@@ -212,7 +212,6 @@ fn mangled_stylesheets_never_panic() {
                     vec![
                         Item::text("x").id("a").pressed(true),
                         Item::new(Content::Slider {
-                            levels: Vec::new(),
                             icon: None,
                             value: 0.5,
                         }),
@@ -276,32 +275,45 @@ fn spectrum_bars_grow_from_the_middle() {
     }
 }
 
-/// A slider with levels draws the spectrum behind its rail, in the item's colour; the rail and
-/// its fill stay on top.
+/// An item's spectrum is drawn under its content, in its `spectrum` node's colour (else the
+/// item's): along a slider's rail with the rail and fill on top, or across a button's content
+/// box with its icon or label on top.
 #[test]
-fn a_spectrum_sits_behind_the_rail() {
+fn a_spectrum_sits_under_the_content() {
     let mut r = Renderer::new(Fonts::embedded());
     let (sheet, _) = Stylesheet::parse(
         "t.css",
-        "module { background: transparent; padding: 0; color: #00ff00; } trough { background: #0000ff; min-width: 100px; min-height: 10px; } highlight { background: #ff0000; }",
+        "module { background: transparent; padding: 0; color: #00ff00; } trough { background: #0000ff; min-width: 100px; min-height: 10px; } highlight { background: #ff0000; } #b spectrum { color: #ff00ff; }",
         None,
     );
-    let mut item = Item::new(Content::Slider {
+    let mut slider = Item::new(Content::Slider {
         icon: None,
         value: 0.5,
-        levels: vec![1.0; 4],
     });
-    item.width = sliver_render::Width::Fixed(100.0);
+    slider.width = sliver_render::Width::Fixed(100.0);
+    slider.spectrum = vec![1.0; 4];
     let mut p = Pixmap::new(100, 60).unwrap();
-    r.render(&Scene::new(vec![item]), &sheet, &mut p);
-    let px = |x: u32, y: u32| {
+    r.render(&Scene::new(vec![slider]), &sheet, &mut p);
+    let px = |p: &Pixmap, x: u32, y: u32| {
         let c = p.pixel(x, y).unwrap();
         (c.red(), c.green(), c.blue())
     };
     assert!(
-        px(12, 8).1 > 128 && px(87, 8).1 > 128,
-        "bars above the rail"
+        px(&p, 12, 8).1 > 128 && px(&p, 87, 8).1 > 128,
+        "bars above the rail, in the item's colour"
     );
-    assert!(px(12, 30).0 > 128, "the fill up to the value");
-    assert!(px(87, 30).2 > 128, "the rail after it");
+    assert!(px(&p, 12, 30).0 > 128, "the fill up to the value");
+    assert!(px(&p, 87, 30).2 > 128, "the rail after it");
+
+    let mut button = Item::text("").id("b");
+    button.width = sliver_render::Width::Fixed(100.0);
+    button.spectrum = vec![1.0, 0.0];
+    let mut p = Pixmap::new(100, 60).unwrap();
+    r.render(&Scene::new(vec![button]), &sheet, &mut p);
+    assert_eq!(
+        px(&p, 25, 8),
+        (255, 0, 255),
+        "a full bar, in the spectrum's colour"
+    );
+    assert_eq!(px(&p, 75, 8), (0, 0, 0), "a silent one is a dot");
 }

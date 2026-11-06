@@ -38,9 +38,6 @@ pub enum Content {
     Slider {
         icon: Option<Icon>,
         value: f32,
-        /// A live spectrum (see [`Content::Bars`]) drawn behind the rail across the item's
-        /// height, in the item's `color`. Empty: none.
-        levels: Vec<f32>,
     },
 }
 
@@ -64,6 +61,10 @@ pub struct Item {
     pub background: Option<Color>,
     /// Inline override of the computed `color` (labels and symbolic icons).
     pub foreground: Option<Color>,
+    /// A live spectrum (levels as in [`Content::Bars`]) drawn over the item's background and
+    /// under its content, across its content height: along a slider's rail, else across the
+    /// content box. Styled by a `spectrum` child node's `color`. Empty: none.
+    pub spectrum: Vec<f32>,
 }
 
 impl Item {
@@ -79,6 +80,7 @@ impl Item {
             checked: false,
             background: None,
             foreground: None,
+            spectrum: Vec::new(),
         }
     }
 

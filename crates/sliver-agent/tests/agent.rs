@@ -2513,10 +2513,10 @@ on-tap = { keys = ["PlayPause"] }
     assert_eq!(keys(&fx), [vec![164]], "a plain key tap fires on press");
 }
 
-/// `spectrum = true` makes a slider's rail the live spectrum, and it runs cava like a `cava`
-/// module does.
+/// `spectrum = true` puts the live spectrum under any module (along a slider's rail), and runs
+/// cava like a `cava` module does.
 #[test]
-fn a_slider_can_be_a_spectrum() {
+fn any_module_can_show_the_spectrum() {
     let mut a = agent(
         r#"
 [[layouts.default.zones]]
@@ -2528,9 +2528,14 @@ spectrum = true
 bars = 3
 "#,
     );
-    let levels = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
-        Content::Slider { levels, .. } => levels.clone(),
-        other => panic!("{other:?}"),
+    let levels = |a: &Agent| {
+        let c = &a.frame(Layer::Base).unwrap().cells[0];
+        assert!(
+            matches!(c.content, Content::Slider { .. }),
+            "{:?}",
+            c.content
+        );
+        c.spectrum.clone()
     };
     let mut w = session_world();
     a.render(&w);
@@ -2542,4 +2547,12 @@ bars = 3
     w.spectrum = vec![0.2, 0.4, 0.6];
     a.render(&w);
     assert_eq!(levels(&a), [0.2, 0.4, 0.6]);
+
+    let mut a = agent(
+        "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"custom/play\"]\n[modules.\"custom/play\"]\nformat = \"P\"\nspectrum = true\nbars = 3\n",
+    );
+    a.render(&w);
+    let c = &a.frame(Layer::Base).unwrap().cells[0];
+    assert_eq!(c.spectrum, [0.2, 0.4, 0.6], "under a button's label");
+    assert!(a.spectrum_config().is_some());
 }

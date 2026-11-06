@@ -94,6 +94,8 @@ struct Styles {
     items: Vec<Arc<Style>>,
     /// For sliders: trough, highlight, knob.
     parts: Vec<Option<[Arc<Style>; 3]>>,
+    /// For items with a spectrum: its `spectrum` child node.
+    spectra: Vec<Option<Arc<Style>>>,
 }
 
 /// Draws scenes. Holds font, glyph, label and style caches, so keep one around.
@@ -148,6 +150,7 @@ impl Renderer {
         let mut zones = Vec::new();
         let mut items = Vec::new();
         let mut parts = Vec::new();
+        let mut spectra = Vec::new();
         let nz = scene.zones.len();
         for (zi, zone) in scene.zones.iter().enumerate() {
             // A zone's name is a class (`.zone-main`, like waybar's `.modules-left`), so `#id`
@@ -231,6 +234,26 @@ impl Renderer {
                 } else {
                     None
                 });
+                spectra.push(if item.spectrum.is_empty() {
+                    None
+                } else {
+                    let child = Element {
+                        tag: "spectrum",
+                        id: None,
+                        classes: &[],
+                        active: item.pressed,
+                        disabled: item.disabled,
+                        checked: item.checked,
+                        first: true,
+                        last: true,
+                    };
+                    Some(self.cached(
+                        &format!("{key}>spectrum"),
+                        sheet,
+                        &[bar_el, zone_el, el, child],
+                        Some(&ms),
+                    ))
+                });
                 items.push(ms);
             }
             zones.push(zs);
@@ -241,6 +264,7 @@ impl Renderer {
             zones,
             items,
             parts,
+            spectra,
         }
     }
 
@@ -511,7 +535,8 @@ impl Renderer {
             .zip(&layout.items)
             .zip(&st.items)
             .zip(&st.parts)
-            .zip(&layout.tracks);
+            .zip(&layout.tracks)
+            .zip(&st.spectra);
         for ((zone, zs), zrect) in scene.zones.iter().zip(&st.zones).zip(&layout.zones) {
             let zone_name = zone.name.as_deref().unwrap_or("");
             let zone_opacity = bar_opacity * zs.opacity;
@@ -527,7 +552,8 @@ impl Renderer {
             // element keeps its own transition state.
             let mut seen_ids: HashMap<String, usize> = HashMap::new();
             for (ii, zone_item) in zone.items.iter().enumerate() {
-                let ((((item, rect), s), parts), track) = items.next().expect("one rect per item");
+                let (((((item, rect), s), parts), track), spectrum) =
+                    items.next().expect("one rect per item");
                 let id = zone_item.id.clone().unwrap_or_else(|| ii.to_string());
                 let n = seen_ids.entry(id.clone()).or_insert(0);
                 *n += 1;
@@ -539,26 +565,28 @@ impl Renderer {
                 // A box gliding to its new place (`transition: width`): the trough keeps its
                 // inset from the item's left edge and stretches with it.
                 let drawn = self.anim.geometry(&scene_id, &key, *rect, s, now);
-                self.draw_item(item, drawn, s, opacity, pixmap);
-                if let (Content::Slider { value, levels, .. }, Some(parts), Some(track)) =
-                    (&item.content, parts, track)
-                {
-                    let track = Rect {
-                        x: track.x + drawn.x - rect.x,
-                        w: (track.w + drawn.w - rect.w).max(0.0),
-                        ..*track
-                    };
-                    if !levels.is_empty() {
-                        // The spectrum spans the item's content height, behind the rail.
-                        let content = drawn.inset(s.padding.map(|p| p + s.border_width));
-                        let area = Rect {
+                let track = track.map(|t| Rect {
+                    x: t.x + drawn.x - rect.x,
+                    w: (t.w + drawn.w - rect.w).max(0.0),
+                    ..t
+                });
+                let spectrum = spectrum.as_ref().map(|ss| {
+                    // Across the content height: along a slider's rail, else the content box.
+                    let content = drawn.inset(s.padding.map(|p| p + s.border_width));
+                    let area = match track {
+                        Some(t) => Rect {
                             y: content.y,
                             h: content.h,
-                            ..track
-                        };
-                        let fg = fade(item.foreground.unwrap_or(s.color), opacity);
-                        draw_bars(pixmap, area, levels, fg);
-                    }
+                            ..t
+                        },
+                        None => content,
+                    };
+                    (area, fade(ss.color, opacity * ss.opacity))
+                });
+                self.draw_item(item, drawn, s, opacity, spectrum, pixmap);
+                if let (Content::Slider { value, .. }, Some(parts), Some(track)) =
+                    (&item.content, parts, track)
+                {
                     draw_slider(pixmap, track, *value, parts, opacity);
                 }
             }
@@ -580,11 +608,22 @@ impl Renderer {
         pixmap
     }
 
-    fn draw_item(&mut self, item: &Item, rect: Rect, s: &Style, opacity: f32, pixmap: &mut Pixmap) {
+    fn draw_item(
+        &mut self,
+        item: &Item,
+        rect: Rect,
+        s: &Style,
+        opacity: f32,
+        spectrum: Option<(Rect, Color)>,
+        pixmap: &mut Pixmap,
+    ) {
         if matches!(item.content, Content::Spacer) || opacity <= 0.0 {
             return;
         }
         draw_box(pixmap, rect, s, item.background, opacity);
+        if let Some((area, color)) = spectrum {
+            draw_bars(pixmap, area, &item.spectrum, color);
+        }
         let fg = fade(item.foreground.unwrap_or(s.color), opacity);
         let content = rect.inset(s.padding.map(|p| p + s.border_width));
         let avail = content.w.max(1.0);
