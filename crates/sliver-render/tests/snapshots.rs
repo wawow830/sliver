@@ -104,13 +104,16 @@ fn mixed_stretch_widgets_and_fitting() {
     let items = vec![
         Item::text("esc").fill(1),
         Item::spacer().fill(1),
-        Item::new(Content::IconText(icon("battery_charging_80"), "83%".into()))
-            .fill(2)
-            .id("battery")
-            .class("charging"),
+        Item::new(Content::label(
+            Some(icon("battery_charging_80")),
+            "83%".into(),
+        ))
+        .fill(2)
+        .id("battery")
+        .class("charging"),
         Item::text("12:34 Mon 12 Oct").fill(3),
         Item::text("A label far too long for one slot").fill(1),
-        Item::new(Content::Blank).fill(1),
+        Item::new(Content::blank()).fill(1),
         Item::text("Ünïcødé €…").fill(3),
         Item::icon(icon("volume_up"))
             .fill(1)
@@ -187,7 +190,7 @@ fn waybar_style_stylesheet() {
             Item::text("Song - Artist").width(Width::Fill(1)),
         ],
         vec![
-            Item::new(Content::IconText(icon("battery_2_bar"), "18%".into()))
+            Item::new(Content::label(Some(icon("battery_2_bar")), "18%".into()))
                 .id("battery")
                 .class("warning"),
             Item::icon(icon("volume_off")).class("muted"),
@@ -221,7 +224,7 @@ fn theme_controls() -> Scene {
             .pressed(true),
         ],
         vec![
-            Item::new(Content::IconText(icon("battery_1_bar"), "9%".into()))
+            Item::new(Content::label(Some(icon("battery_1_bar")), "9%".into()))
                 .id("battery")
                 .class("critical"),
             Item::icon(icon("mic_off")).disabled(true),
@@ -309,8 +312,8 @@ fn markup_items() -> Vec<Item> {
         Item::markup("<u>under</u> <s>strike</s>").fill(1),
         Item::markup("<big>big</big> <small>small</small>").fill(1),
         Item::markup("<span foreground=\"#40ff80\" size=\"x-large\">&lt;5&gt;</span>").fill(1),
-        Item::new(Content::IconMarkup(
-            icon("play_pause"),
+        Item::new(Content::label(
+            Some(icon("play_pause")),
             "<i>song</i> <b>title that is much too long to fit</b>".into(),
         ))
         .fill(1),

@@ -71,7 +71,7 @@ fn main() {
         let mut p = Pixmap::new(2008, 60).unwrap();
         let text = format!("title {i} \u{10fffd}");
         r.render(
-            &Scene::new(vec![Item::new(Content::Markup(text))]),
+            &Scene::new(vec![Item::new(Content::markup(text))]),
             &sheet,
             &mut p,
         );
@@ -85,7 +85,7 @@ fn main() {
     for (name, t) in texts {
         let mut p = Pixmap::new(2008, 60).unwrap();
         r.render(
-            &Scene::new(vec![Item::new(Content::Markup(t.into()))]),
+            &Scene::new(vec![Item::new(Content::markup(t))]),
             &sheet,
             &mut p,
         );

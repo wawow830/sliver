@@ -597,9 +597,12 @@ fn main() {
                 for (c, r) in f.cells.iter().zip(&f.layout.items) {
                     use sliver_render::Content as C;
                     let content = match &c.content {
-                        C::Markup(t) | C::Text(t) => t.clone(),
-                        C::IconMarkup(_, t) | C::IconText(_, t) => format!("[icon] {t}"),
-                        C::Icon(_) => "[icon]".into(),
+                        C::Label { icon, text } => match (icon.is_some(), text.is_empty()) {
+                            (false, false) => text.clone(),
+                            (true, false) => format!("[icon] {text}"),
+                            (true, true) => "[icon]".into(),
+                            (false, true) => "[blank]".into(),
+                        },
                         C::Slider { value, .. } => format!("[slider {:.0}%]", value * 100.0),
                         C::Spacer => "[spacer]".into(),
                         _ => "[blank]".into(),

@@ -561,7 +561,7 @@ fn session_modules() {
     );
     let mpris = cells.iter().find(|c| c.kind == "mpris").unwrap();
     assert!(
-        matches!(&mpris.content, sliver_render::Content::Markup(t) if t == "⏸ Song &amp; Dance"),
+        matches!(&mpris.content, sliver_render::Content::Label { text: t, .. } if t == "⏸ Song &amp; Dance"),
         "{:?}",
         mpris.content
     );
@@ -1060,7 +1060,7 @@ fn a_menu_entry_acts_on_the_button_that_opened_it() {
         ]
     );
     assert!(
-        matches!(&cells[3].content, sliver_render::Content::Markup(t) if t == "Close kitty"),
+        matches!(&cells[3].content, sliver_render::Content::Label { text: t, .. } if t == "Close kitty"),
         "{:?}",
         cells[3].content
     );
@@ -1108,7 +1108,7 @@ fn timer_counts_down_and_notifies() {
     );
     let w = world(9, 41);
     let text = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
-        sliver_render::Content::Markup(t) | sliver_render::Content::Text(t) => t.clone(),
+        sliver_render::Content::Label { text: t, .. } => t.clone(),
         other => format!("{other:?}"),
     };
     a.render(&w);
@@ -1175,7 +1175,7 @@ fn emoji_picker_types_pages_and_closes() {
             .cells
             .iter()
             .map(|c| match &c.content {
-                sliver_render::Content::Markup(t) => t.clone(),
+                sliver_render::Content::Label { text: t, .. } => t.clone(),
                 other => format!("{other:?}"),
             })
             .collect::<Vec<_>>()
@@ -1262,7 +1262,7 @@ fn emoji_search_on_the_bar() {
     let text = |a: &Agent, key: &str| {
         let f = a.frame(Layer::Base).unwrap();
         match &f.cells.iter().find(|c| c.key == key).unwrap().content {
-            sliver_render::Content::Markup(t) => t.clone(),
+            sliver_render::Content::Label { text: t, .. } => t.clone(),
             other => format!("{other:?}"),
         }
     };
@@ -1337,7 +1337,7 @@ fn emoji_skin_tones() {
             .iter()
             .filter(|c| c.key.starts_with("emoji#strip/"))
             .map(|c| match &c.content {
-                sliver_render::Content::Markup(t) => t.clone(),
+                sliver_render::Content::Label { text: t, .. } => t.clone(),
                 other => format!("{other:?}"),
             })
             .collect::<Vec<_>>()
@@ -1656,7 +1656,7 @@ fn language_follows_fcitx5_toggles_and_picks() {
     });
     a.render(&w);
     let text = |a: &Agent| match a.frame(Layer::Base).unwrap().cells[0].content.clone() {
-        sliver_render::Content::Markup(t) | sliver_render::Content::IconMarkup(_, t) => t,
+        sliver_render::Content::Label { text: t, .. } => t,
         other => format!("{other:?}"),
     };
     assert_eq!(text(&a), "拼");
@@ -1813,8 +1813,7 @@ fn privacy_shows_one_cell_per_capture_kind() {
             .filter(|c| c.id.starts_with("privacy"))
             .map(|c| {
                 let text = match &c.content {
-                    sliver_render::Content::IconMarkup(_, t)
-                    | sliver_render::Content::Markup(t) => Some(t.clone()),
+                    sliver_render::Content::Label { text: t, .. } => Some(t.clone()),
                     _ => None,
                 };
                 (c.id.clone(), text)
@@ -1864,7 +1863,7 @@ fn now_playing_position_and_length() {
         "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"mpris\"]\n[modules.mpris]\nformat = \"{position} / {length}\"\nart = false\n",
     );
     let text = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
-        sliver_render::Content::Markup(t) | sliver_render::Content::Text(t) => t.clone(),
+        sliver_render::Content::Label { text: t, .. } => t.clone(),
         other => panic!("{other:?}"),
     };
     let mut w = world(9, 41);
@@ -1904,7 +1903,7 @@ fn now_playing_art_player_picker_and_scrub() {
     a.render(&w);
     let content = |a: &Agent| a.frame(Layer::Base).unwrap().cells[0].content.clone();
     assert!(
-        matches!(content(&a), sliver_render::Content::IconMarkup(_, ref t) if t == "Song One"),
+        matches!(content(&a), sliver_render::Content::Label { text: t, .. } if t == "Song One"),
         "art icon + title: {:?}",
         content(&a)
     );
@@ -1916,7 +1915,7 @@ fn now_playing_art_player_picker_and_scrub() {
     assert!(fx.contains(&Effect::Redraw), "{fx:?}");
     a.render(&w);
     assert!(
-        matches!(content(&a), sliver_render::Content::Markup(ref t) | sliver_render::Content::IconMarkup(_, ref t) if t == "Song Two"),
+        matches!(content(&a), sliver_render::Content::Label { text: t, .. } if t == "Song Two"),
         "{:?}",
         content(&a)
     );
@@ -1973,7 +1972,7 @@ fn notifications_show_latest_open_and_dismiss() {
     });
     a.render(&w);
     let text = match &a.frame(Layer::Base).unwrap().cells[0].content {
-        sliver_render::Content::Markup(t) | sliver_render::Content::IconMarkup(_, t) => t.clone(),
+        sliver_render::Content::Label { text: t, .. } => t.clone(),
         other => format!("{other:?}"),
     };
     assert_eq!(text, "Lunch at 12? &lt;b&gt;", "the summary, escaped");

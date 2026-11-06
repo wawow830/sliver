@@ -178,7 +178,7 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
         css_id: "modal-close".into(),
         classes: vec!["app".into(), "modal-close".into()],
         width: Width::Auto,
-        content: icon.map_or_else(|| Content::Text("×".into()), Content::Icon),
+        content: icon.map_or_else(|| Content::text("×"), Content::icon),
         touch: Touch::Agent,
         on: Vec::new(),
         next_change: None,
@@ -362,10 +362,10 @@ fn push(
         });
     let label = item.label.clone().unwrap_or_default();
     let label_content = |icon: Option<Icon>, text: String| match (icon, text.is_empty()) {
-        (Some(i), true) => Content::Icon(i),
-        (Some(i), false) => Content::IconText(i, text),
-        (None, false) => Content::Text(text),
-        (None, true) => Content::Blank,
+        (Some(i), true) => Content::icon(i),
+        (Some(i), false) => Content::label(Some(i), sliver_render::markup::escape(&text)),
+        (None, false) => Content::text(text),
+        (None, true) => Content::blank(),
     };
     let mut classes = vec![class.to_owned(), item.kind.type_name().to_owned()];
     if focused {
@@ -529,7 +529,7 @@ fn push(
             let (prev, next) = ((offset - page).max(0), (offset + page).min(max));
             let arrow = |text: &str, to: i32, which: &str| {
                 let mut c = base(
-                    Content::Text(text.into()),
+                    Content::text(text),
                     Some(PubKind::ScrollTo(to)),
                     false,
                     &format!("{}.{which}", item.id),

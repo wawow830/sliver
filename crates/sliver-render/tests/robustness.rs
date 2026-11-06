@@ -117,8 +117,8 @@ fn random_markup_and_text_never_panic() {
                     &mut r,
                     &sheet,
                     vec![
-                        Item::new(Content::Markup(s.clone())).id("m"),
-                        Item::new(Content::Text(s.clone())).id("t"),
+                        Item::new(Content::markup(s.clone())).id("m"),
+                        Item::new(Content::text(s.clone())).id("t"),
                     ],
                 )
             }));
@@ -127,7 +127,7 @@ fn random_markup_and_text_never_panic() {
     }
     // Very long input: still fine (and clipped).
     let long = "<b>x</b>&amp;".repeat(5000);
-    render(&mut r, &sheet, vec![Item::new(Content::Markup(long))]);
+    render(&mut r, &sheet, vec![Item::new(Content::markup(long))]);
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn unloading_fonts_after_a_missing_glyph_keeps_drawing_right() {
     let scene = |t: &str| {
         Scene::new(vec![
             Item::text("Hello").id("a"),
-            Item::new(Content::Markup(t.into())).id("b"),
+            Item::new(Content::markup(t)).id("b"),
         ])
     };
     let draw = |r: &mut Renderer, t: &str| {

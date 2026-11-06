@@ -506,7 +506,7 @@ fn scrubber_scrolls_and_picks() {
             .filter(|c| !c.key.ends_with("#close"))
             .map(|c| {
                 let t = match &c.content {
-                    sliver_render::Content::Text(t) => t.clone(),
+                    sliver_render::Content::Label { text: t, .. } => t.clone(),
                     other => format!("{other:?}"),
                 };
                 if c.checked { format!("[{t}]") } else { t }
@@ -888,8 +888,8 @@ fn priority_overflow_width_svg_and_indeterminate() {
         f.layout.items[at("capped")]
     );
     assert!(matches!(
-        f.cells[at("logo")].content,
-        sliver_render::Content::Icon(_)
+        &f.cells[at("logo")].content,
+        sliver_render::Content::Label { icon: Some(_), text } if text.is_empty()
     ));
     assert!(
         f.cells[at("busy")]
@@ -1140,7 +1140,7 @@ format = "⏭ {{text}}"
         .filter(|c| c.published.is_some())
         .map(|c| {
             let t = match &c.content {
-                sliver_render::Content::Markup(t) | sliver_render::Content::Text(t) => t.clone(),
+                sliver_render::Content::Label { text: t, .. } => t.clone(),
                 other => format!("{other:?}"),
             };
             (c.id.clone(), t)
@@ -1300,7 +1300,7 @@ fn published_image_item() {
     assert!(cover.published.is_some(), "taps reach the app");
     let (nopic, _) = cell("#nopic");
     assert!(
-        matches!(&nopic.content, sliver_render::Content::Text(t) if t == "No art"),
+        matches!(&nopic.content, sliver_render::Content::Label { text: t, .. } if t == "No art"),
         "{:?}",
         nopic.content
     );

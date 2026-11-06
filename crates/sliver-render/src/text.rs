@@ -32,7 +32,6 @@ struct LabelKey {
     family: String,
     weight: u16,
     size_bits: u32,
-    markup: bool,
 }
 
 /// Shaped labels kept between frames. Re-renders mostly repeat the same labels, and shaping with
@@ -172,7 +171,7 @@ pub(crate) struct Label {
     pub new_match: bool,
 }
 
-/// Shapes `text`, or returns the cached result.
+/// Shapes `text`, in the [`crate::markup`] subset, or returns the cached result.
 pub(crate) fn shape(
     fonts: &mut Fonts,
     text: &str,
@@ -180,34 +179,11 @@ pub(crate) fn shape(
     weight: u16,
     size: f32,
 ) -> Arc<Label> {
-    shape_any(fonts, text, family, weight, size, false)
-}
-
-/// Like [`shape`], for text in the [`crate::markup`] subset.
-pub(crate) fn shape_markup(
-    fonts: &mut Fonts,
-    text: &str,
-    family: &str,
-    weight: u16,
-    size: f32,
-) -> Arc<Label> {
-    shape_any(fonts, text, family, weight, size, true)
-}
-
-fn shape_any(
-    fonts: &mut Fonts,
-    text: &str,
-    family: &str,
-    weight: u16,
-    size: f32,
-    markup: bool,
-) -> Arc<Label> {
     let key = LabelKey {
         text: text.to_owned(),
         family: family.to_owned(),
         weight,
         size_bits: size.to_bits(),
-        markup,
     };
     if let Some(label) = fonts.labels.get(&key) {
         return label.clone();
@@ -225,7 +201,6 @@ fn shape_any(
         family,
         weight,
         size,
-        markup,
     ));
     // A glyph that none of the fallback fonts has makes cosmic-text try every font on the
     // system, whether one of them has it in the end (a Nerd Font has most private-use
@@ -248,7 +223,6 @@ fn shape_uncached(
     family: &str,
     weight: u16,
     size: f32,
-    markup: bool,
 ) -> Label {
     let mut buffer = Buffer::new(fs, Metrics::new(size, size * 1.25));
     buffer.set_size(None, None);
@@ -260,20 +234,16 @@ fn shape_uncached(
         matched.clear();
     }
     let mut new_match = matched.insert((&attrs).into());
-    if markup {
-        let parsed = crate::markup::parse(text);
-        let spans: Vec<(&str, Attrs)> = parsed
-            .spans
-            .iter()
-            .map(|s| (s.text.as_str(), span_attrs(&attrs, &s.style, size)))
-            .collect();
-        for (_, a) in &spans {
-            new_match |= matched.insert(a.into());
-        }
-        buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
-    } else {
-        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+    let parsed = crate::markup::parse(text);
+    let spans: Vec<(&str, Attrs)> = parsed
+        .spans
+        .iter()
+        .map(|s| (s.text.as_str(), span_attrs(&attrs, &s.style, size)))
+        .collect();
+    for (_, a) in &spans {
+        new_match |= matched.insert(a.into());
     }
+    buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(fs, false);
 
     let mut width: f32 = 0.0;

@@ -47,7 +47,7 @@ fn parse_content(arg: &str) -> Item {
     };
     let content = match rest {
         "-" => Content::Spacer,
-        "_" => Content::Blank,
+        "_" => Content::blank(),
         _ if rest.starts_with("slider:") => {
             // slider:0.6 or slider:NAME:0.6
             let spec = &rest["slider:".len()..];
@@ -59,15 +59,15 @@ fn parse_content(arg: &str) -> Item {
         }
         _ => match rest.strip_prefix("icon:") {
             Some(name) if name.contains('/') => {
-                Content::Icon(Icon::load(name).unwrap_or_else(|e| panic!("{name}: {e}")))
+                Content::icon(Icon::load(name).unwrap_or_else(|e| panic!("{name}: {e}")))
             }
-            Some(name) => Content::Icon(Icon::builtin(name).unwrap_or_else(|| {
+            Some(name) => Content::icon(Icon::builtin(name).unwrap_or_else(|| {
                 panic!(
                     "no built-in icon {name:?}; have {:?}",
                     sliver_render::BUILTIN_ICONS
                 )
             })),
-            None => Content::Text(rest.to_string()),
+            None => Content::text(rest),
         },
     };
     Item::new(content).width(width).pressed(pressed)

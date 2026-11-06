@@ -855,7 +855,7 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
             .chain(m.classes.iter().cloned())
             .collect(),
         width: Width::Fixed(w),
-        content: Content::Markup(sliver_render::markup::escape(text)),
+        content: Content::markup(sliver_render::markup::escape(text)),
         touch: Touch::Agent,
         on,
         next_change: None,
@@ -1150,7 +1150,7 @@ pub fn menu_cells(
     };
     let x = icons
         .get("window-close-symbolic", None, icon_size)
-        .map_or_else(|| Content::Markup("✕".into()), Content::Icon);
+        .map_or_else(|| Content::markup("✕"), Content::icon);
     let mut out = Vec::new();
     if let Some((offset, _)) = slot.filter(|s| s.0 > 0.0) {
         out.push(cell(
@@ -1175,9 +1175,9 @@ pub fn menu_cells(
             .and_then(|n| icons.get(n, None, icon_size));
         let label = sliver_render::markup::escape(&e.label);
         let content = match (icon, label.is_empty()) {
-            (Some(ic), false) => Content::IconMarkup(ic, label),
-            (Some(ic), true) => Content::Icon(ic),
-            (None, _) => Content::Markup(label),
+            (Some(ic), false) => Content::label(Some(ic), label),
+            (Some(ic), true) => Content::icon(ic),
+            (None, _) => Content::markup(label),
         };
         out.push(cell(
             format!("menu/{i}"),
@@ -1326,12 +1326,12 @@ fn pinned_cell(
     };
     let label = format_module(&m.common, "", &st, &values).text;
     let content = match icon {
-        Some(icon) if label.is_empty() => Content::Icon(icon),
-        Some(icon) => Content::IconMarkup(icon, label),
-        None if label.is_empty() => Content::Markup(sliver_render::markup::escape(
+        Some(icon) if label.is_empty() => Content::icon(icon),
+        Some(icon) => Content::label(Some(icon), label),
+        None if label.is_empty() => Content::markup(sliver_render::markup::escape(
             &name.chars().take(2).collect::<String>(),
         )),
-        None => Content::Markup(label),
+        None => Content::markup(label),
     };
     let target = win.map(|w| sliver_desktop::control::Action::FocusWindow {
         address: w.address.clone(),
@@ -1815,9 +1815,9 @@ fn cell(
         // Format strings are Pango-style markup, like waybar (values from outside are escaped).
         match (sp.slider, icon, f.text.is_empty()) {
             (Some(value), icon, _) => Content::Slider { icon, value },
-            (None, Some(i), true) => Content::Icon(i),
-            (None, Some(i), false) => Content::IconMarkup(i, f.text),
-            (None, None, false) => Content::Markup(f.text),
+            (None, Some(i), true) => Content::icon(i),
+            (None, Some(i), false) => Content::label(Some(i), f.text),
+            (None, None, false) => Content::markup(f.text),
             // A window whose app has no icon: its name's first letters.
             (None, None, true) if m.id.kind == "taskbar" => {
                 let name = world
@@ -1825,13 +1825,11 @@ fn cell(
                     .windows
                     .get(item.unwrap_or(usize::MAX))
                     .map_or("", |w| w.class.as_str());
-                Content::Markup(sliver_render::markup::escape(
+                Content::markup(sliver_render::markup::escape(
                     &name.chars().take(2).collect::<String>(),
                 ))
             }
-            (None, None, true) => sp
-                .fallback_text
-                .map_or(Content::Blank, |t| Content::Markup(t.into())),
+            (None, None, true) => sp.fallback_text.map_or(Content::blank(), Content::markup),
         }
     };
     let menu = if m.common.menu.is_empty() {
@@ -2033,7 +2031,7 @@ mod tests {
         let cells = build("", "fn");
         assert_eq!(cells.len(), 12, "Esc is hidden with a physical Esc");
         assert_eq!(cells[0].touch, Touch::Keys(vec![59]));
-        assert!(matches!(&cells[0].content, Content::Markup(t) if t == "F1"));
+        assert!(matches!(&cells[0].content, Content::Label { text: t, .. } if t == "F1"));
         assert_eq!(cells[0].css_id, "key-f1");
         assert_eq!(cells[0].width, Width::Fill(1));
     }
@@ -2084,7 +2082,7 @@ mod tests {
             cells(&r.zones[0].modules, &world(), &mut icons, 36, &ui, &mut out);
             out.iter()
                 .map(|c| match &c.content {
-                    Content::Markup(t) | Content::Text(t) => t.clone(),
+                    Content::Label { text: t, .. } => t.clone(),
                     other => panic!("{other:?}"),
                 })
                 .collect::<Vec<_>>()
@@ -2134,7 +2132,7 @@ mod tests {
             &w,
         );
         let text = |c: &Cell| match &c.content {
-            Content::Markup(t) | Content::Text(t) => t.clone(),
+            Content::Label { text: t, .. } => t.clone(),
             other => panic!("{other:?}"),
         };
         assert_eq!(
@@ -2185,7 +2183,7 @@ mod tests {
             &w,
         );
         let text = |c: &Cell| match &c.content {
-            Content::Markup(t) | Content::Text(t) => t.clone(),
+            Content::Label { text: t, .. } => t.clone(),
             other => panic!("{other:?}"),
         };
         assert_eq!(text(&cells[0]), "20% @0");
@@ -2233,7 +2231,7 @@ mod tests {
         w.session.network.kind = sliver_session::network::NetKind::Ethernet;
         w.session.network.iface = Some("eth0".into());
         let text = |c: &Cell| match &c.content {
-            Content::Markup(t) | Content::Text(t) | Content::IconMarkup(_, t) => t.clone(),
+            Content::Label { text: t, .. } => t.clone(),
             other => panic!("{other:?}"),
         };
         let toml = |extra: &str| {
@@ -2303,8 +2301,7 @@ mod tests {
             &w,
         );
         let text = |c: &Cell| match &c.content {
-            Content::Markup(t) | Content::Text(t) => t.clone(),
-            Content::IconMarkup(_, t) => t.clone(),
+            Content::Label { text: t, .. } => t.clone(),
             other => format!("{other:?}"),
         };
         let wsc: Vec<&Cell> = cells.iter().filter(|c| c.kind == "workspaces").collect();
@@ -2352,7 +2349,7 @@ mod tests {
             "dnd is hidden while the daemon doesn't report it"
         );
         assert!(
-            matches!(&c[0].content, Content::Icon(_) | Content::Blank),
+            matches!(&c[0].content, Content::Label { text, .. } if text.is_empty()),
             "no text at zero: {:?}",
             c[0].content
         );
@@ -2361,7 +2358,7 @@ mod tests {
         let c = stat_cells(toml, &w);
         assert_eq!(c.len(), 2);
         assert!(
-            matches!(&c[0].content, Content::IconMarkup(_, t) | Content::Markup(t) if t == "3"),
+            matches!(&c[0].content, Content::Label { text: t, .. } if t == "3"),
             "{:?}",
             c[0].content
         );
@@ -2400,7 +2397,7 @@ mod tests {
         let c = stat_cells(toml, &w);
         assert_eq!(c.len(), 2);
         let text = |c: &Cell| match &c.content {
-            Content::Markup(t) | Content::IconMarkup(_, t) | Content::Text(t) => t.clone(),
+            Content::Label { text: t, .. } => t.clone(),
             other => format!("{other:?}"),
         };
         assert_eq!(
@@ -2481,7 +2478,7 @@ mod tests {
         // `format-focused` labels only the app you're in, with its name (`{name}`): a pinned
         // app by its desktop entry, a window without one by its class.
         let label = |c: &Cell| match &c.content {
-            Content::IconMarkup(_, t) | Content::Markup(t) => t.clone(),
+            Content::Label { text: t, .. } => t.clone(),
             _ => String::new(),
         };
         let conf = "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"taskbar\"]\n[modules.taskbar]\npinned = [\"org.mozilla.firefox.desktop\", \"kitty\"]\nformat-focused = \"{name}\"\n";
@@ -2512,7 +2509,7 @@ mod tests {
             "#,
             "base",
         );
-        assert!(matches!(&cells[0].content, Content::Markup(t) if t == "09:41"));
+        assert!(matches!(&cells[0].content, Content::Label { text: t, .. } if t == "09:41"));
         assert_eq!(
             cells[0].next_change.unwrap().format("%H:%M:%S").to_string(),
             "09:42:00"
@@ -2660,7 +2657,7 @@ mod tests {
             .iter()
             .filter(|c| c.classes.contains(&"placeholder".to_string()))
             .map(|c| match &c.content {
-                Content::Text(t) => t.clone(),
+                Content::Label { text: t, .. } => t.clone(),
                 other => format!("{other:?}"),
             })
             .collect();
@@ -2699,7 +2696,7 @@ mod tests {
             out
         };
         let text = |c: &Cell| match &c.content {
-            Content::Markup(t) | Content::IconMarkup(_, t) => t.clone(),
+            Content::Label { text: t, .. } => t.clone(),
             other => format!("{other:?}"),
         };
         let mgr = |u: &[&str]| {
@@ -2810,7 +2807,9 @@ mod tests {
             )
         );
         assert_eq!(cells[0].touch, Touch::Agent, "the handle opens the drawer");
-        assert!(matches!(cells[1].content, Content::Icon(_)));
+        assert!(
+            matches!(&cells[1].content, Content::Label { icon: Some(_), text } if text.is_empty())
+        );
     }
 
     #[test]
@@ -2963,16 +2962,14 @@ fn decorate_published(
                 )
             })
             .or(match &cell.content {
-                Content::Icon(i) | Content::IconText(i, _) | Content::IconMarkup(i, _) => {
-                    Some(i.clone())
-                }
+                Content::Label { icon: Some(i), .. } => Some(i.clone()),
                 _ => None,
             });
         cell.content = match (icon, f.text.is_empty()) {
-            (Some(i), true) => Content::Icon(i),
-            (Some(i), false) => Content::IconMarkup(i, f.text),
-            (None, false) => Content::Markup(f.text),
-            (None, true) => Content::Blank,
+            (Some(i), true) => Content::icon(i),
+            (Some(i), false) => Content::label(Some(i), f.text),
+            (None, false) => Content::markup(f.text),
+            (None, true) => Content::blank(),
         };
     }
     Some(cell)
@@ -2988,7 +2985,7 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
         css_id: m.css_id.clone(),
         classes: vec!["placeholder".into(), class.into()],
         width: width(m.common.width),
-        content: Content::Text(label.into()),
+        content: Content::text(label),
         touch: Touch::None,
         on: Vec::new(),
         next_change: None,

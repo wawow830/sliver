@@ -6,17 +6,10 @@ pub enum Content {
     /// Empty space that draws nothing, whatever the stylesheet says (tiny-dfr's spacer).
     #[default]
     Spacer,
-    /// A button with no content.
-    Blank,
-    Text(String),
-    /// Text in the Pango-markup subset of [`crate::markup`] (`<b>`, `<span foreground=…>`).
-    /// Waybar `format` strings are markup unless the module sets `escape`.
-    Markup(String),
-    Icon(Icon),
-    /// An icon followed by a label, centered together.
-    IconText(Icon, String),
-    /// An icon followed by markup text.
-    IconMarkup(Icon, String),
+    /// An icon and a label, either or both, centered together with the style's `gap` between
+    /// them. Neither is an empty button. The label is in the Pango-markup subset of
+    /// [`crate::markup`] (`<b>`, `<span foreground=…>`); [`Content::text`] escapes plain text.
+    Label { icon: Option<Icon>, text: String },
     /// A picture (the `image` module, a published `image` item): fills the content box, keeping
     /// its aspect ratio, and its natural width follows that ratio. Never recolored, unlike a
     /// symbolic icon.
@@ -24,10 +17,7 @@ pub enum Content {
     /// A sparkline (the `graph` module): `values` in `0.0..=1.0`, oldest first, the newest at
     /// the right edge; `capacity` samples span the width, so a short history starts mid-way.
     /// Drawn in the item's `color`: a line over an area filled at a quarter of its alpha.
-    Graph {
-        values: Vec<f32>,
-        capacity: usize,
-    },
+    Graph { values: Vec<f32>, capacity: usize },
     /// Levels side by side (the `cava` module's spectrum), each in `0.0..=1.0`: one rounded bar
     /// per level, spread across the content box and growing out from its middle line, drawn in
     /// the item's `color`. A level of 0 is a dot, so a silent spectrum still shows its shape.
@@ -35,10 +25,41 @@ pub enum Content {
     /// A horizontal slider, `value` in `0.0..=1.0`, with an optional icon on its left. Styled
     /// with child nodes like GTK/waybar: `module > trough > highlight` (the filled part) and
     /// `trough > slider` (the knob).
-    Slider {
-        icon: Option<Icon>,
-        value: f32,
-    },
+    Slider { icon: Option<Icon>, value: f32 },
+}
+
+impl Content {
+    /// A button with nothing on it.
+    pub fn blank() -> Content {
+        Content::label(None, String::new())
+    }
+
+    /// A label of plain text (escaped, so `<` and `&` show as written).
+    pub fn text(text: impl AsRef<str>) -> Content {
+        Content::markup(crate::markup::escape(text.as_ref()))
+    }
+
+    /// A label in the markup subset.
+    pub fn markup(text: impl Into<String>) -> Content {
+        Content::label(None, text.into())
+    }
+
+    pub fn icon(icon: Icon) -> Content {
+        Content::label(Some(icon), String::new())
+    }
+
+    /// An icon and a markup label, either of which may be absent.
+    pub fn label(icon: Option<Icon>, text: String) -> Content {
+        Content::Label { icon, text }
+    }
+
+    /// A label's markup, if it has any.
+    pub fn label_text(&self) -> Option<&str> {
+        match self {
+            Content::Label { text, .. } if !text.is_empty() => Some(text),
+            _ => None,
+        }
+    }
 }
 
 /// One item (a `module` in the stylesheet).
@@ -84,17 +105,17 @@ impl Item {
         }
     }
 
-    pub fn text(text: impl Into<String>) -> Item {
-        Item::new(Content::Text(text.into()))
+    pub fn text(text: impl AsRef<str>) -> Item {
+        Item::new(Content::text(text))
     }
 
     /// A label in the markup subset.
     pub fn markup(text: impl Into<String>) -> Item {
-        Item::new(Content::Markup(text.into()))
+        Item::new(Content::markup(text))
     }
 
     pub fn icon(icon: Icon) -> Item {
-        Item::new(Content::Icon(icon))
+        Item::new(Content::icon(icon))
     }
 
     pub fn spacer() -> Item {

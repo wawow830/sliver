@@ -436,19 +436,16 @@ impl Renderer {
         content_h: f32,
     ) -> f32 {
         let family = self.fonts.pick_family(&s.font_family);
-        let mut label = |t: &str, markup: bool| {
-            let shape = if markup {
-                text::shape_markup
-            } else {
-                text::shape
-            };
-            shape(&mut self.fonts, t, &family, s.font_weight, s.font_size).width
-        };
+        let mut label =
+            |t: &str| text::shape(&mut self.fonts, t, &family, s.font_weight, s.font_size).width;
         match content {
-            Content::Spacer | Content::Blank => 0.0,
-            Content::Text(t) => label(t, false).ceil(),
-            Content::Markup(t) => label(t, true).ceil(),
-            Content::Icon(_) => s.icon_size,
+            Content::Spacer => 0.0,
+            Content::Label { icon, text } => match (icon, text.is_empty()) {
+                (None, true) => 0.0,
+                (None, false) => label(text).ceil(),
+                (Some(_), true) => s.icon_size,
+                (Some(_), false) => s.icon_size + s.gap + label(text).ceil(),
+            },
             // Wide enough to read a trend; `width`/`min-width` make it wider.
             Content::Graph { .. } => GRAPH_WIDTH,
             Content::Bars(levels) => levels.len() as f32 * BAR_PITCH,
@@ -457,8 +454,6 @@ impl Renderer {
                 (w, h) if w > 0.0 && h > 0.0 => (content_h.max(0.0) * w / h).ceil(),
                 _ => 0.0,
             },
-            Content::IconText(_, t) => s.icon_size + s.gap + label(t, false).ceil(),
-            Content::IconMarkup(_, t) => s.icon_size + s.gap + label(t, true).ceil(),
             Content::Slider { icon, .. } => {
                 let trough =
                     parts.map_or(0.0, |p| p[0].min_width + p[0].margin[1] + p[0].margin[3]);
@@ -656,17 +651,28 @@ impl Renderer {
             }
         };
         match &item.content {
-            Content::Spacer | Content::Blank => {}
-            Content::Text(t) | Content::Markup(t) => {
-                let markup = matches!(item.content, Content::Markup(_));
-                let label = self.fit_label(t, markup, s, avail);
-                let x = (cx - label.width / 2.0).round();
-                self.draw_label(&label, x, cy, fg, clip, pixmap);
-            }
-            Content::Icon(icon) => {
-                let x = (cx - icon_size / 2.0).round();
+            Content::Spacer => {}
+            Content::Label { icon, text } => {
                 let y = (cy - icon_size / 2.0).round();
-                draw_icon(&fit(icon), x, y, icon_size, fg, opacity, pixmap);
+                match (icon, text.is_empty()) {
+                    (None, true) => {}
+                    (None, false) => {
+                        let label = self.fit_label(text, s, avail);
+                        let x = (cx - label.width / 2.0).round();
+                        self.draw_label(&label, x, cy, fg, clip, pixmap);
+                    }
+                    (Some(icon), true) => {
+                        let x = (cx - icon_size / 2.0).round();
+                        draw_icon(&fit(icon), x, y, icon_size, fg, opacity, pixmap);
+                    }
+                    (Some(icon), false) => {
+                        let label = self.fit_label(text, s, avail - icon_size - s.gap);
+                        let total = icon_size + s.gap + label.width;
+                        let x = (cx - total / 2.0).round().max(content.x.floor());
+                        draw_icon(&fit(icon), x, y, icon_size, fg, opacity, pixmap);
+                        self.draw_label(&label, x + icon_size + s.gap, cy, fg, clip, pixmap);
+                    }
+                }
             }
             Content::Graph { values, capacity } => {
                 // Some room above the highest value and below the area, inside any padding.
@@ -710,32 +716,16 @@ impl Renderer {
                     );
                 }
             }
-            Content::IconText(icon, t) | Content::IconMarkup(icon, t) => {
-                let markup = matches!(item.content, Content::IconMarkup(..));
-                let label = self.fit_label(t, markup, s, avail - icon_size - s.gap);
-                let total = icon_size + s.gap + label.width;
-                let x = (cx - total / 2.0).round().max(content.x.floor());
-                let y = (cy - icon_size / 2.0).round();
-                draw_icon(&fit(icon), x, y, icon_size, fg, opacity, pixmap);
-                self.draw_label(&label, x + icon_size + s.gap, cy, fg, clip, pixmap);
-            }
         }
     }
 
-    /// Shapes `text` at the style's size, shrinking it (down to half, at least 10 px) to fit
-    /// `avail` pixels, then ellipsizing if it still doesn't fit.
-    fn fit_label(&mut self, text: &str, markup: bool, s: &Style, avail: f32) -> Arc<Label> {
+    /// Shapes markup `text` at the style's size, shrinking it (down to half, at least 10 px) to
+    /// fit `avail` pixels, then ellipsizing if it still doesn't fit.
+    fn fit_label(&mut self, text: &str, s: &Style, avail: f32) -> Arc<Label> {
         let family = self.fonts.pick_family(&s.font_family);
         let (size, weight) = (s.font_size, s.font_weight);
         let min_size = (size * 0.5).max(10.0).min(size);
-        let mut shape = |t: &str, size: f32| {
-            let f = if markup {
-                text::shape_markup
-            } else {
-                text::shape
-            };
-            f(&mut self.fonts, t, &family, weight, size)
-        };
+        let mut shape = |t: &str, size: f32| text::shape(&mut self.fonts, t, &family, weight, size);
         let label = shape(text, size);
         if label.width <= avail {
             return label;
@@ -745,22 +735,18 @@ impl Renderer {
         if label.width <= avail {
             return label;
         }
-        // Longest prefix that fits with an ellipsis (binary search over char counts). Markup is
-        // cut on its plain text so styles survive and tags are never split.
-        let parsed = markup.then(|| crate::markup::parse(text));
-        let chars: Vec<char> = text.chars().collect();
-        let total = parsed.as_ref().map_or(chars.len(), |m| m.len_chars());
-        let truncated = |n: usize| match &parsed {
-            Some(m) => {
-                let mut cut = m.truncated(n);
-                if let Some(last) = cut.spans.last_mut() {
-                    last.text = last.text.trim_end().to_owned();
-                    last.text.push('…');
-                }
-                cut.to_markup()
+        // Longest prefix that fits with an ellipsis (binary search over char counts), cut on the
+        // plain text so styles survive and tags are never split.
+        let parsed = crate::markup::parse(text);
+        let truncated = |n: usize| {
+            let mut cut = parsed.truncated(n);
+            if let Some(last) = cut.spans.last_mut() {
+                last.text = last.text.trim_end().to_owned();
+                last.text.push('…');
             }
-            None => chars[..n].iter().collect::<String>().trim_end().to_owned() + "…",
+            cut.to_markup()
         };
+        let total = parsed.len_chars();
         let (mut lo, mut hi) = (0, total);
         while lo < hi {
             let mid = (lo + hi).div_ceil(2);
