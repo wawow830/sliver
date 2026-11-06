@@ -323,7 +323,7 @@ pub struct MenuEntry {
     pub on_tap: Action,
 }
 
-/// Keys every module understands. Type-specific keys stay in [`crate::ModuleInstance::config`].
+/// Keys every module understands. Type-specific keys are read with [`crate::ModuleInstance::get`].
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Common {
     pub format: Option<String>,
