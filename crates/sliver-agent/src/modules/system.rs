@@ -134,10 +134,8 @@ pub(super) fn network(m: &ModuleInstance, world: &World) -> Option<Spec> {
     // plain network cell still never wakes the bar.
     let polled = matches!(m.common.interval, Some(sliver_config::Interval::Every(_)));
     let (rates, hist) = if polled {
-        world.stats.with(|s| {
-            let r = s.net_rates(world.now.instant);
-            (r.unwrap_or_default(), s.net_history())
-        })
+        let s = &world.stats;
+        (s.net.unwrap_or_default(), s.net_history.clone())
     } else {
         Default::default()
     };
@@ -477,26 +475,22 @@ pub(super) fn poll_every(m: &ModuleInstance, default_secs: u64) -> std::time::Du
 /// (the agent's loop wakes only while such a cell is on the bar and the display is on).
 pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let stats = &world.stats;
-    let now = world.now.instant;
     let mut sp = match m.id.kind.as_str() {
         "cpu" => {
-            let (usage, load, ghz, hist) = stats.with(|s| {
-                let u = s.cpu_usage(now);
-                (u, s.load(), s.cpu_ghz(), s.cpu_history())
-            });
-            let usage = usage?;
+            let (load, ghz, hist) = (stats.load, stats.cpu_ghz, &stats.cpu_history);
+            let usage = stats.cpu?;
             let v = ValueMap::new()
                 .with("usage", pct0(usage))
                 .with("", pct0(usage))
                 .with("load", load.map_or(0.0, |l| l.one))
                 .with("avg_frequency", (ghz.unwrap_or(0.0) * 10.0).round() / 10.0)
-                .with("spark", crate::stats::sparkline(&hist, Some(100.0)));
+                .with("spark", crate::stats::sparkline(hist, Some(100.0)));
             let mut sp = Spec::new(v, "CPU {usage}%");
             sp.percentage = Some(usage);
             sp
         }
         "memory" => {
-            let mem = stats.with(|s| s.mem())?;
+            let mem = stats.mem?;
             let v = ValueMap::new()
                 .with("percentage", pct0(mem.percent_used()))
                 .with("", pct0(mem.percent_used()))
@@ -512,7 +506,7 @@ pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
             sp
         }
         "load" => {
-            let l = stats.with(|s| s.load())?;
+            let l = stats.load?;
             let v = ValueMap::new()
                 .with("load1", l.one)
                 .with("load5", l.five)
@@ -521,7 +515,7 @@ pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
             Spec::new(v, "{load1}")
         }
         "temperature" => {
-            let c = temperature(m, stats)?;
+            let c = *stats.temps.get(&crate::stats::TempSource::of(m))?;
             let v = ValueMap::new()
                 .with("temperatureC", c.round())
                 .with("temperatureF", (c * 9.0 / 5.0 + 32.0).round())
@@ -537,7 +531,7 @@ pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
         }
         "disk" => {
             let path = m.config.get("path").and_then(|p| p.as_str()).unwrap_or("/");
-            let d = crate::stats::disk(std::path::Path::new(path))?;
+            let d = *stats.disks.get(path)?;
             let v = ValueMap::new()
                 .with("percentage_used", pct0(d.percent_used()))
                 .with("percentage_free", pct0(d.percent_free()))
@@ -558,31 +552,6 @@ pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
     };
     sp.redraw(world.now.wall, poll_every(m, default));
     Some(sp)
-}
-
-/// The temperature to show: `hwmon-path` (a `temp*_input` file), `thermal-zone` (an index), or the
-/// hottest sensor.
-pub(super) fn temperature(m: &ModuleInstance, stats: &Stats) -> Option<f64> {
-    let read = |p: &std::path::Path| {
-        std::fs::read_to_string(p)
-            .ok()?
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .map(|v| v / 1000.0)
-    };
-    if let Some(p) = m.config.get("hwmon-path").and_then(|v| v.as_str()) {
-        return read(std::path::Path::new(p));
-    }
-    if let Some(z) = m.config.get("thermal-zone").and_then(|v| v.as_integer()) {
-        let root = stats.with(|s| s.sys_root().to_path_buf());
-        return read(&root.join(format!("class/thermal/thermal_zone{z}/temp")));
-    }
-    stats
-        .with(|s| s.sensors())
-        .iter()
-        .map(|s| s.celsius)
-        .fold(None, |a: Option<f64>, c| Some(a.map_or(c, |a| a.max(c))))
 }
 
 /// tiny-dfr's battery icon thresholds, on the built-in icon set.

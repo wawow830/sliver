@@ -1,10 +1,11 @@
 //! The numbers behind the `cpu`, `memory`, `load`, `temperature`, `disk` and
 //! network-throughput modules, read from `/proc` and `/sys`.
 //!
-//! Everything is a plain file read (no polling thread, no subprocess): the agent samples when it
-//! renders a frame that shows such a module, and schedules its next render from the module's
-//! `interval`, so a bar without these modules, or with the display off, never reads any of it.
-//! The file roots are injectable ([`Sampler::with_roots`]) so tests use fixture directories.
+//! Everything is a plain file read (no polling thread, no subprocess). The agent's loop reads what
+//! the placed modules ask for ([`wants`]) when it builds a frame's world, into [`Readings`] that
+//! the modules only look at; a module's `interval` schedules the next frame. So a bar without
+//! these modules, or with the display off, never reads any of it, and building cells does no
+//! I/O. The file roots are injectable ([`Sampler::with_roots`]) so tests use fixture directories.
 
 mod cpu;
 mod disk;
@@ -18,7 +19,7 @@ pub use mem::{Mem, parse_meminfo};
 pub use net::{NetRates, human_rate, parse_net_dev, sparkline};
 pub use temp::{Sensor, sensors};
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -53,6 +54,86 @@ pub struct Sampler {
     net: Option<NetRates>,
     cpu_hist: VecDeque<f64>,
     net_hist: VecDeque<f64>,
+}
+
+/// Where a `temperature` module reads: a `temp*_input` file (`hwmon-path`), a thermal zone
+/// (`thermal-zone`), or else the hottest sensor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TempSource {
+    File(PathBuf),
+    Zone(i64),
+    Hottest,
+}
+
+impl TempSource {
+    pub fn of(m: &sliver_config::ModuleInstance) -> TempSource {
+        if let Some(p) = m.config.get("hwmon-path").and_then(|v| v.as_str()) {
+            return TempSource::File(p.into());
+        }
+        match m.config.get("thermal-zone").and_then(|v| v.as_integer()) {
+            Some(z) => TempSource::Zone(z),
+            None => TempSource::Hottest,
+        }
+    }
+}
+
+/// What the placed modules read, so a frame reads nothing more.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Wants {
+    pub cpu: bool,
+    pub load: bool,
+    pub mem: bool,
+    /// Network throughput: only for a `network` module with an `interval` (else it never wakes).
+    pub net: bool,
+    pub disks: BTreeSet<String>,
+    pub temps: BTreeSet<TempSource>,
+}
+
+/// The readings the modules `config` places ask for.
+pub fn wants(config: &sliver_config::Config) -> Wants {
+    let mut w = Wants::default();
+    for m in crate::modules::placed_modules(config) {
+        match m.id.kind.as_str() {
+            "cpu" => {
+                w.cpu = true;
+                w.load = true;
+            }
+            "load" => w.load = true,
+            "memory" => w.mem = true,
+            "disk" => {
+                let path = m.config.get("path").and_then(|p| p.as_str()).unwrap_or("/");
+                w.disks.insert(path.to_owned());
+            }
+            "temperature" => {
+                w.temps.insert(TempSource::of(&m));
+            }
+            "network" => {
+                w.net |= matches!(m.common.interval, Some(sliver_config::Interval::Every(_)))
+            }
+            _ => {}
+        }
+    }
+    w
+}
+
+/// One frame's statistics: what [`Wants`] asked for, `None` (or absent) where it couldn't be
+/// read.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Readings {
+    /// Whole-machine CPU usage, percent, and its recent samples, oldest first.
+    pub cpu: Option<f64>,
+    pub cpu_history: Vec<f64>,
+    /// Average core frequency, GHz.
+    pub cpu_ghz: Option<f64>,
+    pub load: Option<Load>,
+    pub mem: Option<Mem>,
+    pub net: Option<NetRates>,
+    /// Recent download rates (bytes/s), oldest first.
+    pub net_history: Vec<f64>,
+    /// By `path`.
+    pub disks: HashMap<String, Disk>,
+    /// Celsius.
+    pub temps: HashMap<TempSource, f64>,
 }
 
 /// How many samples the sparklines remember.
@@ -181,6 +262,58 @@ impl Sampler {
 
     pub fn sys_root(&self) -> &Path {
         &self.sys_root
+    }
+
+    /// Reads what `wants` asks for, at `now` (CPU and network figures are deltas since the last).
+    pub fn readings(&mut self, wants: &Wants, now: Instant) -> Readings {
+        let mut r = Readings::default();
+        if wants.cpu {
+            r.cpu = self.cpu_usage(now);
+            r.cpu_history = self.cpu_history();
+            r.cpu_ghz = self.cpu_ghz();
+        }
+        if wants.load {
+            r.load = self.load();
+        }
+        if wants.mem {
+            r.mem = self.mem();
+        }
+        if wants.net {
+            r.net = self.net_rates(now);
+            r.net_history = self.net_history();
+        }
+        for path in &wants.disks {
+            if let Some(d) = disk(Path::new(path)) {
+                r.disks.insert(path.clone(), d);
+            }
+        }
+        for src in &wants.temps {
+            if let Some(c) = self.temperature(src) {
+                r.temps.insert(src.clone(), c);
+            }
+        }
+        r
+    }
+
+    /// Celsius at `src`.
+    fn temperature(&self, src: &TempSource) -> Option<f64> {
+        let read = |p: &Path| {
+            let milli: f64 = std::fs::read_to_string(p).ok()?.trim().parse().ok()?;
+            Some(milli / 1000.0)
+        };
+        match src {
+            TempSource::File(p) => read(p),
+            TempSource::Zone(z) => read(
+                &self
+                    .sys_root
+                    .join(format!("class/thermal/thermal_zone{z}/temp")),
+            ),
+            TempSource::Hottest => self
+                .sensors()
+                .iter()
+                .map(|s| s.celsius)
+                .fold(None, |a: Option<f64>, c| Some(a.map_or(c, |a| a.max(c)))),
+        }
     }
 }
 

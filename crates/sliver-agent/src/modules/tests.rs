@@ -38,6 +38,14 @@ fn fkeys_are_key_regions() {
     assert_eq!(cells[0].look.width, Width::Fill(1));
 }
 
+/// What the agent's loop would read for `toml`'s modules from the fixture tree `dir`
+/// (`proc/`, `sys/`).
+fn read_stats(toml: &str, dir: &std::path::Path) -> crate::stats::Readings {
+    let config = load_str(toml, std::path::Path::new(".")).config;
+    crate::stats::Sampler::with_roots(dir.join("proc"), dir.join("sys"))
+        .readings(&crate::stats::wants(&config), std::time::Instant::now())
+}
+
 fn stat_cells(toml: &str, w: &World) -> Vec<Cell> {
     let loaded = load_str(toml, std::path::Path::new("."));
     assert!(loaded.diagnostics.ok(), "{:?}", loaded.diagnostics);
@@ -176,9 +184,7 @@ fn stats_modules_read_files_and_schedule_their_own_refresh() {
     put("sys/class/hwmon/hwmon0/name", "chip\n");
     put("sys/class/hwmon/hwmon0/temp1_input", "61500\n");
     let mut w = world();
-    w.stats = Stats::with_roots(dir.join("proc"), dir.join("sys"));
-    let cells = stat_cells(
-        r#"
+    let toml = r#"
         [[layouts.default.zones]]
         name = "main"
         modules = ["cpu", "memory", "load", "temperature", "temperature#hot", "disk", "cpu#fast"]
@@ -194,9 +200,9 @@ fn stats_modules_read_files_and_schedule_their_own_refresh() {
         path = "/"
         [modules."cpu#fast"]
         interval = "2s"
-        "#,
-        &w,
-    );
+        "#;
+    w.stats = read_stats(toml, &dir);
+    let cells = stat_cells(toml, &w);
     let text = |c: &Cell| match &c.look.content {
         Content::Label { text: t, .. } => t.clone(),
         other => panic!("{other:?}"),
@@ -220,11 +226,9 @@ fn stats_modules_read_files_and_schedule_their_own_refresh() {
     );
     // with no data source (no /proc here) the module hides instead of showing zeros
     let mut empty = world();
-    empty.stats = Stats::with_roots("/nonexistent", "/nonexistent");
-    let none = stat_cells(
-        "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"cpu\", \"memory\", \"temperature\"]\n",
-        &empty,
-    );
+    let toml = "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"cpu\", \"memory\", \"temperature\"]\n";
+    empty.stats = read_stats(toml, std::path::Path::new("/nonexistent"));
+    let none = stat_cells(toml, &empty);
     assert!(none.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -241,7 +245,6 @@ fn network_bandwidth_and_cpu_sparkline() {
     )
     .unwrap();
     let mut w = world();
-    w.stats = Stats::with_roots(dir.join("proc"), dir.join("sys"));
     w.session.network.state = sliver_session::network::NetState::Connected;
     w.session.network.kind = sliver_session::network::NetKind::Ethernet;
     w.session.network.iface = Some("eth0".into());
@@ -255,11 +258,18 @@ fn network_bandwidth_and_cpu_sparkline() {
         )
     };
     // no `interval`: not sampled, no wake-ups
+    let mut sampler = crate::stats::Sampler::with_roots(dir.join("proc"), dir.join("sys"));
+    let mut read = |toml: &str| {
+        let config = load_str(toml, std::path::Path::new(".")).config;
+        sampler.readings(&crate::stats::wants(&config), w.now.instant)
+    };
+    w.stats = read(&toml(""));
     let cells = stat_cells(&toml(""), &w);
     assert!(cells[0].next_change.is_none());
     assert_eq!(text(&cells[0]), "0B/s 0b/s");
     assert_eq!(text(&cells[1]).chars().count(), 1, "one cpu sample so far");
     // with one: the first read primes the counters
+    w.stats = read(&toml("interval = 2\n"));
     let cells = stat_cells(&toml("interval = 2\n"), &w);
     assert_eq!(
         (cells[0].next_change.unwrap() - w.now.wall).num_seconds(),

@@ -42,33 +42,6 @@ impl EmojiHandle {
     }
 }
 
-/// Shared system-statistics sampler (CPU usage needs the previous sample, so one instance lives
-/// as long as the agent). Cheap to clone; reads files only when a stats module asks.
-#[derive(Clone, Default)]
-pub struct Stats(std::sync::Arc<std::sync::Mutex<crate::stats::Sampler>>);
-
-impl std::fmt::Debug for Stats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Stats")
-    }
-}
-
-impl Stats {
-    pub(super) fn with<R>(&self, f: impl FnOnce(&mut crate::stats::Sampler) -> R) -> R {
-        f(&mut self.0.lock().unwrap_or_else(|e| e.into_inner()))
-    }
-
-    /// A sampler reading these roots instead of `/proc` and `/sys` (tests).
-    pub fn with_roots(
-        proc_root: impl Into<std::path::PathBuf>,
-        sys_root: impl Into<std::path::PathBuf>,
-    ) -> Stats {
-        Stats(std::sync::Arc::new(std::sync::Mutex::new(
-            crate::stats::Sampler::with_roots(proc_root, sys_root),
-        )))
-    }
-}
-
 /// Everything modules and rules can read.
 #[derive(Debug, Clone)]
 pub struct World {
@@ -84,8 +57,8 @@ pub struct World {
     pub published: crate::published::Published,
     /// The settings app's editor: show empty placeholders as outlined `.placeholder` cells.
     pub preview: bool,
-    /// cpu, memory, load, temperature, disk.
-    pub stats: Stats,
+    /// cpu, memory, load, temperature, disk and network throughput, as read for this frame.
+    pub stats: crate::stats::Readings,
     /// Recently used emoji (the picker's first tab).
     pub emoji: EmojiHandle,
     /// Local file of the current player's album art (fetched by the feeds).
@@ -107,7 +80,7 @@ impl World {
             outputs: HashMap::new(),
             published: Default::default(),
             preview: false,
-            stats: Stats::default(),
+            stats: Default::default(),
             apps: Default::default(),
             emoji: Default::default(),
             media_art: None,

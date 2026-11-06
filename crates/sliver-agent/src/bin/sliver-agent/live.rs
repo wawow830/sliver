@@ -21,8 +21,10 @@ pub(super) struct Live {
     /// Our own compositor backend (Hyprland/sway/niri IPC) is connected. Without one, what a
     /// GNOME/KDE integration pushes over `Desktop1` is the desktop.
     pub(super) own_desktop: bool,
-    /// cpu/memory/... sampler, kept across frames for CPU deltas.
-    pub(super) stats: sliver_agent::modules::Stats,
+    /// cpu/memory/... sampler, kept across frames for CPU deltas, and what the config's modules
+    /// read with it.
+    pub(super) stats: sliver_agent::stats::Sampler,
+    pub(super) wants: sliver_agent::stats::Wants,
     /// Installed applications (taskbar icons).
     pub(super) apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
     /// Emoji recents, shared with the agent.
@@ -74,6 +76,7 @@ impl Live {
             published_stale: false,
             own_desktop: false,
             stats: Default::default(),
+            wants: Default::default(),
             emoji: sliver_agent::modules::EmojiHandle::persistent(),
             apps: std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::from_paths(
                 &sliver_icons::SearchPaths::from_env(|k| std::env::var(k).ok()),
@@ -164,6 +167,13 @@ impl Live {
     /// The world for a frame at `now`. Copies the API registry first if it changed since the
     /// last copy.
     pub(super) fn world(&mut self, now: Now) -> World {
+        let wants = self.wants.clone();
+        self.world_reading(now, &wants)
+    }
+
+    /// [`Live::world`], reading the statistics `wants` asks for (a preview's config may place
+    /// modules the live one doesn't).
+    pub(super) fn world_reading(&mut self, now: Now, wants: &sliver_agent::stats::Wants) -> World {
         if self.published_stale
             && let Some(api) = &self.api
         {
@@ -184,7 +194,7 @@ impl Live {
             outputs: self.outputs.clone(),
             published: self.published.clone(),
             preview: false,
-            stats: self.stats.clone(),
+            stats: self.stats.readings(wants, now.instant),
             apps: self.apps.clone(),
             emoji: self.emoji.clone(),
             media_art: self.agg.media_art().map(std::path::Path::to_path_buf),
@@ -205,6 +215,7 @@ impl Live {
     /// Runs what `config` needs (at start and after a reload): its user modules (unchanged
     /// specs keep the running ones), the watchers its modules use, and the API's policy.
     pub(super) fn follow(&mut self, config: &Config) {
+        self.wants = sliver_agent::stats::wants(config);
         if let Some(api) = &self.api {
             api.set_policy(sliver_agent::api::policy_from_config(config));
         }
