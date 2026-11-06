@@ -58,17 +58,8 @@ impl Live {
         let mut feeds = Feeds::new()?;
         feeds.start_desktop(|k| std::env::var(k).ok());
         feeds.start_session();
-        let (specs, errors) = sliver_agent::modules::user_module_specs(config);
-        errors.iter().for_each(|e| eprintln!("sliver-agent: {e}"));
-        feeds.start_modules(specs);
-        if sliver_agent::modules::uses_kind(config, "systemd-failed-units") {
-            feeds.watch_failed_units();
-        }
-        if sliver_agent::modules::uses_kind(config, "privacy") {
-            feeds.watch_capture();
-        }
-        if sliver_agent::modules::uses_kind(config, "language") {
-            feeds.watch_input_method();
+        for e in feeds.follow(config) {
+            eprintln!("sliver-agent: {e}");
         }
         let ops = feeds.session.clone().and_then(|h| match start_ops(h) {
             Ok(tx) => Some(tx),
@@ -216,17 +207,8 @@ impl Live {
 
     /// New user module specs after a reload. Unchanged specs keep the running modules.
     pub(super) fn restart_modules(&mut self, config: &Config) {
-        let (specs, errors) = sliver_agent::modules::user_module_specs(config);
-        errors.iter().for_each(|e| eprintln!("sliver-agent: {e}"));
-        self.feeds.start_modules(specs);
-        if sliver_agent::modules::uses_kind(config, "systemd-failed-units") {
-            self.feeds.watch_failed_units();
-        }
-        if sliver_agent::modules::uses_kind(config, "privacy") {
-            self.feeds.watch_capture();
-        }
-        if sliver_agent::modules::uses_kind(config, "language") {
-            self.feeds.watch_input_method();
+        for e in self.feeds.follow(config) {
+            eprintln!("sliver-agent: {e}");
         }
         if let Some(rt) = &self.feeds.modules {
             let keys: std::collections::HashSet<String> = rt.keys().into_iter().collect();

@@ -433,9 +433,28 @@ impl Feeds {
         }
     }
 
-    /// Start the user modules and forward their updates. Also routes `pkill -RTMIN+N`.
-    /// Starts the user modules, or restarts them with new `specs` (config reload). Unchanged specs
-    /// keep the running modules and their last output.
+    /// Runs what `config` needs: its user modules, and the watchers only some modules use
+    /// (failed units, capture, fcitx5). Called at start and after every reload. Returns the user
+    /// modules that couldn't be set up, as messages.
+    pub fn follow(&mut self, config: &sliver_config::Config) -> Vec<String> {
+        let (specs, errors) = crate::modules::user_module_specs(config);
+        self.start_modules(specs);
+        let uses = |kind| crate::modules::uses_kind(config, kind);
+        if uses("systemd-failed-units") {
+            self.watch_failed_units();
+        }
+        if uses("privacy") {
+            self.watch_capture();
+        }
+        if uses("language") {
+            self.watch_input_method();
+        }
+        errors
+    }
+
+    /// Starts the user modules, or restarts them with new `specs` (config reload), and forwards
+    /// their updates and `pkill -RTMIN+N`. Unchanged specs keep the running modules and their last
+    /// output.
     pub fn start_modules(&mut self, specs: Vec<Spec>) {
         if self.modules.is_some() && specs == self.specs {
             return;
