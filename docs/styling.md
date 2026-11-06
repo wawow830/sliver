@@ -43,8 +43,9 @@ area filled with the same color at a quarter of its alpha, inside the content bo
 height free above and below; `width`/`min-width` make it wider than its natural 60 px. A `cava`
 spectrum draws its bars in `color` too, across the content box: each half its slot wide. Any module
 with `spectrum = true` draws them under its content, over its content height (along a slider's
-rail), in the `color` of its `spectrum` node, which inherits the module's. Something faint keeps
-the content readable: `#mpris.toggle spectrum { color: alpha(@on_primary, 0.3); }`.
+rail), in the `color` of its `spectrum` node, which inherits the module's; the node's `padding`
+narrows that area. Something faint, or a band clear of the icon, keeps the content readable:
+`#mpris.toggle spectrum { color: alpha(@on_primary, 0.4); padding: 38px 0 0 0; }`.
 
 ## Selectors
 `*`, `bar`/`zone`/`module`, `#id`, `.class`, `:active` (pressed), `:checked` (a toggle that is on; the `.on` class is equivalent in the built-in themes),

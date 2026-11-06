@@ -316,4 +316,18 @@ fn a_spectrum_sits_under_the_content() {
         "a full bar, in the spectrum's colour"
     );
     assert_eq!(px(&p, 75, 8), (0, 0, 0), "a silent one is a dot");
+
+    // The node's padding narrows the bars to a band: here the bottom third.
+    let (sheet, _) = Stylesheet::parse(
+        "t.css",
+        "module { background: transparent; padding: 0; } spectrum { color: white; padding: 40px 0 0 0; }",
+        None,
+    );
+    let mut button = Item::text("");
+    button.width = sliver_render::Width::Fixed(100.0);
+    button.spectrum = vec![1.0];
+    let mut p = Pixmap::new(100, 60).unwrap();
+    r.render(&Scene::new(vec![button]), &sheet, &mut p);
+    assert_eq!(px(&p, 50, 30), (0, 0, 0), "nothing above the band");
+    assert_eq!(px(&p, 50, 50), (255, 255, 255), "the band");
 }

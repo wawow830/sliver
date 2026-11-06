@@ -581,7 +581,8 @@ impl Renderer {
                         },
                         None => content,
                     };
-                    (area, fade(ss.color, opacity * ss.opacity))
+                    // Its own padding narrows it: a band under a button's icon, say.
+                    (area.inset(ss.padding), fade(ss.color, opacity * ss.opacity))
                 });
                 self.draw_item(item, drawn, s, opacity, spectrum, pixmap);
                 if let (Content::Slider { value, .. }, Some(parts), Some(track)) =
