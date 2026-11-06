@@ -1104,8 +1104,9 @@ pub fn oneshot_action(name: &str) -> Option<Action> {
     }
 }
 
-/// The cells of an open `menu` sub-bar: one per entry (label and/or icon, as wide as that
-/// needs), then a ✕.
+/// The cells of an open `menu` sub-bar: a ✕, then one per entry (label and/or icon, as wide as
+/// that needs). The ✕ comes first, where the finger that opened the menu usually is, so tapping
+/// there again dismisses instead of acting.
 pub fn menu_cells(
     entries: &[sliver_config::MenuEntry],
     icons: &mut Icons,
@@ -1136,7 +1137,16 @@ pub fn menu_cells(
         menu: Vec::new(),
         slot: None,
     };
-    let mut out = Vec::new();
+    let x = icons
+        .get("window-close-symbolic", None, icon_size)
+        .map_or_else(|| Content::Markup("✕".into()), Content::Icon);
+    let mut out = vec![cell(
+        "menu/close".into(),
+        x,
+        Width::Fixed(72.0),
+        &["menu-close"],
+        "menu:close".into(),
+    )];
     for (i, e) in entries.iter().enumerate() {
         let icon = e
             .icon
@@ -1156,16 +1166,6 @@ pub fn menu_cells(
             format!("menu:pick:{i}"),
         ));
     }
-    let x = icons
-        .get("window-close-symbolic", None, icon_size)
-        .map_or_else(|| Content::Markup("✕".into()), Content::Icon);
-    out.push(cell(
-        "menu/close".into(),
-        x,
-        Width::Fixed(72.0),
-        &["menu-close"],
-        "menu:close".into(),
-    ));
     out
 }
 

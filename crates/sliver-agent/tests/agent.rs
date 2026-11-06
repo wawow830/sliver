@@ -1030,11 +1030,11 @@ fn a_menu_entry_acts_on_the_button_that_opened_it() {
     a.render(&w);
     let cells = &a.frame(Layer::Base).unwrap().cells;
     let keys: Vec<&str> = cells.iter().map(|c| c.key.as_str()).collect();
-    assert_eq!(keys, ["custom/a", "menu/0", "menu/close", "custom/z"]);
+    assert_eq!(keys, ["custom/a", "menu/close", "menu/0", "custom/z"]);
     assert!(
-        matches!(&cells[1].content, sliver_render::Content::Markup(t) if t == "Close kitty"),
+        matches!(&cells[2].content, sliver_render::Content::Markup(t) if t == "Close kitty"),
         "{:?}",
-        cells[1].content
+        cells[2].content
     );
     let (id, x) = region(&a, "menu/0");
     let mut fx = a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
@@ -1465,7 +1465,7 @@ fn menu_sub_bar_opens_runs_and_closes() {
     assert!(fx.contains(&Effect::Redraw), "{fx:?}");
     a.render(&w);
     // like a modal context, the sub-bar covers everything but the layout's first zone
-    assert_eq!(keys(&a), ["custom/pw", "menu/0", "menu/1", "menu/close"]);
+    assert_eq!(keys(&a), ["custom/pw", "menu/close", "menu/0", "menu/1"]);
     // picking runs the action and closes
     let fx = tap(&mut a, "menu/1", 2_000_000);
     assert!(
@@ -1541,7 +1541,7 @@ fn language_hold_lists_and_picks_a_layout() {
     a.render(&w);
     assert_eq!(
         keys(&a),
-        ["language", "menu/0", "menu/1", "menu/2", "menu/close"]
+        ["language", "menu/close", "menu/0", "menu/1", "menu/2"]
     );
     let (id, x) = region(&a, "menu/2");
     let mut fx = a.touch(id, 0, TouchPhase::Down, x, 2_000_000);
