@@ -1104,7 +1104,8 @@ pub fn oneshot_action(name: &str) -> Option<Action> {
     }
 }
 
-/// The cells of an open `menu` sub-bar: one per entry (label and/or icon), then a ✕.
+/// The cells of an open `menu` sub-bar: one per entry (label and/or icon, as wide as that
+/// needs), then a ✕.
 pub fn menu_cells(
     entries: &[sliver_config::MenuEntry],
     icons: &mut Icons,
@@ -1150,7 +1151,7 @@ pub fn menu_cells(
         out.push(cell(
             format!("menu/{i}"),
             content,
-            Width::Fill(1),
+            Width::Auto,
             &["menu-item"],
             format!("menu:pick:{i}"),
         ));
@@ -1166,6 +1167,23 @@ pub fn menu_cells(
         "menu:close".into(),
     ));
     out
+}
+
+/// A button's `menu`, its labels filled in with the button's own placeholders, so one entry
+/// names what it acts on ("Close {name}" reads "Close Firefox"). Labels stay plain text.
+fn button_menu(
+    menu: &[sliver_config::MenuEntry],
+    values: &dyn sliver_config::Values,
+) -> Vec<sliver_config::MenuEntry> {
+    menu.iter()
+        .map(|e| match sliver_config::Template::parse(&e.label) {
+            Ok(t) if e.label.contains('{') => sliver_config::MenuEntry {
+                label: sliver_render::markup::parse(&t.render(values)).plain(),
+                ..e.clone()
+            },
+            _ => e.clone(),
+        })
+        .collect()
 }
 
 /// `pinned = ["org.mozilla.firefox", "kitty"]`: desktop ids (with or without `.desktop`).
@@ -1330,7 +1348,7 @@ fn pinned_cell(
         pass_through: false,
         target,
         timer_total: None,
-        menu: m.common.menu.clone(),
+        menu: button_menu(&m.common.menu, &values),
         slot: None,
     }
 }
@@ -1758,7 +1776,7 @@ fn cell(
     let menu = if m.common.menu.is_empty() {
         std::mem::take(&mut sp.menu)
     } else {
-        m.common.menu.clone()
+        button_menu(&m.common.menu, sp.values.as_ref())
     };
     let on = bindings(m, sp.defaults, !menu.is_empty());
     let collapsed_slider = m.id.kind.ends_with("/slider") && sp.slider.is_none();

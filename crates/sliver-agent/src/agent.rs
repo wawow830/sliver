@@ -574,6 +574,11 @@ impl Agent {
             .then(|| self.subbar.clone())
             .flatten();
         if (menu.is_some() || subbar.is_some()) && !zones.is_empty() {
+            // A menu's entries fit their labels, so the layout's last zone (volume, say) stays
+            // too; a drawer's items take the room.
+            let last = (menu.is_some() && zones.len() > 1)
+                .then(|| zones.pop())
+                .flatten();
             zones.truncate(1);
             zones.push(sliver_config::ResolvedZone {
                 name: "menu".into(),
@@ -582,6 +587,7 @@ impl Agent {
                 class: vec!["menu".into()],
                 modules: Vec::new(),
             });
+            zones.extend(last);
         }
         if modal.is_some() && !zones.is_empty() {
             zones.truncate(1);

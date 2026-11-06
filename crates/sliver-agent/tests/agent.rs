@@ -991,7 +991,8 @@ fn workspaces_and_taskbar_buttons_drive_the_compositor() {
 }
 
 /// A menu's module actions act on the button that opened it: a taskbar item whose hold asks
-/// first closes its own window only when "Close window" is tapped.
+/// first closes its own window only when its "Close" entry is tapped. The entry is named after
+/// the button, and the layout's last zone stays beside it.
 #[test]
 fn a_menu_entry_acts_on_the_button_that_opened_it() {
     use sliver_agent::agent::Effect;
@@ -999,7 +1000,7 @@ fn a_menu_entry_acts_on_the_button_that_opened_it() {
     use sliver_desktop::control::Action as Desk;
     use sliver_ipc::proto::TouchPhase;
     let mut a = agent(
-        "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"taskbar\"]\n[modules.taskbar]\nmenu = [{ label = \"Close window\", on-tap = { module-action = \"close\" } }]\n",
+        "[[layouts.default.zones]]\nname = \"left\"\nmodules = [\"custom/a\"]\n[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"taskbar\"]\n[[layouts.default.zones]]\nname = \"right\"\nmodules = [\"custom/z\"]\n[modules.\"custom/a\"]\nformat = \"A\"\n[modules.\"custom/z\"]\nformat = \"Z\"\n[modules.taskbar]\nmenu = [{ label = \"Close {app_id}\", on-tap = { module-action = \"close\" } }]\n",
     );
     let mut w = world(9, 41);
     w.desktop.connected = true;
@@ -1027,6 +1028,14 @@ fn a_menu_entry_acts_on_the_button_that_opened_it() {
     fx.extend(a.touch(id, 0, TouchPhase::Up, x, 2_100_000));
     assert!(closes(&fx).is_empty(), "hold only asks: {fx:?}");
     a.render(&w);
+    let cells = &a.frame(Layer::Base).unwrap().cells;
+    let keys: Vec<&str> = cells.iter().map(|c| c.key.as_str()).collect();
+    assert_eq!(keys, ["custom/a", "menu/0", "menu/close", "custom/z"]);
+    assert!(
+        matches!(&cells[1].content, sliver_render::Content::Markup(t) if t == "Close kitty"),
+        "{:?}",
+        cells[1].content
+    );
     let (id, x) = region(&a, "menu/0");
     let mut fx = a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
     fx.extend(a.touch(id, 0, TouchPhase::Up, x, 3_040_000));
