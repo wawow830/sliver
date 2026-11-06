@@ -36,7 +36,7 @@ def spdx(ts: set[frozenset[str]]) -> str:
 
 def bundled() -> str:
     tree = subprocess.run(
-        ["cargo", "tree", "--workspace", "--edges=no-build,no-dev,no-proc-macro", "--target=all",
+        ["cargo", "tree", "--color=never", "--workspace", "--edges=no-build,no-dev,no-proc-macro", "--target=all",
          "--prefix=none", "--format", "{p}\t{l}"],
         cwd=ROOT, capture_output=True, text=True, check=True).stdout
     found = set(ASSETS)

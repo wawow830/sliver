@@ -45,9 +45,9 @@ has() { local t; for t in "$@"; do command -v "$t" >/dev/null || { skipped+=("$t
 if has systemd-analyze udevadm; then
   d=target/check-units && rm -rf "$d" && mkdir -p "$d"
   # Documentation= names man pages that are only on the system once the RPM is installed.
-  sed -e 's|^ExecStart=.*|ExecStart=/usr/bin/true|' -e '/^Documentation=/d' \
-    packaging/systemd/sliverd.service > "$d/sliverd.service"
-  cp packaging/systemd/sliverd.socket "$d/"
+  for u in sliverd.service sliverd.socket; do
+    sed -e 's|^ExecStart=.*|ExecStart=/usr/bin/true|' -e '/^Documentation=/d' packaging/systemd/$u > "$d/$u"
+  done
   out=$(systemd-analyze verify "$d/sliverd.socket" "$d/sliverd.service" 2>&1) || { echo "$out"; exit 1; }
   [[ -z "$out" ]] || { echo "$out"; exit 1; }
   udevadm verify --no-summary packaging/udev/*.rules
