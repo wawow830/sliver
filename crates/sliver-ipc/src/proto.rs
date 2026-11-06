@@ -369,8 +369,6 @@ pub struct HwReport {
     /// The bar backlight's sysfs dir. Empty if none was found.
     pub backlight: String,
     pub max_brightness: u32,
-    /// False: sliverd runs without dim/off (only when there's no tiny-dfr to fall back to).
-    pub backlight_writable: bool,
     /// The digitizer sliverd chose, e.g. `/dev/input/event3`.
     pub touch: String,
     /// Every input device sliverd has open (digitizer, Fn/lid keyboards), by name.

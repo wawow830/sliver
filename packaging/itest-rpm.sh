@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # RPM lifecycle test: installs the built sliverd and sliver-agent RPMs in a throwaway
 # Fedora container with systemd as PID 1 and checks what the scriptlets do to the bar's owner:
-#   A. tiny-dfr installed (a stand-in unit) and driving the bar
-#      1. install starts nothing and leaves tiny-dfr alone; the agent's user preset enables it
-#      2. upgrade (reinstall) while tiny-dfr runs doesn't take the bar
-#      3. upgrade while sliverd runs restarts sliverd and keeps tiny-dfr off
-#      4. uninstall while sliverd runs hands the bar to tiny-dfr (invariant 1) and removes our
-#         tiny-dfr drop-in and udev rule
-#   B. no tiny-dfr at all: install, run, uninstall all succeed and leave nothing running
+#   1. install starts nothing and leaves tiny-dfr alone; the agent's user preset enables it
+#   2. upgrade (reinstall) while tiny-dfr runs doesn't take the bar
+#   3. upgrade while sliverd runs restarts sliverd and keeps tiny-dfr off
+#   4. uninstall while sliverd runs hands the bar to tiny-dfr (invariant 1) and removes our
+#      tiny-dfr drop-in and udev rule
 # The scriptlets, presets, udev rule and drop-ins are the real ones from the RPMs. Only
 # sliverd.service's [Service] is replaced by a stand-in (/etc override) since there's no bar:
 # its [Unit] and the real handover command (ExecStartPre) are kept, minus the device binding.
@@ -54,7 +52,8 @@ boot() {
   done
   echo "FAIL: systemd in the container didn't come up ($s)"; exit 1
 }
-# Libraries the RPMs need that the image lacks (it's built once; the packages' needs grow).
+# Packages the RPMs need that the image lacks, tiny-dfr among them (the image is built once; the
+# packages' needs grow).
 deps() {
   local missing
   missing=$(x bash -c "rpm -U --test $(rpms) 2>&1" | awk '/is needed by/ {print $1}' | sort -u)
@@ -73,12 +72,13 @@ standin() {
     systemctl daemon-reload'
 }
 
+# The real tiny-dfr package, its unit overridden by a stand-in (/etc) since there's no bar.
 fake_tiny_dfr() {
   x bash -c 'printf "[Unit]\nDescription=fake tiny-dfr\n[Service]\nExecStart=/usr/bin/sleep infinity\nRestart=always\n" \
-    > /usr/lib/systemd/system/tiny-dfr.service && systemctl daemon-reload && systemctl start tiny-dfr.service'
+    > /etc/systemd/system/tiny-dfr.service && systemctl daemon-reload && systemctl start tiny-dfr.service'
 }
 
-echo "== A1. install starts nothing, tiny-dfr keeps the bar"
+echo "== 1. install starts nothing, tiny-dfr keeps the bar"
 boot; deps
 fake_tiny_dfr
 expect tiny-dfr.service active
@@ -92,7 +92,7 @@ expect tiny-dfr.service active
 x test -e /usr/lib/systemd/system/tiny-dfr.service.d/50-sliver.conf
 echo ok
 
-echo "== A2. upgrade while tiny-dfr runs doesn't take the bar"
+echo "== 2. upgrade while tiny-dfr runs doesn't take the bar"
 standin
 t=$(pid tiny-dfr.service)
 x bash -c "rpm -U --replacepkgs $(rpms)" >/dev/null
@@ -102,7 +102,7 @@ expect tiny-dfr.service active
 [[ "$(pid tiny-dfr.service)" == "$t" ]] || { echo "FAIL: tiny-dfr was restarted"; exit 1; }
 echo ok
 
-echo "== A3. upgrade while sliverd runs restarts it, tiny-dfr stays off"
+echo "== 3. upgrade while sliverd runs restarts it, tiny-dfr stays off"
 x systemctl start sliverd.service
 expect sliverd.service active
 expect tiny-dfr.service inactive
@@ -113,8 +113,8 @@ expect tiny-dfr.service inactive
 [[ "$(pid sliverd.service)" != "$s" ]] || { echo "FAIL: sliverd was not restarted by the upgrade"; exit 1; }
 echo ok
 
-echo "== A4. uninstall while sliverd runs hands the bar to tiny-dfr"
-# sliverd is still running from A3. The stand-in stays through the uninstall: without it a reload
+echo "== 4. uninstall while sliverd runs hands the bar to tiny-dfr"
+# sliverd is still running from 3. The stand-in stays through the uninstall: without it a reload
 # would bring back the device binding and systemd would stop sliverd before %preun gets to.
 x bash -c 'rpm -e sliver-agent sliverd' >/dev/null
 expect tiny-dfr.service active
@@ -125,14 +125,4 @@ for f in /usr/lib/systemd/system/tiny-dfr.service.d/50-sliver.conf /usr/lib/udev
 done
 echo ok
 
-echo "== B. without tiny-dfr: install, run, uninstall"
-boot; deps
-x bash -c "rpm -U $(rpms)" >/dev/null
-standin
-x systemctl start sliverd.service
-expect sliverd.service active
-x bash -c 'rpm -e sliver-agent sliverd' >/dev/null
-expect sliverd.service inactive
-expect sliverd.socket inactive
-echo ok
 echo "itest-rpm: all ok"

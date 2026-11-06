@@ -48,9 +48,10 @@ Summary:        Sliver Touch Bar system daemon
 License:        (%{sliver_license}) AND %{bundled_licenses}
 %{?systemd_requires}
 Requires:       systemd-udev
-# The fallback when sliverd can't run (OnFailure=tiny-dfr.service). The two coexist:
-# sliverd's udev rule takes over the bar, and removing sliverd gives it back to tiny-dfr.
-Recommends:     tiny-dfr
+# The fallback when sliverd can't run (OnFailure=tiny-dfr.service): required, so the F-keys never
+# depend on what else is installed. The two coexist: sliverd's udev rule takes over the bar, and
+# removing sliverd gives it back to tiny-dfr.
+Requires:       tiny-dfr
 
 %description -n sliverd
 sliverd owns the Touch Bar display, touch input, backlight and key emission. It shows a built-in

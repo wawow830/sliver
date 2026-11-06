@@ -8,7 +8,6 @@
 #      (with Conflicts= it would stop tiny-dfr and leave the bar with no daemon)
 #   6. starting only the socket doesn't take the bar from tiny-dfr
 #   7. both started at once → exactly one runs
-#   8. no tiny-dfr installed at all → sliverd still starts
 # The real units' [Unit] sections are used as-is (renamed with a unique prefix). [Service] is
 # replaced by a stand-in, and device bindings are dropped (no devices in a user manager).
 set -euo pipefail
@@ -145,13 +144,4 @@ for i in 1 2 3 4 5; do
 done
 echo ok
 
-echo "== 8. no tiny-dfr installed: sliverd still starts"
-fresh
-mv "$DIR/$P-tiny-dfr.service" "$DIR/$P-tiny-dfr.service.away"
-systemctl --user daemon-reload
-systemctl --user start "$P-sliverd.service" || true
-mv "$DIR/$P-tiny-dfr.service.away" "$DIR/$P-tiny-dfr.service"
-wait_for "$P-sliverd.service" active 5
-systemctl --user daemon-reload
-echo ok
 echo "itest-units: all ok"

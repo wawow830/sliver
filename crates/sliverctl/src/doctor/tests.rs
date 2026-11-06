@@ -87,7 +87,6 @@ impl Fake {
                 width: 2008,
                 height: 60,
                 card: "/dev/dri/card1".into(),
-                backlight_writable: true,
                 hotplug: true,
                 view: "agent:base".into(),
                 ..Default::default()
@@ -434,13 +433,6 @@ fn the_reports_carry_the_machine_and_every_check() {
 
 // ---- hardware -------------------------------------------------------------------------------
 
-fn report_mut(f: &mut Fake) -> &mut sliver_ipc::proto::HwReport {
-    match f.report.as_mut() {
-        Some(Ok(sliver_ipc::report::Reply::Report(r))) => r,
-        _ => unreachable!(),
-    }
-}
-
 #[test]
 fn a_machine_without_a_bar_says_which_driver_is_missing() {
     let mut f = Fake::healthy();
@@ -465,13 +457,6 @@ fn backlight_permissions_name_the_udev_fix() {
     let c = find(&run_checks(&f), "bar-backlight").clone();
     assert_eq!(c.level, Level::Fail);
     assert!(c.fix.unwrap().contains("udevadm trigger --action=change"));
-
-    let mut f = Fake::healthy();
-    report_mut(&mut f).backlight_writable = false;
-    assert_eq!(
-        find(&run_checks(&f), "sliverd-backlight").level,
-        Level::Fail
-    );
 }
 
 #[test]

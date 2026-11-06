@@ -281,7 +281,6 @@ pub fn facts() -> sliver_ipc::proto::HwReport {
     sliver_ipc::proto::HwReport {
         backend: "fake".into(),
         gate: "fake hardware (no devices opened)".into(),
-        backlight_writable: true,
         ..Default::default()
     }
 }

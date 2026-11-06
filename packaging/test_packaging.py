@@ -71,13 +71,12 @@ class Sliverd(unittest.TestCase):
         self.assertFalse(any("tiny-dfr" in c for c in self.u["Unit"].get("Conflicts", [])))
         self.assertIn("tiny-dfr.service", self.u["Unit"]["OnFailure"])
 
-    def test_starting_stops_tiny_dfr_tolerating_only_its_absence(self):
+    def test_starting_stops_tiny_dfr_or_fails(self):
         (pre,) = self.u["Service"]["ExecStartPre"]
         ok, calls = run_exec(pre, 0)
         self.assertTrue(ok)
         self.assertEqual(calls, ["stop tiny-dfr.service"])
-        self.assertTrue(run_exec(pre, 5)[0], "exit 5: tiny-dfr isn't installed")
-        self.assertFalse(run_exec(pre, 1)[0], "any other failure fails the start")
+        self.assertFalse(run_exec(pre, 1)[0], "a failure to stop it fails the start")
 
 
 class TinyDfr(unittest.TestCase):
@@ -123,6 +122,11 @@ class Rpm(unittest.TestCase):
         # A %files line in %install runs as a command, and breaks the build only after compiling.
         bad = [l for l in self.sections().get("install", []) if re.match(r"^%\{_[a-z]+\}/", l)]
         self.assertEqual(bad, [])
+
+    def test_sliverd_requires_its_fallback(self):
+        # OnFailure=tiny-dfr.service only keeps the F-keys reachable if tiny-dfr is installed.
+        sliverd = self.spec.split("%package -n sliverd", 1)[1].split("%description", 1)[0]
+        self.assertRegex(sliverd, r"(?m)^Requires:\s*tiny-dfr\b")
 
     def test_installing_sends_no_events_to_the_digitizers(self):
         # SYSTEMD_WANTS=sliverd.service fires on 'change' too: that would take the bar over at

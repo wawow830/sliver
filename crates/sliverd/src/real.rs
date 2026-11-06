@@ -104,19 +104,6 @@ impl crate::backend::InputSource for HwInput {
     }
 }
 
-/// The fallback daemon's unit (sliverd.service has OnFailure= on it).
-const TINY_DFR_UNIT: &str = "/usr/lib/systemd/system/tiny-dfr.service";
-
-/// Stand-in when the bar backlight can't be opened: brightness writes are dropped.
-struct NoBacklight;
-
-impl Backlight for NoBacklight {
-    fn set(&mut self, _value: u32) {}
-    fn screen_fraction(&mut self) -> Option<f32> {
-        None
-    }
-}
-
 /// Everything opened for a real run.
 pub struct RealHardware {
     pub backends: Backends,
@@ -146,31 +133,14 @@ pub fn open() -> io::Result<RealHardware> {
         input.hotplug()
     );
     // A backlight we can't write (udev hasn't applied 99-z-sliverd.rules yet, missing fd) means we
-    // could never dim or turn off the OLED bar (burn-in, power: invariant 3). If tiny-dfr is
-    // installed, exit: systemd retries (udev may just be late), then falls back to tiny-dfr, which
-    // has working dim/off. Only without any fallback do we run anyway, since Esc/F-keys at full
-    // brightness beat no bar at all (invariant 1).
-    let (backlight, max_brightness, writable): (Box<dyn Backlight>, u32, bool) =
-        match SysfsBacklight::open() {
-            Ok(b) => {
-                let max = b.max();
-                (Box::new(b), max, true)
-            }
-            Err(e) if Path::new(TINY_DFR_UNIT).exists() => {
-                return Err(io::Error::other(format!(
-                    "bar backlight not writable ({e}); exiting so systemd can fall back to tiny-dfr"
-                )));
-            }
-            Err(e) => {
-                eprintln!(
-                    "sliverd: WARNING: bar backlight not writable ({e}) and no tiny-dfr to fall back to; \
-                 running without dim/off. Fix: udevadm trigger --action=change on the bar backlight"
-                );
-                let max = sliver_hw::discover::bar_backlight(Path::new("/sys/class/backlight"))
-                    .map_or(255, |b| b.max);
-                (Box::new(NoBacklight), max, false)
-            }
-        };
+    // could never dim or turn off the OLED bar (burn-in, power: invariant 3). Exit: systemd retries
+    // (udev may just be late), then falls back to tiny-dfr, which has working dim/off.
+    let backlight = SysfsBacklight::open().map_err(|e| {
+        io::Error::other(format!(
+            "bar backlight not writable ({e}); exiting so systemd can fall back to tiny-dfr"
+        ))
+    })?;
+    let max_brightness = backlight.max();
     let keys = UinputKeys::create()?;
     let facts = HwReport {
         backend: "real".into(),
@@ -179,7 +149,6 @@ pub fn open() -> io::Result<RealHardware> {
         backlight: sliver_hw::discover::bar_backlight(Path::new("/sys/class/backlight"))
             .map(|b| b.sysfs.display().to_string())
             .unwrap_or_default(),
-        backlight_writable: writable,
         touch: touch.display().to_string(),
         inputs: input.device_names(),
         hotplug: input.hotplug(),
@@ -189,7 +158,7 @@ pub fn open() -> io::Result<RealHardware> {
     Ok(RealHardware {
         backends: Backends {
             display: Box::new(panel),
-            backlight,
+            backlight: Box::new(backlight),
             keys: Box::new(keys),
         },
         input,

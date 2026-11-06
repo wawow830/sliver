@@ -154,14 +154,6 @@ fn from_report(r: &HwReport) -> Vec<Check> {
         (Level::Ok, None)
     };
     out.push(check("sliverd-hw", level, s, fix));
-    if r.backend == "real" && !r.backlight_writable {
-        out.push(check(
-            "sliverd-backlight",
-            Level::Fail,
-            "sliverd runs without a writable backlight: the bar never dims or turns off (OLED burn-in)",
-            Some("sudo udevadm trigger --action=change --subsystem-match=backlight, then sudo systemctl restart sliverd"),
-        ));
-    }
     if r.backend == "real" && !r.hotplug {
         out.push(check(
             "sliverd-hotplug",
