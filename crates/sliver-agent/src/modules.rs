@@ -32,7 +32,8 @@ pub enum Touch {
     Agent,
 }
 
-/// One drawable module.
+/// One drawable module: what it looks like (the renderer's [`Item`]), what touching it does, and
+/// where it came from.
 #[derive(Debug, Clone)]
 pub struct Cell {
     /// Stable identity across frames: the module id plus its position in groups.
@@ -41,35 +42,21 @@ pub struct Cell {
     pub id: String,
     /// The module type (`clock`, `audio`, …).
     pub kind: String,
-    pub css_id: String,
-    pub classes: Vec<String>,
-    pub width: Width,
-    pub content: Content,
+    /// What it draws: content, `#id` and classes, width, states (`:active`, `:checked`,
+    /// `:disabled`), inline colours and the spectrum under it.
+    pub look: sliver_render::Item,
     pub touch: Touch,
     /// Gesture bindings, for the agent's recognizer.
     pub on: Vec<(Gesture, Do)>,
-    /// When this cell's content changes next on its own (clock ticks), if ever.
-    pub next_change: Option<DateTime<Local>>,
-    /// Being touched (agent regions; sliverd draws key regions' feedback itself).
-    pub pressed: bool,
-    /// A toggle that is on (`:checked`).
-    pub checked: bool,
     /// This cell is the handle of a drawer group: tapping it opens/closes the group.
     pub drawer: Option<Drawer>,
-    /// `:disabled`.
-    pub disabled: bool,
-    /// Inline colours (published items' `fg`/`bg`).
-    pub foreground: Option<sliver_render::Color>,
-    pub background: Option<sliver_render::Color>,
+    /// When this cell's content changes next on its own (clock ticks), if ever.
+    pub next_change: Option<DateTime<Local>>,
     /// A published item: touches go to the app that owns it.
     pub published: Option<crate::published::PubRef>,
-    /// Published items: also send the app its event when a user binding handled the gesture.
-    pub pass_through: bool,
     /// Part of a sized App controls / Status items slot (`width` = px or fill), by the slot's
     /// key: its published items, and the trailing `kind = "slot"` spacer that reserves the rest.
     pub slot: Option<String>,
-    /// `spectrum = true`: the live spectrum's levels, drawn under the content. Empty: none.
-    pub spectrum: Vec<f32>,
 }
 
 impl Cell {
@@ -85,23 +72,13 @@ impl Cell {
             key: key.into(),
             id: id.into(),
             kind: kind.into(),
-            css_id: css_id.into(),
-            classes: Vec::new(),
-            width: Width::Auto,
-            content,
+            look: sliver_render::Item::new(content).id(css_id.into()),
             touch: Touch::None,
             on: Vec::new(),
-            next_change: None,
-            pressed: false,
-            checked: false,
             drawer: None,
-            disabled: false,
-            foreground: None,
-            background: None,
+            next_change: None,
             published: None,
-            pass_through: false,
             slot: None,
-            spectrum: Vec::new(),
         }
     }
 
@@ -166,7 +143,7 @@ fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut V
             // Any other module is a cell, or one per item it lists (workspaces, windows, who's
             // recording).
             _ => {
-                let cells: Vec<(String, Option<Item>)> = match items(m, b.world) {
+                let cells: Vec<(String, Option<Part>)> = match items(m, b.world) {
                     Some(list) => list
                         .into_iter()
                         .map(|(suffix, item)| (format!("{key}/{suffix}"), Some(item)))

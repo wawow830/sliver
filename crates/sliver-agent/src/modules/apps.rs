@@ -54,18 +54,20 @@ pub(super) fn decorate_published(
     icon_size: u32,
 ) -> Option<Cell> {
     let c = &m.common;
-    cell.classes.extend(m.classes.iter().cloned());
+    cell.look.classes.extend(m.classes.iter().cloned());
     if !c.on.is_empty() {
         cell.on = user_bindings(m);
-        cell.pass_through = c.pass_through;
+        if let Some(p) = &mut cell.published {
+            p.pass_through = c.pass_through;
+        }
     }
     if c.width != sliver_config::Width::Auto {
-        cell.width = width(c.width);
+        cell.look.width = width(c.width);
     }
     let it = cell.published.as_ref().and_then(|p| ctx.item(&p.item));
     if (c.format.is_some() || c.format_alt.is_some() || c.format_icons.is_some())
         && let Some(it) = it
-        && !matches!(cell.content, Content::Slider { .. })
+        && !matches!(cell.look.content, Content::Slider { .. })
     {
         let (values, pct) = crate::published::item_values(it);
         let st = State {
@@ -73,12 +75,12 @@ pub(super) fn decorate_published(
             ..State::default()
         };
         let f = present(c, "{text}", &st, &values, None, icons, icon_size)?;
-        cell.classes.extend(f.classes);
-        let own = match &cell.content {
+        cell.look.classes.extend(f.classes);
+        let own = match &cell.look.content {
             Content::Label { icon, .. } => icon.clone(),
             _ => None,
         };
-        cell.content = Content::label(f.icon.or(own), f.text);
+        cell.look.content = Content::label(f.icon.or(own), f.text);
     }
     Some(cell)
 }
@@ -93,8 +95,8 @@ pub(super) fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &st
         m.css_id.clone(),
         Content::text(label),
     );
-    c.classes = vec!["placeholder".into(), class.into()];
-    c.width = width(m.common.width);
+    c.look.classes = vec!["placeholder".into(), class.into()];
+    c.look.width = width(m.common.width);
     c
 }
 
@@ -140,9 +142,11 @@ pub(super) fn placeholder_cells(
     // (a user `on-*` replaces the app's event unless `pass-through`, api.md §5).
     let on = user_bindings(m);
     for c in &mut out[start..] {
-        c.classes.extend(m.classes.iter().cloned());
+        c.look.classes.extend(m.classes.iter().cloned());
         c.on = on.clone();
-        c.pass_through = m.common.pass_through;
+        if let Some(p) = &mut c.published {
+            p.pass_through = m.common.pass_through;
+        }
         c.key = format!("{prefix}{}", c.key);
     }
     // `[modules."app/<provider>#<item>"]` applies here too (api.md §3.1).
@@ -174,8 +178,8 @@ pub(super) fn placeholder_cells(
         }
         let mut spacer = placeholder(m, &format!("{slot}#slot"), "", class);
         spacer.kind = "slot".into();
-        spacer.classes = vec!["slot".into(), class.into()];
-        spacer.content = Content::Spacer;
+        spacer.look.classes = vec!["slot".into(), class.into()];
+        spacer.look.content = Content::Spacer;
         spacer.slot = Some(slot);
         out.push(spacer);
     }

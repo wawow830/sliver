@@ -177,7 +177,7 @@ impl Agent {
                         ("layer", Prop::Str(layer.into())),
                         (
                             "classes",
-                            Prop::List(c.classes.iter().cloned().map(Prop::Str).collect()),
+                            Prop::List(c.look.classes.iter().cloned().map(Prop::Str).collect()),
                         ),
                         ("x", Prop::Int(r.x as i64)),
                         ("width", Prop::Int(r.w as i64)),
@@ -260,7 +260,7 @@ impl Agent {
         };
         if let Some(d) = cell.binding(want).cloned() {
             self.run(&d, None, Some(region), now, fx);
-            if !cell.pass_through {
+            if !p.pass_through {
                 return;
             }
         }
@@ -277,6 +277,7 @@ impl Agent {
             (PubKind::ScrollTo(_), _) => {}
             (PubKind::Popover, AG::Tap) => {
                 let class = cell
+                    .look
                     .classes
                     .first()
                     .cloned()

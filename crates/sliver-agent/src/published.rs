@@ -107,6 +107,9 @@ pub struct PubRef {
     pub priority: i32,
     /// What overflows as a unit: the top-level item's id (a group's children go together).
     pub unit: String,
+    /// A user binding on the module placing it handled the gesture: also send the app its event
+    /// (`pass-through`).
+    pub pass_through: bool,
 }
 
 impl PubRef {
@@ -119,6 +122,7 @@ impl PubRef {
             gestures: Vec::new(),
             priority: i32::MAX,
             unit: String::new(),
+            pass_through: false,
         }
     }
 }
@@ -203,7 +207,7 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
         "modal-close",
         content,
     );
-    c.classes = vec!["app".into(), "modal-close".into()];
+    c.look.classes = vec!["app".into(), "modal-close".into()];
     c.touch = Touch::Agent;
     c.published = Some(PubRef::control(ctx.id, "", PubKind::Close));
     c
@@ -227,13 +231,13 @@ pub fn popover_cells(
         push(ctx, child, None, class, icons, icon_size, &mut out);
     }
     for c in &mut out {
-        c.classes.push("popover-item".into());
+        c.look.classes.push("popover-item".into());
     }
     let mut close = close_cell(ctx, icons, icon_size);
     close.key = format!("popover/{}#{popover}.close", ctx.provider);
     close.id = format!("app/{}#{popover}.close", ctx.provider);
-    close.css_id = "popover-close".into();
-    close.classes = vec![class.to_owned(), "popover-close".into()];
+    close.look.id = Some("popover-close".into());
+    close.look.classes = vec![class.to_owned(), "popover-close".into()];
     close.published = Some(PubRef::control(ctx.id, popover, PubKind::PopoverClose));
     out.push(close);
     Some(out)
@@ -366,8 +370,8 @@ fn push(
             ),
             content,
         );
-        c.classes = classes.clone();
-        c.width = match (&item.kind, item.min_width, item.max_width) {
+        c.look.classes = classes.clone();
+        c.look.width = match (&item.kind, item.min_width, item.max_width) {
             (ItemKind::Spacer { size }, ..) => match size {
                 SpacerSize::Flexible => Width::Fill(1),
                 SpacerSize::Small => Width::Fixed(SPACER_SMALL),
@@ -383,10 +387,10 @@ fn push(
         if kind.is_some() && item.enabled {
             c.touch = Touch::Agent;
         }
-        c.checked = checked;
-        c.disabled = !item.enabled;
-        c.foreground = color(&item.fg);
-        c.background = color(&item.bg);
+        c.look.checked = checked;
+        c.look.disabled = !item.enabled;
+        c.look.foreground = color(&item.fg);
+        c.look.background = color(&item.bg);
         c.published = kind.map(|kind| PubRef {
             context: ctx.id,
             item: item.id.clone(),
@@ -394,6 +398,7 @@ fn push(
             gestures: item.gestures.clone(),
             priority: group.map_or(item.priority, |g| g.priority),
             unit: group.map_or(&item.id, |g| &g.id).clone(),
+            pass_through: false,
         });
         c
     };
@@ -469,7 +474,7 @@ fn push(
                 &item.id,
             );
             if *indeterminate {
-                c.classes.push("indeterminate".into());
+                c.look.classes.push("indeterminate".into());
             }
             out.push(c);
         }
@@ -506,7 +511,7 @@ fn push(
                     false,
                     &format!("{}.{which}", item.id),
                 );
-                c.classes.push(format!("scrubber-{which}"));
+                c.look.classes.push(format!("scrubber-{which}"));
                 c
             };
             if offset > 0 {
@@ -532,7 +537,7 @@ fn push(
                     *selected == i as i32,
                     &format!("{}.{i}", item.id),
                 );
-                c.classes.push("scrubber-candidate".into());
+                c.look.classes.push("scrubber-candidate".into());
                 out.push(c);
             }
             if offset < max {

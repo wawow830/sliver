@@ -129,25 +129,25 @@ pub(super) fn pct(v: Option<u8>) -> Option<f64> {
 
 /// Which item of a module that shows several ([`items`]) a cell is.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Item {
+pub(super) enum Part {
     /// The `n`th of what the module lists (a workspace, a window, a kind of capture).
     Nth(usize),
     /// The taskbar's `n`th pinned app.
     Pin(usize),
 }
 
-impl Item {
+impl Part {
     pub(super) fn nth(self) -> Option<usize> {
         match self {
-            Item::Nth(i) => Some(i),
-            Item::Pin(_) => None,
+            Part::Nth(i) => Some(i),
+            Part::Pin(_) => None,
         }
     }
 }
 
 /// The items of a module that shows several, each with its key suffix; `None` for a module that
 /// is one cell.
-pub(super) fn items(m: &ModuleInstance, world: &World) -> Option<Vec<(String, Item)>> {
+pub(super) fn items(m: &ModuleInstance, world: &World) -> Option<Vec<(String, Part)>> {
     Some(match m.id.kind.as_str() {
         // One per kind in use (screen, camera, microphone), nothing while idle.
         "privacy" => world
@@ -156,11 +156,11 @@ pub(super) fn items(m: &ModuleInstance, world: &World) -> Option<Vec<(String, It
             .kinds()
             .into_iter()
             .enumerate()
-            .map(|(i, (kind, _))| (kind.to_owned(), Item::Nth(i)))
+            .map(|(i, (kind, _))| (kind.to_owned(), Part::Nth(i)))
             .collect(),
         "workspaces" => listed(m, world)
             .into_iter()
-            .map(|i| (world.desktop.workspaces[i].id.to_string(), Item::Nth(i)))
+            .map(|i| (world.desktop.workspaces[i].id.to_string(), Part::Nth(i)))
             .collect(),
         "taskbar" => desktop::taskbar_items(m, world),
         _ => return None,
@@ -174,7 +174,7 @@ pub(super) struct At<'a> {
     pub(super) key: &'a str,
     pub(super) world: &'a World,
     pub(super) ui: &'a UiState,
-    pub(super) item: Option<Item>,
+    pub(super) item: Option<Part>,
 }
 
 /// The module's spec for this world, or `None` to hide it (no data, nothing to show).
@@ -413,13 +413,13 @@ pub(super) fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
         m.css_id.clone(),
         content,
     );
-    cell.classes = classes;
-    cell.width = width(c.width);
+    cell.look.classes = classes;
+    cell.look.width = width(c.width);
     cell.touch = touch;
     cell.on = on;
     cell.next_change = next_change;
-    cell.checked = sp.checked;
-    cell.spectrum = spectrum(m, world);
+    cell.look.checked = sp.checked;
+    cell.look.spectrum = spectrum(m, world);
     // A collapsed slider opens like a drawer handle and closes on its own.
     cell.drawer = collapsed.then(|| Drawer {
         group: key,

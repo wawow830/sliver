@@ -86,8 +86,8 @@ pub fn menu_cells(
 ) -> Vec<Cell> {
     let cell = |key: &str, content: Content, width: Width, class: &str, tap: Act| {
         let mut c = Cell::new(key, "menu", "menu", "menu", content).tapped(tap);
-        c.classes = vec![class.to_owned()];
-        c.width = width;
+        c.look.classes = vec![class.to_owned()];
+        c.look.width = width;
         c
     };
     let x = icons

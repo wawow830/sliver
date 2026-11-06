@@ -472,7 +472,7 @@ fn locked_screen_shows_nothing_private() {
             .unwrap()
             .cells
             .iter()
-            .map(|c| format!("{} {:?}", c.kind, c.content))
+            .map(|c| format!("{} {:?}", c.kind, c.look.content))
             .collect::<Vec<_>>()
             .join(" | ")
     };
@@ -555,21 +555,22 @@ fn session_modules() {
     let cells = &a.frame(Layer::Base).unwrap().cells;
     let battery = cells.iter().find(|c| c.kind == "battery").unwrap();
     assert!(
-        battery.classes.contains(&"warning".to_string()),
+        battery.look.classes.contains(&"warning".to_string()),
         "{:?}",
-        battery.classes
+        battery.look.classes
     );
     let mpris = cells.iter().find(|c| c.kind == "mpris").unwrap();
     assert!(
-        matches!(&mpris.content, sliver_render::Content::Label { text: t, .. } if t == "⏸ Song &amp; Dance"),
+        matches!(&mpris.look.content, sliver_render::Content::Label { text: t, .. } if t == "⏸ Song &amp; Dance"),
         "{:?}",
-        mpris.content
+        mpris.look.content
     );
     assert!(
         cells
             .iter()
             .find(|c| c.kind == "idle-inhibitor")
             .unwrap()
+            .look
             .checked
     );
 
@@ -779,7 +780,7 @@ fn press_and_slide_a_collapsed_slider() {
     );
     // The knob shows the finger's value at once, before the system reports it, and the
     // system's again once it has.
-    let value = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[i].content {
+    let value = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[i].look.content {
         sliver_render::Content::Slider { value, .. } => *value,
         c => panic!("{c:?}"),
     };
@@ -934,7 +935,7 @@ fn runtime_layout_visibility_and_pushed_output() {
         .unwrap()
         .cells
         .iter()
-        .map(|c| format!("{:?}", c.content))
+        .map(|c| format!("{:?}", c.look.content))
         .collect();
     assert!(texts[0].contains("[pushed]"), "{texts:?}");
 
@@ -1067,9 +1068,9 @@ fn a_menu_entry_acts_on_the_button_that_opened_it() {
         ]
     );
     assert!(
-        matches!(&cells[3].content, sliver_render::Content::Label { text: t, .. } if t == "Close kitty"),
+        matches!(&cells[3].look.content, sliver_render::Content::Label { text: t, .. } if t == "Close kitty"),
         "{:?}",
-        cells[3].content
+        cells[3].look.content
     );
     let x = rect(&a, "menu/close");
     assert!(
@@ -1114,7 +1115,7 @@ fn timer_counts_down_and_notifies() {
         "[[layouts.default.zones]]\nname = \"main\"\nwidth = \"fill\"\nmodules = [\"timer\"]\n[modules.timer]\nduration = \"1s\"\n",
     );
     let w = world(9, 41);
-    let text = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
+    let text = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].look.content {
         sliver_render::Content::Label { text: t, .. } => t.clone(),
         other => format!("{other:?}"),
     };
@@ -1129,7 +1130,10 @@ fn timer_counts_down_and_notifies() {
     };
     tap(&mut a, 1_000);
     a.render(&w);
-    assert!(a.frame(Layer::Base).unwrap().cells[0].checked, "running");
+    assert!(
+        a.frame(Layer::Base).unwrap().cells[0].look.checked,
+        "running"
+    );
     assert!(
         a.frame(Layer::Base).unwrap().cells[0].next_change.is_some(),
         "ticks every second while running"
@@ -1153,7 +1157,7 @@ fn timer_counts_down_and_notifies() {
     tap(&mut a, 5_000_000);
     a.render(&w);
     assert_eq!(text(&a), "00:01");
-    assert!(!a.frame(Layer::Base).unwrap().cells[0].checked);
+    assert!(!a.frame(Layer::Base).unwrap().cells[0].look.checked);
 }
 
 /// The emoji picker: the `emoji` layer shows tabs, a page of emoji and ✕; tapping one types it
@@ -1181,7 +1185,7 @@ fn emoji_picker_types_pages_and_closes() {
             .unwrap()
             .cells
             .iter()
-            .map(|c| match &c.content {
+            .map(|c| match &c.look.content {
                 sliver_render::Content::Label { text: t, .. } => t.clone(),
                 other => format!("{other:?}"),
             })
@@ -1268,7 +1272,7 @@ fn emoji_search_on_the_bar() {
     };
     let text = |a: &Agent, key: &str| {
         let f = a.frame(Layer::Base).unwrap();
-        match &f.cells.iter().find(|c| c.key == key).unwrap().content {
+        match &f.cells.iter().find(|c| c.key == key).unwrap().look.content {
             sliver_render::Content::Label { text: t, .. } => t.clone(),
             other => format!("{other:?}"),
         }
@@ -1343,7 +1347,7 @@ fn emoji_skin_tones() {
             .cells
             .iter()
             .filter(|c| c.key.starts_with("emoji#strip/"))
-            .map(|c| match &c.content {
+            .map(|c| match &c.look.content {
                 sliver_render::Content::Label { text: t, .. } => t.clone(),
                 other => format!("{other:?}"),
             })
@@ -1662,7 +1666,7 @@ fn language_follows_fcitx5_toggles_and_picks() {
         group: vec![us.clone(), pinyin.clone()],
     });
     a.render(&w);
-    let text = |a: &Agent| match a.frame(Layer::Base).unwrap().cells[0].content.clone() {
+    let text = |a: &Agent| match a.frame(Layer::Base).unwrap().cells[0].look.content.clone() {
         sliver_render::Content::Label { text: t, .. } => t,
         other => format!("{other:?}"),
     };
@@ -1819,7 +1823,7 @@ fn privacy_shows_one_cell_per_capture_kind() {
             .iter()
             .filter(|c| c.id.starts_with("privacy"))
             .map(|c| {
-                let text = match &c.content {
+                let text = match &c.look.content {
                     sliver_render::Content::Label { text: t, .. } => Some(t.clone()),
                     _ => None,
                 };
@@ -1869,7 +1873,7 @@ fn now_playing_position_and_length() {
     let mut a = agent(
         "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"mpris\"]\n[modules.mpris]\nformat = \"{position} / {length}\"\nart = false\n",
     );
-    let text = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
+    let text = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].look.content {
         sliver_render::Content::Label { text: t, .. } => t.clone(),
         other => panic!("{other:?}"),
     };
@@ -1908,7 +1912,7 @@ fn now_playing_art_player_picker_and_scrub() {
     );
     w.media_art = Some(std::path::PathBuf::from(&art));
     a.render(&w);
-    let content = |a: &Agent| a.frame(Layer::Base).unwrap().cells[0].content.clone();
+    let content = |a: &Agent| a.frame(Layer::Base).unwrap().cells[0].look.content.clone();
     assert!(
         matches!(content(&a), sliver_render::Content::Label { text: t, .. } if t == "Song One"),
         "art icon + title: {:?}",
@@ -1943,7 +1947,7 @@ fn now_playing_art_player_picker_and_scrub() {
     w.session.players = vec![one];
     a.render(&w);
     let f = a.frame(Layer::Base).unwrap();
-    let sliderv = match &f.cells[0].content {
+    let sliderv = match &f.cells[0].look.content {
         sliver_render::Content::Slider { value, .. } => *value,
         other => panic!("scrub renders a slider: {other:?}"),
     };
@@ -1978,7 +1982,7 @@ fn notifications_show_latest_open_and_dismiss() {
         summary: "Lunch at 12? <b>".into(),
     });
     a.render(&w);
-    let text = match &a.frame(Layer::Base).unwrap().cells[0].content {
+    let text = match &a.frame(Layer::Base).unwrap().cells[0].look.content {
         sliver_render::Content::Label { text: t, .. } => t.clone(),
         other => format!("{other:?}"),
     };
@@ -2330,13 +2334,13 @@ fn image_module() {
     let ids: Vec<&str> = f.cells.iter().map(|c| c.id.as_str()).collect();
     // No file, and a script that hasn't printed yet: hidden.
     assert_eq!(ids, ["image#wide", "image#big", "clock"]);
-    assert!(matches!(f.cells[0].content, Content::Image(_)));
+    assert!(matches!(f.cells[0].look.content, Content::Image(_)));
     // 2:1, as tall as the item's content box.
     let r = f.layout.items[0];
     assert!(r.w > r.h, "a 2:1 picture is wider than tall: {r:?}");
     // The big photo is kept small (120 px tall at most), not 1600x1600.
-    let Content::Image(icon) = &f.cells[1].content else {
-        panic!("{:?}", f.cells[1].content)
+    let Content::Image(icon) = &f.cells[1].look.content else {
+        panic!("{:?}", f.cells[1].look.content)
     };
     assert_eq!(icon.size(), (120.0, 120.0));
     check("image-module", &f.image);
@@ -2363,7 +2367,7 @@ fn image_module() {
     std::thread::sleep(std::time::Duration::from_millis(20));
     picture("image-wide.png", 100, 100, [10, 200, 10]);
     a.render(&w);
-    let Content::Image(icon) = &a.frame(Layer::Base).unwrap().cells[0].content else {
+    let Content::Image(icon) = &a.frame(Layer::Base).unwrap().cells[0].look.content else {
         panic!()
     };
     assert_eq!(
@@ -2430,7 +2434,7 @@ fn graph_module() {
             .unwrap()
             .cells
             .iter()
-            .filter_map(|c| match &c.content {
+            .filter_map(|c| match &c.look.content {
                 Content::Graph { values, capacity } => {
                     Some((c.id.clone(), values.clone(), *capacity))
                 }
@@ -2505,7 +2509,7 @@ source = "evil\n[output]"
 noise_reduction = 0.5
 "#,
     );
-    let bars = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].content {
+    let bars = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].look.content {
         Content::Bars(l) => l.clone(),
         other => panic!("{other:?}"),
     };
@@ -2605,11 +2609,11 @@ bars = 3
     let levels = |a: &Agent| {
         let c = &a.frame(Layer::Base).unwrap().cells[0];
         assert!(
-            matches!(c.content, Content::Slider { .. }),
+            matches!(c.look.content, Content::Slider { .. }),
             "{:?}",
-            c.content
+            c.look.content
         );
-        c.spectrum.clone()
+        c.look.spectrum.clone()
     };
     let mut w = session_world();
     a.render(&w);
@@ -2627,6 +2631,6 @@ bars = 3
     );
     a.render(&w);
     let c = &a.frame(Layer::Base).unwrap().cells[0];
-    assert_eq!(c.spectrum, [0.2, 0.4, 0.6], "under a button's label");
+    assert_eq!(c.look.spectrum, [0.2, 0.4, 0.6], "under a button's label");
     assert!(a.spectrum_config().is_some());
 }

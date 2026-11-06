@@ -54,12 +54,12 @@ pub(super) fn emoji_strip(
     let bare = |k: String, text: &str, w: f32, classes: &[&str], on: Vec<(Gesture, Do)>| {
         let content = Content::text(text);
         let mut c = Cell::new(k, m.id.to_string(), "emoji", m.css_id.clone(), content);
-        c.classes = classes
+        c.look.classes = classes
             .iter()
             .map(|c| c.to_string())
             .chain(m.classes.iter().cloned())
             .collect();
-        c.width = Width::Fixed(w);
+        c.look.width = Width::Fixed(w);
         c.touch = Touch::Agent;
         c.on = on;
         c
@@ -82,7 +82,7 @@ pub(super) fn emoji_strip(
             &["emoji-tab"],
             vec![(Gesture::Tap, act(EmojiOp::Tab(t)))],
         );
-        c.checked = t == tab;
+        c.look.checked = t == tab;
         out.push(c);
     }
     out.push(bare(

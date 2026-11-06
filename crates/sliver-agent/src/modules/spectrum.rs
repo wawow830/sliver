@@ -129,7 +129,7 @@ pub(super) fn spectrum(m: &ModuleInstance, world: &World) -> Vec<f32> {
 
 /// Does this cell show the spectrum (a `cava` module, or any with `spectrum = true`)?
 pub fn shows_spectrum(c: &Cell) -> bool {
-    c.kind == "cava" || !c.spectrum.is_empty()
+    c.kind == "cava" || !c.look.spectrum.is_empty()
 }
 
 /// The value a `graph` plots now, scaled to 0..=1 by `min`/`max` (default 0 and 100): from its

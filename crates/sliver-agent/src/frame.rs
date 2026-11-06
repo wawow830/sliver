@@ -3,7 +3,7 @@
 
 use sliver_config::{Align as CAlign, ResolvedZone, Width as CWidth};
 use sliver_ipc::proto::{Rect as IpcRect, Region, RegionKind};
-use sliver_render::{Align, Item, Layout, Pixmap, Renderer, Scene, Stylesheet, Width, Zone};
+use sliver_render::{Align, Layout, Pixmap, Renderer, Scene, Stylesheet, Width, Zone};
 
 use crate::modules::{Cell, Touch};
 
@@ -107,22 +107,7 @@ pub fn scene(zones: &[ResolvedZone], cells: &[Vec<Cell>], bar_classes: Vec<Strin
                 classes: z.class.clone(),
                 width: width(z.width),
                 align: align(z.align),
-                items: cs
-                    .iter()
-                    .map(|c| {
-                        let mut item = Item::new(c.content.clone())
-                            .width(c.width)
-                            .id(c.css_id.clone())
-                            .pressed(c.pressed)
-                            .checked(c.checked)
-                            .disabled(c.disabled);
-                        item.foreground = c.foreground;
-                        item.background = c.background;
-                        item.classes = c.classes.clone();
-                        item.spectrum = c.spectrum.clone();
-                        item
-                    })
-                    .collect(),
+                items: cs.iter().map(|c| c.look.clone()).collect(),
             })
             .collect(),
     }
@@ -204,8 +189,8 @@ impl Frame {
         let mut changed = false;
         for (item, cell) in self.scene.items_mut().zip(self.cells.iter_mut()) {
             let p = pressed(cell);
-            if cell.pressed != p {
-                cell.pressed = p;
+            if cell.look.pressed != p {
+                cell.look.pressed = p;
                 item.pressed = p;
                 changed = true;
             }

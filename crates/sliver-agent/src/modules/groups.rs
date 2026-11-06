@@ -131,7 +131,7 @@ pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mu
             collapse_after,
             opens: if bar { Opens::SubBar } else { Opens::Inline },
         });
-        handle.checked = open;
+        handle.look.checked = open;
         if handle.touch == Touch::None {
             handle.touch = Touch::Agent;
         }
@@ -143,10 +143,11 @@ pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mu
             .to_owned()
     });
     for c in &mut out[start..] {
-        c.classes
+        c.look
+            .classes
             .push(format!("group-{}", m.id.name.as_deref().unwrap_or("")));
         if let Some(class) = &child_class {
-            c.classes.push(class.clone());
+            c.look.classes.push(class.clone());
         }
     }
 }

@@ -146,9 +146,10 @@ impl Agent {
                 // how far the finger slid, so touching it never jumps the value.
                 let f = self.frame_for(region).expect("cell came from a frame");
                 let i = f.cell_index(region).expect("cell came from a frame");
-                let (Some(t), sliver_render::Content::Slider { value, .. }) =
-                    (f.layout.tracks.get(i).copied().flatten(), &cell.content)
-                else {
+                let (Some(t), sliver_render::Content::Slider { value, .. }) = (
+                    f.layout.tracks.get(i).copied().flatten(),
+                    &cell.look.content,
+                ) else {
                     return; // Not open (yet): nothing to slide.
                 };
                 if t.w <= 0.0 {
@@ -420,7 +421,7 @@ impl Agent {
 /// A slider shown as just its icon until opened (`collapsed = true`).
 pub(super) fn collapsed_slider(c: &Cell) -> bool {
     c.drawer.as_ref().is_some_and(|d| d.opens == Opens::Slider)
-        && !matches!(c.content, sliver_render::Content::Slider { .. })
+        && !matches!(c.look.content, sliver_render::Content::Slider { .. })
 }
 
 /// What the recognizer should look for on this cell.

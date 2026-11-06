@@ -574,9 +574,9 @@ impl Agent {
                     }
                 };
                 for c in &mut cells {
-                    c.pressed = self.pressed.contains(&c.key);
+                    c.look.pressed = self.pressed.contains(&c.key);
                     if let (Some(&(v, up)), sliver_render::Content::Slider { value, .. }) =
-                        (self.under_finger.get(&c.key), &mut c.content)
+                        (self.under_finger.get(&c.key), &mut c.look.content)
                     {
                         let caught_up = (*value - v).abs() < 0.015;
                         let gone = |t: u64| world.now.mono_us.saturating_sub(t) > HELD_GRACE_US;
@@ -672,13 +672,13 @@ impl Agent {
         classes: &[String],
     ) {
         use sliver_render::Width;
-        let is_px_spacer = |c: &Cell| c.kind == "slot" && matches!(c.width, Width::Fixed(_));
+        let is_px_spacer = |c: &Cell| c.kind == "slot" && matches!(c.look.width, Width::Fixed(_));
         // The slots' sizes, then measure with their spacers at zero.
         let mut want: HashMap<String, f32> = HashMap::new();
         for c in per_zone.iter_mut().flatten().filter(|c| is_px_spacer(c)) {
-            if let (Width::Fixed(w), Some(s)) = (c.width, &c.slot) {
+            if let (Width::Fixed(w), Some(s)) = (c.look.width, &c.slot) {
                 want.insert(s.clone(), w);
-                c.width = Width::Fixed(0.0);
+                c.look.width = Width::Fixed(0.0);
             }
         }
         if want.is_empty() {
@@ -712,7 +712,7 @@ impl Agent {
             }
             let Some(slot) = too_big else {
                 for (zi, ci, rest) in sizes {
-                    per_zone[zi][ci].width = Width::Fixed(rest.floor());
+                    per_zone[zi][ci].look.width = Width::Fixed(rest.floor());
                 }
                 return;
             };

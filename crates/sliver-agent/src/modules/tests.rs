@@ -33,9 +33,9 @@ fn fkeys_are_key_regions() {
     let cells = build("", "fn");
     assert_eq!(cells.len(), 12, "Esc is hidden with a physical Esc");
     assert_eq!(cells[0].touch, Touch::Keys(vec![59]));
-    assert!(matches!(&cells[0].content, Content::Label { text: t, .. } if t == "F1"));
-    assert_eq!(cells[0].css_id, "key-f1");
-    assert_eq!(cells[0].width, Width::Fill(1));
+    assert!(matches!(&cells[0].look.content, Content::Label { text: t, .. } if t == "F1"));
+    assert_eq!(cells[0].look.id.as_deref(), Some("key-f1"));
+    assert_eq!(cells[0].look.width, Width::Fill(1));
 }
 
 fn stat_cells(toml: &str, w: &World) -> Vec<Cell> {
@@ -94,7 +94,7 @@ fn clock_time_zones_and_locale() {
             &mut out,
         );
         out.iter()
-            .map(|c| match &c.content {
+            .map(|c| match &c.look.content {
                 Content::Label { text: t, .. } => t.clone(),
                 other => panic!("{other:?}"),
             })
@@ -146,7 +146,7 @@ fn window_title_rewrite() {
         "#,
         &w,
     );
-    let text = |c: &Cell| match &c.content {
+    let text = |c: &Cell| match &c.look.content {
         Content::Label { text: t, .. } => t.clone(),
         other => panic!("{other:?}"),
     };
@@ -197,7 +197,7 @@ fn stats_modules_read_files_and_schedule_their_own_refresh() {
         "#,
         &w,
     );
-    let text = |c: &Cell| match &c.content {
+    let text = |c: &Cell| match &c.look.content {
         Content::Label { text: t, .. } => t.clone(),
         other => panic!("{other:?}"),
     };
@@ -205,11 +205,11 @@ fn stats_modules_read_files_and_schedule_their_own_refresh() {
     assert_eq!(text(&cells[1]), "12/16G 75%");
     assert_eq!(text(&cells[2]), "L 1.5/1");
     assert_eq!(text(&cells[3]), "62°C");
-    assert!(!cells[3].classes.contains(&"critical".to_string()));
+    assert!(!cells[3].look.classes.contains(&"critical".to_string()));
     assert!(
-        cells[4].classes.contains(&"critical".to_string()),
+        cells[4].look.classes.contains(&"critical".to_string()),
         "61.5 >= 60: {:?}",
-        cells[4].classes
+        cells[4].look.classes
     );
     assert!(text(&cells[5]).ends_with('%'));
     // refresh: the module's interval, else its default; the clock-like wake-up the loop uses
@@ -245,7 +245,7 @@ fn network_bandwidth_and_cpu_sparkline() {
     w.session.network.state = sliver_session::network::NetState::Connected;
     w.session.network.kind = sliver_session::network::NetKind::Ethernet;
     w.session.network.iface = Some("eth0".into());
-    let text = |c: &Cell| match &c.content {
+    let text = |c: &Cell| match &c.look.content {
         Content::Label { text: t, .. } => t.clone(),
         other => panic!("{other:?}"),
     };
@@ -318,7 +318,7 @@ fn workspaces_and_taskbar_follow_the_compositor_lists() {
         "#,
         &w,
     );
-    let text = |c: &Cell| match &c.content {
+    let text = |c: &Cell| match &c.look.content {
         Content::Label { text: t, .. } => t.clone(),
         other => format!("{other:?}"),
     };
@@ -328,8 +328,8 @@ fn workspaces_and_taskbar_follow_the_compositor_lists() {
         ["1:1", "web:2", "3:0"],
         "other output hidden"
     );
-    assert!(wsc[1].checked && wsc[1].classes.contains(&"active".to_string()));
-    assert!(wsc[2].classes.contains(&"empty".to_string()));
+    assert!(wsc[1].look.checked && wsc[1].look.classes.contains(&"active".to_string()));
+    assert!(wsc[2].look.classes.contains(&"empty".to_string()));
     assert_eq!(wsc[0].touch, Touch::Agent);
     assert_eq!(wsc[1].key, "workspaces/2");
     assert!(matches!(
@@ -338,8 +338,8 @@ fn workspaces_and_taskbar_follow_the_compositor_lists() {
     ));
     let tb: Vec<&Cell> = cells.iter().filter(|c| c.kind == "taskbar").collect();
     assert_eq!(tb.len(), 2, "only the active workspace's windows");
-    assert!(tb[0].classes.contains(&"focused".to_string()) && tb[0].checked);
-    assert!(tb[1].classes.contains(&"urgent".to_string()));
+    assert!(tb[0].look.classes.contains(&"focused".to_string()) && tb[0].look.checked);
+    assert!(tb[1].look.classes.contains(&"urgent".to_string()));
     // no icon theme in tests: the app's first letters stand in
     assert_eq!(text(tb[0]), "fi");
     assert!(matches!(
@@ -368,23 +368,24 @@ fn notifications_and_dnd() {
         "dnd is hidden while the daemon doesn't report it"
     );
     assert!(
-        matches!(&c[0].content, Content::Label { text, .. } if text.is_empty()),
+        matches!(&c[0].look.content, Content::Label { text, .. } if text.is_empty()),
         "no text at zero: {:?}",
-        c[0].content
+        c[0].look.content
     );
     w.session.notifications.count = 3;
     w.session.notifications.dnd = Some(true);
     let c = stat_cells(toml, &w);
     assert_eq!(c.len(), 2);
     assert!(
-        matches!(&c[0].content, Content::Label { text: t, .. } if t == "3"),
+        matches!(&c[0].look.content, Content::Label { text: t, .. } if t == "3"),
         "{:?}",
-        c[0].content
+        c[0].look.content
     );
     assert!(
-        c[0].classes.contains(&"dnd".to_string()) && c[0].classes.contains(&"pending".to_string())
+        c[0].look.classes.contains(&"dnd".to_string())
+            && c[0].look.classes.contains(&"pending".to_string())
     );
-    assert!(c[1].checked);
+    assert!(c[1].look.checked);
 }
 
 #[test]
@@ -414,7 +415,7 @@ fn network_and_bluetooth_modules() {
     }];
     let c = stat_cells(toml, &w);
     assert_eq!(c.len(), 2);
-    let text = |c: &Cell| match &c.content {
+    let text = |c: &Cell| match &c.look.content {
         Content::Label { text: t, .. } => t.clone(),
         other => format!("{other:?}"),
     };
@@ -423,14 +424,14 @@ fn network_and_bluetooth_modules() {
         "Home &lt;5G&gt;",
         "an SSID cannot inject markup"
     );
-    assert!(c[0].classes.contains(&"wifi".to_string()));
+    assert!(c[0].look.classes.contains(&"wifi".to_string()));
     assert_eq!(text(&c[1]), "Buds");
-    assert!(c[1].checked && c[1].classes.contains(&"connected".to_string()));
+    assert!(c[1].look.checked && c[1].look.classes.contains(&"connected".to_string()));
     w.session.network.state = NetState::Disconnected;
     w.session.bluetooth.powered = false;
     let c = stat_cells(toml, &w);
-    assert!(c[0].classes.contains(&"disconnected".to_string()));
-    assert!(c[1].classes.contains(&"off".to_string()));
+    assert!(c[0].look.classes.contains(&"disconnected".to_string()));
+    assert!(c[1].look.classes.contains(&"off".to_string()));
 }
 
 #[test]
@@ -478,18 +479,19 @@ fn taskbar_pinned_apps() {
         "pinned first, running pinned app not repeated"
     );
     assert!(
-        cells[0].classes.contains(&"running".to_string())
-            && cells[0].classes.contains(&"focused".to_string())
+        cells[0].look.classes.contains(&"running".to_string())
+            && cells[0].look.classes.contains(&"focused".to_string())
             && cells[0]
+                .look
                 .classes
                 .contains(&"app-org-mozilla-firefox".to_string())
-            && cells[0].checked
+            && cells[0].look.checked
     );
     assert!(matches!(
         cells[0].binding(Gesture::Tap),
         Some(Do::Agent(Act::Desktop(sliver_desktop::control::Action::FocusWindow { address }))) if address == "b2"
     ));
-    assert!(cells[1].classes.contains(&"idle".to_string()));
+    assert!(cells[1].look.classes.contains(&"idle".to_string()));
     assert!(
         matches!(
             cells[1].binding(Gesture::Tap),
@@ -499,7 +501,7 @@ fn taskbar_pinned_apps() {
     );
     // `format-focused` labels only the app you're in, with its name (`{name}`): a pinned
     // app by its desktop entry, a window without one by its class.
-    let label = |c: &Cell| match &c.content {
+    let label = |c: &Cell| match &c.look.content {
         Content::Label { text: t, .. } => t.clone(),
         _ => String::new(),
     };
@@ -510,7 +512,7 @@ fn taskbar_pinned_apps() {
     assert_eq!(labels, ["Firefox", "ki", "mp"]);
     w.desktop.windows = vec![win("a1", "mpv", true), win("b2", "firefox", false)];
     let cells = stat_cells(conf, &w);
-    assert!(cells[2].classes.contains(&"focused".to_string()));
+    assert!(cells[2].look.classes.contains(&"focused".to_string()));
     let labels: Vec<String> = cells.iter().map(label).collect();
     assert_eq!(labels, ["Fi", "ki", "mpv"]);
     let _ = std::fs::remove_dir_all(&dir);
@@ -531,7 +533,7 @@ fn clock_formats_and_ticks() {
         "#,
         "base",
     );
-    assert!(matches!(&cells[0].content, Content::Label { text: t, .. } if t == "09:41"));
+    assert!(matches!(&cells[0].look.content, Content::Label { text: t, .. } if t == "09:41"));
     assert_eq!(
         cells[0].next_change.unwrap().format("%H:%M:%S").to_string(),
         "09:42:00"
@@ -540,7 +542,7 @@ fn clock_formats_and_ticks() {
         cells[1].next_change.unwrap().format("%H:%M:%S").to_string(),
         "09:41:08"
     );
-    assert_eq!(cells[1].classes, ["s"]);
+    assert_eq!(cells[1].look.classes, ["s"]);
     assert_eq!(cells[2].touch, Touch::Agent);
     assert_eq!(cells[0].touch, Touch::None);
 }
@@ -588,10 +590,10 @@ fn preview_shows_samples_and_placeholders() {
             "key/Mute"
         ],
     );
-    assert!(out[0].classes.contains(&"placeholder".to_string()));
+    assert!(out[0].look.classes.contains(&"placeholder".to_string()));
     // Collapsed by default: an icon that opens into a slider.
     let sliders = |c: &&Cell| {
-        matches!(c.content, Content::Slider { .. })
+        matches!(c.look.content, Content::Slider { .. })
             || c.drawer.as_ref().is_some_and(|d| d.opens == Opens::Slider)
     };
     assert_eq!(out.iter().filter(sliders).count(), 2);
@@ -624,12 +626,12 @@ fn slider_is_one_switch_for_every_module_with_a_level() {
     let taps = |c: &Cell| c.on.iter().any(|(g, _)| *g == Gesture::Tap);
     // Written as waybar's `audio/slider` or as `slider = true`: the same slider.
     for c in &out[..2] {
-        assert!(matches!(c.content, Content::Slider { .. }), "{}", c.id);
+        assert!(matches!(c.look.content, Content::Slider { .. }), "{}", c.id);
         assert!(drags(c) && !taps(c), "{}", c.id);
     }
     // Without it, the volume is a button whose tap mutes.
     assert!(taps(&out[2]) && !drags(&out[2]));
-    assert!(!matches!(out[2].content, Content::Slider { .. }));
+    assert!(!matches!(out[2].look.content, Content::Slider { .. }));
 }
 
 #[test]
@@ -656,7 +658,7 @@ fn graphs_preview_with_a_made_up_history() {
             &mut out,
         );
     }
-    match &out[0].content {
+    match &out[0].look.content {
         Content::Graph { values, capacity } => {
             assert_eq!((values.len(), *capacity), (20, 20));
             assert!(values.iter().all(|v| (0.0..=1.0).contains(v)));
@@ -690,8 +692,8 @@ fn pinned_app_placeholders_have_short_labels() {
     }
     let labels: Vec<String> = out
         .iter()
-        .filter(|c| c.classes.contains(&"placeholder".to_string()))
-        .map(|c| match &c.content {
+        .filter(|c| c.look.classes.contains(&"placeholder".to_string()))
+        .map(|c| match &c.look.content {
             Content::Label { text: t, .. } => t.clone(),
             other => format!("{other:?}"),
         })
@@ -732,7 +734,7 @@ fn systemd_failed_units() {
         }
         out
     };
-    let text = |c: &Cell| match &c.content {
+    let text = |c: &Cell| match &c.look.content {
         Content::Label { text: t, .. } => t.clone(),
         other => format!("{other:?}"),
     };
@@ -755,9 +757,9 @@ fn systemd_failed_units() {
     let ok = run("hide-on-ok = false", &none);
     assert_eq!(text(&ok[0]), "✓");
     assert!(
-        ok[0].classes.contains(&"ok".to_owned()),
+        ok[0].look.classes.contains(&"ok".to_owned()),
         "{:?}",
-        ok[0].classes
+        ok[0].look.classes
     );
 
     let some = FailedUnits {
@@ -767,7 +769,7 @@ fn systemd_failed_units() {
     };
     let c = run("", &some);
     assert_eq!(text(&c[0]), "2 failed");
-    assert!(c[0].classes.contains(&"degraded".to_owned()));
+    assert!(c[0].look.classes.contains(&"degraded".to_owned()));
     let Some(Do::Agent(Act::Menu { items, .. })) = c[0].binding(Gesture::Tap) else {
         panic!("a tap opens the menu: {:?}", c[0].on);
     };
@@ -819,9 +821,9 @@ fn placeholders_take_the_module_width() {
         );
     }
     let status = out.iter().find(|c| c.kind == "status-items").unwrap();
-    assert_eq!(status.width, Width::Fixed(332.0));
+    assert_eq!(status.look.width, Width::Fixed(332.0));
     let app = out.iter().find(|c| c.kind == "app-controls").unwrap();
-    assert_eq!(app.width, Width::Auto, "unset stays auto");
+    assert_eq!(app.look.width, Width::Auto, "unset stays auto");
 }
 
 #[test]
@@ -834,7 +836,7 @@ fn closed_drawer_shows_its_handle() {
         .collect();
     let keys: Vec<&str> = cells.iter().map(|c| c.key.as_str()).collect();
     assert_eq!(keys, ["group/control-strip/custom/expand", "key/Mute"]);
-    assert!(cells[0].classes.contains(&"drawer-child".to_string()));
+    assert!(cells[0].look.classes.contains(&"drawer-child".to_string()));
     let d = cells[0].drawer.as_ref().unwrap();
     assert_eq!(
         (d.group.as_str(), d.collapse_after),
@@ -844,7 +846,9 @@ fn closed_drawer_shows_its_handle() {
         )
     );
     assert_eq!(cells[0].touch, Touch::Agent, "the handle opens the drawer");
-    assert!(matches!(&cells[1].content, Content::Label { icon: Some(_), text } if text.is_empty()));
+    assert!(
+        matches!(&cells[1].look.content, Content::Label { icon: Some(_), text } if text.is_empty())
+    );
 }
 
 #[test]
@@ -890,8 +894,11 @@ fn drawer_options_class_direction_and_start() {
     );
     assert!(out[2].drawer.is_some(), "the leader is still the handle");
     assert!(out[0].drawer.is_none());
-    assert!(out.iter().all(|c| c.classes.contains(&"kid".to_string())
-        && !c.classes.contains(&"drawer-child".to_string())));
+    assert!(
+        out.iter()
+            .all(|c| c.look.classes.contains(&"kid".to_string())
+                && !c.look.classes.contains(&"drawer-child".to_string()))
+    );
 }
 
 /// A user module's output is formatted like any module's: `format`, `format-alt`,
@@ -924,7 +931,7 @@ fn user_module_output_is_formatted_like_any_module() {
         );
         out.into_iter().next()
     };
-    let text = |c: &Cell| c.content.label_text().unwrap_or_default().to_owned();
+    let text = |c: &Cell| c.look.content.label_text().unwrap_or_default().to_owned();
     let plain = sliver_modules::Output {
         text: "hi".into(),
         ..Default::default()
@@ -941,7 +948,7 @@ fn user_module_output_is_formatted_like_any_module() {
     };
     let c = cell(block, busy.clone(), false).unwrap();
     assert_eq!(text(&c), "c cpu 95%");
-    assert!(c.classes.contains(&"mine".into()) && c.classes.contains(&"critical".into()));
+    assert!(c.look.classes.contains(&"mine".into()) && c.look.classes.contains(&"critical".into()));
     assert_eq!(text(&cell(block, busy, true).unwrap()), "busy!");
 
     let empty = sliver_modules::Output::default();

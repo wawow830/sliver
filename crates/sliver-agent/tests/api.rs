@@ -208,9 +208,9 @@ fn published_items_end_to_end() {
         .find(|c| c.key.ends_with("#bold"))
         .expect("toggle drawn");
     assert!(
-        bold.checked && bold.classes.contains(&"focused-app".to_string()),
+        bold.look.checked && bold.look.classes.contains(&"focused-app".to_string()),
         "{:?}",
-        bold.classes
+        bold.look.classes
     );
 
     // Tap "Run": the app gets a tap event, unicast.
@@ -377,7 +377,7 @@ fn modal_context_covers_the_bar_and_closes() {
     check("api-modal", &f.image);
     let keys: Vec<&str> = f.cells.iter().map(|c| c.key.as_str()).collect();
     assert_eq!(keys.len(), 4, "3 segments + close, nothing else: {keys:?}");
-    assert!(f.cells[1].checked, "selected segment");
+    assert!(f.cells[1].look.checked, "selected segment");
 
     // Tap the ✕ (simulated): the app is told, and the context stops being shown.
     let close = f
@@ -505,11 +505,11 @@ fn scrubber_scrolls_and_picks() {
             .iter()
             .filter(|c| !c.key.ends_with("#close"))
             .map(|c| {
-                let t = match &c.content {
+                let t = match &c.look.content {
                     sliver_render::Content::Label { text: t, .. } => t.clone(),
                     other => format!("{other:?}"),
                 };
-                if c.checked { format!("[{t}]") } else { t }
+                if c.look.checked { format!("[{t}]") } else { t }
             })
             .collect::<Vec<_>>()
     };
@@ -720,6 +720,7 @@ fn popover_opens_and_closes() {
     let f = a.frame(Layer::Base).unwrap();
     assert!(
         f.cells[f.cells.len() - 1]
+            .look
             .classes
             .contains(&"popover-close".to_owned())
     );
@@ -882,11 +883,12 @@ fn priority_overflow_width_svg_and_indeterminate() {
         f.layout.items[at("capped")]
     );
     assert!(matches!(
-        &f.cells[at("logo")].content,
+        &f.cells[at("logo")].look.content,
         sliver_render::Content::Label { icon: Some(_), text } if text.is_empty()
     ));
     assert!(
         f.cells[at("busy")]
+            .look
             .classes
             .contains(&"indeterminate".to_owned())
     );
@@ -1133,7 +1135,7 @@ format = "⏭ {{text}}"
         .iter()
         .filter(|c| c.published.is_some())
         .map(|c| {
-            let t = match &c.content {
+            let t = match &c.look.content {
                 sliver_render::Content::Label { text: t, .. } => t.clone(),
                 other => format!("{other:?}"),
             };
@@ -1156,7 +1158,7 @@ format = "⏭ {{text}}"
         .iter()
         .position(|c| c.id.ends_with("#timer"))
         .unwrap()];
-    assert!(timer.classes.contains(&"pomo".to_owned()));
+    assert!(timer.look.classes.contains(&"pomo".to_owned()));
 
     // A tap still reaches the app; the user's on-hold replaces the app's hold.
     let r = f
@@ -1286,17 +1288,17 @@ fn published_image_item() {
         (&f.cells[i], f.layout.items[i])
     };
     let (cover, r) = cell("#cover");
-    let sliver_render::Content::Image(icon) = &cover.content else {
-        panic!("{:?}", cover.content)
+    let sliver_render::Content::Image(icon) = &cover.look.content else {
+        panic!("{:?}", cover.look.content)
     };
     assert_eq!(icon.size(), (240.0, 120.0), "kept at most 120 px tall");
     assert!(r.w > 1.5 * r.h, "2:1 picture: {r:?}");
     assert!(cover.published.is_some(), "taps reach the app");
     let (nopic, _) = cell("#nopic");
     assert!(
-        matches!(&nopic.content, sliver_render::Content::Label { text: t, .. } if t == "No art"),
+        matches!(&nopic.look.content, sliver_render::Content::Label { text: t, .. } if t == "No art"),
         "{:?}",
-        nopic.content
+        nopic.look.content
     );
 }
 

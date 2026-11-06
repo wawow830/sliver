@@ -152,7 +152,7 @@ fn main() {
                 // What's on it, for config debugging.
                 for (c, r) in f.cells.iter().zip(&f.layout.items) {
                     use sliver_render::Content as C;
-                    let content = match &c.content {
+                    let content = match &c.look.content {
                         C::Label { icon, text } => match (icon.is_some(), text.is_empty()) {
                             (false, false) => text.clone(),
                             (true, false) => format!("[icon] {text}"),
@@ -163,10 +163,13 @@ fn main() {
                         C::Spacer => "[spacer]".into(),
                         _ => "[blank]".into(),
                     };
-                    let classes: String = c.classes.iter().map(|k| format!(".{k}")).collect();
+                    let classes: String = c.look.classes.iter().map(|k| format!(".{k}")).collect();
                     println!(
                         "  {:>5}+{:<4} {:<34} #{}{classes}  {content}",
-                        r.x, r.w, c.key, c.css_id
+                        r.x,
+                        r.w,
+                        c.key,
+                        c.look.id.as_deref().unwrap_or_default()
                     );
                 }
             }

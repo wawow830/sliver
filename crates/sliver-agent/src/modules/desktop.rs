@@ -90,7 +90,7 @@ pub(super) fn mode(world: &World) -> Option<Spec> {
     Some(Spec::new(ValueMap::new().with("", esc(submap)), "{}"))
 }
 
-pub(super) fn workspaces(world: &World, item: Option<Item>) -> Option<Spec> {
+pub(super) fn workspaces(world: &World, item: Option<Part>) -> Option<Spec> {
     let ws = world.desktop.workspaces.get(item?.nth()?)?;
     let status = if ws.urgent {
         "urgent"
@@ -113,10 +113,10 @@ pub(super) fn workspaces(world: &World, item: Option<Item>) -> Option<Spec> {
     Some(sp)
 }
 
-pub(super) fn taskbar(m: &ModuleInstance, world: &World, item: Option<Item>) -> Option<Spec> {
+pub(super) fn taskbar(m: &ModuleInstance, world: &World, item: Option<Part>) -> Option<Spec> {
     let i = match item? {
-        Item::Pin(p) => return pinned(m, world, p),
-        Item::Nth(i) => i,
+        Part::Pin(p) => return pinned(m, world, p),
+        Part::Nth(i) => i,
     };
     let w = world.desktop.windows.get(i)?;
     let entry = world.apps.find_by_app_id(&w.class);
@@ -253,7 +253,7 @@ fn pinned(m: &ModuleInstance, world: &World, p: usize) -> Option<Spec> {
 
 /// A taskbar's items: its pinned apps first (launchers, or the running app's window), then the
 /// other windows it lists.
-pub(super) fn taskbar_items(m: &ModuleInstance, world: &World) -> Vec<(String, Item)> {
+pub(super) fn taskbar_items(m: &ModuleInstance, world: &World) -> Vec<(String, Part)> {
     let pins = pinned_ids(m);
     let shown: Vec<usize> = pins
         .iter()
@@ -261,8 +261,8 @@ pub(super) fn taskbar_items(m: &ModuleInstance, world: &World) -> Vec<(String, I
         .collect();
     let windows = listed(m, world).into_iter().filter(|i| !shown.contains(i));
     (0..pins.len())
-        .map(|p| (format!("pin{p}"), Item::Pin(p)))
-        .chain(windows.map(|i| (world.desktop.windows[i].address.clone(), Item::Nth(i))))
+        .map(|p| (format!("pin{p}"), Part::Pin(p)))
+        .chain(windows.map(|i| (world.desktop.windows[i].address.clone(), Part::Nth(i))))
         .collect()
 }
 
