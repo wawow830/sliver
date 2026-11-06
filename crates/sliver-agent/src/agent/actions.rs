@@ -24,12 +24,11 @@ impl Agent {
         let c = &self.config;
         self.layers.retain(|l| c.layers.contains_key(l));
         if self
-            .layout_override
+            .forced
             .as_ref()
-            .is_some_and(|(_, l)| !c.layouts.contains_key(l))
+            .is_some_and(|f| !c.layouts.contains_key(&f.layout))
         {
-            self.layout_override = None;
-            self.held = None;
+            self.forced = None;
         }
     }
 
@@ -41,24 +40,32 @@ impl Agent {
     /// `Control1.SetLayout`: show `layout` on the current base layer until the next call (an
     /// empty name goes back to the rules).
     pub fn set_layout(&mut self, layout: &str) -> Result<(), String> {
-        self.held = None;
         if layout.is_empty() {
-            self.layout_override = None;
+            self.forced = None;
             return Ok(());
         }
         self.config
             .layout_zones(layout)
             .map_err(|e| e.to_string())?;
-        self.layout_override = Some((self.base_layer().to_owned(), layout.to_owned()));
+        self.forced = Some(Forced {
+            layer: self.base_layer().to_owned(),
+            layout: layout.to_owned(),
+            held: None,
+        });
         Ok(())
+    }
+
+    /// Whether a client holds the forced layout (`Some(true)`: select only).
+    pub(super) fn held(&self) -> Option<bool> {
+        self.forced.as_ref().and_then(|f| f.held)
     }
 
     /// `Control1.HoldLayout…` (Mirror): [`Agent::set_layout`], and every touch on it is reported
     /// as [`Effect::HeldPressed`]. With `select_only`, touching only selects (nothing fires).
     pub fn hold_layout(&mut self, layout: &str, select_only: bool) -> Result<(), String> {
         self.set_layout(layout)?;
-        if !layout.is_empty() {
-            self.held = Some(select_only);
+        if let Some(f) = &mut self.forced {
+            f.held = Some(select_only);
         }
         Ok(())
     }
@@ -66,10 +73,10 @@ impl Agent {
     /// Is `region` an item of the held layout as the bar shows it now (not another layout, a
     /// sub-bar, a popover or the Fn layer)?
     pub(super) fn on_held(&self, region: u32) -> bool {
-        self.held.is_some()
+        self.held().is_some()
             && region <= FN_REGION_BASE
             && self.overlay.is_none()
-            && self.layout_override.as_ref().map(|o| &o.1) == self.active.as_ref().map(|a| &a.0)
+            && self.forced.as_ref().map(|f| &f.layout) == self.active.as_ref().map(|a| &a.0)
     }
 
     /// What a touch on `region` selects in the held layout (`HeldPressed`): the cell's key, its
@@ -79,7 +86,7 @@ impl Agent {
         if !self.on_held(region) {
             return None;
         }
-        let (_, name) = self.layout_override.as_ref()?;
+        let name = &self.forced.as_ref()?.layout;
         let f = self.frames[0].as_ref()?;
         let i = f.cell_index(region)?;
         let center = |j: usize| f.layout.items.get(j).map(|r| r.x + r.w / 2.0);
@@ -110,7 +117,7 @@ impl Agent {
             .and_then(|i| self.config.rules.get(i))
             .and_then(|r| r.name.clone())
             .unwrap_or_default();
-        let source = match (&self.layout_override, rule) {
+        let source = match (&self.forced, rule) {
             (Some(_), _) => "forced",
             (None, Some(_)) => "rule",
             (None, None) => "default",
@@ -120,7 +127,7 @@ impl Agent {
 
     /// The layout forced by [`Agent::set_layout`], if any.
     pub fn layout_override(&self) -> Option<&str> {
-        self.layout_override.as_ref().map(|(_, n)| n.as_str())
+        self.forced.as_ref().map(|f| f.layout.as_str())
     }
 
     /// Runs an action that didn't come from a touch (D-Bus `Control1`, sliverctl).
@@ -229,18 +236,18 @@ impl Agent {
             if step > 0.0 {
                 v = (min + ((v - min) / step).round() * step).clamp(min, max);
             }
-            let phase = if self.pub_drag.contains_key(&region) {
+            let phase = if self.touches.pub_drag.contains_key(&region) {
                 Phase::Change
             } else {
                 Phase::Begin
             };
-            if self.pub_drag.insert(region, v) != Some(v) || phase == Phase::Begin {
+            if self.touches.pub_drag.insert(region, v) != Some(v) || phase == Phase::Begin {
                 send(I::Slider { value: v, phase }, fx);
             }
             return;
         }
         if g == Gesture::Release
-            && let Some(v) = self.pub_drag.remove(&region)
+            && let Some(v) = self.touches.pub_drag.remove(&region)
         {
             send(
                 I::Slider {

@@ -286,6 +286,22 @@ fn published_items_end_to_end() {
             "Slider { value: 150.0, phase: End }"
         ]
     );
+    // Touches cancelled mid-drag (the bar went dark): the app still hears the drag end.
+    let phases = |fx: &[Effect]| -> Vec<String> {
+        fx.iter()
+            .filter_map(|e| match e {
+                Effect::Api {
+                    what: sliver_api::registry::Interaction::Slider { phase, .. },
+                    ..
+                } => Some(format!("{phase:?}")),
+                _ => None,
+            })
+            .collect()
+    };
+    fake.touch(4, TouchPhase::Down, t.x + t.w * 0.5, 30.0)
+        .unwrap();
+    assert_eq!(phases(&deliver(&mut a, &mut link, &mut fake)), ["Begin"]);
+    assert_eq!(phases(&a.cancel_touches()), ["End"]);
     let mut kinds = Vec::new();
     while let Ok((item, kind, _)) = app_events.recv_timeout(Duration::from_millis(500)) {
         kinds.push(format!("{item}:{kind}"));

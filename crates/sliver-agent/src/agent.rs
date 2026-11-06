@@ -150,20 +150,14 @@ pub struct Agent {
     #[cfg(test)]
     panic_in_build: bool,
     base_depth: usize,
-    recognizer: Recognizer,
-    /// Cell keys being touched (agent regions).
-    pressed: HashSet<String>,
-    /// Layer opened by a `hold`-mode action, closed when that region is released.
-    hold_layer: Option<(u32, String)>,
-    /// A `oneshot` layer: closes after the next action from it.
-    oneshot: Option<String>,
+    /// The fingers on the bar, and what they're doing.
+    touches: Touches,
+    /// The top custom layer closes on its own: the layer, and when.
+    closes: Option<(String, Closes)>,
     /// Macro steps and drawer closings due at a monotonic time (µs).
     scheduled: Vec<(u64, Scheduled)>,
+    /// `on-drag` throttling by region: it outlives the touch, so the final value always runs.
     drag: HashMap<u32, DragState>,
-    /// Press-and-slide anchors per region: (finger x, slider value 0–100) when sliding began.
-    slide: HashMap<u32, (f32, f64)>,
-    /// Published sliders being dragged: last value sent, by region.
-    pub_drag: HashMap<u32, f64>,
     /// Problems resolving layers, for logging/status. Cleared on each render.
     pub errors: Vec<String>,
     /// `graph` modules' samples, by module id. Sampled in [`Agent::render`] while the bar is
@@ -182,11 +176,8 @@ pub struct Agent {
     pub hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
     pub hidden_modules: std::collections::BTreeSet<String>,
-    /// `sliverctl layout NAME`: the layer it was forced on, and the layout it shows there.
-    layout_override: Option<(String, String)>,
-    /// That override is held (`Control1.HoldLayout…`, Mirror to Touch Bar): touches on it go to
-    /// the holder as `HeldPressed`. `Some(true)`: select only, nothing fires.
-    held: Option<bool>,
+    /// A layout shown on a layer whatever the rules say (`sliverctl layout`, Mirror).
+    forced: Option<Forced>,
     /// What the base layer resolved to last: its layout and the rule (index) that picked it.
     active: Option<(String, Option<usize>)>,
     /// `sliverctl update MODULE …`: output pushed to exec-less custom modules.
@@ -200,6 +191,60 @@ struct Samples {
     values: std::collections::VecDeque<f32>,
     cap: usize,
     taken: Option<DateTime<Local>>,
+}
+
+/// The fingers on the bar: the gesture recognizer, the cells they press, and the sliders they
+/// slide or drag. All of it ends together when touches are cancelled (the display going off, the
+/// hatch, the bar changing under them).
+struct Touches {
+    recognizer: Recognizer,
+    /// Cell keys being touched (agent regions).
+    pressed: HashSet<String>,
+    /// Press-and-slide anchors per region: (finger x, slider value 0–100) when sliding began.
+    slide: HashMap<u32, (f32, f64)>,
+    /// Published sliders being dragged: the last value sent, by region.
+    pub_drag: HashMap<u32, f64>,
+}
+
+impl Touches {
+    /// Ends every touch (the recognizer keeps its bar gestures). Returns whether anything was
+    /// pressed, and the published sliders that were being dragged, with their last values.
+    fn end(&mut self) -> (bool, HashMap<u32, f64>) {
+        self.recognizer.cancel_all();
+        self.slide.clear();
+        let pressed = !std::mem::take(&mut self.pressed).is_empty();
+        (pressed, std::mem::take(&mut self.pub_drag))
+    }
+}
+
+impl Default for Touches {
+    fn default() -> Touches {
+        Touches {
+            recognizer: Recognizer::new(),
+            pressed: HashSet::new(),
+            slide: HashMap::new(),
+            pub_drag: HashMap::new(),
+        }
+    }
+}
+
+/// When a custom layer closes on its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Closes {
+    /// A `hold` layer: when the finger on this region lets go.
+    Release(u32),
+    /// A `oneshot` layer: after the next action taken from it.
+    NextAction,
+}
+
+/// A layout shown on a layer whatever the rules say (`Control1.SetLayout`).
+#[derive(Debug, Clone, PartialEq)]
+struct Forced {
+    layer: String,
+    layout: String,
+    /// Held by a client (`Control1.HoldLayout…`, Mirror to Touch Bar): touches on it go to the
+    /// holder as `HeldPressed`. `Some(true)`: select only, nothing fires.
+    held: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -255,18 +300,13 @@ impl Agent {
             #[cfg(test)]
             panic_in_build: false,
             base_depth: 0,
-            recognizer: Recognizer::new(),
-            pressed: HashSet::new(),
-            hold_layer: None,
-            oneshot: None,
+            touches: Touches::default(),
+            closes: None,
             scheduled: Vec::new(),
             drag: HashMap::new(),
-            slide: HashMap::new(),
-            pub_drag: HashMap::new(),
             hidden: false,
             hidden_modules: Default::default(),
-            layout_override: None,
-            held: None,
+            forced: None,
             active: None,
             pushed: HashMap::new(),
             errors: Vec::new(),
@@ -374,12 +414,14 @@ impl Agent {
         self.ctx = ctx;
         let bound = |g: crate::gesture::BarGesture| self.config.gestures.contains_key(g.name());
         use crate::gesture::BarGesture as BG;
-        self.recognizer.set_bar(crate::gesture::BarBindings {
-            two_finger: bound(BG::TwoFingerSwipeLeft) || bound(BG::TwoFingerSwipeRight),
-            edge_left: bound(BG::EdgeSwipeFromLeft),
-            edge_right: bound(BG::EdgeSwipeFromRight),
-            width: self.width as f32,
-        });
+        self.touches
+            .recognizer
+            .set_bar(crate::gesture::BarBindings {
+                two_finger: bound(BG::TwoFingerSwipeLeft) || bound(BG::TwoFingerSwipeRight),
+                edge_left: bound(BG::EdgeSwipeFromLeft),
+                edge_right: bound(BG::EdgeSwipeFromRight),
+                width: self.width as f32,
+            });
         // Locked: modules only ever see the sanitized world (lock-screen privacy).
         let sanitized;
         let world = if self.ctx.flag("locked") {
@@ -392,8 +434,8 @@ impl Agent {
         let mut out = Vec::new();
         let base = self.base_layer().to_owned();
         for (layer, name) in [(Layer::Base, base.as_str()), (Layer::Fn, "fn")] {
-            let resolved = match &self.layout_override {
-                Some((on, layout)) if on == name => self.config.resolve_as(name, layout, &self.ctx),
+            let resolved = match &self.forced {
+                Some(f) if f.layer == name => self.config.resolve_as(name, &f.layout, &self.ctx),
                 _ => self.config.resolve(name, &self.ctx),
             };
             match resolved {
@@ -574,7 +616,7 @@ impl Agent {
                     }
                 };
                 for c in &mut cells {
-                    c.look.pressed = self.pressed.contains(&c.key);
+                    c.look.pressed = self.touches.pressed.contains(&c.key);
                     if let (Some(&(v, up)), sliver_render::Content::Slider { value, .. }) =
                         (self.under_finger.get(&c.key), &mut c.look.content)
                     {
@@ -610,7 +652,7 @@ impl Agent {
         }
         // Mirror: every item of the held layout reports its touches (`HeldPressed`), so none
         // stays sliverd-only (keys then fire from the agent) or untouchable.
-        if self.held.is_some() && id_base == 0 {
+        if self.held().is_some() && id_base == 0 {
             for c in per_zone.iter_mut().flatten() {
                 c.touch = crate::modules::Touch::Agent;
             }
@@ -656,7 +698,7 @@ impl Agent {
             id_base,
             world.now.instant,
         );
-        if self.recognizer.bar_bound() {
+        if self.touches.recognizer.bar_bound() {
             f.fill_gaps();
         }
         f
@@ -743,7 +785,7 @@ impl Agent {
     pub fn render_press(&mut self, at: std::time::Instant) -> Vec<Layer> {
         // A touch ends a layer change at once: the press draws on the settled layer.
         self.layer_anim = None;
-        let pressed = &self.pressed;
+        let pressed = &self.touches.pressed;
         let is_pressed = |c: &Cell| pressed.contains(&c.key);
         let mut out = Vec::new();
         for (i, layer) in [Layer::Base, Layer::Fn].into_iter().enumerate() {
@@ -794,7 +836,8 @@ impl Agent {
             .values()
             .filter(|d| d.pending.is_some())
             .filter_map(|d| d.last_run.map(|t| t + DRAG_INTERVAL_US));
-        self.recognizer
+        self.touches
+            .recognizer
             .next_deadline()
             .into_iter()
             .chain(self.scheduled.iter().map(|s| s.0))
@@ -805,7 +848,7 @@ impl Agent {
     /// Runs whatever is due at `now` (monotonic µs).
     pub fn tick(&mut self, now: u64) -> Vec<Effect> {
         let mut fx = Vec::new();
-        for (region, g) in self.recognizer.tick(now) {
+        for (region, g) in self.touches.recognizer.tick(now) {
             self.dispatch(region, g, now, &mut fx);
         }
         let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.scheduled)

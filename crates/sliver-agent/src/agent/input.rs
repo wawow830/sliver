@@ -21,10 +21,15 @@ impl Agent {
             let background = self
                 .frame_for(region)
                 .is_some_and(|f| f.is_background(region));
-            if background && self.held != Some(true) {
-                let recognized =
-                    self.recognizer
-                        .touch(region, Bindings::default(), slot, phase, x, time_us);
+            if background && self.held() != Some(true) {
+                let recognized = self.touches.recognizer.touch(
+                    region,
+                    Bindings::default(),
+                    slot,
+                    phase,
+                    x,
+                    time_us,
+                );
                 for (r, g) in recognized {
                     self.gesture(r, g, time_us, &mut fx);
                 }
@@ -32,7 +37,7 @@ impl Agent {
             return fx;
         };
         // Mirror: the editor selects what was touched; select only fires nothing.
-        if let Some(select_only) = self.held
+        if let Some(select_only) = self.held()
             && self.on_held(region)
         {
             let key = cell.key.clone();
@@ -47,9 +52,9 @@ impl Agent {
             }
             if select_only {
                 let changed = if phase == TouchPhase::Down {
-                    self.pressed.insert(key)
+                    self.touches.pressed.insert(key)
                 } else if matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
-                    self.pressed.remove(&key)
+                    self.touches.pressed.remove(&key)
                 } else {
                     false
                 };
@@ -63,7 +68,11 @@ impl Agent {
             return fx;
         };
         let b = bindings(cell);
-        for (r, g) in self.recognizer.touch(region, b, slot, phase, x, time_us) {
+        for (r, g) in self
+            .touches
+            .recognizer
+            .touch(region, b, slot, phase, x, time_us)
+        {
             self.gesture(r, g, time_us, &mut fx);
         }
         fx
@@ -89,17 +98,30 @@ impl Agent {
         }
     }
 
-    /// Display off, hatch, layer switch: forget touches and pressed feedback.
+    /// Display off, hatch, layer switch: every touch ends. A published slider being dragged is
+    /// told the drag ended, and a `hold` layer no longer waits for its finger.
     pub fn cancel_touches(&mut self) -> Vec<Effect> {
-        let had = !self.pressed.is_empty();
-        self.recognizer.cancel_all();
-        self.pressed.clear();
-        self.hold_layer = None;
-        if had {
-            vec![Effect::Redraw]
-        } else {
-            Vec::new()
+        let mut fx = Vec::new();
+        let (pressed, dragged) = self.touches.end();
+        for (region, value) in dragged {
+            if let Some(p) = self.cell(region).and_then(|c| c.published.clone()) {
+                fx.push(Effect::Api {
+                    context: p.context,
+                    item: p.item,
+                    what: sliver_api::registry::Interaction::Slider {
+                        value,
+                        phase: sliver_api::registry::Phase::End,
+                    },
+                });
+            }
         }
+        if matches!(self.closes, Some((_, Closes::Release(_)))) {
+            self.closes = None;
+        }
+        if pressed {
+            fx.push(Effect::Redraw);
+        }
+        fx
     }
 
     pub(super) fn frame_for(&self, region: u32) -> Option<&Frame> {
@@ -126,15 +148,15 @@ impl Agent {
             Gesture::Bar(_) => return, // handled in `touch`
             Gesture::Pressed(on) => {
                 let changed = if on {
-                    self.pressed.insert(cell.key.clone())
+                    self.touches.pressed.insert(cell.key.clone())
                 } else {
-                    self.pressed.remove(&cell.key)
+                    self.touches.pressed.remove(&cell.key)
                 };
                 if changed {
                     fx.push(Effect::RedrawPress);
                 }
                 if !on {
-                    self.slide.remove(&region);
+                    self.touches.slide.remove(&region);
                     if let Some(h) = self.under_finger.get_mut(&cell.key) {
                         h.1 = Some(now);
                     }
@@ -156,6 +178,7 @@ impl Agent {
                     return;
                 }
                 let (x0, v0) = *self
+                    .touches
                     .slide
                     .entry(region)
                     .or_insert((x, (*value as f64 * 100.0).round()));
@@ -184,7 +207,7 @@ impl Agent {
                 return;
             }
             Gesture::Release => {
-                if let Some((r, name)) = &self.hold_layer
+                if let Some((name, Closes::Release(r))) = &self.closes
                     && *r == region
                 {
                     if self.layers.last() == Some(name) {
@@ -192,7 +215,7 @@ impl Agent {
                         fx.extend(self.cancel_touches());
                         fx.push(Effect::Redraw);
                     }
-                    self.hold_layer = None;
+                    self.closes = None;
                 }
                 if self.drag.get(&region).is_some_and(|d| d.pending.is_some()) {
                     self.run_drag(region, None, now, true, fx);
@@ -213,11 +236,11 @@ impl Agent {
                     fx.push(Effect::ModuleFired(cell.id.clone()));
                 }
                 // A oneshot layer closes after the first action taken from it.
-                if self.oneshot.as_deref() == Some(layer_before.as_str())
+                if self.closes == Some((layer_before.clone(), Closes::NextAction))
                     && region <= FN_REGION_BASE
                     && !matches!(d, Do::Run(Action::Layer { .. }))
                 {
-                    self.oneshot = None;
+                    self.closes = None;
                     if self.layers.last() == Some(&layer_before) {
                         self.layers.pop();
                         fx.extend(self.cancel_touches());
@@ -375,8 +398,10 @@ impl Agent {
                     }
                 }
                 match mode {
-                    LayerMode::Hold => self.hold_layer = region.map(|r| (r, name.clone())),
-                    LayerMode::Oneshot => self.oneshot = Some(name.clone()),
+                    LayerMode::Hold => {
+                        self.closes = region.map(|r| (name.clone(), Closes::Release(r)))
+                    }
+                    LayerMode::Oneshot => self.closes = Some((name.clone(), Closes::NextAction)),
                     LayerMode::Toggle => {}
                 }
                 // The visible base frame changes owner. Keep the hold layer's own touch alive.
