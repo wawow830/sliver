@@ -95,7 +95,8 @@ The spec builds in COPR from an SRPM upload, or with the "SCM" source type runni
 Publishing there is a public release, so it needs the maintainer's OK.
 
 ## Bundled-crate licenses
-The spec's `bundled_licenses` is written by hand. Refresh it when dependencies change:
+The spec's `bundled_licenses` is written by hand, and `packaging/test_packaging.py` (in the gate)
+fails when it no longer matches the dependencies. Refresh it from:
 ```
 RUSTC_BOOTSTRAP=1 cargo tree -Zavoid-dev-deps --workspace --edges=no-build,no-dev,no-proc-macro \
   --target=all --prefix=none --format '# {l}' | sort -u
