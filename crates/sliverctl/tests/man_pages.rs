@@ -142,7 +142,7 @@ fn daemon_and_agent_pages_cover_their_flags() {
         ("sliverd.8", "crates/sliverd/src/main.rs", &[][..]),
         (
             "sliver-agent.1",
-            "crates/sliver-agent/src/main.rs",
+            "crates/sliver-agent/src/bin/sliver-agent/main.rs",
             // systemd-run arguments the agent passes when launching apps, not its own options.
             &["--user", "--scope", "--collect", "--quiet"][..],
         ),

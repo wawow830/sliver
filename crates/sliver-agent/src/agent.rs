@@ -1,6 +1,6 @@
 //! The agent core: config + context → resolved layers → frames, and touches → gestures →
 //! actions. Sans-IO: the caller feeds it events and time, presents the frames it builds and
-//! carries out the [`Effect`]s it returns (see `run` in main.rs and the tests).
+//! carries out the [`Effect`]s it returns (see [`crate::driver`], which runs it, and the tests).
 
 use std::collections::{HashMap, HashSet};
 
