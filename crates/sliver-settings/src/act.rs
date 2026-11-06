@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use sliver_config::{Key, parse_cli_value, writer::inline};
+use sliver_config::{Action, Key, LayerMode, parse_cli_value, writer::inline};
 use toml::{Table, Value};
 
 /// What a gesture does, as the picker shows it.
@@ -101,90 +101,75 @@ impl Pick {
     }
 
     /// The picker's view of an `on-*` value, or `None` if it can't show it (then it's TOML only).
+    /// The value is read as the config reads it ([`Action::parse`]); macro steps, D-Bus calls
+    /// and waits keep their own text, which their own editors show.
     pub fn from_value(v: Option<&Value>) -> Option<Pick> {
         let Some(v) = v else {
             return Some(Pick::None);
         };
-        let t = match v {
-            Value::String(s) => return Some(Pick::Command(s.clone())),
-            Value::Table(t) => t,
+        if let Value::Array(steps) = v {
             // Macros don't nest.
-            Value::Array(steps) if !steps.iter().any(Value::is_array) => {
-                return Some(Pick::Macro(steps.clone()));
-            }
-            _ => return None,
+            return (!steps.iter().any(Value::is_array)).then(|| Pick::Macro(steps.clone()));
+        }
+        // Waits are only valid as steps: parse as one to see whether it is one.
+        let parsed = Action::parse(&Value::Array(vec![v.clone()]), "", &mut Default::default());
+        let Some(Action::Macro(mut one)) = parsed else {
+            return None;
         };
-        let s = |k: &str| t.get(k).and_then(Value::as_str).map(str::to_owned);
-        let only = |keys: &[&str]| t.keys().all(|k| keys.contains(&k.as_str()));
-        Some(if only(&["key"]) && t.contains_key("key") {
-            Pick::Key(s("key")?)
-        } else if only(&["keys"]) && t.contains_key("keys") {
-            Pick::Keys(
-                t["keys"]
-                    .as_array()?
-                    .iter()
-                    .map(|k| k.as_str().map(str::to_owned))
-                    .collect::<Option<_>>()?,
-            )
-        } else if only(&["open"]) && t.contains_key("open") {
-            Pick::Open(s("open")?)
-        } else if only(&["url"]) && t.contains_key("url") {
-            Pick::Url(s("url")?)
-        } else if only(&["layer", "mode"]) && t.contains_key("layer") {
-            Pick::Layer {
-                name: s("layer")?,
-                mode: s("mode").unwrap_or_else(|| "toggle".into()),
-            }
-        } else if only(&["close-layer"]) && t.get("close-layer") == Some(&Value::Boolean(true)) {
-            Pick::CloseLayer
-        } else if only(&["layout"]) && t.contains_key("layout") {
-            Pick::Layout(s("layout")?)
-        } else if only(&["profile"]) && t.contains_key("profile") {
-            Pick::Profile(s("profile")?)
-        } else if only(&["dbus"]) && t.get("dbus").is_some_and(Value::is_table) {
-            Pick::DBus(v.clone())
-        } else if only(&["sleep"]) && t.contains_key("sleep") {
-            Pick::Sleep(match &t["sleep"] {
+        let names = |ks: &[Key]| ks.iter().map(|k| k.name().to_owned()).collect();
+        Some(match one.pop()? {
+            Action::Shell(c) => Pick::Command(c),
+            Action::Key(k) => Pick::Key(k.name().into()),
+            Action::Keys(ks) => Pick::Keys(names(&ks)),
+            Action::Open(a) => Pick::Open(a),
+            Action::Url(u) => Pick::Url(u),
+            Action::Layer { name, mode } => Pick::Layer {
+                name,
+                mode: match mode {
+                    LayerMode::Toggle => "toggle",
+                    LayerMode::Hold => "hold",
+                    LayerMode::Oneshot => "oneshot",
+                }
+                .into(),
+            },
+            Action::CloseLayer => Pick::CloseLayer,
+            Action::Layout(l) => Pick::Layout(l),
+            Action::Profile(p) => Pick::Profile(p),
+            Action::DBus(_) => Pick::DBus(v.clone()),
+            Action::Sleep(_) => Pick::Sleep(match &v.get("sleep")? {
                 Value::String(s) => s.clone(),
                 other => inline(other),
-            })
-        } else {
-            return None;
+            }),
+            _ => return None,
         })
     }
 
-    /// The `on-*` value to write (`None` = no action). Text forms that are still empty write
+    /// The `on-*` value to write (`None` = no action), in the config's own spelling
+    /// ([`Action::to_value`]). Forms still empty, or naming a key that doesn't exist, write
     /// nothing yet.
     pub fn to_value(&self) -> Option<Value> {
-        let one = |k: &str, v: Value| {
-            let mut t = Table::new();
-            t.insert(k.into(), v);
-            Some(Value::Table(t))
-        };
-        let s = |s: &str| Value::String(s.to_owned());
-        match self {
-            Pick::None => None,
-            Pick::Command(c) if c.trim().is_empty() => None,
-            Pick::Command(c) => Some(s(c.trim())),
-            Pick::Key(k) => one("key", s(k)),
-            Pick::Keys(ks) if ks.is_empty() => None,
-            Pick::Keys(ks) => one("keys", Value::Array(ks.iter().map(|k| s(k)).collect())),
-            Pick::Open(a) if a.trim().is_empty() => None,
-            Pick::Open(a) => one("open", s(a.trim())),
-            Pick::Url(u) if u.trim().is_empty() => None,
-            Pick::Url(u) => one("url", s(u.trim())),
-            Pick::Layer { name, mode } => {
-                let mut t = Table::new();
-                t.insert("layer".into(), s(name));
-                if mode != "toggle" {
-                    t.insert("mode".into(), s(mode));
-                }
-                Some(Value::Table(t))
-            }
-            Pick::CloseLayer => one("close-layer", Value::Boolean(true)),
-            Pick::Layout(l) => one("layout", s(l)),
-            Pick::Profile(p) => one("profile", s(p)),
-            Pick::DBus(v) => Some(v.clone()),
+        let text = |t: &str| Some(t.trim().to_owned()).filter(|t| !t.is_empty());
+        let key = |k: &str| Key::from_name(k);
+        let a = match self {
+            Pick::None => return None,
+            Pick::Command(c) => Action::Shell(text(c)?),
+            Pick::Key(k) => Action::Key(key(k)?),
+            Pick::Keys(ks) if ks.is_empty() => return None,
+            Pick::Keys(ks) => Action::Keys(ks.iter().map(|k| key(k)).collect::<Option<_>>()?),
+            Pick::Open(a) => Action::Open(text(a)?),
+            Pick::Url(u) => Action::Url(text(u)?),
+            Pick::Layer { name, mode } => Action::Layer {
+                name: name.clone(),
+                mode: match mode.as_str() {
+                    "hold" => LayerMode::Hold,
+                    "oneshot" => LayerMode::Oneshot,
+                    _ => LayerMode::Toggle,
+                },
+            },
+            Pick::CloseLayer => Action::CloseLayer,
+            Pick::Layout(l) => Action::Layout(l.clone()),
+            Pick::Profile(p) => Action::Profile(p.clone()),
+            Pick::DBus(v) => return Some(v.clone()),
             // Steps added but not filled in yet aren't written.
             Pick::Macro(steps) => {
                 let done: Vec<Value> = steps
@@ -192,12 +177,18 @@ impl Pick {
                     .filter(|v| v.as_str().is_none_or(|s| !s.trim().is_empty()))
                     .cloned()
                     .collect();
-                (!done.is_empty()).then_some(Value::Array(done))
+                return (!done.is_empty()).then_some(Value::Array(done));
             }
-            Pick::Sleep(t) if t.trim().is_empty() => None,
-            // A bare number is seconds; "100ms" stays a string.
-            Pick::Sleep(t) => one("sleep", parse_cli_value(t.trim())),
-        }
+            // A bare number is seconds; "100ms" stays a string, as typed.
+            Pick::Sleep(t) => {
+                let t = text(t)?;
+                return Some(Value::Table(Table::from_iter([(
+                    "sleep".to_owned(),
+                    parse_cli_value(&t),
+                )])));
+            }
+        };
+        Some(a.to_value())
     }
 }
 

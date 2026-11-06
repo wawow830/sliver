@@ -260,6 +260,62 @@ impl Action {
         action
     }
 
+    /// The action as config TOML, the form [`Action::parse`] reads back: editors write actions
+    /// through this, so the config's spelling of an action lives here only.
+    pub fn to_value(&self) -> Value {
+        let one = |k: &str, v: Value| Value::Table(Table::from_iter([(k.to_owned(), v)]));
+        let s = |s: &str| Value::String(s.to_owned());
+        let list = |v: &[String]| Value::Array(v.iter().map(|x| s(x)).collect());
+        match self {
+            Action::Shell(cmd) => s(cmd),
+            Action::Exec(argv) => one("exec", list(argv)),
+            Action::Key(k) => one("key", s(k.name())),
+            Action::Keys(ks) => one(
+                "keys",
+                Value::Array(ks.iter().map(|k| s(k.name())).collect()),
+            ),
+            Action::Layer { name, mode } => {
+                let mut t = Table::from_iter([("layer".to_owned(), s(name))]);
+                let mode = match mode {
+                    LayerMode::Toggle => None,
+                    LayerMode::Hold => Some("hold"),
+                    LayerMode::Oneshot => Some("oneshot"),
+                };
+                t.extend(mode.map(|m| ("mode".to_owned(), s(m))));
+                Value::Table(t)
+            }
+            Action::CloseLayer => one("close-layer", Value::Boolean(true)),
+            Action::Layout(l) => one("layout", s(l)),
+            Action::Profile(p) => one("profile", s(p)),
+            Action::Open(app) => one("open", s(app)),
+            Action::Url(url) => one("url", s(url)),
+            Action::DBus(c) => {
+                let mut t = Table::new();
+                if c.system_bus {
+                    t.insert("bus".into(), s("system"));
+                }
+                for (k, v) in [
+                    ("dest", &c.dest),
+                    ("path", &c.path),
+                    ("interface", &c.interface),
+                    ("method", &c.method),
+                ] {
+                    t.insert(k.into(), s(v));
+                }
+                if !c.args.is_empty() {
+                    t.insert("args".into(), Value::Array(c.args.clone()));
+                }
+                one("dbus", Value::Table(t))
+            }
+            Action::Signal(n) => one("signal", Value::Integer(i64::from(*n))),
+            Action::Update(m) => one("update", s(m)),
+            Action::ToggleAlt => one("format", s("toggle-alt")),
+            Action::ModuleAction(n) => one("module-action", s(n)),
+            Action::Sleep(d) => one("sleep", s(&format!("{}ms", d.as_millis()))),
+            Action::Macro(steps) => Value::Array(steps.iter().map(Action::to_value).collect()),
+        }
+    }
+
     /// Every key this action presses, for F-key coverage checks.
     pub fn keys(&self) -> Vec<Key> {
         match self {
@@ -313,6 +369,63 @@ fn parse_dbus(t: &Table, path: &str, d: &mut Diagnostics) -> Option<DBusCall> {
         method: method?,
         args,
     })
+}
+
+#[cfg(test)]
+mod round_trip {
+    use super::*;
+
+    /// Every form written by `to_value` reads back as the same action.
+    #[test]
+    fn to_value_reads_back() {
+        let k = |n: &str| Key::from_name(n).unwrap();
+        let actions = [
+            Action::Shell("pavucontrol".into()),
+            Action::Exec(vec!["notify-send".into(), "hi".into()]),
+            Action::Key(k("F5")),
+            Action::Keys(vec![k("LeftCtrl"), k("T")]),
+            Action::Layer {
+                name: "media".into(),
+                mode: LayerMode::Toggle,
+            },
+            Action::Layer {
+                name: "media".into(),
+                mode: LayerMode::Hold,
+            },
+            Action::Layer {
+                name: "media".into(),
+                mode: LayerMode::Oneshot,
+            },
+            Action::CloseLayer,
+            Action::Layout("fkeys".into()),
+            Action::Profile("work".into()),
+            Action::Open("org.gnome.Nautilus".into()),
+            Action::Url("https://example.org".into()),
+            Action::DBus(DBusCall {
+                system_bus: true,
+                dest: "org.freedesktop.login1".into(),
+                path: "/org/freedesktop/login1".into(),
+                interface: "org.freedesktop.login1.Manager".into(),
+                method: "Suspend".into(),
+                args: vec![Value::Boolean(false)],
+            }),
+            Action::Signal(8),
+            Action::Update("custom/vpn".into()),
+            Action::ToggleAlt,
+            Action::ModuleAction("toggle-mute".into()),
+            Action::Macro(vec![
+                Action::Key(k("F1")),
+                Action::Sleep(Duration::from_millis(150)),
+                Action::Shell("true".into()),
+            ]),
+        ];
+        for a in actions {
+            let mut d = Diagnostics::default();
+            let back = Action::parse(&a.to_value(), "on-tap", &mut d);
+            assert!(d.ok(), "{a:?}: {d:?}");
+            assert_eq!(back, Some(a));
+        }
+    }
 }
 
 #[cfg(test)]
