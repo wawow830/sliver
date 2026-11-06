@@ -26,6 +26,9 @@ const DRAG_INTERVAL_US: u64 = 50_000;
 /// An open menu closes on its own after this long, so an entry like "Close window" doesn't
 /// stay armed on a bar nobody is looking at.
 const MENU_TIMEOUT_US: u64 = 5_000_000;
+/// After a slider is let go, how long it may keep showing the finger's value while the system
+/// catches up before it shows what the system reports again.
+const HELD_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Something for the caller to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -169,6 +172,10 @@ pub struct Agent {
     /// Where that button was among the zones the menu covers (offset from the menu's start,
     /// width): the menu's ✕ takes its place, under the finger that opened it.
     menu_slot: Option<(f32, f32)>,
+    /// Sliders under a finger, by cell key: the value there, and when it was let go. They show
+    /// it at once (the system's level is set at most every [`DRAG_INTERVAL_US`] and reported back
+    /// later), and after release until the system reports it or [`HELD_GRACE`] passes.
+    under_finger: HashMap<String, (f32, Option<std::time::Instant>)>,
     /// An open popover a published item showed (api.md §3): context, popover item id, and the
     /// context's class (`app` / `status`).
     popover: Option<(sliver_api::registry::ContextId, String, String)>,
@@ -262,6 +269,7 @@ impl Agent {
             menu: None,
             menu_owner: None,
             menu_slot: None,
+            under_finger: HashMap::new(),
             popover: None,
             subbar: None,
         }
@@ -696,6 +704,16 @@ impl Agent {
                 cells.retain(|c| !hidden.contains(&c.id) && !hidden.contains(&c.key));
                 for c in &mut cells {
                     c.pressed = self.pressed.contains(&c.key);
+                    if let (Some(&(v, up)), sliver_render::Content::Slider { value, .. }) =
+                        (self.under_finger.get(&c.key), &mut c.content)
+                    {
+                        let caught_up = (*value - v).abs() < 0.015;
+                        if up.is_some_and(|t| caught_up || t.elapsed() > HELD_GRACE) {
+                            self.under_finger.remove(&c.key);
+                        } else {
+                            *value = v;
+                        }
+                    }
                 }
                 cells
             })
@@ -1101,6 +1119,9 @@ impl Agent {
                 }
                 if !on {
                     self.slide.remove(&region);
+                    if let Some(h) = self.under_finger.get_mut(&cell.key) {
+                        h.1 = Some(std::time::Instant::now());
+                    }
                 }
                 return;
             }
@@ -1124,6 +1145,7 @@ impl Agent {
                 let v = (v0 + ((x - x0) / t.w) as f64 * 100.0)
                     .clamp(0.0, 100.0)
                     .round();
+                self.hold_value(&cell.key, v, fx);
                 self.keep_drawer_open(&cell, now);
                 self.run_drag(region, Some(v), now, false, fx);
                 return;
@@ -1134,7 +1156,9 @@ impl Agent {
                 // Sliders report 0–100 along their trough, other modules the bar x.
                 let value = match f.layout.tracks.get(i).copied().flatten() {
                     Some(t) if t.w > 0.0 => {
-                        (((x - t.x) / t.w).clamp(0.0, 1.0) * 100.0).round() as f64
+                        let v = (((x - t.x) / t.w).clamp(0.0, 1.0) * 100.0).round() as f64;
+                        self.hold_value(&cell.key, v, fx);
+                        v
                     }
                     _ => x.round() as f64,
                 };
@@ -1208,6 +1232,19 @@ impl Agent {
                 fx.push(Effect::Redraw);
             }
             _ => {}
+        }
+    }
+
+    /// Shows `v` (0–100) on the slider `key` at once, while the finger is on it.
+    fn hold_value(&mut self, key: &str, v: f64, fx: &mut Vec<Effect>) {
+        let v = (v / 100.0) as f32;
+        if self
+            .under_finger
+            .insert(key.to_owned(), (v, None))
+            .map(|h| h.0)
+            != Some(v)
+        {
+            fx.push(Effect::Redraw);
         }
     }
 

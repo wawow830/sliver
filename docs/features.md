@@ -158,8 +158,8 @@ From GOAL.md; details in api.md and integration.md.
 - **Backlight:** raw 0–255. dfr uses 1 = dim and 0 = off. DRM ACTIVE=0 doesn't blank the panel,
   so "off" means backlight 0. While it's 0, touches are ignored and the first touch wakes the bar.
 - **Updates:** memcpy + DIRTYFB with per-button damage rects, with no vsync or page flip. A
-  full-frame DIRTYFB takes ~34 ms, so render damage per item, keep animations short (~30 fps max
-  for full-bar ones), and skip them when idle.
+  full-frame DIRTYFB takes ~34 ms, so render damage per item, keep animations short (60 fps for
+  a button's worth of damage, ~30 fps for full-bar ones), and skip them when idle.
 - **OLED:** burn-in from static items is real. Rely on idle dim/off. Pixel shift is advanced
   and opt-in.
 - **Physical Esc:** present on the Mac14,7. Esc on the bar is optional there, and the F-keys are

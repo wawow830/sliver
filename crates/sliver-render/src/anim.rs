@@ -15,8 +15,9 @@ use crate::Color;
 use crate::geometry::Rect;
 use crate::style::{Style, Timing, TransitionProp};
 
-/// Minimum time between animation frames (~30 fps): plenty for fades on a 60 px bar, and cheap.
-pub const FRAME: Duration = Duration::from_millis(33);
+/// Minimum time between animation frames: the panel's 60 Hz, so a glide or fade moves every
+/// refresh. Frames are drawn only while something moves.
+pub const FRAME: Duration = Duration::from_millis(16);
 
 trait Lerp: Copy + PartialEq {
     fn lerp(a: Self, b: Self, t: f32) -> Self;

@@ -776,6 +776,19 @@ fn press_and_slide_a_collapsed_slider() {
         fx.contains(&Session(SessionOp::ScreenBrightness(90))),
         "{fx:?}"
     );
+    // The knob shows the finger's value at once, before the system reports it, and the
+    // system's again once it has.
+    let value = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[i].content {
+        sliver_render::Content::Slider { value, .. } => *value,
+        c => panic!("{c:?}"),
+    };
+    a.render(&w);
+    assert!((value(&a) - 0.9).abs() < 0.01, "{}", value(&a));
+    let mut reported = w.clone();
+    reported.session.brightness.screen_pct = Some(90);
+    a.render(&reported);
+    a.render(&w);
+    assert!((value(&a) - 0.7).abs() < 0.01, "{}", value(&a));
     // Still open after lifting (it closes on its own later), and a fresh drag on the open
     // slider is absolute again.
     assert!(a.frame(Layer::Base).unwrap().layout.tracks[i].is_some());
@@ -2478,7 +2491,7 @@ name = "main"
 modules = ["key/F1"]
 [modules.cava]
 bars = 4
-framerate = 60
+framerate = 120
 stereo = true
 source = "evil\n[output]"
 noise_reduction = 0.5
@@ -2495,7 +2508,7 @@ noise_reduction = 0.5
     let conf = a.spectrum_config().expect("on the lit bar");
     for line in [
         "bars = 4",
-        "framerate = 30",
+        "framerate = 60",
         "method = raw",
         "channels = stereo",
         "noise_reduction = 0.5",

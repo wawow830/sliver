@@ -212,9 +212,10 @@ pub fn graph_params(block: &toml::Table) -> (std::time::Duration, usize) {
     (every, samples)
 }
 
-/// `cava` defaults: 20 bars at 30 frames a second, the most the bar draws while animating.
+/// `cava` defaults: 20 bars at 60 frames a second, the panel's refresh and the most the bar
+/// draws while animating.
 pub const CAVA_BARS: usize = 20;
-pub const CAVA_FPS: i64 = 30;
+pub const CAVA_FPS: i64 = 60;
 
 /// How many bars a `cava` module draws (`bars`, 1–128).
 pub fn cava_bars(block: &toml::Table) -> usize {
