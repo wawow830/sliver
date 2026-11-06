@@ -139,3 +139,173 @@ pub(super) fn taskbar(world: &World, item: Option<usize>) -> Option<Spec> {
     });
     Some(sp)
 }
+
+/// `pinned = ["org.mozilla.firefox", "kitty"]`: desktop ids (with or without `.desktop`).
+pub(super) fn pinned_ids(m: &ModuleInstance) -> Vec<String> {
+    m.config
+        .get("pinned")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .map(|s| s.strip_suffix(".desktop").unwrap_or(s).to_string())
+        .collect()
+}
+
+/// The first window (any workspace) that belongs to the pinned app `id`.
+pub(super) fn pinned_window(world: &World, id: &str) -> Option<usize> {
+    world.desktop.windows.iter().position(|w| {
+        world
+            .apps
+            .find_by_app_id(&w.class)
+            .is_some_and(|e| e.id == id)
+    })
+}
+
+/// The class a taskbar button gets for its app, so a stylesheet can treat one app's icon
+/// differently: `app-` and its desktop id (else its app id), lowercased, other characters as
+/// `-` (`app-org-kde-dolphin`). Pinned or not, an app gets the same one.
+pub(crate) fn app_class(id: &str) -> String {
+    let id: String = id
+        .trim_end_matches(".desktop")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("app-{id}")
+}
+
+/// A launcher for a pinned app: tap focuses its window when it is running, else starts it
+/// (`gtk-launch`); hold closes the running window.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn pinned_cell(
+    m: &ModuleInstance,
+    key: &str,
+    world: &World,
+    icons: &mut Icons,
+    icon_size: u32,
+    index: usize,
+    id: &str,
+    window: Option<usize>,
+) -> Cell {
+    let entry = world.apps.get(id);
+    let icon = entry
+        .and_then(|e| e.icon.as_deref())
+        .or(Some(id))
+        .and_then(|n| {
+            icons.get(
+                n,
+                m.common.icon_theme.as_deref(),
+                m.common.icon_size.unwrap_or(icon_size),
+            )
+        });
+    let name = entry.map_or(id, |e| e.name.as_str());
+    let win = window.map(|i| &world.desktop.windows[i]);
+    let focused = win.is_some_and(|w| w.focused);
+    // The same `format` as the window buttons (icon only by default).
+    let esc = |s: &str| FmtValue::Text(sliver_render::markup::escape(s));
+    let values = ValueMap::new()
+        .with("name", esc(name))
+        .with("title", esc(win.map_or("", |w| w.title.as_str())))
+        .with("app_id", esc(win.map_or(id, |w| w.class.as_str())));
+    let st = State {
+        status: focused.then_some("focused"),
+        ..Default::default()
+    };
+    let label = format_module(&m.common, "", &st, &values).text;
+    let content = match icon {
+        Some(icon) if label.is_empty() => Content::icon(icon),
+        Some(icon) => Content::label(Some(icon), label),
+        None if label.is_empty() => Content::markup(sliver_render::markup::escape(
+            &name.chars().take(2).collect::<String>(),
+        )),
+        None => Content::markup(label),
+    };
+    let target = win.map(|w| sliver_desktop::control::Action::FocusWindow {
+        address: w.address.clone(),
+    });
+    let mut classes = vec!["pinned".to_string(), app_class(id)];
+    classes.push(if win.is_some() { "running" } else { "idle" }.to_string());
+    if focused {
+        classes.push("focused".into());
+    }
+    if win.is_some_and(|w| w.urgent) {
+        classes.push("urgent".into());
+    }
+    classes.extend(m.classes.iter().cloned());
+    let tap = if win.is_some() {
+        Action::ModuleAction("focus".into())
+    } else {
+        Action::Open(id.to_string())
+    };
+    let mut defaults = vec![(Gesture::Tap, tap)];
+    if win.is_some() {
+        defaults.push((Gesture::Hold, Action::ModuleAction("close".into())));
+    }
+    // The module's own bindings and `menu` apply to its launchers too.
+    let on = bindings(m, defaults, !m.common.menu.is_empty());
+    Cell {
+        key: format!("{key}/pin{index}"),
+        id: m.id.to_string(),
+        kind: "taskbar".into(),
+        mic: false,
+        slider: false,
+        css_id: m.css_id.clone(),
+        classes,
+        width: Width::Auto,
+        content,
+        touch: Touch::Agent,
+        on,
+        next_change: None,
+        pressed: false,
+        checked: win.is_some_and(|w| w.focused),
+        drawer: None,
+        disabled: false,
+        foreground: None,
+        background: None,
+        published: None,
+        pass_through: false,
+        target,
+        timer_total: None,
+        menu: button_menu(&m.common.menu, &values),
+        slot: None,
+        spectrum: Vec::new(),
+    }
+}
+
+/// Which workspaces/windows a `workspaces` / `taskbar` module shows (indexes into the lists).
+/// Waybar semantics: workspaces of the focused output unless `all-outputs`; windows of the
+/// active workspace unless `all-workspaces`.
+pub(super) fn listed(m: &ModuleInstance, world: &World) -> Vec<usize> {
+    let flag = |k: &str| m.config.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let d = &world.desktop;
+    if m.id.kind == "workspaces" {
+        let here = d.monitor.as_deref();
+        return (0..d.workspaces.len())
+            .filter(|&i| {
+                flag("all-outputs")
+                    || here.is_none()
+                    || d.workspaces[i].monitor.is_none()
+                    || d.workspaces[i].monitor.as_deref() == here
+            })
+            .collect();
+    }
+    let active = d.workspace.as_ref().map(|w| w.id);
+    // niri's window workspace ids are niri ids: match against the active workspace's info.
+    let active = d
+        .workspaces
+        .iter()
+        .find(|w| w.active)
+        .map(|w| w.id)
+        .or(active);
+    (0..d.windows.len())
+        .filter(|&i| {
+            flag("all-workspaces") || active.is_none() || Some(d.windows[i].workspace) == active
+        })
+        .collect()
+}

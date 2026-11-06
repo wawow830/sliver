@@ -426,3 +426,160 @@ pub(super) fn power() -> Option<Spec> {
     sp.menu = power_menu(false);
     Some(sp)
 }
+
+pub(super) const GIB: f64 = (1u64 << 30) as f64;
+
+/// Rounds like waybar's integer percentages and one-decimal sizes.
+pub(super) fn pct0(v: f64) -> FmtValue {
+    FmtValue::Num(v.round())
+}
+
+pub(super) fn gib(bytes: u64) -> FmtValue {
+    FmtValue::Num((bytes as f64 / GIB * 10.0).round() / 10.0)
+}
+
+/// How often a polled module refreshes: its `interval`, else the module's own default.
+pub(super) fn poll_every(m: &ModuleInstance, default_secs: u64) -> std::time::Duration {
+    match m.common.interval {
+        Some(sliver_config::Interval::Every(d)) => d,
+        _ => std::time::Duration::from_secs(default_secs),
+    }
+}
+
+/// `cpu`, `memory`, `load`, `temperature`, `disk`: read when drawn, redrawn on their interval
+/// (the agent's loop wakes only while such a cell is on the bar and the display is on).
+pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
+    let stats = &world.stats;
+    let now = std::time::Instant::now();
+    let mut sp = match m.id.kind.as_str() {
+        "cpu" => {
+            let (usage, load, ghz, hist) = stats.with(|s| {
+                let u = s.cpu_usage(now);
+                (u, s.load(), s.cpu_ghz(), s.cpu_history())
+            });
+            let usage = usage?;
+            let v = ValueMap::new()
+                .with("usage", pct0(usage))
+                .with("", pct0(usage))
+                .with("load", load.map_or(0.0, |l| l.one))
+                .with("avg_frequency", (ghz.unwrap_or(0.0) * 10.0).round() / 10.0)
+                .with("spark", crate::stats::sparkline(&hist, Some(100.0)));
+            let mut sp = Spec::new(v, "CPU {usage}%");
+            sp.percentage = Some(usage);
+            sp
+        }
+        "memory" => {
+            let mem = stats.with(|s| s.mem())?;
+            let v = ValueMap::new()
+                .with("percentage", pct0(mem.percent_used()))
+                .with("", pct0(mem.percent_used()))
+                .with("used", gib(mem.used()))
+                .with("total", gib(mem.total))
+                .with("avail", gib(mem.available))
+                .with("swapPercentage", pct0(mem.swap_percent()))
+                .with("swapUsed", gib(mem.swap_used()))
+                .with("swapTotal", gib(mem.swap_total))
+                .with("swapAvail", gib(mem.swap_free));
+            let mut sp = Spec::new(v, "MEM {percentage}%");
+            sp.percentage = Some(mem.percent_used());
+            sp
+        }
+        "load" => {
+            let l = stats.with(|s| s.load())?;
+            let v = ValueMap::new()
+                .with("load1", l.one)
+                .with("load5", l.five)
+                .with("load15", l.fifteen)
+                .with("", l.one);
+            Spec::new(v, "{load1}")
+        }
+        "temperature" => {
+            let c = temperature(m, stats)?;
+            let v = ValueMap::new()
+                .with("temperatureC", c.round())
+                .with("temperatureF", (c * 9.0 / 5.0 + 32.0).round())
+                .with("temperatureK", (c + 273.15).round())
+                .with("", c.round());
+            let mut sp = Spec::new(v, "{temperatureC}°C");
+            let critical = m
+                .config
+                .get("critical-threshold")
+                .and_then(|t| t.as_float().or(t.as_integer().map(|i| i as f64)));
+            sp.status = critical.filter(|t| c >= *t).map(|_| "critical");
+            sp
+        }
+        "disk" => {
+            let path = m.config.get("path").and_then(|p| p.as_str()).unwrap_or("/");
+            let d = crate::stats::disk(std::path::Path::new(path))?;
+            let v = ValueMap::new()
+                .with("percentage_used", pct0(d.percent_used()))
+                .with("percentage_free", pct0(d.percent_free()))
+                .with("used", gib(d.used()))
+                .with("free", gib(d.free))
+                .with("total", gib(d.total))
+                .with("path", esc(path))
+                .with("", pct0(d.percent_used()));
+            let mut sp = Spec::new(v, "{percentage_used}%");
+            sp.percentage = Some(d.percent_used());
+            sp
+        }
+        _ => return None,
+    };
+    let default = match m.id.kind.as_str() {
+        "memory" | "disk" => 30,
+        _ => 10,
+    };
+    sp.refresh = Some(poll_every(m, default));
+    Some(sp)
+}
+
+/// The temperature to show: `hwmon-path` (a `temp*_input` file), `thermal-zone` (an index), or the
+/// hottest sensor.
+pub(super) fn temperature(m: &ModuleInstance, stats: &Stats) -> Option<f64> {
+    let read = |p: &std::path::Path| {
+        std::fs::read_to_string(p)
+            .ok()?
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|v| v / 1000.0)
+    };
+    if let Some(p) = m.config.get("hwmon-path").and_then(|v| v.as_str()) {
+        return read(std::path::Path::new(p));
+    }
+    if let Some(z) = m.config.get("thermal-zone").and_then(|v| v.as_integer()) {
+        let root = stats.with(|s| s.sys_root().to_path_buf());
+        return read(&root.join(format!("class/thermal/thermal_zone{z}/temp")));
+    }
+    stats
+        .with(|s| s.sensors())
+        .iter()
+        .map(|s| s.celsius)
+        .fold(None, |a: Option<f64>, c| Some(a.map_or(c, |a| a.max(c))))
+}
+
+/// tiny-dfr's battery icon thresholds, on the built-in icon set.
+pub(super) fn battery_icon(level: u8, charging: bool) -> &'static str {
+    if charging {
+        match level {
+            0..=20 => "battery_charging_20",
+            21..=30 => "battery_charging_30",
+            31..=50 => "battery_charging_50",
+            51..=60 => "battery_charging_60",
+            61..=80 => "battery_charging_80",
+            81..=99 => "battery_charging_90",
+            _ => "battery_charging_full",
+        }
+    } else {
+        match level {
+            0 => "battery_0_bar",
+            1..=20 => "battery_1_bar",
+            21..=30 => "battery_2_bar",
+            31..=50 => "battery_3_bar",
+            51..=60 => "battery_4_bar",
+            61..=80 => "battery_5_bar",
+            81..=99 => "battery_6_bar",
+            _ => "battery_full",
+        }
+    }
+}
