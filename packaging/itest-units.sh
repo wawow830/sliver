@@ -5,7 +5,7 @@
 #   2. tiny-dfr starting while sliverd runs → sliverd (and its socket) stop
 #   3. after the fallback, an agent connecting can't reactivate sliverd
 #   5. after the fallback, `systemctl start sliverd` (refused: start limit) leaves tiny-dfr running
-#      (this left the real bar dead once, with Conflicts=)
+#      (with Conflicts= it would stop tiny-dfr and leave the bar with no daemon)
 #   6. starting only the socket doesn't take the bar from tiny-dfr
 #   7. both started at once → exactly one runs
 #   8. no tiny-dfr installed at all → sliverd still starts

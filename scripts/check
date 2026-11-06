@@ -13,14 +13,14 @@ if [[ -f Cargo.toml ]]; then
   echo "== cargo test";  cargo test --workspace --quiet
 fi
 
-# The installed sliverd must be allowed past sliver-hw's harness gate (first real install failed
-# without it), and must not pretend to be a harness run.
+# The installed sliverd must be allowed past sliver-hw's harness gate, and must not pretend to be
+# a harness run.
 grep -qx 'Environment=SLIVER_SYSTEM_UNIT=1' packaging/systemd/sliverd.service \
   || { echo "sliverd.service must set Environment=SLIVER_SYSTEM_UNIT=1"; exit 1; }
 ! grep -q 'SLIVER_SAFESWAP' packaging/systemd/sliverd.service \
   || { echo "sliverd.service must not set SLIVER_SAFESWAP"; exit 1; }
-# Conflicts=tiny-dfr stops the fallback even for starts the start limit refuses (left the real
-# bar dead once). The handover is ExecStartPre= in both directions; itest-units.sh tests it.
+# Conflicts=tiny-dfr stops the fallback even for starts the start limit refuses, which leaves the
+# bar with no daemon. The handover is ExecStartPre= in both directions; itest-units.sh tests it.
 ! grep -q '^Conflicts=.*tiny-dfr' packaging/systemd/sliverd.service packaging/systemd/sliverd.socket \
   || { echo "sliverd units must not use Conflicts=tiny-dfr (see sliverd.service)"; exit 1; }
 # sliverd must start where tiny-dfr isn't installed (systemctl stop exits 5 for an unknown unit).
@@ -78,7 +78,7 @@ grep -qx 'Restart=always' packaging/systemd/user/sliver-agent.service \
   || { echo "sliver-agent.service needs Restart=always"; exit 1; }
 
 # The RPM must not send udev events to the digitizers: SYSTEMD_WANTS=sliverd.service fires on
-# 'change' too, so that would take the bar over at every install/upgrade (measured).
+# 'change' too, so that would take the bar over at every install and upgrade.
 ! grep -E '^\s*udevadm trigger.*subsystem-match=input' packaging/rpm/sliver.spec \
   || { echo "sliver.spec must not trigger udev events on input devices (takes the bar over)"; exit 1; }
 

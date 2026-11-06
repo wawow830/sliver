@@ -1,5 +1,5 @@
 # sliver-agent: the per-user session agent (renders the bar, serves the public D-Bus API).
-# docs/agent.md, docs/api.md §7. Enable per user: systemctl --user enable --now sliver-agent
+# sliver-agent(1), docs/api.md §7. Enable per user: systemctl --user enable --now sliver-agent
 # (the RPM enables it by default through a user preset).
 #
 # Type=dbus: the unit counts as started once the agent owns io.github.wawow830.Sliver, so D-Bus
@@ -7,7 +7,7 @@
 
 [Unit]
 Description=Sliver Touch Bar session agent
-Documentation=https://github.com/wawow830/sliver/blob/main/docs/agent.md
+Documentation=man:sliver-agent(1)
 PartOf=graphical-session.target
 After=graphical-session.target
 # Without a Touch Bar there's no sliverd socket. The agent then waits and retries, which is cheap,
