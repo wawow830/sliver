@@ -1,7 +1,7 @@
-//! `cargo run -p sliver-waybar --example waybar-import -- ~/.config/waybar/config.jsonc [style.css]`
+//! `cargo run -p sliver-import --example waybar-import -- ~/.config/waybar/config.jsonc [style.css]`
 //! Prints the sliver config on stdout and the report on stderr.
 
-use sliver_waybar::{Level, Options, import_path};
+use sliver_import::waybar::{Level, Options, import_path};
 use std::path::Path;
 
 fn main() {

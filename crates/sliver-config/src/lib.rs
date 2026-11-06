@@ -1,9 +1,9 @@
 //! Sliver's config language: the waybar model translated to a touch strip.
 //!
-//! The spec is `docs/customization.md`, and ADR-0004 records the decisions. This crate parses
-//! and validates config files and resolves what each layer shows for a given context. It
-//! imports tiny-dfr configs. It does no rendering and no pixel layout (that's sliver-render), and
-//! it runs no modules (that's the agent's module runtime).
+//! The reference is `sliver-config(5)`, and ADR-0004 records the decisions. This crate parses
+//! and validates config files and resolves what each layer shows for a given context. It does no
+//! rendering and no pixel layout (that's sliver-render), and it runs no modules (that's the
+//! agent's module runtime). Foreign configs are converted by `sliver-import`.
 //!
 //! ```
 //! use sliver_config::{Context, Hardware, load_str};
@@ -32,7 +32,6 @@ pub mod preset;
 pub mod profile;
 mod resolve;
 mod rewrite;
-pub mod tinydfr;
 mod validate;
 mod values;
 pub mod writer;

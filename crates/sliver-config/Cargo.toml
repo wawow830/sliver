@@ -1,6 +1,6 @@
 [package]
 name = "sliver-config"
-description = "Sliver config language (waybar model): modules, zones, layers, rules, validation, tiny-dfr import"
+description = "Sliver config language (waybar model): modules, zones, layers, rules, validation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

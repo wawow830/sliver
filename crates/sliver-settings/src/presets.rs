@@ -65,7 +65,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
     dfr.add_suffix(&gtk::Image::from_icon_name("document-open-symbolic"));
     {
         let ui = ui.clone();
-        dfr.connect_activated(move |_| match sliver_config::tinydfr::import_system() {
+        dfr.connect_activated(move |_| match sliver_import::tinydfr::import_system() {
             Ok(Some(imp)) => {
                 // The look is `theme = "classic"`; style.css only holds font/outline overrides,
                 // and an existing one is kept.
@@ -107,10 +107,10 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                 let Ok(f) = r else { return };
                 let Some(path) = f.path() else { return };
                 let css = path.with_file_name("style.css");
-                let opts = sliver_waybar::Options {
+                let opts = sliver_import::waybar::Options {
                     stylesheet: css.is_file().then(|| css.display().to_string()),
                 };
-                match sliver_waybar::import_path(&path, &opts) {
+                match sliver_import::waybar::import_path(&path, &opts) {
                     Ok(imp) => {
                         let note = format!(
                             "{} modules come over, {} don't. ",

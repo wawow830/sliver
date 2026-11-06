@@ -256,7 +256,7 @@ fn resolve(args: &[&str]) -> Result<ExitCode, String> {
 }
 
 fn import_tiny_dfr(force: bool) -> Result<ExitCode, String> {
-    let imp = sliver_config::tinydfr::import_system()?
+    let imp = sliver_import::tinydfr::import_system()?
         .ok_or("tiny-dfr isn't installed (no /usr/share/tiny-dfr/config.toml)")?;
     let cfg = user_config();
     let css = cfg.with_file_name("style.css");
@@ -298,10 +298,10 @@ fn import_waybar(args: &[&str]) -> Result<ExitCode, String> {
     };
     // Reuse waybar's style.css when it sits next to the config (sliver accepts the GTK-isms).
     let css = src.with_file_name("style.css");
-    let opts = sliver_waybar::Options {
+    let opts = sliver_import::waybar::Options {
         stylesheet: css.is_file().then(|| css.display().to_string()),
     };
-    let imp = sliver_waybar::import_path(&src, &opts)?;
+    let imp = sliver_import::waybar::import_path(&src, &opts)?;
     let cfg = user_config();
     if cfg.exists() && !force {
         return Err(format!(

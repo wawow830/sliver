@@ -588,7 +588,7 @@ fn onboarding(ui: &Rc<Ui>) {
     if state.edit_target().0.exists() || state.path.is_some() {
         return;
     }
-    let dfr = std::path::Path::new(sliver_config::tinydfr::SYSTEM_BASE).exists();
+    let dfr = std::path::Path::new(sliver_import::tinydfr::SYSTEM_BASE).exists();
     let body = format!(
         "Sliver draws your Touch Bar. Whatever you change, double-press Fn and hold to get the built-in \
          F-keys{}. Edits apply instantly and can be undone.\n\n{}",
@@ -621,7 +621,7 @@ fn onboarding(ui: &Rc<Ui>) {
     let ui2 = ui.clone();
     dialog.connect_response(None, move |_, r| {
         let imported = (r == "dfr")
-            .then(sliver_config::tinydfr::import_system)
+            .then(sliver_import::tinydfr::import_system)
             .and_then(Result::ok)
             .flatten();
         apply(&ui2, move |ed, _| match imported {
@@ -636,7 +636,7 @@ fn onboarding(ui: &Rc<Ui>) {
         });
         if r == "dfr" {
             // tiny-dfr's font/outline overrides; the look itself is theme = "classic".
-            if let Ok(Some(imp)) = sliver_config::tinydfr::import_system() {
+            if let Ok(Some(imp)) = sliver_import::tinydfr::import_system() {
                 let css = ui2.state().edit_target().0.with_file_name("style.css");
                 if !css.exists() {
                     let _ = std::fs::write(&css, imp.stylesheet);

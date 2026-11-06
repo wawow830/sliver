@@ -1,4 +1,4 @@
-//! tiny-dfr 0.3.7 config import (features.md §1, docs/hardware.md "Config").
+//! tiny-dfr 0.3.7 config import.
 //!
 //! tiny-dfr merges `/usr/share/tiny-dfr/config.toml` with `/etc/tiny-dfr/config.toml` per
 //! top-level key (the /etc one wins, and a list replaces the whole list). We do the same, then
@@ -12,7 +12,7 @@
 
 use toml::{Table, Value};
 
-use crate::keys::Key;
+use sliver_config::Key;
 
 pub const SYSTEM_BASE: &str = "/usr/share/tiny-dfr/config.toml";
 pub const SYSTEM_OVERLAY: &str = "/etc/tiny-dfr/config.toml";
@@ -429,7 +429,7 @@ fn stylesheet(outlines: bool, font: &str, w: &mut Vec<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Action, Context, Gesture, Hardware, Width, load_str};
+    use sliver_config::{Action, Context, Gesture, Hardware, Width, load_str};
 
     const DFR_DEFAULT: &str = include_str!("../tests/fixtures/tiny-dfr-0.3.7.toml");
 

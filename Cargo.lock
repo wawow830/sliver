@@ -1661,6 +1661,15 @@ name = "sliver-icons"
 version = "0.1.0"
 
 [[package]]
+name = "sliver-import"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sliver-config",
+ "toml",
+]
+
+[[package]]
 name = "sliver-ipc"
 version = "0.1.0"
 dependencies = [
@@ -1728,9 +1737,9 @@ dependencies = [
  "sliver-config",
  "sliver-emoji",
  "sliver-icons",
+ "sliver-import",
  "sliver-ipc",
  "sliver-render",
- "sliver-waybar",
  "toml",
  "zbus",
 ]
@@ -1740,15 +1749,6 @@ name = "sliver-testbus"
 version = "0.1.0"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "sliver-waybar"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "sliver-config",
- "toml",
 ]
 
 [[package]]
@@ -1762,9 +1762,9 @@ dependencies = [
  "sliver-client",
  "sliver-config",
  "sliver-hw",
+ "sliver-import",
  "sliver-ipc",
  "sliver-testbus",
- "sliver-waybar",
  "toml",
  "zbus",
 ]

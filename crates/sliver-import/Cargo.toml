@@ -1,6 +1,6 @@
 [package]
-name = "sliver-waybar"
-description = "Import a waybar config (JSONC) into a sliver config.toml, with a report of what does not apply"
+name = "sliver-import"
+description = "Import waybar and tiny-dfr configs into a sliver config.toml, with a report of what does not apply"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

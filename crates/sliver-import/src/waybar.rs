@@ -1,4 +1,4 @@
-//! `sliver-waybar`: turn a waybar config into a sliver `config.toml` (customization.md G8).
+//! Turn a waybar config into a sliver `config.toml`.
 //!
 //! Sliver reads waybar's module names, gesture keys (`on-click`, `on-scroll-up`, ...), `format`
 //! strings, `custom/*` blocks and `tooltip` keys as they are, so most of the job is carrying
@@ -379,7 +379,7 @@ fn build(bar: Map<String, Json>, opts: &Options, mut notes: Vec<Note>) -> Import
     }
 
     let text = format!(
-        "# Imported from a waybar config by sliver-waybar.\n# Review the notes printed by the importer: some waybar features do not apply to a touch bar.\n{}",
+        "# Imported from a waybar config.\n# Review the notes printed by the importer: some waybar features do not apply to a touch bar.\n{}",
         toml::to_string(&root).expect("a table of plain values serializes")
     );
 
