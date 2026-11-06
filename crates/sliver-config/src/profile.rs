@@ -12,21 +12,20 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::load::search_path;
-
 pub const DEFAULT: &str = "default";
 const MARKER: &str = "active-profile";
 const DIR: &str = "profiles";
 
-/// The user's config dir (`$XDG_CONFIG_HOME/sliver` or `~/.config/sliver`), if there is a home.
+/// The user's config dir: `$XDG_CONFIG_HOME/sliver`, else `~/.config/sliver`. The variable
+/// replaces `~/.config` (XDG), so a sandboxed `XDG_CONFIG_HOME` never reads the real config.
 pub fn user_dir() -> Option<PathBuf> {
-    let has_home = ["XDG_CONFIG_HOME", "HOME"]
-        .iter()
-        .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
-    if !has_home {
-        return None;
-    }
-    search_path().first()?.parent().map(Path::to_path_buf)
+    let var = |k| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    let base = var("XDG_CONFIG_HOME").or_else(|| Some(var("HOME")?.join(".config")))?;
+    Some(base.join("sliver"))
 }
 
 /// Where `active-profile` lives.
@@ -246,6 +245,21 @@ mod tests {
         // SAFETY: tests touching the environment hold ENV.
         unsafe { std::env::set_var("XDG_CONFIG_HOME", &root) };
         (Sandbox { _lock: g, old }, root.join("sliver"))
+    }
+
+    #[test]
+    fn a_config_home_replaces_dot_config() {
+        // XDG: a sandboxed XDG_CONFIG_HOME never falls back to the real ~/.config.
+        let (_g, dir) = sandbox("xdg");
+        assert_eq!(user_dir(), Some(dir.clone()));
+        let path = crate::search_path();
+        assert_eq!(path[0], dir.join("config.toml"));
+        assert!(
+            path[1..]
+                .iter()
+                .all(|p| p.starts_with("/etc") || p.starts_with("/usr")),
+            "{path:?}"
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! `config`, this only touches files; the agent hot-reloads what `import` writes.
 
 use std::io::{BufRead, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sliver_config::preset::{Bundle, CONFIG, EXTENSION, Run, export};
@@ -89,13 +89,8 @@ fn run_inner(args: &[String]) -> Result<ExitCode, String> {
     }
 }
 
-/// Where the user's config lives: `$XDG_CONFIG_HOME/sliver` or `~/.config/sliver`.
 fn user_dir() -> Result<PathBuf, String> {
-    sliver_config::search_path()
-        .into_iter()
-        .next()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .ok_or_else(|| "no HOME or XDG_CONFIG_HOME".into())
+    sliver_config::profile::user_dir().ok_or_else(|| "no HOME or XDG_CONFIG_HOME".into())
 }
 
 fn read(file: &str) -> Result<Bundle, String> {

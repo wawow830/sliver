@@ -26,22 +26,16 @@ pub struct Loaded {
     pub merged: Table,
 }
 
-/// The config search path, first found wins: `$XDG_CONFIG_HOME/sliver`, `~/.config/sliver`,
+/// The config search path, first found wins: the user's dir ([`crate::profile::user_dir`]),
 /// `/etc/xdg/sliver`, `/usr/share/sliver`.
 pub fn search_path() -> Vec<PathBuf> {
-    let mut v = Vec::new();
-    if let Some(x) = std::env::var_os("XDG_CONFIG_HOME").filter(|x| !x.is_empty()) {
-        v.push(PathBuf::from(x).join("sliver/config.toml"));
-    }
-    if let Some(h) = std::env::var_os("HOME") {
-        let p = PathBuf::from(h).join(".config/sliver/config.toml");
-        if !v.contains(&p) {
-            v.push(p);
-        }
-    }
-    v.push("/etc/xdg/sliver/config.toml".into());
-    v.push("/usr/share/sliver/config.toml".into());
-    v
+    let user = crate::profile::user_dir().map(|d| d.join("config.toml"));
+    user.into_iter()
+        .chain([
+            "/etc/xdg/sliver/config.toml".into(),
+            "/usr/share/sliver/config.toml".into(),
+        ])
+        .collect()
 }
 
 /// The config in use: the active profile's file (see [`crate::profile`]), else the first file on
