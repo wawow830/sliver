@@ -553,7 +553,7 @@ mod tests {
 
     #[test]
     fn caps_parse_real_keyboard() {
-        // "Apple MTP keyboard" on the Mac14,7 (docs/hardware.md): has KEY_FN (464) and KEY_ESC (1).
+        // "Apple MTP keyboard" on the Mac14,7: has KEY_FN (464) and KEY_ESC (1).
         let k = Caps::parse(
             "10000 0 0 0 101007b02011007 ff9f217ac14057ff ffbeffdfffefffff fffffffffffffffe",
         );

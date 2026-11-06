@@ -2,7 +2,7 @@
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <!-- sliver safe-swap: lets a user run a sliver build on the Touch Bar for a bounded time.
-     tiny-dfr is always restored. See docs/safe-swap.md. -->
+     the bar's previous owner is always restored. -->
 <policyconfig>
   <vendor>sliver</vendor>
   <action id="org.sliver.safeswap">

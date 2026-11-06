@@ -325,7 +325,7 @@ impl Config {
         keys
     }
 
-    /// GOAL invariant 1 is guaranteed by sliverd's safe hatch, not by config. Here we only warn
+    /// Invariant 1 is guaranteed by sliverd's safe hatch, not by config. Here we only warn
     /// when the config itself leaves F-keys or Esc off the bar (sliver-config(5)).
     fn check_reachability(&self, hw: Hardware, d: &mut Diagnostics) {
         let candidates = |layer: &str| -> BTreeSet<&str> {

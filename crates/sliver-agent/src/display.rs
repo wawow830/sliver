@@ -1,4 +1,4 @@
-//! The bar's backlight and idle policy, sent to sliverd as `display_policy` (api.md §6).
+//! The bar's backlight and idle policy, sent to sliverd as `display_policy`.
 //!
 //! It comes from the user's `[display]` (tiny-dfr's 0–255 brightness scale), with
 //! `[display.on-battery]` replacing values while UPower says we're on battery. The agent sends it

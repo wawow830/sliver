@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A counter on the Touch Bar from Node.js or an Electron main process, in plain D-Bus
-// (dbus-next, no sliver libraries). docs/api.md §10 explains it step by step.
+// (dbus-next, no sliver libraries).
 //
 //     npm install dbus-next
 //     node examples/node/counter.js
@@ -23,7 +23,7 @@ const items = () => [{
   type: new Variant('s', 'button'),
   label: new Variant('s', `Clicked ${count}`),
   gestures: new Variant('as', ['hold']),
-  // For the user's `format = "{count} clicks"` (docs/api.md §3.1)
+  // For the user's `format = "{count} clicks"`
   values: new Variant('a{sv}', { count: new Variant('i', count) }),
 }];
 

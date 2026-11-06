@@ -1,5 +1,5 @@
 //! End-to-end tests of the daemon core on fake hardware: simulated touches through the key-region
-//! semantics (docs/api.md §6), asserting emitted keys, agent messages and PNG frames.
+//! semantics, asserting emitted keys, agent messages and PNG frames.
 //!
 //! Snapshots live in `tests/snapshots/`. Look at them when they change.
 //! Update after an intended change: `SLIVER_BLESS=1 cargo test -p sliverd --test daemon`.

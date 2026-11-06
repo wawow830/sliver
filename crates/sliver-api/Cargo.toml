@@ -1,6 +1,6 @@
 [package]
 name = "sliver-api"
-description = "Sliver's public session D-Bus API server: contexts, items, focus binding, policy (docs/api.md)"
+description = "Sliver's public session D-Bus API server: contexts, items, focus binding, policy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

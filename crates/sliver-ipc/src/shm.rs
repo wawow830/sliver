@@ -1,4 +1,4 @@
-//! Pixel buffers shared through sealed memfds (`docs/api.md` §6).
+//! Pixel buffers shared through sealed memfds.
 //!
 //! The agent creates a [`ShmBuffer`], draws into it and sends its fd with `attach_buffer`.
 //! sliverd [`MappedBuffer::import`]s it and **copies** each presented frame out right away.

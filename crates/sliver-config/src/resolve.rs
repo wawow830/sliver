@@ -176,7 +176,7 @@ impl Config {
 
     /// The module `id` as it would be instantiated in a zone for `ctx` (its `[modules."…"]` block
     /// applied; `None` if its `when` doesn't hold or it's hidden while locked). The agent uses it
-    /// for app-published items configured by id but shown in a placeholder (api.md §3.1).
+    /// for app-published items configured by id but shown in a placeholder.
     pub fn instance(&self, id: &ModuleId, ctx: &Context) -> Option<ModuleInstance> {
         self.instantiate(&ModuleRef::Named(id.clone()), None, ctx, &mut Vec::new())
     }

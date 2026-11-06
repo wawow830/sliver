@@ -19,7 +19,7 @@ use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{Array, Dict, OwnedObjectPath, OwnedValue, Signature, Str, Value};
 use zbus::{Connection, interface, names::BusName};
 
-/// D-Bus errors (`docs/api.md`). Names are checked against `sliver_ipc::dbus::error` in tests.
+/// D-Bus errors. Names are checked against `sliver_ipc::dbus::error` in tests.
 #[derive(Debug, zbus::DBusError)]
 #[zbus(prefix = "io.github.wawow830.Sliver.Error")]
 pub enum Error {

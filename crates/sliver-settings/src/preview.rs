@@ -13,7 +13,7 @@ use sliver_ipc::proto::Layer;
 use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};
 
 /// The bar's size in pixels: 2008x60 on Macs with a physical Esc key, 2170x60 on those without
-/// (docs/hardware.md). The preview renders at the real size, so it shows what the bar will.
+///. The preview renders at the real size, so it shows what the bar will.
 pub fn bar_size(hw: sliver_config::Hardware) -> (u32, u32) {
     if hw.physical_esc {
         (2008, 60)

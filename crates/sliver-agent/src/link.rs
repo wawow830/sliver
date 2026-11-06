@@ -1,4 +1,4 @@
-//! The connection to sliverd (api.md §6): handshake, shared-memory buffers, presenting, and the
+//! The connection to sliverd: handshake, shared-memory buffers, presenting, and the
 //! messages sliverd sends back.
 //!
 //! Each layer (`base`, `fn`) owns two buffers: the frame and its all-pressed twin. sliverd copies

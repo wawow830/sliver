@@ -1,5 +1,5 @@
 //! Find the Touch Bar's devices from sysfs. Read-only, safe to run anywhere.
-//! Name lists mirror tiny-dfr 0.3.7 so we match the same machines (docs/hardware.md).
+//! Name lists mirror tiny-dfr 0.3.7 so we match the same machines.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,4 +1,4 @@
-//! The Apps page (api.md §4): which apps and providers may put things on the bar.
+//! The Apps page: which apps and providers may put things on the bar.
 //! It writes `[apps."…"]`, `[providers."…"]` and `[api]` (sliver-config(5)).
 
 use std::collections::BTreeSet;
@@ -162,7 +162,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                                 state.loaded.config.provider_prefs(&p).allow,
                             ));
                         }
-                        // Pin its items into a layout like any module (api.md §2).
+                        // Pin its items into a layout like any module.
                         let mut seen = BTreeSet::new();
                         for c in &mine {
                             for (i, id) in c.item_ids.iter().enumerate() {

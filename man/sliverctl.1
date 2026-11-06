@@ -1,5 +1,5 @@
 .\" sliverctl(1). Source of truth for commands: crates/sliverctl/src/cli.rs (a test keeps this
-.\" page in sync with `sliverctl help`). Prose: docs/api.md.
+.\" page in sync with `sliverctl help`).
 .TH SLIVERCTL 1 2026-10-12 "sliver 0.1.0" "User Commands"
 .SH NAME
 sliverctl \- control the Touch Bar and publish items to it
@@ -259,9 +259,7 @@ For
 Cover the Main and Controls zones while shown, if the user allows it.
 .TP
 \fB\-p\fR \fIid.key\fB=\fIvalue\fR, \fB\-\-prop\fR \fIid.key\fB=\fIvalue\fR
-Set any item property
-.RI ( docs/api.md
-\(sc3), for example
+Set any item property (the published-item keys), for example
 .BR "\-p go.icon=media\-playback\-start" .
 This option can be repeated.
 .TP
@@ -472,8 +470,3 @@ sliverctl layer push media 5000
 .BR sliver\-stylesheet (5),
 .BR sliverd (8),
 .BR busctl (1)
-.PP
-.I docs/api.md
-and
-.I docs/user\-guide.md
-in the sliver sources.

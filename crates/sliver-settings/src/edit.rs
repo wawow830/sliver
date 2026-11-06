@@ -2,7 +2,7 @@
 //! each one takes the user's file (an `Editor`) plus the merged effective config and edits the
 //! file. No GTK here, so they're unit-tested.
 //!
-//! The subtle part is that TOML arrays replace and never merge (ADR-0004 #6). To change one zone
+//! The subtle part is that TOML arrays replace and never merge. To change one zone
 //! of a layout that comes from the built-ins or an include, we first copy that layout's whole
 //! effective zone list into the user's file ("materialize"). Otherwise the user's partial list
 //! would silently drop the other zones. A zone inherited through `extends` is copied into the

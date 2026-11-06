@@ -1,10 +1,10 @@
 # Sliver: the Touch Bar platform for Linux Macs. Built from a git snapshot plus a cargo vendor
-# tarball (offline, so it works in mock/COPR). Local build: scripts/rpm-build. See docs/packaging.md.
+# tarball (offline, so it works in mock/COPR). Local build: scripts/rpm-build.
 
 # Sliver's own license (MIT OR Apache-2.0, like most Rust projects).
 %global sliver_license MIT OR Apache-2.0
-# Bundled crates (cargo tree --format '{l}', see docs/packaging.md) plus embedded assets
-# (Noto Sans: OFL-1.1, Material icons: Apache-2.0).
+# Bundled crates plus embedded assets (Noto Sans: OFL-1.1, Material icons: Apache-2.0); written
+# by hand, and packaging/test_packaging.py fails when the dependencies no longer match.
 %global bundled_licenses (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR GPL-2.0-only) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND BSD-2-Clause AND BSD-3-Clause AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Apache-2.0 OR LGPL-2.1-or-later) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT) AND Unicode-3.0 AND Zlib AND (Zlib OR Apache-2.0 OR MIT) AND OFL-1.1
 
 %bcond check 1
@@ -48,7 +48,7 @@ Summary:        Sliver Touch Bar system daemon
 License:        (%{sliver_license}) AND %{bundled_licenses}
 %{?systemd_requires}
 Requires:       systemd-udev
-# The fallback when sliverd can't run (OnFailure=tiny-dfr.service, ADR-0005). The two coexist:
+# The fallback when sliverd can't run (OnFailure=tiny-dfr.service). The two coexist:
 # sliverd's udev rule takes over the bar, and removing sliverd gives it back to tiny-dfr.
 Recommends:     tiny-dfr
 
@@ -127,8 +127,9 @@ Requires:       mozilla-filesystem
 %description -n sliver-browser
 The native-messaging host and browser extension that give the focused Firefox or Chromium window
 Touch Bar controls: back, forward, reload, new tab, and its tabs as a scrollable strip. The host
-publishes them through Sliver's public D-Bus API. Load the extension from
-%{_datadir}/sliver/browser (see the README there).
+publishes them through Sliver's public D-Bus API. Load the extension once: Chromium,
+chrome://extensions, Load unpacked, %{_datadir}/sliver/browser/chromium; Firefox, about:debugging,
+Load Temporary Add-on, %{_datadir}/sliver/browser/firefox/manifest.json.
 
 %prep
 %autosetup -n %{name}-%{version} -p1 -a1
@@ -163,7 +164,6 @@ for b in firefox chromium; do
     install -Dpm0644 integration/browser/extension/manifest.$b.json \
         %{buildroot}%{_datadir}/sliver/browser/$b/manifest.json
 done
-install -Dpm0644 integration/browser/README.md %{buildroot}%{_datadir}/sliver/browser/README.md
 # GNOME extension and KWin script. KWin 6.7 also reads /usr/share/kwin/scripts (checked in a nested
 # kwin_wayland), and Plasma 6.0-6.3 only read it.
 gs=sliver-focus@sliver.wawow830.github.io
@@ -235,7 +235,7 @@ udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=05ac \
     --attr-match=idProduct=8302 >/dev/null 2>&1 || :
 udevadm settle --timeout=5 >/dev/null 2>&1 || :
 # No takeover at install time: the bar switches to sliverd at the next boot, or now with
-# `systemctl start sliverd` (its ExecStartPre stops tiny-dfr). docs/packaging.md.
+# `systemctl start sliverd` (its ExecStartPre stops tiny-dfr).
 
 %preun -n sliverd
 %systemd_preun sliverd.service sliverd.socket
@@ -262,12 +262,11 @@ fi
 
 %files
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies cargo-vendor.txt
-%doc README.md GOAL.md docs/user-guide.md docs/api.md
+%doc README.md
 %doc examples
 
 %files -n sliverd
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
-%doc docs/hardware.md docs/decisions/0005-sliverd-system-integration.md
 %{_libexecdir}/sliverd
 %{_unitdir}/sliverd.service
 %{_unitdir}/sliverd.socket

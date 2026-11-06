@@ -1,5 +1,5 @@
 //! One layer's frame: resolved zones + cells → [`Scene`] → pixels (normal and all-pressed) and
-//! touch regions for sliverd (api.md §6).
+//! touch regions for sliverd.
 
 use sliver_config::{Align as CAlign, ResolvedZone, Width as CWidth};
 use sliver_ipc::proto::{Rect as IpcRect, Region, RegionKind};

@@ -1,5 +1,5 @@
 //! What apps publish, on the bar: App controls and Status items placeholders, and items a
-//! layout places itself (`app/<provider>#<item>`), with the module's config on top (api.md §3.1).
+//! layout places itself (`app/<provider>#<item>`), with the module's config on top.
 
 use super::*;
 
@@ -139,7 +139,7 @@ pub(super) fn placeholder_cells(
         out.push(placeholder(m, key, label, class));
     }
     // The placeholder's own classes and user bindings apply to every item in it
-    // (a user `on-*` replaces the app's event unless `pass-through`, api.md §5).
+    // (a user `on-*` replaces the app's event unless `pass-through`).
     let on = user_bindings(m);
     for c in &mut out[start..] {
         c.look.classes.extend(m.classes.iter().cloned());
@@ -149,7 +149,7 @@ pub(super) fn placeholder_cells(
         }
         c.key = format!("{prefix}{}", c.key);
     }
-    // `[modules."app/<provider>#<item>"]` applies here too (api.md §3.1).
+    // `[modules."app/<provider>#<item>"]` applies here too.
     if !world.published.configured.is_empty() {
         let cells: Vec<Cell> = out.drain(start..).collect();
         for cell in cells {

@@ -1,4 +1,4 @@
-//! The daemon core: a sans-IO state machine (docs/api.md §6).
+//! The daemon core: a sans-IO state machine.
 //!
 //! The event loop feeds it [`Input`]s with a monotonic timestamp in milliseconds, arms one timer
 //! for [`Daemon::next_deadline`], and carries out the returned [`Out`]s on the agent sockets.

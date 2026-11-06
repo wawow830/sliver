@@ -172,7 +172,7 @@ pub struct Config {
     /// Module blocks, keyed by the canonical id (so `[modules.pulseaudio]` configures `audio`).
     pub modules: BTreeMap<ModuleId, Table>,
     pub gestures: BTreeMap<String, Action>,
-    /// Per-app API preferences, keyed by app id (`"*"` = defaults). api.md §4.
+    /// Per-app API preferences, keyed by app id (`"*"` = defaults).
     pub apps: BTreeMap<String, AppPrefs>,
     /// Per-provider preferences, keyed by D-Bus provider id (a Flatpak/Snap id when sandboxed).
     pub providers: BTreeMap<String, ProviderPrefs>,

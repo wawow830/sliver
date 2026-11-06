@@ -75,7 +75,7 @@ pub struct TestDaemon {
 }
 
 impl TestDaemon {
-    /// This machine's bar (docs/hardware.md).
+    /// This machine's bar.
     pub fn mac14_7() -> PanelInfo {
         PanelInfo {
             width: 2008,

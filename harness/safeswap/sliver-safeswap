@@ -3,7 +3,8 @@
 
 Privileged helper (root via pkexec). The bar's previous owner is ALWAYS restored: the
 installed sliverd if it was driving the bar, else tiny-dfr. This is the only sanctioned way to
-touch the real bar. Design and install: docs/safe-swap.md. Below, "the owner" is that unit.
+touch the real bar. Install: `sudo harness/safeswap/install.sh`. Below, "the owner" is that
+unit.
 
     sliver-safeswap run BINARY [--seconds N] [--wait] [-- ARGS...]
     sliver-safeswap stop | restore | status

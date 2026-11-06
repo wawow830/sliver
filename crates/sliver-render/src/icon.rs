@@ -53,7 +53,8 @@ impl fmt::Debug for Icon {
 
 macro_rules! builtin_icons {
     ($($name:literal),* $(,)?) => {
-        /// Names of the icons embedded in the binary (Material Symbols, as shipped by tiny-dfr).
+        /// Names of the icons embedded in the binary: Material Symbols as tiny-dfr 0.3.7 ships them
+        /// (Apache-2.0, `assets/icons/LICENSE`), white fill, 48x48.
         pub const BUILTIN_ICONS: &[&str] = &[$($name),*];
         fn builtin_svg(name: &str) -> Option<&'static [u8]> {
             match name {

@@ -205,7 +205,7 @@ pub(super) fn control(
     (reply, fx)
 }
 
-/// The `Control1` properties while connected to sliverd (api.md §7). `Healthy`: connected and
+/// The `Control1` properties while connected to sliverd. `Healthy`: connected and
 /// driving the bar (sliverd's active agent, not standby for another seat user); problems with
 /// the config, stylesheet or modules are `Errors`.
 pub(super) fn control_state(agent: &Agent, reloader: &Reloader, role: Role) -> ControlState {

@@ -210,7 +210,7 @@ pub fn pushed_desktop(s: &Shared, backend: sliver_desktop::Backend) -> Option<De
     })
 }
 
-/// `SetFocus` keys (`docs/api.md` §5) → a window. Empty dict = nothing focused.
+/// `SetFocus` keys → a window. Empty dict = nothing focused.
 pub(super) fn focus_window(p: &Props) -> Option<Window> {
     if p.is_empty() {
         return None;

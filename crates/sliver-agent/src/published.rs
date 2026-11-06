@@ -1,4 +1,4 @@
-//! Items that apps publish over the public D-Bus API (api.md §3) as bar cells: the App controls
+//! Items that apps publish over the public D-Bus API as bar cells: the App controls
 //! and Status items placeholders (sliver-config(5)) fill from here.
 
 use sliver_api::item::{Item, ItemKind, SpacerSize};
@@ -33,14 +33,14 @@ impl PubContext {
 #[derive(Debug, Clone, Default)]
 pub struct Published {
     pub app: Option<PubContext>,
-    /// The app context may cover Main + Controls (api.md §4).
+    /// The app context may cover Main + Controls.
     pub modal: bool,
     pub status: Vec<PubContext>,
     /// Items the layout places itself (`app/<provider>#<item>`, or `app/<provider>` for a whole
-    /// context): they leave App controls / Status items (api.md §3.1). `None` = every item.
+    /// context): they leave App controls / Status items. `None` = every item.
     pub pinned: std::collections::HashSet<(String, Option<String>)>,
     /// `[modules."app/<provider>#<item>"]` blocks for items that show in a placeholder: their
-    /// format, classes and bindings still apply (api.md §3.1). Keyed by module id.
+    /// format, classes and bindings still apply. Keyed by module id.
     pub configured: std::collections::HashMap<String, sliver_config::ModuleInstance>,
 }
 
@@ -196,7 +196,7 @@ fn color(s: &Option<String>) -> Option<Color> {
     Some(Color::rgba(c[0], c[1], c[2], c[3]))
 }
 
-/// The ✕ at the end of a modal context (api.md §4).
+/// The ✕ at the end of a modal context.
 pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
     let icon = icons.get("window-close-symbolic", None, icon_size);
     let content = icon.map_or_else(|| Content::text("×"), Content::icon);
@@ -258,7 +258,7 @@ pub fn cells(
     }
 }
 
-/// The format values of a published item (api.md §3.1): `text` (= `label`), `icon`,
+/// The format values of a published item: `text` (= `label`), `icon`,
 /// `percentage` (a slider's or progress's position, 0–100; a toggle is 0 or 100), and every
 /// app-defined key in `values`. Text is escaped: formats are markup.
 pub fn item_values(item: &Item) -> (sliver_config::ValueMap, Option<f64>) {
@@ -301,7 +301,7 @@ pub fn item_values(item: &Item) -> (sliver_config::ValueMap, Option<f64>) {
     (v, pct)
 }
 
-/// A pinned `app/<provider>[#item]` module (api.md §3.1): that item's cells, or the whole
+/// A pinned `app/<provider>[#item]` module: that item's cells, or the whole
 /// context's. Empty when it isn't published (or not shown right now).
 pub fn pinned_cells(
     ctx: &PubContext,
@@ -334,7 +334,7 @@ fn push(
     if !item.visible {
         return;
     }
-    // `icon-data` is PNG, JPEG or SVG bytes (api.md §3). An `image` item's picture is kept at
+    // `icon-data` is PNG, JPEG or SVG bytes. An `image` item's picture is kept at
     // most 120 px tall; it fills the cell instead of sitting at icon size.
     let picture = match (&item.kind, &item.icon_data, &item.icon) {
         (ItemKind::Image, Some(data), _) => icons.from_bytes(data, Some(IMAGE_MAX_HEIGHT)),

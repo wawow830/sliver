@@ -1,4 +1,4 @@
-//! Rust client for Sliver's public Touch Bar API (`docs/api.md`).
+//! Rust client for Sliver's public Touch Bar API.
 //!
 //! ```no_run
 //! use sliver_client::{Client, ContextOptions, Item};
@@ -46,7 +46,7 @@ fn clone_props(p: &Props) -> Props {
         .collect()
 }
 
-/// Builder for one item (`docs/api.md` §3). Unknown keys are allowed (newer agents may know them).
+/// Builder for one item. Unknown keys are allowed (newer agents may know them).
 #[derive(Debug)]
 pub struct Item(Props);
 
@@ -177,7 +177,7 @@ impl Item {
     }
 }
 
-/// `CreateContext` options (`docs/api.md` §2).
+/// `CreateContext` options.
 #[derive(Debug)]
 pub struct ContextOptions(Props);
 
@@ -228,7 +228,7 @@ impl ContextOptions {
     }
 }
 
-/// An `Event` from the agent (`docs/api.md` §3).
+/// An `Event` from the agent.
 #[derive(Debug)]
 pub struct Event {
     pub context: u32,

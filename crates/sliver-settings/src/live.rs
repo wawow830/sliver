@@ -276,7 +276,7 @@ pub struct ContextInfo {
     pub item_labels: Vec<String>,
 }
 
-/// An integer from an `a{sv}` reply: `i` when it fits, else `x` (api.md §1).
+/// An integer from an `a{sv}` reply: `i` when it fits, else `x`.
 fn int(d: &std::collections::HashMap<String, OwnedValue>, k: &str) -> Option<i64> {
     let v = d.get(k)?;
     i32::try_from(v.try_clone().ok()?)

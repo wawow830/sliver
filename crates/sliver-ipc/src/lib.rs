@@ -1,4 +1,4 @@
-//! Sliver's wire contracts. See ADR-0003. The spec is `docs/api.md`.
+//! Sliver's wire contracts: the private sliverd⇄agent IPC, and the public D-Bus API's names.
 //!
 //! - [`proto`]: the private, versioned IPC between the privileged `sliverd` and the per-user
 //!   `sliver-agent` (one JSON object per `SOCK_SEQPACKET` packet, pixels in sealed memfds).

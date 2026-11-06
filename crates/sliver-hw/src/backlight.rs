@@ -1,7 +1,7 @@
 //! Bar backlight (write) + main display backlight (read, for adaptive brightness), via sysfs.
 //!
 //! The bar's `brightness` file is root-only, so in production and under the harness systemd
-//! opens it and passes the fd (`OpenFile=...:backlight`, see docs/safe-swap.md). Then sliverd
+//! opens it and passes the fd (`OpenFile=...:backlight`). Then sliverd
 //! never needs root. `max_brightness` and the main display's values are world-readable.
 
 use std::fs::{self, File, OpenOptions};
@@ -25,7 +25,7 @@ pub struct SysfsBacklight {
 
 impl SysfsBacklight {
     /// Bar backlight from the systemd-passed fd named `backlight` if present, else by opening
-    /// the sysfs file (needs root). Discovery is the same as tiny-dfr's (docs/hardware.md).
+    /// the sysfs file (needs root). Discovery is the same as tiny-dfr's.
     pub fn open() -> io::Result<SysfsBacklight> {
         let sys = Path::new("/sys/class/backlight");
         let bar = discover::bar_backlight(sys)

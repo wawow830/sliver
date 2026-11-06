@@ -1,22 +1,12 @@
 # sliver
 
-**Sliver turns the Touch Bar on Linux Macs into a first-class part of the Linux desktop.** It is
-a complete Touch Bar platform and customizer that replaces tiny-dfr. Users get full control over
-what the bar shows and does: layouts, per-app contexts, widgets, gestures and appearance. Every
-app, script and desktop environment gets a standard way to put things on the bar. And the user
-is never left without Escape or the F-keys.
+Sliver makes the Touch Bar on Linux Macs part of the desktop: waybar-style modules, layouts and
+stylesheets, a D-Bus API for apps (`docs/dbus/`, `examples/`), replacing tiny-dfr. It never trades
+away: (1) Esc and the F-keys are always reachable, (2) a hardware experiment never strands the
+user, (3) it's cheap on power, (4) all of it is testable without hardware.
 
-- [docs/user-guide.md](docs/user-guide.md): install, first run, troubleshooting
-- [man/](man): the reference (`sliver-config(5)`, `sliver-stylesheet(5)`, `sliverctl(1)`, ...)
-- [docs/api.md](docs/api.md): putting an app or script on the bar over D-Bus
-- [GOAL.md](GOAL.md): the goal, the design principle and the invariants
-- [docs/decisions](docs/decisions): architecture decisions
+Install: `scripts/rpm-build --binary`, `sudo dnf install target/rpmbuild/RPMS/*/*.rpm`, then
+`sudo systemctl start sliverd`. `sliverctl doctor` says what's wrong; `man sliver-config` is the
+reference. Bar stuck? Double-press Fn and hold: the F-keys. Back to tiny-dfr: remove the packages.
 
-Status: early. It drives the Touch Bar day to day on an M2 MacBook Pro 13" (`Mac14,7`) under
-Hyprland; other compositors, desktops and Macs are experimental.
-
-## License
-
-Sliver is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
-option. Bundled third-party assets keep their own licenses (fonts: OFL-1.1, icons: Apache-2.0,
-see `crates/sliver-render/assets/`), and code derived from tiny-dfr keeps its MIT notice.
+MIT or Apache-2.0; bundled fonts and icons keep their licenses (beside them).

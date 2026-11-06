@@ -1,8 +1,8 @@
 //! Real Touch Bar hardware access: discovery (sysfs), DRM, evdev and backlight helpers.
 //!
-//! **Never open the real devices outside the safe-swap harness** (docs/safe-swap.md) or the
-//! installed `sliverd.service`. Code that opens devices must call [`require_harness`] first. Discovery only reads sysfs and is always safe.
-//! Hardware facts and per-model quirks: docs/hardware.md.
+//! **Never open the real devices outside the safe-swap harness** or the
+//! installed `sliverd.service`. Code that opens devices must call [`require_harness`] first.
+//! Discovery only reads sysfs and is always safe.
 
 pub mod backlight;
 pub mod discover;
@@ -24,7 +24,7 @@ impl fmt::Display for NotUnderHarness {
         f.write_str(
             "refusing to open Touch Bar devices outside the safe-swap harness or the installed \
              sliverd.service (SLIVER_SAFESWAP=1 not set, and not running as the system unit); \
-             see docs/safe-swap.md",
+             run it with harness/safeswap/sliver-safeswap",
         )
     }
 }

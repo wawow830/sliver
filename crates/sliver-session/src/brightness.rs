@@ -24,7 +24,7 @@ pub struct Device {
     pub max: u32,
 }
 
-/// Names of the Touch Bar panel's backlight, as in tiny-dfr's udev rules (docs/hardware.md).
+/// Names of the Touch Bar panel's backlight, as in tiny-dfr's udev rules.
 pub fn is_touch_bar(name: &str, driver: Option<&str>) -> bool {
     matches!(
         name,

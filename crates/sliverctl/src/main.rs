@@ -1,4 +1,4 @@
-//! `sliverctl`: command-line client of the public sliver session D-Bus API (`docs/api.md`).
+//! `sliverctl`: command-line client of the public sliver session D-Bus API.
 
 mod cli;
 mod config;

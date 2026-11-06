@@ -1,4 +1,16 @@
-//! Published items: the `aa{sv}` vocabulary of `docs/api.md` §3, parsed into typed values.
+//! Published items: each an `a{sv}` with an `id` (stable across releases: users pin and style by
+//! it) and a `type`, parsed into typed values.
+//!
+//! - Types: `button`, `toggle` (`state`), `label`, `slider` (`value`, `min`, `max`, `step`),
+//!   `segmented` (`segments`, `selected`), `scrubber` (`candidates`, `selected`, `offset`,
+//!   `visible-count`), `progress` (`value` 0–1 or `indeterminate`), `spacer` (`size`), `image`
+//!   (`icon-data` or `icon`), `group` and `popover` (`items`, one level).
+//! - Common: `label` (plain text), `icon` (a name) or `icon-data` (PNG, JPEG or SVG bytes),
+//!   `enabled`, `visible`, `classes`, `values` (for the user's `format`), `fg`/`bg` hints,
+//!   `width` (`min`, `max`), `priority` (lower gives way when a zone overflows), `gestures`.
+//! - Events: `tap`, `toggled`, `value` (`begin`/`change`/`end`), `selected`, `scrolled`,
+//!   `popover`, `closed`, and `hold`, `double-tap`, `swipe-*` only when listed in `gestures`.
+//!   The agent updates toggles, sliders and selections at once; the app may correct them.
 //!
 //! Parsing is lenient (the forward compatibility rule): unknown keys and types become warnings and
 //! wrong-typed values are ignored with a warning. Only structural problems are errors: a missing

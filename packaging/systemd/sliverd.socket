@@ -1,4 +1,4 @@
-# The sliverd <-> sliver-agent IPC socket (docs/api.md §6). sliverd authorises each connection
+# The sliverd <-> sliver-agent IPC socket. sliverd authorises each connection
 # itself (SO_PEERCRED uid must own the active seat0 session), hence mode 0666.
 #
 # Not WantedBy=sockets.target: on a Mac without a Touch Bar nothing should start sliverd. The
@@ -7,7 +7,7 @@
 
 [Unit]
 Description=Sliver Touch Bar daemon IPC socket
-Documentation=https://github.com/wawow830/sliver/blob/main/docs/api.md
+Documentation=man:sliverd(8)
 
 [Socket]
 ListenSequentialPacket=/run/sliver/sliverd.sock

@@ -1,4 +1,5 @@
-//! Per-model quirks in one table (docs/hardware.md "Touch Bar models"). Everything else is
+//! Per-model quirks in one table. T1/T2 bars are 2170 px with no physical Esc (except the 2019+
+//! 16" and 13"), T2 backlights have three steps; Apple Silicon bars are 2008 px. Everything else is
 //! discovered at runtime: geometry from the DRM mode, `max_brightness` from sysfs, the model from
 //! DMI. Only the Mac14,7 row has been observed directly; the rest is "believed".
 

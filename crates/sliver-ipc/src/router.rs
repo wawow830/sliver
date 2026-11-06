@@ -1,4 +1,4 @@
-//! Touch → key/agent routing for sliverd (`docs/api.md` §6, "Key-region touch semantics").
+//! Touch → key/agent routing for sliverd.
 //!
 //! Lives here, not in sliverd, so the fake daemon behaves exactly like the real one.
 //! It's pure state: feed it touches plus the regions currently on screen, and act on the output.

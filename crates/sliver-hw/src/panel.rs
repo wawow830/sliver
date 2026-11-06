@@ -1,7 +1,7 @@
 //! The Touch Bar DRM panel: one XRGB8888 dumb buffer scanned out by an atomic modeset, updated
 //! by writing into the mapped buffer and flushing damaged columns with DIRTYFB. That's what the
 //! Mac14,7's `adp` driver needs: one XR24-only primary plane with no FB_DAMAGE_CLIPS and no
-//! rotation (docs/hardware.md). The same approach works on T2 `appletbdrm` (XRGB
+//! rotation. The same approach works on T2 `appletbdrm` (XRGB
 //! emulated, damage helper).
 //!
 //! The buffer is in *scanout* orientation. The bar is portrait on every known model (60x2008,

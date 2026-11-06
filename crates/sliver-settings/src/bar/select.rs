@@ -226,7 +226,7 @@ pub(super) fn drop_target(v: &View) -> (gtk::DropTarget, DropFn) {
     (target, drop_module)
 }
 
-/// Dragging (GOAL: WYSIWYG drag/drop/resize): a Library chip onto the bar; a module along the bar
+/// Dragging (what you see is what you get): a Library chip onto the bar; a module along the bar
 /// to move it, also into another zone; a module off the bar (up or down) to remove it; a module's
 /// right edge to set its width. One gesture on the page, which holds both the chips and the
 /// preview, so it follows the pointer between them on every GDK backend (Broadway has no implicit

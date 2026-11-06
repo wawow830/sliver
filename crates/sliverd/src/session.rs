@@ -1,4 +1,4 @@
-//! Who owns the active session on seat0: only that uid's agent may drive the bar (api.md §6).
+//! Who owns the active session on seat0: only that uid's agent may drive the bar.
 //!
 //! sd-login keeps this in `/run/systemd/seats/<seat>` (`ACTIVE_UID=…`), rewritten by rename on
 //! every session switch. [`SeatWatch`] reads it and watches the directory with inotify, which is

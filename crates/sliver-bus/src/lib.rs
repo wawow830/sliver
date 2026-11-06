@@ -4,7 +4,7 @@
 //! `blocking` crate then keeps an idle pool thread in a 500 ms `wait_timeout` loop that it only
 //! leaves when the pool is over its limit (500), i.e. never: two wakeups a second, forever, in
 //! every process that ever connected or dropped a connection. That was the agent's whole idle
-//! floor (docs/hardware.md, "Idle wakeups").
+//! floor of wakeups.
 //!
 //! So this crate connects the socket itself (a plain `connect(2)` on a Unix socket doesn't block
 //! for long) and hands zbus a socket whose write half shuts down directly on close (`shutdown(2)`

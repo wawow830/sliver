@@ -1,4 +1,4 @@
-//! The brightness-curve editor (GOAL Appearance): how bright the bar is for each brightness
+//! The brightness-curve editor: how bright the bar is for each brightness
 //! of the main display, in adaptive mode. It edits `[display] curve = [[screen, bar], …]`
 //! (percent; bar is a percentage of max-brightness). The graph uses sliverd's own math
 //! (`sliver_ipc::curve`). Without a curve that's tiny-dfr's square root, drawn dashed.

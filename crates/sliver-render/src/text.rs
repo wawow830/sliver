@@ -9,6 +9,10 @@ use cosmic_text::{
 /// Family name of the font embedded in the binary.
 pub const EMBEDDED_FONT_FAMILY: &str = "Noto Sans";
 
+/// Noto Sans Bold (SIL OFL 1.1, `assets/fonts/OFL.txt`), embedded so the safe layer renders with
+/// no system fonts. Subset to Latin, punctuation, arrows, shapes and key symbols:
+/// `pyftsubset NotoSans-Bold.ttf --layout-features='*' --unicodes="U+0020-007E,U+00A0-017F,`
+/// `U+2000-206F,U+20AC,U+2190-21FF,U+2212,U+2318,U+2325,U+2326,U+232B,U+23CE,U+25A0-25FF"`.
 const EMBEDDED_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSans-Bold-subset.ttf");
 
 /// Fonts available to the renderer, plus shaping and glyph caches.

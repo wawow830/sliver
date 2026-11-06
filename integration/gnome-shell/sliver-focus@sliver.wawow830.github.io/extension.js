@@ -1,6 +1,5 @@
 // Sliver focus: a GNOME Shell extension (ESM, GNOME 45+) that feeds the focused window and
-// workspace to the Sliver session agent over D-Bus (io.github.wawow830.Sliver.Desktop1,
-// docs/api.md section 5).
+// workspace to the Sliver session agent over D-Bus (io.github.wawow830.Sliver.Desktop1).
 //
 // Mutter lets no client ask "what is focused?" (org.gnome.Shell.Eval is locked down), so the
 // shell side has to push. The agent is optional: calls use NO_AUTO_START and ignore errors,
@@ -8,7 +7,7 @@
 // focus source.
 //
 // Run against a real (headless) GNOME Shell 50.5 by integration/gnome-shell/test.sh; written from the
-// GNOME Shell 45+ extension API. See integration/README.md.
+// GNOME Shell 45+ extension API. Enable once: gnome-extensions enable sliver-focus@sliver.wawow830.github.io
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';

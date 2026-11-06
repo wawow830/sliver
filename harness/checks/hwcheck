@@ -7,7 +7,7 @@
 A check (harness/checks/NAME.toml) can build release binaries, do a bounded safe-swap run with
 an agent, and then go step by step: tell the human what to do at the moment it matters, check
 the daemon log by itself, save bar snapshots, and ask short questions. Results go to
-target/hw/checks/<stamp>/result.txt. See docs/safe-swap.md "Guided checks".
+target/hw/checks/<stamp>/result.txt.
 
 Step fields, run in this order: say, confirm, shell, resume, wait, expect, snap, ask, collect.
 """

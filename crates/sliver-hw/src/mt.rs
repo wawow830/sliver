@@ -1,6 +1,7 @@
 //! Pure decoder: Linux multitouch protocol B (evdev `EV_ABS`/`EV_SYN` stream) into contact phases
-//! in logical bar pixels. No I/O, so it's unit-tested on recorded sequences (docs/hardware.md has
-//! the real device's ranges: X 0..23044 along the bar, Y 0..639, ~60 Hz SYN_REPORTs).
+//! in logical bar pixels. No I/O, so it's unit-tested on recorded sequences. The Mac14,7 bar
+//! reports X 0..23044 along the bar and Y 0..639 (100 units/mm), ~60 Hz SYN_REPORTs, three
+//! reliable contacts, and no pressure or hover.
 
 use crate::evdev::{
     ABS_MT_POSITION_X, ABS_MT_POSITION_Y, ABS_MT_SLOT, ABS_MT_TRACKING_ID, EV_ABS, EV_SYN,

@@ -216,7 +216,7 @@ impl ApiLink {
 }
 
 /// `[apps."<app-id>"]`, `[providers."<id>"]` and `[api]` (sliver-config(5)) as the API
-/// registry's [`Policy`] (api.md §4).
+/// registry's [`Policy`].
 pub fn policy_from_config(config: &sliver_config::Config) -> Policy {
     let app = |p: sliver_config::AppPolicy| AppPolicy {
         source: match (p.controls, p.pin) {

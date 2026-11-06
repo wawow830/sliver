@@ -5,7 +5,7 @@
 
 It publishes a `status` context (it shows up in the user's "Status items"), updates its label
 every second, and reacts to taps. If sliver-agent restarts, it publishes again, like every good
-client should (docs/api.md section 7). Customize it like any module:
+client should. Customize it like any module:
 `app/org.example.Pomodoro#timer` in your config and stylesheet.
 """
 

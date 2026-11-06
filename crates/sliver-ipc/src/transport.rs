@@ -1,4 +1,4 @@
-//! `SOCK_SEQPACKET` transport: one message per packet, fds via `SCM_RIGHTS` (`docs/api.md` §6).
+//! `SOCK_SEQPACKET` transport: one message per packet, fds via `SCM_RIGHTS`.
 //!
 //! Blocking by default. Use [`Conn::set_nonblocking`] and the [`AsFd`] impl to drive it from an
 //! event loop (epoll/calloop). Then `recv` returns `ErrorKind::WouldBlock` when nothing is queued.

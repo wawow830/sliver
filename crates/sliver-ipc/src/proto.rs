@@ -1,4 +1,9 @@
-//! sliverd ⇄ sliver-agent messages (`docs/api.md` §6).
+//! sliverd ⇄ sliver-agent messages. sliverd trusts nothing the agent says: it validates every
+//! frame, region and key ([`crate::validate`]), copies pixels out of sealed memfds, and falls back
+//! to its built-in layer on a hangup, a malformed packet, a major version mismatch or a missed
+//! `pong`. The agent draws whole frames; sliverd only knows key regions (pressed and emitted by
+//! itself, so Esc and the F-keys never wait on the agent), the `base` and `fn` layers it swaps on
+//! Fn, and the safe hatch.
 //!
 //! One message = one `SOCK_SEQPACKET` packet = one UTF-8 JSON object tagged by `"t"`.
 //! Unknown fields are ignored (forward compatibility within a major version). Only

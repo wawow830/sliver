@@ -1,5 +1,4 @@
-# sliverd: owns the Touch Bar (display, touch, backlight, key output). See sliverd(8) and
-# docs/decisions/0005-sliverd-system-integration.md.
+# sliverd: owns the Touch Bar (display, touch, backlight, key output). See sliverd(8).
 #
 # Started by udev (99-z-sliverd.rules) when the bar's digitizer appears, like tiny-dfr.
 # Invariant 1: if sliverd keeps failing, systemd hands the bar back to tiny-dfr.

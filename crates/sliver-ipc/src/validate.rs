@@ -1,4 +1,4 @@
-//! What sliverd checks before trusting anything from the agent (`docs/api.md` §6).
+//! What sliverd checks before trusting anything from the agent.
 //!
 //! sliverd treats the agent as untrusted. A frame that fails [`validate_present`] is rejected
 //! (the previous frame stays up). [`missing_safe_keys`] is advisory only. Layouts are fully

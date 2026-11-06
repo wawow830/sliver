@@ -62,7 +62,7 @@ pub enum Effect {
     Profile(String),
     /// Switch workspace or focus/close a window on the compositor (workspaces, taskbar).
     Desktop(sliver_desktop::control::Action),
-    /// Tell the app that owns a published item what the user did (api.md §5).
+    /// Tell the app that owns a published item what the user did.
     Api {
         context: sliver_api::registry::ContextId,
         item: String,
@@ -274,7 +274,7 @@ impl Agent {
         width: u32,
         height: u32,
     ) -> Agent {
-        // tiny-dfr's heuristic (docs/hardware.md): only the 2170 px bars lack a physical Esc.
+        // tiny-dfr's heuristic: only the 2170 px bars lack a physical Esc.
         let physical_esc = width < 2170;
         let ctx = Context::new().with("physical_esc", physical_esc);
         Agent {
@@ -536,7 +536,7 @@ impl Agent {
             panic!("test panic in build");
         }
         // Published items the layout places itself (`app/<provider>#<item>`) leave the
-        // App controls / Status items placeholders (api.md §3.1).
+        // App controls / Status items placeholders.
         fn pinned(ms: &[sliver_config::ModuleInstance], out: &mut Vec<(String, Option<String>)>) {
             for m in ms {
                 if m.id.kind == "app"
@@ -589,7 +589,7 @@ impl Agent {
             }
             s
         };
-        // A menu, drawer, popover or modal app context covers all but the first zone (api.md §4).
+        // A menu, drawer, popover or modal app context covers all but the first zone.
         let mut cover = (id_base == 0)
             .then(|| overlay::cover(&mut self.overlay, &r.zones, world, &mut self.icons, &lookup))
             .flatten();
@@ -663,7 +663,7 @@ impl Agent {
             }
         }
         self.fit_slots(&zones, &mut per_zone, &classes);
-        // Published items with a lower `priority` give way when their zone overflows (api.md §3),
+        // Published items with a lower `priority` give way when their zone overflows,
         // a group as a unit. Only measured when some priority differs.
         if per_zone.iter().flatten().any(|c| {
             c.published

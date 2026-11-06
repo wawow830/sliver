@@ -1,6 +1,6 @@
 //! Who is a D-Bus client, really? Verified from `/proc`, never from what the client claims.
 //!
-//! Used for two things (`docs/api.md` §4): binding `app` contexts to the focused window (same pid,
+//! Used for two things: binding `app` contexts to the focused window (same pid,
 //! same Flatpak instance or same systemd app unit) and the sandbox tier.
 
 use std::fs;

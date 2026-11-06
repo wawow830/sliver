@@ -2,7 +2,7 @@
 //! the mapping from `sliver_hw` input events to [`crate::Input`].
 //!
 //! Every constructor here refuses unless `SLIVER_SAFESWAP=1` (the safe-swap harness or, later,
-//! the real sliverd unit). Hardware facts: docs/hardware.md. Harness: docs/safe-swap.md.
+//! the real sliverd unit).
 
 use std::io;
 use std::path::Path;

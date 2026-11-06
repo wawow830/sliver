@@ -303,7 +303,7 @@ pub struct Common {
     pub swipe_threshold: Option<u32>,
     pub interval: Option<Interval>,
     /// For app-published modules: also deliver the gesture to the app when a user `on-*`
-    /// binding exists (api.md §5). Default false, so the user binding replaces the app event.
+    /// binding exists. Default false, so the user binding replaces the app event.
     pub pass_through: bool,
 }
 

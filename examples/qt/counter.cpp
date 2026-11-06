@@ -1,5 +1,4 @@
 // A counter on the Touch Bar from a Qt 6 app, in plain D-Bus (QtDBus, no sliver libraries).
-// docs/api.md §10 explains it step by step.
 //
 //     g++ -std=c++17 -fPIC examples/qt/counter.cpp -o counter $(pkg-config --cflags --libs Qt6DBus Qt6Core)
 //     ./counter

@@ -1,5 +1,5 @@
-//! Who fills the bar: the focused app's context for App controls, and the status contexts
-//! (`docs/api.md` §4), under the user's policy.
+//! Who fills the bar: the focused app's context for App controls, and the status contexts, under
+//! the user's policy.
 
 use super::*;
 
@@ -93,7 +93,7 @@ pub struct Resolved {
 }
 
 impl Registry {
-    /// Who fills App controls and Status items (`docs/api.md` §4).
+    /// Who fills App controls and Status items.
     pub fn resolve(&self, focus: &Focus, policy: &Policy, proc: &dyn ProcInfo) -> Resolved {
         if focus.locked {
             return Resolved::default();

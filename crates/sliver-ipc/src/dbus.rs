@@ -1,4 +1,4 @@
-//! Names and limits of the public session D-Bus API (`docs/api.md` §2–5).
+//! Names and limits of the public session D-Bus API.
 //!
 //! The namespace is `io.github.wawow830.Sliver`. Change it here and only here.
 
@@ -25,7 +25,7 @@ pub mod error {
     pub const BUSY: &str = "io.github.wawow830.Sliver.Error.Busy";
 }
 
-/// Per-connection abuse limits (`docs/api.md` §4).
+/// Per-connection abuse limits.
 pub mod limits {
     pub const CONTEXTS_PER_CLIENT: usize = 16;
     pub const ITEMS_PER_CONTEXT: usize = 128;

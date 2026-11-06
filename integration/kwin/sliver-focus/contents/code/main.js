@@ -1,5 +1,6 @@
 // Sliver focus: a KWin script (Plasma 6) that feeds the active window and virtual desktop to the
-// Sliver session agent over D-Bus (io.github.wawow830.Sliver.Desktop1, docs/api.md section 5).
+// Sliver session agent over D-Bus (io.github.wawow830.Sliver.Desktop1). Enable
+// it once in System Settings → Window Management → KWin Scripts.
 //
 // KWin gives clients no way to ask "what is focused?", so the compositor side has to push.
 // Nothing here talks to anything but the agent, and the agent is optional: if it is not running

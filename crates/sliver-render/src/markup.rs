@@ -1,6 +1,6 @@
 //! A Pango-markup subset for format strings (sliver-config(5)).
 //!
-//! Waybar labels are Pango markup. The renderer isn't Pango (ADR-0002), so this parses the part
+//! Waybar labels are Pango markup. The renderer isn't Pango, so this parses the part
 //! that matters on a status bar into styled text runs that `cosmic-text` can shape:
 //!
 //! * tags `<b> <i> <u> <s> <big> <small> <sub> <sup> <tt> <span …>` (and `<strong>`/`<em>`

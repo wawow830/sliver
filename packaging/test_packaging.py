@@ -152,7 +152,7 @@ def license_terms(expr):
 
 class Licenses(unittest.TestCase):
     def test_spec_lists_the_bundled_crates_licenses(self):
-        # The spec's bundled_licenses is written by hand (docs/packaging.md): it must still be
+        # The spec's bundled_licenses is written by hand: it must still be
         # what the shipped binaries' dependencies are under, plus the embedded assets.
         if not shutil.which("cargo"):
             self.skipTest("no cargo")
