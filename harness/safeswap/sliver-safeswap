@@ -1,27 +1,28 @@
 #!/usr/bin/python3
 """sliver-safeswap: run a sliver build on the real Touch Bar for a bounded time.
 
-Privileged helper (root via pkexec). tiny-dfr is ALWAYS restored. This is the only
-sanctioned way to touch the real bar. Design and install: docs/safe-swap.md.
+Privileged helper (root via pkexec). The bar's previous owner is ALWAYS restored: the
+installed sliverd if it was driving the bar, else tiny-dfr. This is the only sanctioned way to
+touch the real bar. Design and install: docs/safe-swap.md. Below, "the owner" is that unit.
 
     sliver-safeswap run BINARY [--seconds N] [--wait] [-- ARGS...]
     sliver-safeswap stop | restore | status
     sliver-safeswap snap > bar.png        # screenshot of whatever is on the bar now
 
 How restoration is guaranteed (all of it is systemd's job, not this script's):
-  * The payload runs in the transient system unit sliver-swap.service with
-    Conflicts=tiny-dfr.service: starting it stops tiny-dfr, and starting tiny-dfr
-    (for any reason, e.g. a udev event) stops it.
+  * The payload runs in the transient system unit sliver-swap.service, which conflicts with
+    every bar owner (tiny-dfr, sliverd and its socket): starting it stops the owner, and
+    starting an owner (for any reason, e.g. a udev event) stops it.
   * RuntimeMaxSec=N kills it at the deadline. TimeoutStopSec + SIGKILL bound the stop.
   * ExecStopPost=+<this> restore runs as root after ANY end: exit, crash, timeout, stop.
   * A separate restore timer (sliver-swap-restore.timer) fires at N+grace no matter what.
-  * Nothing persistent is changed (no mask, no enable), so a reboot restores tiny-dfr
+  * Nothing persistent is changed (no mask, no enable), so a reboot brings the owner back
     through its normal udev activation.
   * In --wait mode, the death of the calling process (PDEATHSIG) or a signal ends the run early.
 
 The payload runs as the INVOKING USER (never root), with groups video+input, which
-that user already has. So the only privileges this helper hands out are "stop
-tiny-dfr for at most N seconds" and an fd to the bar's backlight.
+that user already has. So the only privileges this helper hands out are "stop the bar's
+owner for at most N seconds" and an fd to the bar's backlight.
 """
 
 from __future__ import annotations
