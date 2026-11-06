@@ -24,6 +24,7 @@ use rustix::event::{PollFd, PollFlags, poll};
 use sliver_agent::Agent;
 use sliver_agent::agent::{Effect, SessionOp};
 use sliver_agent::api::{ApiLink, Reply};
+use sliver_agent::driver::{Driver, Input, Now, Output};
 use sliver_agent::feeds::{Aggregate, Feed, Feeds};
 use sliver_agent::icons::Icons;
 use sliver_agent::link::{Event, Link};
@@ -33,7 +34,7 @@ use sliver_agent::published::Published;
 use sliver_api::registry::Focus;
 use sliver_api::service::{Control, ControlReply, ControlState};
 use sliver_config::Config;
-use sliver_ipc::proto::{AgentMsg, DisplayPolicy, DisplayState, Layer, Role, SOCKET_PATH};
+use sliver_ipc::proto::{AgentMsg, DisplayState, Layer, Role, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
 use sliver_render::{Fonts, Renderer, Stylesheet};
 use std::collections::HashMap;
@@ -701,12 +702,6 @@ fn reduce_motion(live: &Live) -> bool {
     live.agg.session.appearance.reduce_motion.unwrap_or(false)
 }
 
-/// Monotonic clock in µs: the same clock sliverd stamps touches with (evdev, CLOCK_MONOTONIC).
-fn now_us() -> u64 {
-    let t = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
-    t.tv_sec as u64 * 1_000_000 + t.tv_nsec as u64 / 1_000
-}
-
 /// The `systemd-run` prefix that puts a command in its own transient scope, so it outlives
 /// the agent: under `sliver-agent.service` (KillMode=control-group) children in our cgroup die
 /// with every agent restart. Desktop launchers do the same.
@@ -764,16 +759,9 @@ fn spawn_detached(argv: &[String]) -> std::io::Result<Child> {
     plain(argv)
 }
 
-/// Carries out the agent's effects. Returns whether a redraw is needed.
-fn apply(
-    effects: Vec<Effect>,
-    link: &Link,
-    children: &mut Vec<Child>,
-    live: &Live,
-    press: &mut bool,
-) -> std::io::Result<bool> {
-    let mut redraw = false;
-    for e in effects {
+/// Carries out one of the agent's effects.
+fn apply(e: Effect, link: &Link, children: &mut Vec<Child>, live: &Live) -> std::io::Result<()> {
+    {
         match e {
             Effect::Session(op) => {
                 let op = match op {
@@ -796,7 +784,7 @@ fn apply(
                             adapter: a.clone(),
                             on: !live.agg.session.bluetooth.powered,
                         },
-                        None => continue,
+                        None => return Ok(()),
                     },
                     SessionOp::OpenNotification | SessionOp::DismissNotification => {
                         match live.agg.session.notifications.latest.as_ref().map(|l| l.id) {
@@ -804,7 +792,7 @@ fn apply(
                                 Op::OpenNotification(id)
                             }
                             Some(id) => Op::CloseNotification(id),
-                            None => continue,
+                            None => return Ok(()),
                         }
                     }
                     SessionOp::DBus(call) => Op::DBus(call),
@@ -830,7 +818,7 @@ fn apply(
                                 track,
                                 pos_us: len * i64::from(pct) / 100,
                             },
-                            None => continue,
+                            None => return Ok(()),
                         }
                     }
                     SessionOp::Media(cmd) => match &live.agg.session.media {
@@ -838,7 +826,7 @@ fn apply(
                             player: m.player.clone(),
                             cmd,
                         },
-                        None => continue,
+                        None => return Ok(()),
                     },
                 };
                 live.op(op);
@@ -898,8 +886,8 @@ fn apply(
                     }
                 });
             }
-            Effect::Redraw => redraw = true,
-            Effect::RedrawPress => *press = true,
+            // The driver draws; these never reach here.
+            Effect::Redraw | Effect::RedrawPress => {}
             Effect::EmitKeys(keys, mode) => link.emit_keys(&keys, mode)?,
             Effect::Log(msg) => eprintln!("sliver-agent: {msg}"),
             Effect::Spawn(argv) => match spawn_detached(&argv) {
@@ -911,9 +899,7 @@ fn apply(
             },
         }
     }
-    // Reap whatever finished, so no zombies pile up.
-    children.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
-    Ok(redraw)
+    Ok(())
 }
 
 /// A `Control1` request from D-Bus (sliverctl and friends), answered by the core.
@@ -929,7 +915,11 @@ fn control(
     let done = Ok(ControlReply::Done);
     let reply = match req {
         Control::SwitchLayer(name) | Control::PushLayer(name, _) => {
-            agent.run_action(&layer(name, LayerMode::Toggle), now_us(), &mut fx);
+            agent.run_action(
+                &layer(name, LayerMode::Toggle),
+                Now::read().mono_us,
+                &mut fx,
+            );
             if !fx.contains(&Effect::Redraw) {
                 Err("no such layer".into())
             } else {
@@ -937,11 +927,15 @@ fn control(
             }
         }
         Control::ToggleLayer(name) => {
-            agent.run_action(&layer(name, LayerMode::Toggle), now_us(), &mut fx);
+            agent.run_action(
+                &layer(name, LayerMode::Toggle),
+                Now::read().mono_us,
+                &mut fx,
+            );
             done
         }
         Control::PopLayer => {
-            agent.run_action(&Action::CloseLayer, now_us(), &mut fx);
+            agent.run_action(&Action::CloseLayer, Now::read().mono_us, &mut fx);
             done
         }
         Control::Signal(n) => {
@@ -953,7 +947,7 @@ fn control(
             _ => Err(format!("no user module {m:?}")),
         },
         Control::Trigger(module, g) => {
-            agent.trigger(&module, g, now_us(), &mut fx);
+            agent.trigger(&module, g, Now::read().mono_us, &mut fx);
             done
         }
         Control::Bar(what) => {
@@ -1155,96 +1149,34 @@ fn control_state(agent: &Agent, reloader: &Reloader, role: Role) -> ControlState
 }
 
 fn run(
-    mut agent: Agent,
+    agent: Agent,
     mut link: Link,
     live: &mut Live,
     reloader: &mut Reloader,
 ) -> std::io::Result<()> {
-    let mut dirty = true;
-    // Only pressed feedback changed: re-render just the touched layer's image (fast path).
-    let mut press_dirty = false;
+    let mut driver = Driver::new(agent, link.panel.max_brightness);
     let mut children = Vec::new();
-    // The display policy sliverd has from us. Resent whenever the config or the power
-    // source changes it, and after a role change (sliverd ignores it from a standby agent).
-    let mut sent_policy: Option<DisplayPolicy> = None;
-    // Content changes (published items, feeds) redraw at most 30 times a second, and
-    // the registry is only copied out when a frame is actually drawn.
-    let mut pacer = sliver_agent::pace::Pacer::default();
+    let mut inputs = vec![Input::OnBattery(live.agg.session.power.on_battery)];
     loop {
-        if pacer.due(std::time::Instant::now()) {
-            dirty = true;
+        let now = Now::read();
+        for input in inputs.drain(..) {
+            let out = driver.handle(&now, input);
+            perform(out, &driver, &mut link, &mut children, live)?;
         }
-        let policy = sliver_agent::display::policy(
-            &agent.config.display,
-            live.agg.session.power.on_battery,
-            link.panel.max_brightness,
-        );
-        if sent_policy.as_ref() != Some(&policy) {
-            link.send(&AgentMsg::DisplayPolicy(policy.clone()))?;
-            sent_policy = Some(policy);
-        }
-        if press_dirty && !dirty && agent.display != DisplayState::Off {
-            for layer in agent.render_press() {
-                let f = agent.frame(layer).expect("rendered before");
-                link.present(layer, &f.image, &f.pressed, &f.regions)?;
-            }
-        }
-        press_dirty = false;
-        if dirty && agent.display != DisplayState::Off {
-            pacer.drawn(std::time::Instant::now());
-            for layer in agent.render(&live.world()) {
-                let f = agent.frame(layer).expect("just rendered");
-                link.present(layer, &f.image, &f.pressed, &f.regions)?;
-            }
-            agent
-                .errors
-                .iter()
-                .for_each(|e| eprintln!("sliver-agent: {e}"));
-            dirty = false;
-            if let Some(api) = &mut live.api {
-                let drawn = [Layer::Base, Layer::Fn]
-                    .iter()
-                    .filter_map(|l| agent.frame(*l))
-                    .flat_map(|f| {
-                        f.cells
-                            .iter()
-                            .filter_map(|c| c.published.as_ref().map(|p| p.context))
-                    })
-                    .collect();
-                api.set_on_screen(drawn);
-            }
-        }
-        // A spectrum on the lit bar runs cava; anything else stops it (the bar going dark,
-        // another layout, Fn held).
-        live.feeds.run_spectrum(agent.spectrum_config().as_deref());
-        // Not only after a render: with the bar off nothing renders, and the state (layer,
-        // profile, health) must still be right. Sent only when it changed.
+        let out = driver.draw(&now, || live.world());
+        perform(out, &driver, &mut link, &mut children, live)?;
+        // Not only after a draw: with the bar off nothing draws, and the state (layer, profile,
+        // health) must still be right. Sent only when it changed.
         if let Some(api) = &live.api {
-            api.set_control_state(control_state(&agent, reloader, link.role));
+            api.set_control_state(control_state(driver.agent(), reloader, link.role));
         }
-        // Sleep until sliverd says something, a gesture/macro deadline, or a module's content
-        // changes on its own. Nothing else wakes us (invariant 3).
-        let change_ms = agent
-            .next_change()
-            .map(|t| (t - Local::now()).num_milliseconds().max(0) + 1);
-        let deadline_ms = agent
-            .next_deadline()
-            .map(|t| (t.saturating_sub(now_us()) / 1000) as i64 + 1);
-        let animation_ms = agent.animation_deadline().map(|t| {
-            t.saturating_duration_since(std::time::Instant::now())
-                .as_millis() as i64
-                + 1
-        });
-        // A held-back content change (never while the bar is off: turning on redraws anyway).
-        let pace_ms = pacer
-            .wait(std::time::Instant::now())
-            .filter(|_| agent.display != DisplayState::Off)
-            .map(|d| d.as_millis() as i64 + 1);
-        let timeout = change_ms
+
+        // Sleep until sliverd, a feed, the API or the config says something, or something is due.
+        // Nothing else wakes us (invariant 3).
+        let timeout = driver
+            .next_deadline(&now)
+            .map(|d| d.as_millis() as i64 + 1)
             .into_iter()
-            .chain(deadline_ms)
-            .chain(animation_ms)
-            .chain(pace_ms)
             .chain(reloader.timeout_ms())
             .min()
             .map(|ms| rustix::event::Timespec {
@@ -1259,14 +1191,12 @@ fn run(
                 reloader.watch_fd(),
                 reloader.usr2.as_ref().map(|r| r.as_fd()),
             ];
-            // While a content change is held back, more changes can't make it sooner:
-            // don't let a storm on the feeds or the API wake us, only touches and the deadline
-            // Control calls wait at most one frame interval.
-            let holding = pacer.pending() && !pacer.due(std::time::Instant::now());
-            let content = if holding {
-                PollFlags::empty()
-            } else {
+            // While a content change is held back by the pace, more can't make it sooner: only
+            // touches, the config and the deadline wake us. Control calls wait one frame at most.
+            let content = if driver.wants_content(&now) {
                 PollFlags::IN
+            } else {
+                PollFlags::empty()
             };
             let mut fds = vec![PollFd::new(&fd, PollFlags::IN), PollFd::new(&wake, content)];
             let mut at = [None; 3];
@@ -1292,51 +1222,43 @@ fn run(
                 ready(at[2]),
             )
         };
-        dirty |= reloader.on_wake(watch_ready, usr2_ready, &mut agent, live);
+
+        if reloader.on_wake(watch_ready, usr2_ready, driver.agent_mut(), live) {
+            inputs.push(Input::Redraw);
+        }
         if world_changed {
             if live.pump() {
-                pacer.changed();
+                inputs.push(Input::Changed);
             }
-            dirty |= reloader.sync_accent(&mut agent, live);
-            agent.set_reduce_motion(reduce_motion(live));
+            if reloader.sync_accent(driver.agent_mut(), live) {
+                inputs.push(Input::Redraw);
+            }
+            driver.agent_mut().set_reduce_motion(reduce_motion(live));
+            inputs.push(Input::OnBattery(live.agg.session.power.on_battery));
         }
         if api_woke && let Some(api) = &live.api {
             let (changed, requests) = api.drain();
             if changed {
                 live.published_stale = true;
                 live.sync_pushed_desktop();
-                pacer.changed();
+                inputs.push(Input::Changed);
             }
             for (req, reply) in requests {
-                let (answer, fx) = control(&mut agent, live, reloader, req);
+                let (answer, fx) = control(driver.agent_mut(), live, reloader, req);
                 let _ = reply.send(answer);
-                dirty |= apply(fx, &link, &mut children, live, &mut press_dirty)?;
+                inputs.push(Input::Effects(fx));
             }
         }
         if api_woke && live.api.as_ref().is_some_and(|a| !a.owns_name()) {
             // A `--replace` agent took over: let go of sliverd (main waits for the name).
             return Ok(());
         }
-        let world_changed = world_changed || api_woke;
-        let fx = agent.tick(now_us());
-        dirty |= apply(fx, &link, &mut children, live, &mut press_dirty)?;
-        if world_changed && !readable {
-            continue;
-        }
+        inputs.push(Input::Tick);
         if !readable {
-            // A module's content may be due to change. An early wakeup just re-renders the same
-            // pixels, which the link then drops.
-            dirty |= agent
-                .next_change()
-                .is_some_and(|t| t <= Local::now() + chrono::Duration::milliseconds(5));
-            // A transition is mid-flight: draw its next frame.
-            dirty |= agent.animation_deadline().is_some_and(|t| {
-                t <= std::time::Instant::now() + std::time::Duration::from_millis(5)
-            });
             continue;
         }
         for ev in link.poll()? {
-            let fx = match ev {
+            inputs.push(match ev {
                 Event::Closed => return Ok(()),
                 Event::Touch {
                     region,
@@ -1345,59 +1267,87 @@ fn run(
                     x,
                     time_us,
                     ..
-                } => agent.touch(region, slot, phase, x, time_us),
+                } => Input::Touch {
+                    region,
+                    slot,
+                    phase,
+                    x,
+                    time_us,
+                },
                 Event::Display(state) => {
-                    if let Some(api) = &mut live.api {
-                        api.set_display(match state {
-                            DisplayState::On => "on",
-                            DisplayState::Dimmed => "dimmed",
-                            DisplayState::Off => "off",
-                        });
-                    }
-                    let was_off = agent.display == DisplayState::Off;
-                    agent.display = state;
-                    dirty |= was_off && state != DisplayState::Off;
-                    if was_off && state != DisplayState::Off {
-                        // A locker may have started while we were dark and nothing told us.
-                        live.lock_watch.wake();
-                        live.push_focus();
-                    }
-                    live.feeds.set_awake(state != DisplayState::Off);
-                    // User module timers stop while the bar is off (invariant 3).
-                    if let Some(rt) = live.modules() {
-                        rt.set_active(state != DisplayState::Off);
-                    }
-                    if state == DisplayState::Off {
-                        agent.cancel_touches()
-                    } else {
-                        Vec::new()
-                    }
+                    display_changed(live, driver.agent().display, state);
+                    Input::Display(state)
                 }
-                Event::Hatch(active) => {
-                    agent.hatch = active;
-                    if active {
-                        agent.cancel_touches()
-                    } else {
-                        Vec::new()
-                    }
-                }
-                Event::Fn(held) => {
-                    agent.fn_held = held;
-                    Vec::new()
-                }
-                Event::Role(_) => {
-                    dirty = true;
-                    sent_policy = None;
-                    Vec::new()
-                }
+                Event::Hatch(open) => Input::Hatch(open),
+                Event::Fn(held) => Input::Fn(held),
+                Event::Role(_) => Input::Role,
                 Event::Error { code, msg } => {
                     eprintln!("sliver-agent: sliverd: {code:?}: {msg}");
-                    Vec::new()
+                    continue;
                 }
-            };
-            dirty |= apply(fx, &link, &mut children, live, &mut press_dirty)?;
+            });
         }
     }
+}
+
+/// The rest of the session follows the bar's display state: the API reports it, the feeds and
+/// user module timers sleep while it's off (invariant 3), and turning on looks again at what
+/// may have changed in the dark.
+fn display_changed(live: &mut Live, was: DisplayState, state: DisplayState) {
+    if let Some(api) = &mut live.api {
+        api.set_display(match state {
+            DisplayState::On => "on",
+            DisplayState::Dimmed => "dimmed",
+            DisplayState::Off => "off",
+        });
+    }
+    if was == DisplayState::Off && state != DisplayState::Off {
+        // A locker may have started while we were dark and nothing told us.
+        live.lock_watch.wake();
+        live.push_focus();
+    }
+    live.feeds.set_awake(state != DisplayState::Off);
+    if let Some(rt) = live.modules() {
+        rt.set_active(state != DisplayState::Off);
+    }
+}
+
+/// Carries out the driver's outputs.
+fn perform(
+    outputs: Vec<Output>,
+    driver: &Driver,
+    link: &mut Link,
+    children: &mut Vec<Child>,
+    live: &mut Live,
+) -> std::io::Result<()> {
+    let mut presented = false;
+    for o in outputs {
+        match o {
+            Output::Present(layer) => {
+                let f = driver.agent().frame(layer).expect("just drawn");
+                link.present(layer, &f.image, &f.pressed, &f.regions)?;
+                presented = true;
+            }
+            Output::Policy(p) => link.send(&AgentMsg::DisplayPolicy(p))?,
+            Output::Spectrum(config) => live.feeds.run_spectrum(config.as_deref()),
+            Output::Effect(e) => apply(e, link, children, live)?,
+        }
+    }
+    // Reap whatever finished, so no zombies pile up.
+    children.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+    if presented && let Some(api) = &mut live.api {
+        let drawn = [Layer::Base, Layer::Fn]
+            .iter()
+            .filter_map(|l| driver.agent().frame(*l))
+            .flat_map(|f| {
+                f.cells
+                    .iter()
+                    .filter_map(|c| c.published.as_ref().map(|p| p.context))
+            })
+            .collect();
+        api.set_on_screen(drawn);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

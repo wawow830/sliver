@@ -8,6 +8,7 @@ pub mod api;
 pub mod context;
 pub mod dbus_call;
 pub mod display;
+pub mod driver;
 pub mod feeds;
 pub mod frame;
 pub mod gesture;
