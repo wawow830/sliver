@@ -166,9 +166,9 @@ pub struct Agent {
     pub_drag: HashMap<u32, f64>,
     /// Problems resolving layers, for logging/status. Cleared on each render.
     pub errors: Vec<String>,
-    /// `graph` modules' samples, by module id: oldest first, 0..=1, and when the last
-    /// one was taken. Sampled in [`Agent::render`] while the bar is drawn.
-    graphs: HashMap<String, (std::collections::VecDeque<f32>, Option<DateTime<Local>>)>,
+    /// `graph` modules' samples, by module id. Sampled in [`Agent::render`] while the bar is
+    /// drawn.
+    graphs: HashMap<String, Samples>,
     /// The emoji picker's recents (shared with the worlds it draws).
     emoji: modules::EmojiHandle,
     /// A menu, drawer sub-bar or popover covering the bar.
@@ -191,6 +191,15 @@ pub struct Agent {
     active: Option<(String, Option<usize>)>,
     /// `sliverctl update MODULE …`: output pushed to exec-less custom modules.
     pub pushed: HashMap<String, sliver_modules::Output>,
+}
+
+/// A placed `graph`'s history: oldest first, 0..=1, how many it keeps, and when the last
+/// sample was taken.
+#[derive(Debug, Default)]
+struct Samples {
+    values: std::collections::VecDeque<f32>,
+    cap: usize,
+    taken: Option<DateTime<Local>>,
 }
 
 #[derive(Debug, Clone)]
@@ -288,14 +297,15 @@ impl Agent {
         }
         let placed: Vec<_> = crate::modules::placed_modules(&self.config)
             .into_iter()
-            .filter(|(id, _)| is_graph(&id.kind))
+            .filter(|m| is_graph(&m.id.kind))
             .collect();
         self.graphs
-            .retain(|k, _| placed.iter().any(|(id, _)| id.to_string() == *k));
-        for (id, block) in placed {
-            let (every, cap) = graph_params(&block);
-            let g = self.graphs.entry(id.to_string()).or_default();
-            let due = g.1.is_none_or(|t| {
+            .retain(|k, _| placed.iter().any(|m| m.id.to_string() == *k));
+        for m in placed {
+            let (every, cap) = graph_params(&m);
+            let g = self.graphs.entry(m.id.to_string()).or_default();
+            g.cap = cap;
+            let due = g.taken.is_none_or(|t| {
                 (world.now.wall - t)
                     .to_std()
                     .is_ok_and(|d| d + std::time::Duration::from_millis(50) >= every)
@@ -303,29 +313,23 @@ impl Agent {
             if !due {
                 continue;
             }
-            if let Some(v) = graph_sample(&self.config, &id, &block, world) {
-                g.0.push_back(v);
-                while g.0.len() > cap {
-                    g.0.pop_front();
+            if let Some(v) = graph_sample(&self.config, &m, world) {
+                g.values.push_back(v);
+                while g.values.len() > cap {
+                    g.values.pop_front();
                 }
-                g.1 = Some(world.now.wall);
+                g.taken = Some(world.now.wall);
             }
         }
     }
 
     /// The samples a `graph` cell draws: by its key, which ends with the module id (keys of
     /// group members are prefixed with the group's).
-    fn graph_for(
-        graphs: &HashMap<String, (std::collections::VecDeque<f32>, Option<DateTime<Local>>)>,
-        config: &Config,
-        key: &str,
-    ) -> Option<(Vec<f32>, usize)> {
-        let (id, (samples, _)) = graphs
+    fn graph_for(graphs: &HashMap<String, Samples>, key: &str) -> Option<(Vec<f32>, usize)> {
+        let (_, g) = graphs
             .iter()
             .find(|(id, _)| key == id.as_str() || key.ends_with(&format!("/{id}")))?;
-        let block = config.modules.iter().find(|(m, _)| m.to_string() == *id)?.1;
-        let (_, cap) = crate::modules::graph_params(block);
-        Some((samples.iter().copied().collect(), cap))
+        Some((g.values.iter().copied().collect(), g.cap))
     }
 
     /// The config `cava` should run with: while a spectrum (a `cava` module, a slider with
@@ -536,11 +540,11 @@ impl Agent {
             &world_pushed
         };
         let ui = &self.ui;
-        let (graphs, config) = (&self.graphs, &self.config);
+        let graphs = &self.graphs;
         let lookup = |k: &str| {
             let mut s = ui.get(k).cloned().unwrap_or_default();
             if !graphs.is_empty() {
-                s.graph = Self::graph_for(graphs, config, k);
+                s.graph = Self::graph_for(graphs, k);
             }
             s
         };

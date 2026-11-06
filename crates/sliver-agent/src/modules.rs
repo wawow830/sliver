@@ -974,11 +974,9 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
     c
 }
 
-/// Every module some layout places (group members included, each id once), with its config
-/// block.
-pub fn placed_modules(
-    config: &sliver_config::Config,
-) -> Vec<(sliver_config::ModuleId, toml::Table)> {
+/// Every module some layout places (group members included, each id once), parsed whatever
+/// the context ([`sliver_config::Config::module`]).
+pub fn placed_modules(config: &sliver_config::Config) -> Vec<ModuleInstance> {
     use sliver_config::{ModuleId, ModuleRef};
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -989,27 +987,23 @@ pub fn placed_modules(
         }
     }
     while let Some(r) = todo.pop() {
-        let id = r.id().clone();
-        if !seen.insert(id.to_string()) {
+        if !seen.insert(r.id().to_string()) {
             continue;
         }
-        let block = config.module_block(&r);
-        if id.kind == "group" {
-            let members = block
-                .get("modules")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+        let m = config.module(&r);
+        if m.id.kind == "group" {
+            let members = m.config.get("modules").and_then(|v| v.as_array());
             todo.extend(
                 members
-                    .iter()
+                    .into_iter()
+                    .flatten()
                     .filter_map(|v| v.as_str())
                     .filter_map(|s| ModuleId::parse(s).ok())
                     .map(ModuleRef::Named),
             );
             continue;
         }
-        out.push((id, block));
+        out.push(m);
     }
     out
 }
@@ -1017,31 +1011,24 @@ pub fn placed_modules(
 /// Does some layout place a module of this `kind`? (Sources that cost something to watch,
 /// such as failed systemd units, start only then.)
 pub fn uses_kind(config: &sliver_config::Config, kind: &str) -> bool {
-    placed_modules(config).iter().any(|(id, _)| id.kind == kind)
+    placed_modules(config).iter().any(|m| m.id.kind == kind)
 }
 
-/// Runtime specs for every `custom/*`, `image` and `graph` module with an `exec`, in any layout (including group
-/// members), for the feeds' module runtime. Problems come back as messages.
+/// Runtime specs for every `custom/*`, `image` and `graph` module with an `exec`, in any layout
+/// (including group members), for the feeds' module runtime. Problems come back as messages.
 pub fn user_module_specs(
     config: &sliver_config::Config,
 ) -> (Vec<sliver_modules::Spec>, Vec<String>) {
     let (mut specs, mut errors) = (Vec::new(), Vec::new());
-    for (id, block) in placed_modules(config) {
-        if !matches!(id.kind.as_str(), "custom" | "image" | "graph") || !block.contains_key("exec")
+    for m in placed_modules(config) {
+        if !matches!(m.id.kind.as_str(), "custom" | "image" | "graph")
+            || !m.config.contains_key("exec")
         {
             continue;
         }
-        let inst = ModuleInstance {
-            css_id: id.css_id(),
-            id: id.clone(),
-            classes: Vec::new(),
-            common: sliver_config::Common::default(),
-            config: block,
-            children: Vec::new(),
-        };
-        match sliver_modules::Spec::from_instance(&inst) {
+        match sliver_modules::Spec::from_instance(&m) {
             Ok(s) => specs.push(s),
-            Err(e) => errors.push(format!("{id}: {e}")),
+            Err(e) => errors.push(format!("{}: {e}", m.id)),
         }
     }
     specs.sort_by(|a, b| a.key.cmp(&b.key));
@@ -1075,6 +1062,13 @@ mod spec_tests {
         assert!(errors.is_empty(), "{errors:?}");
         let keys: Vec<&str> = specs.iter().map(|s| s.key.as_str()).collect();
         assert_eq!(keys, ["custom/a", "custom/b"]);
+        // `interval` is a common key: the runtime runs it on that period, not as a stream.
+        use sliver_modules::Mode;
+        assert_eq!(specs[0].mode, Mode::Continuous);
+        assert_eq!(
+            specs[1].mode,
+            Mode::Every(std::time::Duration::from_secs(5))
+        );
     }
 }
 

@@ -24,7 +24,7 @@ pub(super) fn graph(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
         // Previews (settings, `--render`) have no history yet: a made-up one, so the
         // editor shows what a graph looks like.
         _ if world.preview => {
-            let cap = graph_params(&m.config).1;
+            let cap = graph_params(m).1;
             let wave = (0..cap)
                 .map(|i| {
                     let t = i as f32 / cap.max(2) as f32 * std::f32::consts::TAU * 1.5;

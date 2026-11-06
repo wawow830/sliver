@@ -187,6 +187,36 @@ impl Config {
         self.instantiate(&ModuleRef::Named(id.clone()), None, ctx, &mut Vec::new())
     }
 
+    /// The module `m` with its block parsed, whatever the context: no `when`, no zone width,
+    /// no group members. What runs behind a module (a user module's script, a graph's source)
+    /// is the same wherever it shows.
+    pub fn module(&self, m: &ModuleRef) -> ModuleInstance {
+        self.parse_module(m).0
+    }
+
+    /// [`Config::module`], and whether its block sets its own width.
+    fn parse_module(&self, m: &ModuleRef) -> (ModuleInstance, bool) {
+        let id = m.id();
+        let block = self.module_block(m);
+        let sized = block.contains_key("width") || block.contains_key("expand");
+        // Diagnostics are reported by `validate`; resolving is best-effort.
+        let (common, mut config) = Common::parse(&block, "", &mut Diagnostics::default());
+        if id.slider {
+            config.entry("slider").or_insert(Value::Boolean(true));
+        }
+        let mut classes: Vec<String> = id.instance.iter().cloned().collect();
+        classes.extend(common.class.iter().cloned());
+        let inst = ModuleInstance {
+            css_id: id.css_id(),
+            id: id.clone(),
+            classes,
+            common,
+            config,
+            children: Vec::new(),
+        };
+        (inst, sized)
+    }
+
     fn instantiate(
         &self,
         m: &ModuleRef,
@@ -198,32 +228,25 @@ impl Config {
         if ctx.flag("locked") && HIDDEN_WHILE_LOCKED.contains(&id.kind.as_str()) {
             return None;
         }
-        let block = self.module_block(m);
-        // Diagnostics are reported by `validate`; resolving is best-effort.
-        let (mut common, mut config) = Common::parse(&block, "", &mut Diagnostics::default());
-        if id.slider {
-            config.entry("slider").or_insert(Value::Boolean(true));
-        }
-        if common.when.as_ref().is_some_and(|w| !w.eval(ctx)) {
+        let (mut inst, sized) = self.parse_module(m);
+        if inst.common.when.as_ref().is_some_and(|w| !w.eval(ctx)) {
             return None;
         }
-        if !block.contains_key("width") && !block.contains_key("expand") {
-            if let Some(w) = default_width {
-                common.width = w;
-            }
+        if !sized && let Some(w) = default_width {
+            inst.common.width = w;
         }
-        let mut children = Vec::new();
         if id.kind == "group" {
             // `module-width` on a group is the default width of its children, like on a zone.
-            let child_width = config
+            let child_width = inst
+                .config
                 .get("module-width")
                 .and_then(|v| Width::parse(v).ok());
             if stack.contains(id) || stack.len() >= MAX_DEPTH {
                 return None;
             }
             stack.push(id.clone());
-            for child in group_members(&config) {
-                children.extend(self.instantiate(
+            for child in group_members(&inst.config) {
+                inst.children.extend(self.instantiate(
                     &ModuleRef::Named(child),
                     child_width,
                     ctx,
@@ -232,16 +255,7 @@ impl Config {
             }
             stack.pop();
         }
-        let mut classes: Vec<String> = id.instance.iter().cloned().collect();
-        classes.extend(common.class.iter().cloned());
-        Some(ModuleInstance {
-            css_id: id.css_id(),
-            id: id.clone(),
-            classes,
-            common,
-            config,
-            children,
-        })
+        Some(inst)
     }
 }
 

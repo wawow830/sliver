@@ -12,14 +12,15 @@ pub fn is_graph(kind: &str) -> bool {
 pub const GRAPH_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 pub const GRAPH_SAMPLES: usize = 30;
 
-/// A graph's sampling period and history length, from its block (`interval`, `samples`).
-pub fn graph_params(block: &toml::Table) -> (std::time::Duration, usize) {
-    let every = block
-        .get("interval")
-        .and_then(|v| sliver_config::parse_duration(v).ok())
-        .unwrap_or(GRAPH_EVERY)
-        .max(std::time::Duration::from_millis(100));
-    let samples = block
+/// A graph's sampling period and history length (`interval`, `samples`).
+pub fn graph_params(m: &ModuleInstance) -> (std::time::Duration, usize) {
+    let every = match m.common.interval {
+        Some(sliver_config::Interval::Every(d)) => d,
+        _ => GRAPH_EVERY,
+    }
+    .max(std::time::Duration::from_millis(100));
+    let samples = m
+        .config
         .get("samples")
         .and_then(|v| v.as_integer())
         .map_or(GRAPH_SAMPLES, |n| n.clamp(2, 600) as usize);
@@ -136,11 +137,11 @@ pub fn shows_spectrum(c: &Cell) -> bool {
 /// (`source = "cpu"`, `"memory"`, `"battery"`, `"custom/x"`…). `None`: nothing to plot yet.
 pub fn graph_sample(
     config: &sliver_config::Config,
-    id: &sliver_config::ModuleId,
-    block: &toml::Table,
+    m: &ModuleInstance,
     world: &World,
 ) -> Option<f32> {
     use sliver_config::{ModuleId, ModuleRef};
+    let block = &m.config;
     let from_output = |out: &sliver_modules::Output| {
         out.percentage.or_else(|| {
             out.text
@@ -154,20 +155,13 @@ pub fn graph_sample(
         })
     };
     let raw = if block.contains_key("exec") {
-        from_output(world.outputs.get(&id.to_string())?)?
+        from_output(world.outputs.get(&m.id.to_string())?)?
     } else {
         let src = ModuleId::parse(block.get("source")?.as_str()?).ok()?;
         if src.kind == "custom" {
             from_output(world.outputs.get(&src.to_string())?)?
         } else {
-            let inst = ModuleInstance {
-                css_id: src.css_id(),
-                config: config.module_block(&ModuleRef::Named(src.clone())),
-                id: src,
-                classes: Vec::new(),
-                common: sliver_config::Common::default(),
-                children: Vec::new(),
-            };
+            let inst = config.module(&ModuleRef::Named(src));
             let at = At {
                 m: &inst,
                 key: "",
