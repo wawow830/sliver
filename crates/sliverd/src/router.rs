@@ -1,7 +1,4 @@
-//! Touch → key/agent routing for sliverd.
-//!
-//! Lives here, not in sliverd, so the fake daemon behaves exactly like the real one.
-//! It's pure state: feed it touches plus the regions currently on screen, and act on the output.
+//! Touch → key/agent routing. It's pure state: feed it touches plus the regions currently on screen, and act on the output.
 //!
 //! - A touch is **captured** by the region it starts in. Later layer swaps don't change it.
 //! - Key region: down presses its keys, sliding off releases them, sliding back presses again,
@@ -9,14 +6,14 @@
 //! - Keys are reference-counted across touches. Two fingers on the same key emit one down and one up.
 //! - Agent region: every phase is forwarded with the captured region id.
 
-use crate::proto::{Rect, Region, RegionKind, TouchPhase};
+use sliver_ipc::proto::{Rect, Region, RegionKind, TouchPhase};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Routed {
     /// Emit `EV_KEY code value=1/0` (followed by `SYN_REPORT` once per batch).
     Key { code: u16, down: bool },
-    /// Forward as [`crate::DaemonMsg::Touch`].
+    /// Forward as [`sliver_ipc::DaemonMsg::Touch`].
     Agent {
         region: u32,
         slot: u8,

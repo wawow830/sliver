@@ -14,15 +14,15 @@
 //! - [`profile`]: per-model quirks.
 //! - [`server`]: the `poll(2)` event loop around the core. [`session`]: seat0's active uid.
 //!   [`config`]: `/etc/sliver/sliverd.toml`.
-//! - [`testing`]: `TestDaemon`, the real core in-process for agent tests (FakeDaemon-compatible).
-//!
-//! Touch semantics are `sliver_ipc::router::TouchRouter`, shared with sliver-ipc.
+//! - `testing` (feature): `TestDaemon`, the real core in-process for agent tests.
+//! - [`router`]: which touches become keys and which go to the agent. [`hatch`]: the Fn safe hatch.
 
 pub mod backend;
 pub mod builtin;
 pub mod config;
 pub mod daemon;
 pub mod fake;
+pub mod hatch;
 pub mod idle;
 pub mod inject;
 pub mod ipc;
@@ -30,6 +30,7 @@ pub mod keystate;
 pub mod log;
 pub mod profile;
 pub mod real;
+pub mod router;
 pub mod server;
 pub mod session;
 pub mod shift;

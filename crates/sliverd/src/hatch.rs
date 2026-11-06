@@ -1,8 +1,8 @@
 //! The safe hatch (invariant 1): **double-press Fn and hold** and sliverd shows its built-in
-//! layer ([`crate::keys::safe_keys_for_panel`]) for as long as Fn stays down, whatever the agent,
+//! layer ([`sliver_ipc::keys::safe_keys_for_panel`]) for as long as Fn stays down, whatever the agent,
 //! the config or any app is doing. Not configurable, by design.
 //!
-//! Pure state, shared by sliverd and the fake so both behave the same.
+//! Pure state.
 
 /// Two Fn presses whose key-downs are at most this far apart count as a double press.
 pub const DOUBLE_PRESS_MS: u64 = 400;

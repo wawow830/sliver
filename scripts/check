@@ -23,6 +23,8 @@ missing=$( (git grep -ohE 'docs/[A-Za-z0-9_./-]+\.(md|xml)' || true) | sort -u \
 
 echo "== cargo fmt";   cargo fmt --all -- --check
 echo "== cargo clippy"; cargo clippy --workspace --all-targets --quiet -- -D warnings
+# The `//!` comments are the docs: their links must resolve.
+echo "== cargo doc";   RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet
 # Tests must never start the real audio tools (they leak `pactl subscribe` orphans and touch the
 # real PipeWire): fakes go through audio::Tools { wpctl, pactl } or SessionOptions::hermetic().
 # While they run, `pactl` and `wpctl` are tripwires that note who reached them and fail.

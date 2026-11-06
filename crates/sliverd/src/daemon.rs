@@ -26,12 +26,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use sliver_ipc::hatch::FnHatch;
+use crate::hatch::FnHatch;
+use crate::router::{Routed, TouchRouter};
 use sliver_ipc::proto::{
     CodecError, DaemonMsg, DisplayState, ErrorCode, HwReport, KeyMode, Layer, PING_MIN_INTERVAL_MS,
     PONG_TIMEOUT_MS, PROTO, PanelInfo, Present, Rect, Region, Role, TouchPhase,
 };
-use sliver_ipc::router::{Routed, TouchRouter};
 use sliver_ipc::{AgentMsg, validate};
 use sliver_render::panel::{self, Span};
 use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};

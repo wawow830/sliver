@@ -32,7 +32,7 @@ pub enum Touch {
     Agent,
 }
 
-/// One drawable module: what it looks like (the renderer's [`Item`]), what touching it does, and
+/// One drawable module: what it looks like (the renderer's [`sliver_render::Item`]), what touching it does, and
 /// where it came from.
 #[derive(Debug, Clone)]
 pub struct Cell {

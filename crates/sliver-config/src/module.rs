@@ -458,7 +458,7 @@ impl Common {
     }
 }
 
-/// Every key [`Common::parse`] consumes (plus their waybar aliases).
+/// Every key `Common::parse` consumes (plus their waybar aliases).
 pub const COMMON_KEYS: &[&str] = &[
     "format",
     "format-alt",

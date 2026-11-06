@@ -11,7 +11,7 @@
 //!    is what you touch.
 //! 3. [`Renderer::render`] draws a [`Scene`] into a landscape [`Pixmap`] (e.g. 2008x60).
 //!    Headless callers write it out with [`Pixmap::encode_png`].
-//! 4. [`panel::damage`] finds what changed since the last frame, and [`panel::blit`] rotates it into
+//! 4. [`panel::damage`] finds what changed since the last frame, and [`panel::blit_xrgb8888`] rotates it into
 //!    the panel's native framebuffer layout.
 
 mod anim;

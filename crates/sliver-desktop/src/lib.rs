@@ -2,8 +2,8 @@
 //!
 //! The agent decides which Touch Bar layout to show from a [`DesktopState`] (focused app,
 //! workspace, keyboard layout, ...). Each compositor gets a backend implementing
-//! [`DesktopSource`]; [`hyprland`] is the first. [`fake::ScriptedSource`] drives tests without a
-//! compositor. Backends are blocking and runtime-agnostic (plain threads, no busy loops): they
+//! [`DesktopSource`] ([`hyprland`], [`sway`], [`niri`], and [`wlr`] for the rest).
+//! [`fake::ScriptedSource`] drives tests without a compositor. Backends are blocking and runtime-agnostic (plain threads, no busy loops): they
 //! sleep in `read(2)` until the compositor says something changed.
 //!
 //! No portal or cross-desktop standard says which window is focused (Wayland withholds it on

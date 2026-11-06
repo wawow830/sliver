@@ -98,7 +98,7 @@ impl ShmBuffer {
         unsafe { std::slice::from_raw_parts_mut(self.map.ptr.as_ptr(), self.map.len) }
     }
 
-    /// The `attach_buffer` message to send along with [`ShmBuffer::fd`].
+    /// The `attach_buffer` message to send along with this buffer's fd.
     pub fn attach_msg(&self, id: u32) -> AgentMsg {
         AgentMsg::AttachBuffer {
             id,
