@@ -7,6 +7,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The gate runs as an ordinary user, like on a developer's machine: user modules refuse to run
+  # as root, and so would their tests.
+  CARGO_HOME: /home/ci/.cargo
+  RUSTUP_HOME: /home/ci/.rustup
 
 jobs:
   check:
@@ -15,19 +19,23 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container: fedora:44
     steps:
-      - name: System packages
-        run: >
-          dnf install -y --setopt=install_weak_deps=False
-          git gcc pkgconf-pkg-config gtk4-devel libadwaita-devel libxkbcommon-devel
-          dbus-daemon groff systemd systemd-udev rpm-build desktop-file-utils libxml2
-          nodejs python3 procps-ng fontconfig dejavu-sans-fonts curl
+      - name: System packages and the ci user
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc pkgconf-pkg-config gtk4-devel libadwaita-devel libxkbcommon-devel \
+            dbus-daemon groff systemd systemd-udev rpm-build desktop-file-utils libxml2 \
+            nodejs python3 procps-ng fontconfig dejavu-sans-fonts curl util-linux
+          useradd -m ci
       - uses: actions/checkout@v4
-      # The checkout belongs to another uid than the container's root.
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      # rust-toolchain.toml picks the version.
-      - run: |
-          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - run: scripts/check
+      - run: chown -R ci:ci "$GITHUB_WORKSPACE" /home/ci
+      - name: scripts/check
+        run: |
+          runuser -u ci -- sh -ec '
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            export PATH="$CARGO_HOME/bin:$PATH"
+            git config --global --add safe.directory "$GITHUB_WORKSPACE"
+            cd "$GITHUB_WORKSPACE"
+            rustup toolchain install   # the version in rust-toolchain.toml
+            scripts/check
+          '
