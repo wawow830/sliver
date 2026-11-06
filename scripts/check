@@ -35,7 +35,9 @@ grep -q '^ExecStartPre=+-/usr/bin/systemctl stop sliverd.socket sliverd.service'
 if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then
   echo "== packaging"
   d=target/check-units && rm -rf "$d" && mkdir -p "$d"
-  sed 's|^ExecStart=.*|ExecStart=/usr/bin/true|' packaging/systemd/sliverd.service > "$d/sliverd.service"
+  # Documentation= names man pages that are only on the system once the RPM is installed.
+  sed -e 's|^ExecStart=.*|ExecStart=/usr/bin/true|' -e '/^Documentation=/d' \
+    packaging/systemd/sliverd.service > "$d/sliverd.service"
   cp packaging/systemd/sliverd.socket "$d/"
   out=$(systemd-analyze verify "$d/sliverd.socket" "$d/sliverd.service" 2>&1) || { echo "$out"; exit 1; }
   [[ -z "$out" ]] || { echo "$out"; exit 1; }
