@@ -139,7 +139,7 @@ fn main() {
             Ok(mut live) => {
                 std::thread::sleep(Duration::from_millis(1500));
                 live.pump();
-                live.world()
+                live.world(Now::read())
             }
             Err(_) => World::at(Local::now()),
         };
@@ -285,7 +285,7 @@ fn run(
             let out = driver.handle(&now, input);
             perform(out, &driver, &mut link, &mut children, live)?;
         }
-        let out = driver.draw(&now, || live.world());
+        let out = driver.draw(&now, || live.world(now));
         perform(out, &driver, &mut link, &mut children, live)?;
         // Not only after a draw: with the bar off nothing draws, and the state (layer, profile,
         // health) must still be right. Sent only when it changed.

@@ -87,7 +87,7 @@ fn clock_time_zones_and_locale() {
             })
             .collect::<Vec<_>>()
     };
-    let now = world().now;
+    let now = world().now.wall;
     let tokyo = now.with_timezone(&chrono_tz::Asia::Tokyo).format("%H:%M");
     assert_eq!(at(0)[0], format!("{} local", now.format("%H:%M")));
     assert_eq!(at(1)[0], format!("{tokyo} Asia/Tokyo"));
@@ -119,7 +119,7 @@ fn clock_time_zones_and_locale() {
 
 #[test]
 fn window_title_rewrite() {
-    let mut w = World::sample(world().now);
+    let mut w = World::sample(world().now.wall);
     w.desktop.window.as_mut().unwrap().title = "Docs <b> - Mozilla Firefox".into();
     let cells = stat_cells(
         r#"
@@ -198,7 +198,7 @@ fn stats_modules_read_files_and_schedule_their_own_refresh() {
     );
     assert!(text(&cells[5]).ends_with('%'));
     // refresh: the module's interval, else its default; the clock-like wake-up the loop uses
-    let due = |c: &Cell| (c.next_change.unwrap() - w.now).num_seconds();
+    let due = |c: &Cell| (c.next_change.unwrap() - w.now.wall).num_seconds();
     assert_eq!(
         (due(&cells[0]), due(&cells[1]), due(&cells[6])),
         (10, 30, 2)
@@ -246,7 +246,10 @@ fn network_bandwidth_and_cpu_sparkline() {
     assert_eq!(text(&cells[1]).chars().count(), 1, "one cpu sample so far");
     // with one: the first read primes the counters
     let cells = stat_cells(&toml("interval = 2\n"), &w);
-    assert_eq!((cells[0].next_change.unwrap() - w.now).num_seconds(), 2);
+    assert_eq!(
+        (cells[0].next_change.unwrap() - w.now.wall).num_seconds(),
+        2
+    );
     assert_eq!(text(&cells[0]), "0B/s 0b/s");
     let _ = std::fs::remove_dir_all(&dir);
 }

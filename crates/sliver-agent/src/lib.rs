@@ -45,6 +45,7 @@ pub mod icons;
 pub mod keymap;
 pub mod link;
 pub mod modules;
+pub mod now;
 pub mod ops;
 pub mod pace;
 pub mod privacy;

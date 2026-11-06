@@ -8,38 +8,17 @@
 //! does no I/O: `main` turns file descriptors into inputs, carries out the outputs and sleeps until
 //! [`Driver::next_deadline`].
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use chrono::{DateTime, Local};
 use sliver_ipc::proto::{DisplayPolicy, DisplayState, Layer, TouchPhase};
 
 use crate::agent::{Agent, Effect};
 use crate::modules::World;
+pub use crate::now::Now;
 use crate::pace::Pacer;
 
 /// A deadline this close counts as due: waking a few ms early must not sleep again.
 const SLACK: Duration = Duration::from_millis(5);
-
-/// One reading of the clocks, taken once per wakeup so every deadline is measured from the same
-/// moment: monotonic µs (what sliverd stamps touches with), the same instant for the renderer's
-/// transitions, and wall time for clocks.
-#[derive(Debug, Clone, Copy)]
-pub struct Now {
-    pub mono_us: u64,
-    pub instant: Instant,
-    pub wall: DateTime<Local>,
-}
-
-impl Now {
-    pub fn read() -> Now {
-        let t = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
-        Now {
-            mono_us: t.tv_sec as u64 * 1_000_000 + t.tv_nsec as u64 / 1000,
-            instant: Instant::now(),
-            wall: Local::now(),
-        }
-    }
-}
 
 /// Something that happened.
 #[derive(Debug, Clone, PartialEq)]
@@ -195,7 +174,7 @@ impl Driver {
     }
 
     /// Brings sliverd and cava up to date and draws what's due. `world` is only built when a
-    /// full frame is drawn.
+    /// full frame is drawn, and is built at `now`.
     pub fn draw(&mut self, now: &Now, world: impl FnOnce() -> World) -> Vec<Output> {
         let mut out = Vec::new();
         let policy =
@@ -215,7 +194,12 @@ impl Driver {
                     .map(|e| Output::Effect(Effect::Log(e.clone()))),
             );
         } else if lit && self.press_dirty {
-            out.extend(self.agent.render_press().into_iter().map(Output::Present));
+            out.extend(
+                self.agent
+                    .render_press(now.instant)
+                    .into_iter()
+                    .map(Output::Present),
+            );
         }
         self.dirty = false;
         self.press_dirty = false;

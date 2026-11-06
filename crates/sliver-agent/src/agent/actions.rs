@@ -362,18 +362,17 @@ impl Agent {
             UiChange::Player(p) => ui.player = Some(p.clone()),
             UiChange::TimerReset => ui.timer = None,
             UiChange::Timer { total } => {
-                let wall = Local::now();
                 let t = ui
                     .timer
                     .get_or_insert_with(|| modules::TimerState::new(*total));
                 if t.finished {
                     *t = modules::TimerState::new(*total);
                 } else if t.running_since.is_some() {
-                    t.remaining = t.left(wall);
+                    t.remaining = t.left(now);
                     t.running_since = None;
                     t.generation += 1;
                 } else {
-                    t.running_since = Some(wall);
+                    t.running_since = Some(now);
                     t.generation += 1;
                     let due = now + t.remaining.as_micros() as u64;
                     let generation = t.generation;

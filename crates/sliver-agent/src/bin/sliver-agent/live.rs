@@ -165,8 +165,9 @@ impl Live {
         )
     }
 
-    /// The world for a frame. Copies the API registry first if it changed since the last copy.
-    pub(super) fn world(&mut self) -> World {
+    /// The world for a frame at `now`. Copies the API registry first if it changed since the
+    /// last copy.
+    pub(super) fn world(&mut self, now: Now) -> World {
         if self.published_stale
             && let Some(api) = &self.api
         {
@@ -180,7 +181,7 @@ impl Live {
         let mut context = self.agg.context();
         context.set("locked", locked);
         World {
-            now: Local::now(),
+            now,
             session,
             desktop: self.agg.desktop.clone(),
             context,

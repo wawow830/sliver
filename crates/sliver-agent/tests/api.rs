@@ -556,10 +556,7 @@ fn scrubber_scrolls_and_picks() {
         ["‹", "Tab 4", "Tab 5", "Tab 6", "Tab 7", "›"]
     );
     // Cells glide to their new widths (`transition: width`): snapshot once that has settled.
-    while let Some(due) = a.animation_deadline() {
-        std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
-        a.render(&world);
-    }
+    settle(&mut a, &mut world);
     check("api-scrubber", &a.frame(Layer::Base).unwrap().image);
     // The › arrow: the last page is full, so it stops at 6.
     let r = region(&a, "#tabs.next");
@@ -726,10 +723,7 @@ fn popover_opens_and_closes() {
             .classes
             .contains(&"popover-close".to_owned())
     );
-    while let Some(due) = a.animation_deadline() {
-        std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
-        a.render(&world);
-    }
+    settle(&mut a, &mut world);
     check("api-popover", &a.frame(Layer::Base).unwrap().image);
 
     // A tap inside reaches the child item; the popover stays open.
@@ -1304,4 +1298,15 @@ fn published_image_item() {
         "{:?}",
         nopic.content
     );
+}
+
+/// Renders at the agent's animation deadlines until it's at rest, stepping `world`'s clock to
+/// each, like the real loop.
+fn settle(a: &mut Agent, world: &mut World) {
+    while let Some(due) = a.animation_deadline() {
+        world.now = world
+            .now
+            .after(due.saturating_duration_since(world.now.instant));
+        a.render(world);
+    }
 }

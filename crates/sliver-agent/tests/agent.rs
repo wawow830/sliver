@@ -220,15 +220,15 @@ fn region(a: &Agent, key: &str) -> (u32, f32) {
     (r.id, (r.rect.x + r.rect.w / 2) as f32)
 }
 
-/// Renders at the agent's animation deadlines until it's at rest, like the real loop. Returns
-/// the base images drawn, each with when it was drawn.
+/// Renders at the agent's animation deadlines until it's at rest, like the real loop, stepping
+/// `w`'s clock to each. Returns the base images drawn, each with when it was drawn.
 fn settle(a: &mut Agent, w: &World) -> Vec<(std::time::Instant, Pixmap)> {
+    let mut w = w.clone();
     let mut images = Vec::new();
     while let Some(due) = a.animation_deadline() {
-        std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
-        let t = std::time::Instant::now();
-        a.render(w);
-        images.push((t, a.frame(Layer::Base).unwrap().image.clone()));
+        w.now = w.now.after(due.saturating_duration_since(w.now.instant));
+        a.render(&w);
+        images.push((w.now.instant, a.frame(Layer::Base).unwrap().image.clone()));
         assert!(images.len() < 30, "animations end");
     }
     images
@@ -282,7 +282,7 @@ fn touches_become_actions() {
     fake.touch(0, TouchPhase::Down, x, 30.0).unwrap();
     assert_eq!(deliver(&mut a, &mut link, &mut fake), [RedrawPress]);
     // The fast path re-renders just the base image…
-    let layers = a.render_press();
+    let layers = a.render_press(std::time::Instant::now());
     assert_eq!(layers, [Layer::Base]);
     let fast = a.frame(Layer::Base).unwrap().image.clone();
     // …and matches a full render.
@@ -366,17 +366,17 @@ fn touches_become_actions() {
     assert!(deliver(&mut a, &mut link, &mut fake).contains(&Redraw));
     assert_eq!(a.base_layer(), "media");
     let before = a.frame(Layer::Base).unwrap().image.clone();
-    let start = std::time::Instant::now();
-    let layers = a.render(&world(9, 41));
+    let w = world(9, 41);
+    let start = w.now.instant;
+    let layers = a.render(&w);
     present(&a, &mut link, &mut fake, &layers);
     // The theme slides the media layer in: the first frame still shows the old layer, the
     // middle one a mix, and the loop goes idle once it's in.
     assert_eq!(a.frame(Layer::Base).unwrap().image.data(), before.data());
-    let frames = settle(&mut a, &world(9, 41));
-    assert!(!frames.is_empty(), "slid");
+    let frames = settle(&mut a, &w);
+    assert!(frames.len() > 2, "slid");
     let settled = a.frame(Layer::Base).unwrap().image.clone();
-    // A frame drawn well inside the 200 ms slide is a mix (a loaded machine may draw none
-    // that early; then there's nothing to check).
+    // A frame drawn well inside the 200 ms slide is a mix.
     for (t, img) in &frames {
         if t.duration_since(start) < std::time::Duration::from_millis(120) {
             assert!(
@@ -748,7 +748,9 @@ fn press_and_slide_a_collapsed_slider() {
         "#,
     );
     let (mut fake, mut link) = connect();
-    let w = session_world(); // screen brightness 70 %
+    let mut w = session_world(); // screen brightness 70 %
+    // On the fake daemon's clock, which stamps the touches.
+    w.now.mono_us = fake.now_ms * 1000;
     let layers = a.render(&w);
     present(&a, &mut link, &mut fake, &layers);
     let (id, x) = region(&a, "backlight/slider");
@@ -850,9 +852,16 @@ fn transitions_wake_the_loop_only_while_animating() {
     assert!(a.animation_deadline().is_none(), "the press is instant");
     // …and fades the release.
     a.touch(id, 0, TouchPhase::Up, x, 50_000);
+    let w = World {
+        now: w.now.after(Duration::from_millis(50)),
+        ..w
+    };
     a.render(&w);
     assert!(a.animation_deadline().is_some(), "the release fades out");
-    std::thread::sleep(Duration::from_millis(250));
+    let w = World {
+        now: w.now.after(Duration::from_millis(250)),
+        ..w
+    };
     a.render(&w);
     assert!(
         a.animation_deadline().is_none(),
@@ -865,7 +874,7 @@ fn transitions_wake_the_loop_only_while_animating() {
 /// away left the bar frozen mid-fade, waking for nothing).
 #[test]
 fn a_layout_fade_comes_due_and_ends() {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     let mut a = agent(
         r#"
         [[layouts.default.zones]]
@@ -880,24 +889,22 @@ fn a_layout_fade_comes_due_and_ends() {
         format = "B"
         "#,
     );
-    let w = world(9, 41);
+    let mut w = world(9, 41);
     a.render(&w);
     a.set_layout("other").unwrap();
     a.render(&w);
-    let start = Instant::now();
+    let start = w.now.instant;
     let mut frames = 0;
-    // The agent's loop: sleep until the deadline, then draw if it is due (within 5 ms).
+    // The agent's loop: sleep until the deadline (here: step the clock to it), then draw.
     while let Some(due) = a.animation_deadline() {
-        std::thread::sleep(due.saturating_duration_since(Instant::now()));
-        let now = Instant::now();
-        let due = a.animation_deadline().expect("still fading");
-        assert!(
-            due <= now + Duration::from_millis(5),
-            "the next frame is due"
-        );
+        assert!(due > w.now.instant, "the next frame is ahead");
+        w.now = w.now.after(due - w.now.instant);
         a.render(&w);
         frames += 1;
-        assert!(start.elapsed() < Duration::from_secs(2), "the fade ends");
+        assert!(
+            w.now.instant - start < Duration::from_secs(2),
+            "the fade ends"
+        );
     }
     assert!(frames >= 3, "it animated: {frames} frames");
 }
@@ -1874,7 +1881,7 @@ fn now_playing_position_and_length() {
     assert_eq!(text(&a), "1:05 / 3:20");
     // Playing, reported 10 s ago: it has moved on, and the bar redraws as it does.
     p.status = Playing;
-    p.position_at_ms = Some(w.now.timestamp_millis() as u64 - 10_000);
+    p.position_at_ms = Some(w.now.wall.timestamp_millis() as u64 - 10_000);
     w.session.media = Some(p);
     a.render(&w);
     assert_eq!(text(&a), "1:15 / 3:20");
@@ -2435,6 +2442,7 @@ fn graph_module() {
     a.render(&w);
     assert!(graphs(&a).is_empty());
 
+    let mut last = w.now;
     for (i, (load, net)) in [
         (10.0, "2"),
         (50.0, "5"),
@@ -2461,13 +2469,15 @@ fn graph_module() {
         // It asks to be woken for the next sample.
         let next = a.next_change().unwrap();
         assert!(
-            next <= w.now + chrono::Duration::seconds(1),
+            next <= w.now.wall + chrono::Duration::seconds(1),
             "{next} vs {}",
-            w.now
+            w.now.wall
         );
-        w.now += chrono::Duration::seconds(1);
+        last = w.now;
+        w.now = w.now.after(std::time::Duration::from_secs(1));
     }
-    w.now -= chrono::Duration::seconds(1);
+    // Back to the last sample's time: the snapshot shows those samples.
+    w.now = last;
     settle(&mut a, &w);
     check("graph-module", &a.frame(Layer::Base).unwrap().image);
 

@@ -92,7 +92,7 @@ pub(super) fn control(
             Ok(a) => {
                 let size = (agent.width, agent.height);
                 let mut p = offscreen_agent(a.config, a.sheet, a.config_path.as_deref(), size);
-                p.render(&live.world());
+                p.render(&live.world(Now::read()));
                 p.frame(Layer::Base)
                     .ok_or_else(|| "nothing to draw".to_string())
                     .and_then(|f| f.image.encode_png().map_err(|e| e.to_string()))

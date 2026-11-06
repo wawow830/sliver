@@ -35,7 +35,7 @@ const DRAG_INTERVAL_US: u64 = 50_000;
 const MENU_TIMEOUT_US: u64 = 5_000_000;
 /// After a slider is let go, how long it may keep showing the finger's value while the system
 /// catches up before it shows what the system reports again.
-const HELD_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+const HELD_GRACE_US: u64 = 1_000_000;
 
 /// Something for the caller to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -175,8 +175,9 @@ pub struct Agent {
     overlay: Option<overlay::Overlay>,
     /// Sliders under a finger, by cell key: the value there, and when it was let go. They show
     /// it at once (the system's level is set at most every [`DRAG_INTERVAL_US`] and reported back
-    /// later), and after release until the system reports it or [`HELD_GRACE`] passes.
-    under_finger: HashMap<String, (f32, Option<std::time::Instant>)>,
+    /// later), and after release (monotonic µs) until the system reports it or [`HELD_GRACE_US`]
+    /// passes.
+    under_finger: HashMap<String, (f32, Option<u64>)>,
     /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
     pub hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
@@ -295,7 +296,7 @@ impl Agent {
             let (every, cap) = graph_params(&block);
             let g = self.graphs.entry(id.to_string()).or_default();
             let due = g.1.is_none_or(|t| {
-                (world.now - t)
+                (world.now.wall - t)
                     .to_std()
                     .is_ok_and(|d| d + std::time::Duration::from_millis(50) >= every)
             });
@@ -307,7 +308,7 @@ impl Agent {
                 while g.0.len() > cap {
                     g.0.pop_front();
                 }
-                g.1 = Some(world.now);
+                g.1 = Some(world.now.wall);
             }
         }
     }
@@ -357,7 +358,7 @@ impl Agent {
             Some(c) => c.clone(),
             None => crate::context::build(
                 world.context.clone(),
-                world.now,
+                world.now.wall,
                 self.physical_esc,
                 self.base_layer(),
                 world.published.app.is_some(),
@@ -431,7 +432,7 @@ impl Agent {
                         }
                     };
                     if layer == Layer::Base {
-                        self.animate_layer_change(&mut f);
+                        self.animate_layer_change(&mut f, world.now.instant);
                     }
                     self.frames[slot(layer)] = Some(f);
                     out.push(layer);
@@ -447,8 +448,7 @@ impl Agent {
     }
 
     /// Starts, continues or ends a layer-change animation on the new base frame `f`.
-    fn animate_layer_change(&mut self, f: &mut Frame) {
-        let now = std::time::Instant::now();
+    fn animate_layer_change(&mut self, f: &mut Frame, now: std::time::Instant) {
         let depth = self.layers.len();
         let old_depth = std::mem::replace(&mut self.base_depth, depth);
         if let Some(old) = &self.frames[0]
@@ -577,7 +577,8 @@ impl Agent {
                         (self.under_finger.get(&c.key), &mut c.content)
                     {
                         let caught_up = (*value - v).abs() < 0.015;
-                        if up.is_some_and(|t| caught_up || t.elapsed() > HELD_GRACE) {
+                        let gone = |t: u64| world.now.mono_us.saturating_sub(t) > HELD_GRACE_US;
+                        if up.is_some_and(|t| caught_up || gone(t)) {
                             self.under_finger.remove(&c.key);
                         } else {
                             *value = v;
@@ -649,9 +650,9 @@ impl Agent {
             &self.sheet,
             &scene,
             cells,
-            self.width,
-            self.height,
+            (self.width, self.height),
             id_base,
+            world.now.instant,
         );
         if self.recognizer.bar_bound() {
             f.fill_gaps();
@@ -737,7 +738,7 @@ impl Agent {
 
     /// Re-renders just the images of frames whose pressed cells changed (after
     /// [`Effect::RedrawPress`]). Returns the layers to present.
-    pub fn render_press(&mut self) -> Vec<Layer> {
+    pub fn render_press(&mut self, at: std::time::Instant) -> Vec<Layer> {
         // A touch ends a layer change at once: the press draws on the settled layer.
         self.layer_anim = None;
         let pressed = &self.pressed;
@@ -745,7 +746,7 @@ impl Agent {
         let mut out = Vec::new();
         for (i, layer) in [Layer::Base, Layer::Fn].into_iter().enumerate() {
             if let Some(f) = &mut self.frames[i]
-                && f.repress(&mut self.renderer, &self.sheet, &is_pressed)
+                && f.repress(&mut self.renderer, &self.sheet, &is_pressed, at)
             {
                 out.push(layer);
             }

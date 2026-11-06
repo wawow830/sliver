@@ -136,7 +136,7 @@ impl Agent {
                 if !on {
                     self.slide.remove(&region);
                     if let Some(h) = self.under_finger.get_mut(&cell.key) {
-                        h.1 = Some(std::time::Instant::now());
+                        h.1 = Some(now);
                     }
                 }
                 return;

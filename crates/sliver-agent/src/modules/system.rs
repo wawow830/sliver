@@ -135,7 +135,7 @@ pub(super) fn network(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let polled = matches!(m.common.interval, Some(sliver_config::Interval::Every(_)));
     let (rates, hist) = if polled {
         world.stats.with(|s| {
-            let r = s.net_rates(std::time::Instant::now());
+            let r = s.net_rates(world.now.instant);
             (r.unwrap_or_default(), s.net_history())
         })
     } else {
@@ -469,7 +469,7 @@ pub(super) fn poll_every(m: &ModuleInstance, default_secs: u64) -> std::time::Du
 /// (the agent's loop wakes only while such a cell is on the bar and the display is on).
 pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let stats = &world.stats;
-    let now = std::time::Instant::now();
+    let now = world.now.instant;
     let mut sp = match m.id.kind.as_str() {
         "cpu" => {
             let (usage, load, ghz, hist) = stats.with(|s| {

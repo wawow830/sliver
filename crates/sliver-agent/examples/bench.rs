@@ -33,9 +33,9 @@ fn main() {
     let t = Instant::now();
     for i in 0..20u64 {
         a.touch(r, 0, TouchPhase::Down, 1700.0, i * 1_000_000);
-        a.render_press();
+        a.render_press(Instant::now());
         a.touch(r, 0, TouchPhase::Up, 1700.0, i * 1_000_000 + 50_000);
-        a.render_press();
+        a.render_press(Instant::now());
     }
     println!(
         "press fast path (per press or release): {:?}",

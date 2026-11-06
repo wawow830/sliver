@@ -101,7 +101,7 @@ pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
 }
 
 pub(super) fn clock(at: &At) -> Option<Spec> {
-    let (clock, zones) = Clock::new(at.m, at.world.now, at.ui.tz);
+    let (clock, zones) = Clock::new(at.m, at.world.now.wall, at.ui.tz);
     let mut sp = Spec::new(clock, CLOCK_DEFAULT);
     if zones > 1 {
         let step = |by| Act::Ui {
@@ -142,7 +142,7 @@ pub(super) fn timer(at: &At) -> Option<Spec> {
     let (left, status) = match &ui.timer {
         None => (total, "idle"),
         Some(t) if t.finished => (std::time::Duration::ZERO, "finished"),
-        Some(t) if t.running_since.is_some() => (t.left(world.now), "running"),
+        Some(t) if t.running_since.is_some() => (t.left(world.now.mono_us), "running"),
         Some(t) => (t.remaining, "paused"),
     };
     let pct = 100.0 * (1.0 - left.as_secs_f64() / total.as_secs_f64());

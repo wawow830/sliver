@@ -758,13 +758,13 @@ fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
     let key = at.key.to_owned();
     let next_change = if m.id.kind == "clock" {
         Some(next_clock_tick(
-            world.now,
+            world.now.wall,
             c.format.as_deref().unwrap_or(CLOCK_DEFAULT),
         ))
     } else {
         sp.refresh
             .and_then(|d| chrono::Duration::from_std(d).ok())
-            .map(|d| world.now + d)
+            .map(|d| world.now.wall + d)
     };
     let st = State {
         percentage: sp.percentage,

@@ -128,18 +128,19 @@ pub fn scene(zones: &[ResolvedZone], cells: &[Vec<Cell>], bar_classes: Vec<Strin
     }
 }
 
-/// Renders a layer at `w` x `h` and works out its touch regions.
+/// Renders a layer at `(w, h)` at the moment `at` (which transitions interpolate by) and works
+/// out its touch regions.
 pub fn render(
     renderer: &mut Renderer,
     sheet: &Stylesheet,
     scene: &Scene,
     cells: Vec<Cell>,
-    w: u32,
-    h: u32,
+    (w, h): (u32, u32),
     id_base: u32,
+    at: std::time::Instant,
 ) -> Frame {
     let mut image = Pixmap::new(w, h).expect("non-zero panel");
-    let layout = renderer.render(scene, sheet, &mut image);
+    let layout = renderer.render_at(scene, sheet, &mut image, at);
     let mut all_pressed = scene.clone();
     all_pressed.items_mut().for_each(|i| i.pressed = true);
     let mut pressed = Pixmap::new(w, h).expect("non-zero panel");
@@ -198,6 +199,7 @@ impl Frame {
         renderer: &mut Renderer,
         sheet: &Stylesheet,
         pressed: &dyn Fn(&Cell) -> bool,
+        at: std::time::Instant,
     ) -> bool {
         let mut changed = false;
         for (item, cell) in self.scene.items_mut().zip(self.cells.iter_mut()) {
@@ -209,7 +211,7 @@ impl Frame {
             }
         }
         if changed {
-            renderer.render(&self.scene, sheet, &mut self.image);
+            renderer.render_at(&self.scene, sheet, &mut self.image, at);
         }
         changed
     }

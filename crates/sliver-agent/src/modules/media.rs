@@ -21,7 +21,7 @@ pub(super) fn mpris(at: &At) -> Option<Spec> {
     let length = media.length_us.filter(|l| *l > 0);
     let mut pos = media.position_us.unwrap_or(0).max(0);
     if playing && let Some(at) = media.position_at_ms {
-        let now_ms = world.now.timestamp_millis().max(0) as u64;
+        let now_ms = world.now.wall.timestamp_millis().max(0) as u64;
         pos += (now_ms.saturating_sub(at) as i64) * 1000;
     }
     let pos = length.map_or(pos, |l| pos.min(l));

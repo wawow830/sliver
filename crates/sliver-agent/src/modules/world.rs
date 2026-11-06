@@ -72,7 +72,8 @@ impl Stats {
 /// Everything modules and rules can read.
 #[derive(Debug, Clone)]
 pub struct World {
-    pub now: DateTime<Local>,
+    /// When this world was seen: what clocks show, and what transitions and timers count from.
+    pub now: crate::now::Now,
     pub session: SessionState,
     pub desktop: DesktopState,
     /// Rule context from the feeds (compositor + session keys); the agent adds its own.
@@ -97,9 +98,9 @@ pub struct World {
 
 impl World {
     /// A world with no session or desktop data (headless previews, tests).
-    pub fn at(now: DateTime<Local>) -> World {
+    pub fn at(wall: DateTime<Local>) -> World {
         World {
-            now,
+            now: crate::now::Now::at(wall),
             session: SessionState::default(),
             desktop: DesktopState::default(),
             context: Context::new(),
@@ -188,8 +189,8 @@ pub struct EmojiUi {
 pub struct TimerState {
     /// Time left when it was last started, paused or created.
     pub remaining: std::time::Duration,
-    /// Wall-clock start of the current run; `None` while paused or finished.
-    pub running_since: Option<DateTime<Local>>,
+    /// When the current run started (monotonic µs); `None` while paused or finished.
+    pub running_since: Option<u64>,
     pub finished: bool,
     /// Bumped on every start/pause so a stale "done" deadline is ignored.
     pub generation: u64,
@@ -205,12 +206,12 @@ impl TimerState {
         }
     }
 
-    /// What is left at `now`.
-    pub fn left(&self, now: DateTime<Local>) -> std::time::Duration {
+    /// What is left at `now_us` (monotonic).
+    pub fn left(&self, now_us: u64) -> std::time::Duration {
         match self.running_since {
             Some(t) => self
                 .remaining
-                .saturating_sub((now - t).to_std().unwrap_or_default()),
+                .saturating_sub(std::time::Duration::from_micros(now_us.saturating_sub(t))),
             None => self.remaining,
         }
     }
