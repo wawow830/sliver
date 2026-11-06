@@ -13,6 +13,13 @@ import zlib
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# Scratch directories go in the repo's target/ (ignored by git), which a fresh checkout lacks.
+SCRATCH = HERE.parent.parent / "target"
+
+
+def scratch():
+    SCRATCH.mkdir(exist_ok=True)
+    return SCRATCH
 _loader = importlib.machinery.SourceFileLoader("sliver_safeswap", str(HERE / "sliver-safeswap"))
 _spec = importlib.util.spec_from_loader("sliver_safeswap", _loader)
 ss = importlib.util.module_from_spec(_spec)
@@ -84,7 +91,7 @@ class Props(unittest.TestCase):
     def test_stop_restores_the_recorded_owner(self):
         # `stop` and a manual `restore` give the bar back to whoever had it before the run, not
         # tiny-dfr by default (that raced the run's own ExecStopPost restoring sliverd).
-        with tempfile.TemporaryDirectory(dir=HERE.parent.parent / "target") as d:
+        with tempfile.TemporaryDirectory(dir=scratch()) as d:
             m = ss.Mode(user=False, target="sliverd.service")
             m.state_dir = Path(d)
             self.assertIsNone(ss.recorded_target(m))
@@ -99,7 +106,7 @@ class Props(unittest.TestCase):
         orig = ss.unit_state
         ss.unit_state = lambda mode, u: {"ActiveState": "active"}
         try:
-            with tempfile.TemporaryDirectory(dir=HERE.parent.parent / "target") as d:
+            with tempfile.TemporaryDirectory(dir=scratch()) as d:
                 m = ss.Mode(user=False)
                 m.state_dir = Path(d)
                 self.assertIsNone(ss.stop_refusal(m, 123), "no record: allowed")
