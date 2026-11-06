@@ -39,7 +39,10 @@ echo "== cargo test";  PATH="$trip/bin:$PATH" cargo test --workspace --quiet
 # The files' own validators, where installed. The units' behaviour in a real user manager:
 # packaging/itest-units.sh (~10 s).
 echo "== validators"
-if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then
+# has TOOL...: all installed. If not, that validator is skipped and the last line says so.
+skipped=()
+has() { local t; for t in "$@"; do command -v "$t" >/dev/null || { skipped+=("$t"); return 1; }; done; }
+if has systemd-analyze udevadm; then
   d=target/check-units && rm -rf "$d" && mkdir -p "$d"
   # Documentation= names man pages that are only on the system once the RPM is installed.
   sed -e 's|^ExecStart=.*|ExecStart=/usr/bin/true|' -e '/^Documentation=/d' \
@@ -49,12 +52,12 @@ if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then
   [[ -z "$out" ]] || { echo "$out"; exit 1; }
   udevadm verify --no-summary packaging/udev/*.rules
 fi
-if command -v rpmspec >/dev/null; then
+if has rpmspec; then
   packaging/rpm/spec.py > target/check-sliver.spec && rpmspec -P target/check-sliver.spec >/dev/null
 fi
-if command -v desktop-file-validate >/dev/null; then desktop-file-validate packaging/desktop/*.desktop; fi
-if command -v xmllint >/dev/null; then xmllint --noout packaging/mime/*.xml; fi
-if command -v node >/dev/null; then
+if has desktop-file-validate; then desktop-file-validate packaging/desktop/*.desktop; fi
+if has xmllint; then xmllint --noout packaging/mime/*.xml; fi
+if has node; then
   for f in integration/kwin/sliver-focus/contents/code/main.js integration/gnome-shell/*/extension.js integration/browser/extension/background.js; do
     tmp=$(mktemp --suffix=.mjs); cp "$f" "$tmp"; node --check "$tmp"; rm -f "$tmp"
   done
@@ -63,4 +66,4 @@ for f in integration/kwin/sliver-focus/metadata.json integration/gnome-shell/*/m
   python3 -m json.tool "$f" >/dev/null
 done
 
-echo "check: ok"
+echo "check: ok${skipped[0]:+ (not installed, so skipped: ${skipped[*]})}"

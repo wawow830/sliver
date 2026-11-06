@@ -9,4 +9,10 @@ Install: `scripts/rpm-build --binary`, `sudo dnf install target/rpmbuild/RPMS/*/
 `sudo systemctl start sliverd`. `sliverctl doctor` says what's wrong; `man sliver-config` is the
 reference. Bar stuck? Double-press Fn and hold: the F-keys. Back to tiny-dfr: remove the packages.
 
+Hacking: `sliverd` owns the bar and its safe layer; `sliver-agent`, in the session, tells it what
+to draw (`crates/`; each crate's `//!` says why it exists). `scripts/check` is the gate
+(CI runs it; needs the packages in `.github/workflows/ci.yml`). Slower, by hand: `integration/*/`,
+`packaging/itest-*.sh`, `scripts/soak`, `scripts/idle-wakeups`; real hardware only via
+`harness/safeswap/sliver-safeswap`.
+
 MIT or Apache-2.0; bundled fonts and icons keep their licenses (beside them).
