@@ -684,47 +684,68 @@ fn as_slider(mut sp: Spec, m: &ModuleInstance, ui: &UiState) -> Spec {
     sp
 }
 
-/// What the module shows, before any presentation.
+/// What the module shows, before any presentation: its type's entry in [`SOURCES`].
 fn source(at: &At) -> Option<Spec> {
-    let (m, world, ui, item) = (at.m, at.world, at.ui, at.item);
-    match m.id.kind.as_str() {
-        "custom" if world.outputs.contains_key(&m.id.to_string()) => {
-            widgets::custom_output(m, world)
-        }
-        "key" | "custom" | "spacer" => Some(Spec::new(ValueMap::new(), "")),
-        "graph" | "custom-graph" => widgets::graph(m, world, ui),
-        "cava" => widgets::cava(m, world),
-        "image" => widgets::image(m, world),
-        "clock" => widgets::clock(at),
-        "battery" => system::battery(world),
-        "backlight" | "kbd-backlight" => system::backlight(m, world),
-        "audio" => system::audio(m, world),
-        "mpris" => media::mpris(at),
-        "idle-inhibitor" => system::idle_inhibitor(world),
-        "power-profiles" => system::power_profiles(world),
-        "language" if world.session.input_method.is_some() => desktop::language_input_method(world),
-        "language" => desktop::language(world),
-        "window" => desktop::window(m, world),
-        "mode" => desktop::mode(world),
-        "cpu" | "memory" | "temperature" | "disk" | "load" => stat_spec(m, world),
-        "network" => system::network(m, world),
-        "bluetooth" => system::bluetooth(world),
-        "emoji" => widgets::emoji(m),
-        "timer" => widgets::timer(at),
-        "notifications" => system::notifications(world),
-        "screenshot" => system::screenshot(),
-        "systemd-failed-units" => system::failed_units(m, world),
-        "lock" => system::lock(),
-        "power" => system::power(at.key),
-        "dnd" => system::dnd(world),
-        "dark-mode" => system::dark_mode(world),
-        "privacy" => system::privacy(world, item),
-        "workspaces" => desktop::workspaces(world, item),
-        "taskbar" => desktop::taskbar(m, world, item),
-        // No data source wired yet: show nothing rather than a broken placeholder.
-        _ => None,
-    }
+    let (_, values) = SOURCES.iter().find(|(kind, _)| *kind == at.m.id.kind)?;
+    values(at)
 }
+
+/// Where each module type's values come from. With the types [`cells_in`] composes from other
+/// modules (groups) or from what apps publish, this is the config's list of types
+/// (`sliver_config::MODULE_TYPES`; a test holds them together), so a type is added here.
+type Source = fn(&At) -> Option<Spec>;
+const SOURCES: &[(&str, Source)] = &[
+    ("key", |_| Some(Spec::new(ValueMap::new(), ""))),
+    ("spacer", |_| Some(Spec::new(ValueMap::new(), ""))),
+    ("custom", |at| {
+        if at.world.outputs.contains_key(&at.m.id.to_string()) {
+            widgets::custom_output(at.m, at.world)
+        } else {
+            // No script, or none has printed yet: its `format` alone.
+            Some(Spec::new(ValueMap::new(), ""))
+        }
+    }),
+    ("graph", |at| widgets::graph(at.m, at.world, at.ui)),
+    ("custom-graph", |at| widgets::graph(at.m, at.world, at.ui)),
+    ("cava", |at| widgets::cava(at.m, at.world)),
+    ("image", |at| widgets::image(at.m, at.world)),
+    ("clock", widgets::clock),
+    ("emoji", |at| widgets::emoji(at.m)),
+    ("timer", widgets::timer),
+    ("battery", |at| system::battery(at.world)),
+    ("backlight", |at| system::backlight(at.m, at.world)),
+    ("kbd-backlight", |at| system::backlight(at.m, at.world)),
+    ("audio", |at| system::audio(at.m, at.world)),
+    ("idle-inhibitor", |at| system::idle_inhibitor(at.world)),
+    ("power-profiles", |at| system::power_profiles(at.world)),
+    ("network", |at| system::network(at.m, at.world)),
+    ("bluetooth", |at| system::bluetooth(at.world)),
+    ("notifications", |at| system::notifications(at.world)),
+    ("screenshot", |_| system::screenshot()),
+    ("systemd-failed-units", |at| {
+        system::failed_units(at.m, at.world)
+    }),
+    ("lock", |_| system::lock()),
+    ("power", |at| system::power(at.key)),
+    ("dnd", |at| system::dnd(at.world)),
+    ("dark-mode", |at| system::dark_mode(at.world)),
+    ("privacy", |at| system::privacy(at.world, at.item)),
+    ("cpu", |at| stat_spec(at.m, at.world)),
+    ("memory", |at| stat_spec(at.m, at.world)),
+    ("temperature", |at| stat_spec(at.m, at.world)),
+    ("disk", |at| stat_spec(at.m, at.world)),
+    ("load", |at| stat_spec(at.m, at.world)),
+    ("mpris", media::mpris),
+    // fcitx5 (CJK input methods) takes over while it runs; else the compositor's layout.
+    ("language", |at| match at.world.session.input_method {
+        Some(_) => desktop::language_input_method(at.world),
+        None => desktop::language(at.world),
+    }),
+    ("window", |at| desktop::window(at.m, at.world)),
+    ("mode", |at| desktop::mode(at.world)),
+    ("workspaces", |at| desktop::workspaces(at.world, at.item)),
+    ("taskbar", |at| desktop::taskbar(at.m, at.world, at.item)),
+];
 
 /// A formatted label: the one step every module's (and configured published item's) text goes
 /// through. waybar's `format`/`format-icons`/`states` over `values`, then the icon: the format's,
@@ -1049,6 +1070,24 @@ pub fn user_module_specs(
 #[cfg(test)]
 mod spec_tests {
     use super::*;
+
+    /// Every module type the config accepts has values or is composed, and nothing else does.
+    #[test]
+    fn sources_are_the_configs_module_types() {
+        // Composed in `cells_in`.
+        let composed = ["group", "app", "app-controls", "status-items"];
+        let mut ours: Vec<&str> = SOURCES.iter().map(|(k, _)| *k).chain(composed).collect();
+        // waybar's `custom-graph/<name>`, read as a graph.
+        ours.retain(|k| *k != "custom-graph");
+        ours.sort();
+        let mut config: Vec<&str> = sliver_config::MODULE_TYPES
+            .iter()
+            .copied()
+            .filter(|k| !k.ends_with("/slider"))
+            .collect();
+        config.sort();
+        assert_eq!(ours, config);
+    }
 
     #[test]
     fn finds_exec_modules_everywhere() {
