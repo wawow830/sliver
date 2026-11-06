@@ -17,7 +17,8 @@ python3 -m unittest discover -s packaging -p 'test_*.py' -q
 
 echo "== docs"
 # Every docs/ path named in the tree exists: references are kept pointing at what exists.
-missing=$(git grep -ohE 'docs/[A-Za-z0-9_/-]+\.(md|xml)' | sort -u | while read -r p; do [[ -e $p ]] || echo "$p"; done)
+missing=$( (git grep -ohE 'docs/[A-Za-z0-9_./-]+\.(md|xml)' || true) | sort -u \
+  | while read -r p; do [[ -e $p ]] || echo "$p"; done)
 [[ -z $missing ]] || { echo "named but missing: $missing"; exit 1; }
 
 echo "== cargo fmt";   cargo fmt --all -- --check
