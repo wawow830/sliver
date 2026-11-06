@@ -23,7 +23,7 @@ for a in "$@"; do
 done
 
 name=sliver
-version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
 # date.commitcount.githash: the count keeps same-day builds increasing for `dnf upgrade` (the hash
 # alone compares alphabetically).
 snapshot="$(date -u +%Y%m%d).$(git rev-list --count HEAD).git$(git rev-parse --short HEAD)"
