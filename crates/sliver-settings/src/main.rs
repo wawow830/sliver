@@ -201,7 +201,7 @@ const PAGES: &[(&str, &str, &str)] = &[
 
 fn main() -> glib::ExitCode {
     // `--help`, `--version` and unknown options end here; the presets go on to GTK's `open`.
-    CLI.args(std::env::args().skip(1)).finish();
+    CLI.args(std::env::args().skip(1));
     // `sliver-settings FILE.sliver` (or opening one from a file manager) reviews that preset.
     let app = adw::Application::builder()
         .application_id(APP_ID)

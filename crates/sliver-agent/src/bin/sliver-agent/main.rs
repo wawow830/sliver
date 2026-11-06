@@ -54,12 +54,13 @@ struct Args {
 }
 
 fn args() -> Args {
-    let mut args = sliver_agent::CLI.args(std::env::args().skip(1));
+    let cli = &sliver_agent::CLI;
+    let args = cli.args(std::env::args().skip(1));
     let size = args.value("--size").map_or((2008, 60), |v| {
         let wh = v
             .split_once('x')
             .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
-        wh.unwrap_or_else(|| args.die("--size is WxH, say 2008x60"))
+        wh.unwrap_or_else(|| cli.die("--size is WxH, say 2008x60"))
     });
     let a = Args {
         render: args.value("--render").map(PathBuf::from),
@@ -71,7 +72,7 @@ fn args() -> Args {
         size,
         replace: args.flag("--replace"),
     };
-    if let Some(x) = args.finish().first() {
+    if let Some(x) = args.operands().first() {
         die(&format!("unexpected argument {x:?} (try --help)"));
     }
     a

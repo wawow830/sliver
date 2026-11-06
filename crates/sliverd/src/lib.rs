@@ -17,8 +17,10 @@
 //! - `testing` (feature): `TestDaemon`, the real core in-process for agent tests.
 //! - [`router`]: which touches become keys and which go to the agent. [`hatch`]: the Fn safe hatch.
 
+use sliver_cli::{Cli, Opt};
+
 /// sliverd's command line (`sliverd --help`).
-pub const CLI: sliver_cli::Cli = sliver_cli::Cli {
+pub const CLI: Cli = Cli {
     name: "sliverd",
     version: env!("CARGO_PKG_VERSION"),
     synopsis: "\
@@ -26,48 +28,64 @@ sliverd [--socket PATH] [--config PATH]    (as sliverd.service, or under the saf
 sliverd --fake-hardware [OPTION...]
 sliverd --headless OUT.png [--fn] [OPTION...]",
     options: &[
-        (
-            "--socket PATH",
+        Opt::value(
+            &["--socket"],
+            "PATH",
             "the IPC socket if systemd passes none (default /run/sliver/sliverd.sock)",
         ),
-        (
-            "--config PATH",
+        Opt::value(
+            &["--config"],
+            "PATH",
             "sliverd's own config (default /etc/sliver/sliverd.toml)",
         ),
-        (
-            "--fake-hardware",
+        Opt::flag(
+            &["--fake-hardware"],
             "fake panel, touch and keys: run the agent without a bar",
         ),
-        (
-            "--backend real|fake",
+        Opt::value(
+            &["--backend"],
+            "real|fake",
             "the same, spelled out (fake is --fake-hardware)",
         ),
-        (
-            "--uid N",
+        Opt::value(
+            &["--uid"],
+            "N",
             "the active session's uid on fake hardware (default yours)",
         ),
-        (
-            "--frame-png PATH",
+        Opt::value(
+            &["--frame-png"],
+            "PATH",
             "rewrite this PNG on every panel flush (fake hardware)",
         ),
-        (
-            "--touch-socket PATH",
+        Opt::value(
+            &["--touch-socket"],
+            "PATH",
             "take touches, Fn and lid as text lines (fake hardware)",
         ),
-        (
-            "--headless OUT.png",
+        Opt::value(
+            &["--headless"],
+            "OUT.png",
             "write what the panel shows, once, and exit",
         ),
-        ("--fn", "with --headless: Fn held"),
-        ("--width N", "the fake panel's width (default 2008)"),
-        ("--model ID", "the fake panel's model (default Mac14,7)"),
-        (
-            "--max-brightness N",
+        Opt::flag(&["--fn"], "with --headless: Fn held"),
+        Opt::value(&["--width"], "N", "the fake panel's width (default 2008)"),
+        Opt::value(
+            &["--model"],
+            "ID",
+            "the fake panel's model (default Mac14,7)",
+        ),
+        Opt::value(
+            &["--max-brightness"],
+            "N",
             "the fake panel's top brightness (default 255)",
         ),
-        ("--exit-after SECONDS", "exit on its own after this long"),
-        (
-            "-v, --verbose",
+        Opt::value(
+            &["--exit-after"],
+            "SECONDS",
+            "exit on its own after this long",
+        ),
+        Opt::flag(
+            &["-v", "--verbose"],
             "log input, keys, state changes and agent traffic (or SLIVER_LOG=debug)",
         ),
     ],

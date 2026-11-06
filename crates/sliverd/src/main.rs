@@ -19,12 +19,13 @@ fn die(msg: &str) -> ! {
 }
 
 fn main() {
-    let mut args = sliverd::CLI.args(std::env::args().skip(1));
-    if args.flag("-v") || args.flag("--verbose") || sliverd::log::from_env() {
+    let args = sliverd::CLI.args(std::env::args().skip(1));
+    let parsed = |e: Result<u32, String>| e.unwrap_or_else(|e| die(&e));
+    if args.flag("--verbose") || sliverd::log::from_env() {
         sliverd::log::enable();
     }
-    let width = args.parse("--width", 2008u32);
-    let max_brightness = args.parse("--max-brightness", 255u32);
+    let width = parsed(args.parsed("--width", 2008));
+    let max_brightness = parsed(args.parsed("--max-brightness", 255));
     let model = args.value("--model").unwrap_or_else(|| "Mac14,7".into());
     let panel = PanelInfo {
         width,
@@ -46,10 +47,7 @@ fn main() {
     }
     let fake = match args.value("--backend").as_deref() {
         None | Some("real") => args.flag("--fake-hardware"),
-        Some("fake") => {
-            args.flag("--fake-hardware");
-            true
-        }
+        Some("fake") => true,
         Some(b) => die(&format!("unknown --backend {b} (real, fake)")),
     };
     let harness = std::env::var("SLIVER_SAFESWAP").is_ok_and(|v| v == "1");
@@ -76,13 +74,13 @@ fn main() {
             })
             .flatten()
     });
-    let uid = args.parse("--uid", rustix::process::getuid().as_raw());
+    let uid = parsed(args.parsed("--uid", rustix::process::getuid().as_raw()));
     let frame_png = args.value("--frame-png").map(PathBuf::from);
     let touch_socket = args.value("--touch-socket").map(PathBuf::from);
     if touch_socket.is_some() && !fake {
         die("--touch-socket needs --fake-hardware (real hardware has a real digitizer)");
     }
-    if let Some(a) = args.finish().first() {
+    if let Some(a) = args.operands().first() {
         die(&format!("unexpected argument {a:?} (try --help)"));
     }
 

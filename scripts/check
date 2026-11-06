@@ -39,7 +39,8 @@ echo "== cargo test";  PATH="$trip/bin:$PATH" cargo test --workspace --quiet
 # The files' own validators, where installed. The units' behaviour in a real user manager:
 # packaging/itest-units.sh (~10 s).
 echo "== validators"
-# has TOOL...: all installed. If not, that validator is skipped and the last line says so.
+# has TOOL...: all installed. If not, that validator is skipped and the last line says so
+# (with SLIVER_CHECK_ALL=1, as in CI, a skip fails the gate).
 skipped=()
 has() { local t; for t in "$@"; do command -v "$t" >/dev/null || { skipped+=("$t"); return 1; }; done; }
 if has systemd-analyze udevadm; then
@@ -56,6 +57,12 @@ if has rpmspec; then
   packaging/rpm/spec.py > target/check-sliver.spec && rpmspec -P target/check-sliver.spec >/dev/null
 fi
 if has desktop-file-validate; then desktop-file-validate packaging/desktop/*.desktop; fi
+if has appstreamcli; then  # as %install fills it: Cargo's license for @LICENSE@
+  lic=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["license"])')
+  m=target/check-metainfo && rm -rf "$m" && mkdir -p "$m"
+  for f in packaging/desktop/*.metainfo.xml; do sed "s|@LICENSE@|$lic|" "$f" > "$m/${f##*/}"; done
+  appstreamcli validate --no-net "$m"/*.metainfo.xml
+fi
 if has xmllint; then xmllint --noout packaging/mime/*.xml; fi
 if has node; then
   for f in integration/kwin/sliver-focus/contents/code/main.js integration/gnome-shell/*/extension.js integration/browser/extension/background.js; do
@@ -66,4 +73,7 @@ for f in integration/kwin/sliver-focus/metadata.json integration/gnome-shell/*/m
   python3 -m json.tool "$f" >/dev/null
 done
 
+if [[ -n ${skipped[0]:-} && -n ${SLIVER_CHECK_ALL:-} ]]; then
+  echo "SLIVER_CHECK_ALL: validators skipped for missing tools: ${skipped[*]}"; exit 1
+fi
 echo "check: ok${skipped[0]:+ (not installed, so skipped: ${skipped[*]})}"

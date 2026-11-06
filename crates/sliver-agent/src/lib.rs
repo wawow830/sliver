@@ -31,32 +31,38 @@
 //!   `catch_unwind`, so a panicking module leaves that layer's last good frame up. Fixed-seed
 //!   random inputs in `tests/robustness.rs` check that nothing panics.
 
+use sliver_cli::{Cli, Opt};
+
 /// sliver-agent's command line (`sliver-agent --help`).
-pub const CLI: sliver_cli::Cli = sliver_cli::Cli {
+pub const CLI: Cli = Cli {
     name: "sliver-agent",
     version: env!("CARGO_PKG_VERSION"),
     synopsis: "\
 sliver-agent [--config FILE] [--socket PATH] [--replace]
 sliver-agent --render OUT [--config FILE] [--size WxH]",
     options: &[
-        (
-            "--config FILE",
+        Opt::value(
+            &["--config"],
+            "FILE",
             "this config, not the search path (~/.config/sliver/config.toml)",
         ),
-        (
-            "--socket PATH",
+        Opt::value(
+            &["--socket"],
+            "PATH",
             "sliverd's socket (default /run/sliver/sliverd.sock, or $SLIVER_SOCKET)",
         ),
-        (
-            "--replace",
+        Opt::flag(
+            &["--replace"],
             "take the D-Bus name from a running agent (it's handed back on exit)",
         ),
-        (
-            "--render OUT",
+        Opt::value(
+            &["--render"],
+            "OUT",
             "headless, without sliverd: write OUT-base.png and OUT-fn.png",
         ),
-        (
-            "--size WxH",
+        Opt::value(
+            &["--size"],
+            "WxH",
             "the bar's size for --render (default 2008x60)",
         ),
     ],

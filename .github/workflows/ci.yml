@@ -7,6 +7,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Every validator runs here: one that's skipped for a missing tool fails the gate.
+  SLIVER_CHECK_ALL: "1"
   # The gate runs as an ordinary user, like on a developer's machine: user modules refuse to run
   # as root, and so would their tests.
   CARGO_HOME: /home/ci/.cargo
@@ -27,7 +29,7 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             git gcc pkgconf-pkg-config gtk4-devel libadwaita-devel libxkbcommon-devel \
-            dbus-daemon groff systemd systemd-udev rpm-build desktop-file-utils libxml2 \
+            dbus-daemon groff systemd systemd-udev rpm-build desktop-file-utils libxml2 appstream \
             nodejs python3 python3-gobject procps-ng fontconfig dejavu-sans-fonts util-linux rustup
           useradd -m ci
       - uses: actions/checkout@v4
