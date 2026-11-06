@@ -1,4 +1,4 @@
-.\" sliver-agent(1). Prose: docs/agent.md, docs/api.md.
+.\" sliver-agent(1). Prose: docs/api.md.
 .TH SLIVER\-AGENT 1 2026-10-12 "sliver 0.1.0" "User Commands"
 .SH NAME
 sliver\-agent \- per\-user Touch Bar session agent
@@ -130,29 +130,14 @@ Commands run by modules get
 and
 .BR SLIVER_APP_ID .
 .SH BUGS
-Version 0.1.0 is a development snapshot.
-Hot reload of the configuration
-.RB ( SIGUSR2 ,
-inotify),
-.B SIGUSR1
-are still being wired up.
-Of the
-.BR sliverctl (1)
-control commands,
-.BR layout ,
-.BR profile ,
-.BR reload ,
-.BR show / hide / toggle
-of single modules and
-.B update
-are not supported yet.
+Report them at
+.UR https://github.com/wawow830/sliver/issues
+.UE .
 .SH SEE ALSO
 .BR sliverctl (1),
 .BR sliver\-config (5),
 .BR sliver\-stylesheet (5),
 .BR sliverd (8)
 .PP
-.I docs/agent.md
-and
 .I docs/api.md
 in the sliver sources.

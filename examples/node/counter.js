@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A counter on the Touch Bar from Node.js or an Electron main process, in plain D-Bus
-// (dbus-next, no sliver libraries). docs/integrating-apps.md explains it step by step.
+// (dbus-next, no sliver libraries). docs/api.md §10 explains it step by step.
 //
 //     npm install dbus-next
 //     node examples/node/counter.js

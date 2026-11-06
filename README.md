@@ -6,13 +6,14 @@ what the bar shows and does: layouts, per-app contexts, widgets, gestures and ap
 app, script and desktop environment gets a standard way to put things on the bar. And the user
 is never left without Escape or the F-keys.
 
-- [docs/user-guide.md](docs/user-guide.md): install, configure, style, script; man pages in [man/](man)
-- [GOAL.md](GOAL.md): the goal, what "complete" means, and the invariants
+- [docs/user-guide.md](docs/user-guide.md): install, first run, troubleshooting
+- [man/](man): the reference (`sliver-config(5)`, `sliver-stylesheet(5)`, `sliverctl(1)`, ...)
+- [docs/api.md](docs/api.md): putting an app or script on the bar over D-Bus
+- [GOAL.md](GOAL.md): the goal, the design principle and the invariants
 - [docs/decisions](docs/decisions): architecture decisions
 
 Status: early. It drives the Touch Bar day to day on an M2 MacBook Pro 13" (`Mac14,7`) under
-Hyprland. Other compositors, desktops and Macs are experimental: see the user guide's "What's been
-tested where".
+Hyprland; other compositors, desktops and Macs are experimental.
 
 ## License
 

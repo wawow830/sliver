@@ -1,7 +1,7 @@
 #!/usr/bin/env -S gjs -m
 // A counter on the Touch Bar from a GTK/GNOME app written in GJS, in plain D-Bus (Gio). It is
 // examples/python/pomodoro.py's twin: Gio is the same API in every language.
-// docs/integrating-apps.md explains it step by step.
+// docs/api.md §10 explains it step by step.
 //
 //     gjs -m examples/gjs/counter.js
 

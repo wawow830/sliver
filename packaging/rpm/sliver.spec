@@ -227,7 +227,7 @@ udevadm trigger --action=change --subsystem-match=backlight \
     --sysname-match=appletb_backlight >/dev/null 2>&1 || :
 # Never send a udev event to the digitizers here: they carry SYSTEMD_WANTS=sliverd.service, and
 # systemd acts on it for 'change' events too, so it would take the bar from tiny-dfr at every
-# install and upgrade (measured on the Mac14,7). Their seat rule
+# install and upgrade. Their seat rule
 # (ID_SEAT=seat-touchbar) applies from the next boot, like the rest. Without tiny-dfr our rules
 # also do the T2 USB switch to the display configuration (an add-only rule; it acts only while
 # the configuration is still 1).
@@ -262,12 +262,12 @@ fi
 
 %files
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies cargo-vendor.txt
-%doc README.md GOAL.md docs/user-guide.md docs/api.md docs/customization.md docs/styling.md
+%doc README.md GOAL.md docs/user-guide.md docs/api.md
 %doc examples
 
 %files -n sliverd
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
-%doc docs/sliverd.md docs/decisions/0005-sliverd-system-integration.md
+%doc docs/hardware.md docs/decisions/0005-sliverd-system-integration.md
 %{_libexecdir}/sliverd
 %{_unitdir}/sliverd.service
 %{_unitdir}/sliverd.socket
@@ -279,7 +279,6 @@ fi
 
 %files -n sliver-agent
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
-%doc docs/agent.md
 %{_bindir}/sliver-agent
 %{_userunitdir}/sliver-agent.service
 %{_userpresetdir}/90-sliver.preset

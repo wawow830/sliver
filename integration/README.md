@@ -4,10 +4,7 @@ Compositors that Sliver's agent cannot query itself push focus to it instead, ov
 `io.github.wawow830.Sliver.Desktop1` (`SetFocus`, `SetWorkspaces`; docs/api.md §5).
 Hyprland, sway and niri need none of this: the agent reads their IPC (`crates/sliver-desktop`).
 
-Both are **experimental**: they're tested only in nested or headless sessions, never on a real
-desktop.
-
-| Desktop | What | Package: install path | Tested on |
+| Desktop | What | Package: install path | Test |
 |---|---|---|---|
 | KDE Plasma 6 | KWin script `kwin/sliver-focus` | `sliver-kwin`: `/usr/share/kwin/scripts/sliver-focus/` (the only path KWin 6.0–6.3 read; 6.7 reads it too) | nested `kwin_wayland --virtual`, `kwin/test.sh` |
 | GNOME Shell 45+ | extension `gnome-shell/sliver-focus@sliver.wawow830.github.io` | `gnome-shell-extension-sliver`: `/usr/share/gnome-shell/extensions/<uuid>/` | headless gnome-shell 50.5, `gnome-shell/test.sh` |
@@ -39,7 +36,7 @@ agent, ignores every error, and sends an empty `SetFocus` on disable so the agen
 `integration/gnome-shell/test.sh` runs it on a real gnome-shell/mutter 50.5 (`--headless
 --virtual-monitor`, private session bus) with two real clients: focus, workspaces and the window list
 reach a mock agent, and `Shell1.FocusWindow`, `FocusWorkspace` and `CloseWindow` really act.
-Only GNOME 50.5 is tested: 45–49 are listed in `metadata.json` but untested. No root needed: `dnf download --resolve` the rpms, `rpm2cpio | cpio -idm` them into a
+`metadata.json` lists GNOME 45–50. No root needed: `dnf download --resolve` the rpms, `rpm2cpio | cpio -idm` them into a
 prefix, and the script puts them over `/usr/share` and `/usr/lib64` with an overlay in a private
 user namespace (see the header of the script).
 

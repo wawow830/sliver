@@ -4,16 +4,23 @@ Read `GOAL.md` first: what sliver is and the invariants that are never traded aw
 architecture decisions are in `docs/decisions/`. Write a new ADR to change one.
 
 ## Repo
-- A Cargo workspace (ADR-0001). Crates are in `crates/`:
+- A Cargo workspace (ADR-0001, ADR-0006). Crates are in `crates/`:
   - bins: `sliverd` (system daemon), `sliver-agent` (session agent), `sliverctl` (CLI),
     `sliver-settings` (GTK4 app)
   - libs: `sliver-config` (layout model + TOML schema), `sliver-ipc` (sliverd<->agent protocol),
-    `sliver-render` (rendering + headless PNG), `sliver-api` (public D-Bus API), and smaller
-    helpers. Shared deps go in `[workspace.dependencies]`; crates opt into `[lints] workspace = true`.
+    `sliver-render` (rendering + headless PNG), `sliver-api` (public D-Bus API), `sliver-import`
+    (waybar and tiny-dfr importers), and smaller helpers. A crate needs a boundary (ADR-0006):
+    code only the agent uses lives in the agent, so stats, reload and feeds are agent modules.
+    Shared deps go in `[workspace.dependencies]`; crates opt into `[lints] workspace = true`.
 - `scripts/check` is the gate: fmt, clippy (`-D warnings`), tests, packaging lints. CI
   (`.github/workflows/ci.yml`) runs it on aarch64. Keep it fast and green; run it before pushing.
-- `docs/`: user and reference docs. `harness/`: the safe-swap harness and guided hardware checks.
-  `packaging/`: RPM, systemd, udev, D-Bus files.
+- Docs (ADR-0006): a doc exists only if a test checks it against the code (the man pages in
+  `man/`, `docs/dbus/`), it's a procedure (README, `docs/user-guide.md`, `docs/safe-swap.md`,
+  `docs/packaging.md`, `docs/api.md`), or it's an ADR (`docs/decisions/`). How and why code works
+  goes in its module's `//!` comment. No feature inventories, roadmaps or status tables.
+  The one exception is `docs/hardware.md`: measured hardware facts that several crates cite.
+- `harness/`: the safe-swap harness and guided hardware checks. `packaging/`: RPM, systemd, udev,
+  D-Bus files.
 
 ## Hardware safety
 The F-keys exist only on the Touch Bar, so a broken bar strands the user.

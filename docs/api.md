@@ -1,6 +1,7 @@
 # Sliver API
 
-Status: **draft v1**. Nothing here is public until a release ships. Design decisions: ADR-0003.
+The public D-Bus API for apps, scripts and desktop integrations, and the private protocol between
+sliverd and the agent. Design decisions: ADR-0003. To put an app on the bar quickly, start with §10.
 
 Sliver has two API surfaces:
 
@@ -49,7 +50,7 @@ Additive changes bump the `Version` property (minor).
  └─────┴──────────────────────────────────────────────────────────┴──────────────────────────────┘
 ```
 
-Terms match docs/ux.md. The **user's layout** (config, settings app) has three zones: **Esc**
+The **user's layout** (config, settings app) has three zones: **Esc**
 (pinned), **Main**, and **Controls** (collapsible control strip). Apps never decide the layout. Their
 items only appear where the user put one of two **placeholder items**:
 - **App controls**: the focused app's context. The default layout puts it in Main.
@@ -60,9 +61,9 @@ Rules, layers and layout resolution all happen in the agent. sliverd only knows 
 
 - A **context** is a list of **items** published by one D-Bus client (NSTouchBar analogue).
   It has a **scope**:
-  - `app`: fills App controls while one of *the caller's own* windows is focused (verified, see §4).
+  - `app`: fills App controls while one of *the caller's own* windows is focused (see §4).
   - `target`: fills App controls while a window matching a selector is focused
-    (a script adding controls for another app; BetterTouchTool-style). Unverified, lower priority.
+    (a script adding controls for another app; BetterTouchTool-style).
   - `status`: shown in Status items regardless of focus (StatusNotifierItem/Control Strip analogue).
 - An `app` context may be **modal** (color picker, recording controls). It then covers Main and
   Controls, **never Esc**, if the user's per-app "may take the whole bar" setting allows (default on).
@@ -71,7 +72,7 @@ Rules, layers and layout resolution all happen in the agent. sliverd only knows 
   gesture recognition, and sends **events** back to the owner. Apps never draw pixels.
 - **Published items are modules** (GOAL.md design principle, waybar model). Each item is a module
   instance `app/<provider>#<item-id>`, and a whole context is the group module `app/<provider>`
-  (grammar in docs/customization.md).
+  (grammar in sliver-config(5)).
   The user treats them **exactly like built-ins**: place them in any zone of any layout (not just
   the placeholders), style them from the stylesheet, bind any gesture to their own actions, and
   reshape them with `format`. The placeholders are just the zero-config default. They hold
@@ -196,7 +197,7 @@ Emoji are just text.
 
 ### 3.1 Published items are first-class modules
 Everything a config-defined module can do, a published item can do too. The vocabulary is shared
-with the config schema (docs/customization.md). This is the D-Bus side of it.
+with the config schema (sliver-config(5)). This is the D-Bus side of it.
 
 | waybar-style feature | for a published item |
 |---|---|
@@ -212,7 +213,7 @@ So `values` is how apps let the user restyle *content*: a VPN client publishing
 
 ## 4. Focus, priority and permissions
 
-### Binding an `app` context to windows (verified)
+### Binding an `app` context to windows
 The agent knows the focused toplevel (`app-id`, `pid`, workspace, title) from its compositor backend
 (Hyprland/sway IPC, or a DE integration via `Desktop1`). An `app` context of a client with pid `P`
 (from `GetConnectionCredentials`, pidfd when available) is **active** when the focused window's pid
@@ -234,7 +235,7 @@ Status zone: all visible `status` contexts, ordered by user prefs, then provider
 lowest `priority` items; the user can hide any provider.
 
 ### User preferences (config)
-The user steers all of this from `config.toml` (schema in docs/customization.md):
+The user steers all of this from `config.toml` (schema in sliver-config(5)):
 - `[apps."<app-id>"]` (case-insensitive, with `[apps."*"]` as the default) sets `controls` (may
   fill App controls), `whole-bar` (modal allowed) and `pin` (only this provider fills App controls).
 - `[providers."<provider-id>"]` sets `show` (false hides it everywhere), `allow` (lets a sandboxed
@@ -285,8 +286,7 @@ SetProfile(s name)                  ReloadConfig() -> (as errors)
 Bar(s action)                       show | hide | toggle the whole bar (the hatch keeps working)
 ValidateConfig(s toml) -> (as errors)   checked as if saved over the live config (includes and
                                     the stylesheet resolve from its directory); empty = valid
-Preview(s layout_toml, u timeout_ms)       not implemented (an error); the settings app's Mirror
-                                    uses HoldLayout
+Preview(s layout_toml, u timeout_ms)       always returns an error; use HoldLayout
 RenderPreview(s config_toml, a{sv} options) -> (ay png)   that config drawn offscreen with the
                                     live state, as if saved over the live config; "" = the bar
                                     as it is now. Errors if the config would be rejected
@@ -318,7 +318,7 @@ module errors, one line each with the file and line first when known; empty when
 `SetProfile` writes `~/.config/sliver/active-profile` and reloads. It fails, leaving the old profile
 active, if the name is unknown or the profile doesn't validate. `default` is `config.toml`.
 `Profiles` lists `default` first. Both are empty when the agent runs with `--config FILE`
-(customization.md §1b).
+(sliver-config(5), "Profiles").
 
 `NS.Desktop1`: lets a compositor integration that the agent can't query directly (GNOME extension, KWin
 script) feed it state.
@@ -454,9 +454,10 @@ deliberate change: combos are released in **reverse** order (modifiers last). `s
 
 Clients: **`crates/sliver-client`** (Rust: builders, an event channel, and automatic re-publishing
 when the agent restarts or starts late), **`sliverctl`** (every `Control1` method, plus `publish`), and
-**`examples/`** (`python/pomodoro.py` in plain Gio, `node/counter.js`, `gjs/counter.js`, `qt/counter.cpp`, `shell/README.md`). Per-toolkit recipes (GTK/GJS, Qt, Electron/Node) are in `docs/integrating-apps.md`. The Rust crate,
-`sliverctl` and the Python and Node examples are tested end to end against the real server on a
-private bus.
+**`examples/`** (`python/pomodoro.py` in plain Gio, `node/counter.js`, `gjs/counter.js`,
+`qt/counter.cpp`, `shell/README.md`). Per-toolkit recipes (GTK/GJS, Qt, Electron/Node) are in §10.
+The Rust crate, `sliverctl` and the Python and Node examples are tested end to end against the
+real server on a private bus.
 
 Shell (`busctl`):
 ```sh
@@ -490,3 +491,115 @@ sliverctl layer media | reload | var set focus_mode true | modules
 - **MPRIS:** `PropertiesChanged`-driven state, re-discovery on name owner change.
 - **StatusNotifierItem:** avoided its pain: no raw ARGB pixmaps in network byte order, no separate menu
   protocol (popover is an item), no host/watcher split, re-registration made automatic in the client crate.
+
+## 10. Putting your app on the bar
+
+You don't need a Sliver library. Every toolkit with a D-Bus binding can publish buttons, toggles,
+sliders and more, and react to touches. This is the short path through §2, §3 and §7, with a
+recipe per toolkit.
+
+| Toolkit | Example |
+|---|---|
+| Python / GLib | `examples/python/pomodoro.py` (run by the tests) |
+| Node.js / Electron (dbus-next) | `examples/node/counter.js` (run by the tests when `dbus-next` is installed) |
+| GTK and GNOME apps in GJS (Gio) | `examples/gjs/counter.js` |
+| Qt 6 (QtDBus, C++) | `examples/qt/counter.cpp` |
+| Shell | `sliverctl publish`, `busctl` (§8) |
+| Rust | the `sliver-client` crate |
+
+### The recipe (every language does the same five things)
+
+1. **Wait for the agent.** Watch the bus name `io.github.wawow830.Sliver` on the **session bus**
+   (`Gio.bus_watch_name`, `QDBusServiceWatcher`, `NameOwnerChanged`). It may start after you, and
+   it may restart. Don't treat "not there" as an error: publish when it appears, and publish
+   **again** whenever its name gets a new owner, because your contexts die with it (§7).
+2. **Create a context.** `CreateContext(a{sv})` on `/io/github/wawow830/Sliver`, interface
+   `…Sliver.TouchBar1`. Options: `scope` (`app`: shown while *your* window has focus; `status`: a
+   background item in the user's "Status items"), a stable reverse-DNS `provider` (the user's
+   preferences hang on it), and a `title`. It returns the context's object path.
+3. **Publish items.** `SetItems(aa{sv})` on that path, interface `…Sliver.Context1`. Each item is a
+   dictionary of variants with at least `id` (s) and `type` (s: `button`, `toggle`, `label`,
+   `slider`, `segmented`, `scrubber`, `progress`, `spacer`, `image`, `group`, `popover`). Then `label`,
+   `icon` (an XDG icon name), `classes`, `gestures`, `values` (named values for the user's own
+   `format` string)… Keep item ids **stable between releases**: they're how users pin and style
+   your items.
+4. **React.** The `Event(s item, s kind, a{sv} data)` signal on the context says `tap`, `hold`,
+   `toggled`, `value`, … It is sent to **your connection only** (so no other app sees your
+   presses), but you still subscribe to it by the agent's name. `hold`, `swipe-*` and
+   `double-tap` only arrive if the item lists them in `gestures`.
+5. **Update, don't republish.** `Update(a{sa{sv}})` takes `{item id: {changed props}}` and applies
+   atomically. The agent already flipped your toggle/slider optimistically; correct it with
+   `Update` if your state disagrees.
+
+### Be a good citizen of the bar
+
+The Touch Bar is an OLED strip on a laptop battery. The agent redraws at most 30 times a second
+however fast you call, and throttles sustained abuse (> 120 calls/s, §4), so:
+
+* **Update only on change** and only when something visible changed (a clock label once a
+  minute, not once a second).
+* **Stop while the bar is off or not showing you.** Read `NS.TouchBar1.DisplayState`
+  (`on`/`dimmed`/`off`) and your context's `OnScreen` property (both emit `PropertiesChanged`) and
+  pause timers while they say so.
+* **Hide, don't destroy,** with `SetVisible(false)` when your feature is idle.
+
+### Node.js and Electron (dbus-next)
+
+```js
+const dbus = require('dbus-next');
+const { Variant } = dbus;
+const bus = dbus.sessionBus();
+const root = await bus.getProxyObject('io.github.wawow830.Sliver', '/io/github/wawow830/Sliver');
+const path = await root.getInterface('io.github.wawow830.Sliver.TouchBar1').CreateContext({
+  scope: new Variant('s', 'status'),
+  provider: new Variant('s', 'org.example.MyApp'),
+});
+const ctx = (await bus.getProxyObject('io.github.wawow830.Sliver', path))
+  .getInterface('io.github.wawow830.Sliver.Context1');
+ctx.on('Event', (item, kind) => console.log(item, kind));
+await ctx.SetItems([{ id: new Variant('s', 'go'), type: new Variant('s', 'button'),
+                      label: new Variant('s', 'Go') }]);
+```
+
+* Every value of an `a{sv}` is a `new Variant(signature, value)`; arrays of strings are
+  `new Variant('as', [...])`, nested dictionaries `new Variant('a{sv}', {...})`.
+* In **Electron** do this in the **main process** (the renderer has no D-Bus) and forward events
+  to windows with `webContents.send`. `examples/node/counter.js` is a complete, tested program
+  with the restart handling.
+* A **Flatpak** Electron app needs `--talk-name=io.github.wawow830.Sliver`; the user may also have
+  to allow it for `status` scope (§4, "Client tiers").
+
+### GTK and GNOME apps (GJS, Gio)
+
+Gio is the same API in every language, so `examples/gjs/counter.js` mirrors the Python example:
+`Gio.bus_watch_name_on_connection` for the agent's name, `bus.call_sync` with `GLib.Variant`s
+(`'(a{sv})'` for `CreateContext`, `'(aa{sv})'` for `SetItems`, `'(a{sa{sv}})'` for `Update`), and
+`bus.signal_subscribe(BUS, CONTEXT, 'Event', …)`. For a GTK 4 app with a main loop already running
+use the async `bus.call` instead of `call_sync`, so the UI never waits on the agent. Variants are
+explicit: `GLib.Variant.new_string`, `new GLib.Variant('as', [...])`, `new GLib.Variant('a{sv}', {x: new GLib.Variant('i', 1)})`.
+
+### Qt (QtDBus)
+
+`examples/qt/counter.cpp` is a small Qt 6 program. The two things Qt needs spelled out:
+
+* `aa{sv}` and `a{sa{sv}}` are `QList<QVariantMap>` and `QMap<QString, QVariantMap>`; register them
+  once with `qDBusRegisterMetaType<…>()` before the first call.
+* Plain `QVariantMap` is `a{sv}` (values are marshalled by their Qt type: `QString` → `s`,
+  `int` → `i`, `bool` → `b`, `double` → `d`, `QStringList` → `as`). Qt has no unsigned/`short`
+  surprises here; if you need a specific D-Bus type use `QDBusVariant`/`QDBusArgument`.
+
+Connect to `Event` with `QDBusConnection::connect(service, path, interface, "Event", receiver,
+SLOT(…))` using the agent's well-known name as `service`.
+
+### Checking your work
+
+```sh
+busctl --user introspect io.github.wawow830.Sliver /io/github/wawow830/Sliver   # the interfaces
+sliverctl contexts           # who has published what (and whether it is on screen)
+sliverctl render -o out.png           # what the bar looks like, no hardware needed
+```
+
+`sliverctl publish` is the quickest way to see what a published item is supposed to look like
+before you code it. The settings app's Apps page lists your provider and lets the user hide or
+reorder it. If your items don't show up: the context may be `status` scope but hidden by the user,
+or `app` scope while a different window has focus. Check `sliverctl contexts`.

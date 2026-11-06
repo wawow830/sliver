@@ -54,9 +54,9 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (release 
   `sliverd.socket` lets a waiting agent connect, which socket-activates sliverd once the 60 s
   start-limit window has passed.
 - **udev `change` events on the digitizers start sliverd.** systemd acts on their
-  `SYSTEMD_WANTS=sliverd.service` for `change` too, despite what systemd.device(5) suggests
-  (measured: with tiny-dfr in charge, one `udevadm trigger --action=change` on the digitizer made
-  sliverd take over). So `%post` sends none there (checked by `scripts/check`). Anything else that
+  `SYSTEMD_WANTS=sliverd.service` for `change` too, despite what systemd.device(5) suggests: with
+  tiny-dfr in charge, one `udevadm trigger --action=change` on the digitizer makes sliverd take
+  over. So `%post` sends none there (checked by `scripts/check`). Anything else that
   triggers them (a broad `udevadm trigger`, replugging) also brings sliverd back, so "going back to
   tiny-dfr" with `systemctl start tiny-dfr` only lasts until the next such event or boot.
 - The RPM's own sliverd is the only real-hardware code that may be restarted without the harness.
@@ -75,11 +75,11 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (release 
   of it works without tiny-dfr. Only sliverd's `[Service]` is a stand-in (no bar in a container).
   Run it after changing the spec's scriptlets or the units.
 
-## SELinux and polkit (checked on a Mac14,7, enforcing)
-- **SELinux: clean, no policy module needed.** sliverd runs as `unconfined_service_t` (a `bin_t`
+## SELinux and polkit
+- **SELinux: no policy module needed** (enforcing). sliverd runs as `unconfined_service_t` (a `bin_t`
   binary started by systemd, the same domain tiny-dfr gets). The agent and apps run as the user's
-  `unconfined_t`, and the socket is `var_run_t`. `ausearch -m AVC -ts boot` shows no denials for any
-  sliver process across install, upgrade, start, fallback, harness runs and normal use. Confinement
+  `unconfined_t`, and the socket is `var_run_t`. No sliver process causes AVC denials; check with
+  `ausearch -m AVC -ts boot`. Confinement
   on top (a `sliverd_t` module covering DRM, input, uinput, sysfs backlight and the `/run/sliver`
   socket) would add risk for little gain, since systemd's sandbox (DynamicUser, no capabilities, a
   device allowlist, a syscall filter) already does the confining. Revisit if Fedora ever confines
@@ -90,12 +90,14 @@ scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (release 
   agent launches runs as the user. (The safe-swap harness policy is a dev tool and isn't packaged.)
 
 ## COPR
-The spec is COPR-ready (SRPM upload, or the "SCM" source type running `scripts/rpm-build`). No COPR
-project exists yet; build RPMs locally with `scripts/rpm-build --binary`. Chroots would be
-`fedora-*-aarch64` (Asahi) and `fedora-*-x86_64` (t2linux).
+The spec builds in COPR from an SRPM upload, or with the "SCM" source type running
+`scripts/rpm-build`. The chroots are `fedora-*-aarch64` (Asahi) and `fedora-*-x86_64` (t2linux).
+Publishing there is a public release, so it needs the maintainer's OK.
 
-## Still open
-- **Bundled-crate licenses:** the spec's `bundled_licenses` is hand-written. Refresh it when
-  dependencies change: `RUSTC_BOOTSTRAP=1 cargo tree -Zavoid-dev-deps --workspace --edges=no-build,no-dev,no-proc-macro --target=all --prefix=none --format '# {l}' | sort -u`
-  (`cargo2rpm license-summary` needs the vendored tree). Sliver itself: MIT OR Apache-2.0.
-- **Icon** for the settings app: it uses the theme's `input-keyboard` until we have one.
+## Bundled-crate licenses
+The spec's `bundled_licenses` is written by hand. Refresh it when dependencies change:
+```
+RUSTC_BOOTSTRAP=1 cargo tree -Zavoid-dev-deps --workspace --edges=no-build,no-dev,no-proc-macro \
+  --target=all --prefix=none --format '# {l}' | sort -u
+```
+(`cargo2rpm license-summary` needs the vendored tree.) Sliver itself is MIT OR Apache-2.0.

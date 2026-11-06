@@ -1,6 +1,6 @@
-.\" sliver-config(5). Spec: docs/customization.md. A test checks that every module type,
-.\" common module key, context key and bar gesture known to crates/sliver-config is listed here.
-.TH SLIVER\-CONFIG 5 2026-10-12 "sliver 0.1.0" "File Formats"
+.\" sliver-config(5). A test checks that every module type, common module key, context key and
+.\" bar gesture known to crates/sliver-config is listed here.
+.TH SLIVER\-CONFIG 5 2026-11-06 "sliver 0.1.0" "File Formats"
 .SH NAME
 sliver\-config \- Touch Bar configuration (config.toml)
 .SH SYNOPSIS
@@ -17,12 +17,17 @@ every module is shaped by configuration
 states, gesture bindings), the look comes from a stylesheet
 .RB ( sliver\-stylesheet (5)),
 and zones, layers, layouts and rules are all defined by the user.
-The file is TOML.
+The invariants under
+.B WHAT CANNOT BE CONFIGURED
+are the only things a configuration can't change.
+.PP
+The file is TOML, and comments are allowed.
 Keys are kebab\-case and use waybar's names wherever the concept maps, so waybar module blocks port with few changes
 (or use
-.BR "sliverctl config import\-waybar" ).
+.BR "sliverctl config import\-waybar" ,
+which converts waybar's JSONC module blocks).
 .PP
-The first file that exists in the order above is used.
+The first file that exists in the order above is used, as in waybar.
 The built\-in defaults are always merged underneath it, so the
 .BR base ,
 .B fn
@@ -35,30 +40,69 @@ and
 .B media
 layouts and the control strip exist even with an empty file.
 Any of them can be redefined.
-.SS Profiles
-A profile is a whole configuration to switch to.
-.B default
-is the file above; any other profile is
-.BI ~/.config/sliver/profiles/ name .toml
-and starts as
-.B include = ["../config.toml"]
-(your main configuration plus its own changes).
-The active one is named in
-.BR ~/.config/sliver/active\-profile ;
-while one is active, edits go to its file.
-Switch with
-.BI "sliverctl profile" " name" ,
-.BI "sliverctl config profile use" " name" ,
-the settings app, or a
-.B { profile = \fIname\fP }
-action.
+tiny\-dfr's
+.B MediaLayerDefault = true
+is
+.B [layers] base = \(dqmedia\(dq
+with
+.BR "fn = \(dqfkeys\(dq" .
 .PP
 .BR sliver\-agent (1)
-watches the file, its includes and the stylesheet, and applies changes when they are saved.
-An invalid configuration is never applied: the last good one stays live and the errors are reported.
+watches the file, its includes and the stylesheet (and the directories they live in, so
+rename\-saves and a file created later both count), and applies changes when they are saved.
+.B sliverctl reload
+and
+.B SIGUSR2
+to
+.B sliver\-agent
+reload at once.
+An invalid configuration is never applied: the last good one stays live, and the errors are listed by
+.B sliverctl status
+and the settings app's Status page.
 Unknown keys produce warnings, not errors.
 Check a file with
 .BR "sliverctl config check" .
+.PP
+.BR sliver\-settings (1)
+edits the same files and keeps their comments and formatting.
+Arrays replace rather than merge, so when it edits a zone or a group that comes from the built\-ins or
+an include, it first copies that layout's whole zone list (or the group's member list) into your file.
+When the configuration in use is a system file, the new user file
+.BR include s
+it.
+.SS Profiles
+A profile is a whole configuration to switch to, such as \(lqWork\(rq or \(lqPresenting\(rq.
+.B default
+is the file above; any other profile is
+.BI ~/.config/sliver/profiles/ name .toml
+(names are letters, digits,
+.B \-
+and
+.BR _ ).
+A new profile starts as
+.B include = [\(dq../config.toml\(dq]
+(your main configuration plus its own changes);
+.B sliverctl config profile new \-\-from
+.I profile
+and the settings app copy another profile instead.
+The active one is named in
+.BR ~/.config/sliver/active\-profile ,
+so every way of switching works the same and survives restarts.
+A name whose file is missing means
+.BR default .
+While a profile is active,
+.B sliverctl config set
+and the settings app edit its file.
+Switch with
+.BI "sliverctl profile" " name" ,
+.BI "sliverctl config profile use" " name"
+(offline),
+.BR Control1.SetProfile ,
+the settings app, or a
+.B { profile = \fIname\fP }
+action.
+A profile that doesn't validate is refused, and the previous one stays live.
+Rules switch layouts, never profiles.
 .SH TOP\-LEVEL KEYS
 .TP
 .BR version " = 1"
@@ -70,6 +114,8 @@ Paths are relative to the including file, and
 .B ~
 and globs work.
 Tables are merged deeply, the including file wins, and earlier includes win over later ones.
+Arrays are replaced, not concatenated.
+Includes may nest up to 8 levels; a cycle is an error.
 Relative paths in an included file
 .RB ( icon ,
 .BR stylesheet ,
@@ -77,8 +123,7 @@ an
 .B image
 module's
 .BR path )
-are relative to that file.
-Arrays are replaced, not concatenated.
+are relative to that file, so a shared theme directory can carry its own icons.
 .TP
 .BR stylesheet " = " \fIpath\fP
 Default:
@@ -116,12 +161,21 @@ Each module can override it.
 Adaptive follows the main screen.
 .TP
 .BR max\-brightness " = " 0\-255
+Scaled to the bar's own range: bars with a three\-step backlight (off, dim, full) never turn off
+from a low setting.
 .TP
 .BR dim\-after ", " off\-after
 Durations (default 30s and 60s), or
-.BR """never""" .
+.BR \(dqnever\(dq .
+\(lqOff\(rq is backlight 0.
+The first touch on a dark bar only wakes it and fires nothing.
+The bar is also off while the lid is closed.
 .TP
 .BR pixel\-shift " = " true | false
+Moves the whole picture by up to 11 pixels along the bar and 2 across it, one pixel every 15
+seconds, to spread OLED wear.
+Touches are mapped back, and nothing moves while the bar is dark.
+Keep content 11 pixels in from both ends while it's on.
 .TP
 .BR curve " = " [[ \fIscreen\fP ", " \fIbar\fP "], ...]"
 How adaptive brightness maps the main screen's brightness to the bar's.
@@ -145,17 +199,17 @@ values.
 For example, a dimmer bar that turns off sooner:
 .B max\-brightness = 60
 and
-.BR "off\-after = ""20s""" .
+.BR "off\-after = \(dq20s\(dq" .
 .SH [apps], [providers] AND [api]
 What apps and scripts that use the D\-Bus API may put on the bar.
 Your own layouts and rules always win over them.
 .TP
 .BR [apps."\fIapp\-id\fP"]
 .B controls
-(default true): the app's items may fill
+(default true): the app's items (or a provider's) may fill
 .BR app\-controls .
 .B whole\-bar
-(default true): it may take over the whole bar.
+(default true): a modal context of the app may cover the bar beyond its first zone.
 .B pin
 = \fIprovider\fP: only that provider fills the app's controls.
 App ids match case\-insensitively, with a
@@ -165,12 +219,13 @@ suffix ignored.
 sets the defaults for every app.
 .TP
 .BR [providers."\fIid\fP"]
+The D\-Bus provider id (a Flatpak or Snap id when sandboxed).
 .B show
-(default true): show this provider's items.
+(default true): false hides it everywhere, in Status items and App controls.
 .B allow
-(default false): let a sandboxed (Flatpak or Snap) provider show status items.
+(default false): let a sandboxed provider show status items.
 .B order
-= \fIn\fP: its place among status items.
+= \fIn\fP: its place among status items (lower first; unlisted ones follow, by id).
 .TP
 .B [api]
 .B target
@@ -185,7 +240,10 @@ Maps each layer name to its default layout.
 and
 .B fn
 are reserved (Fn shows
-.BR fn ).
+.BR fn ,
+as
+.B fn\-mode
+says).
 Any other name is a custom layer, opened by a
 .B layer
 action.
@@ -205,19 +263,31 @@ is an ordered array of tables with
 .B modules
 (module ids or inline tables),
 .B width
-.RB ( """auto""" ,
+.RB ( \(dqauto\(dq ,
 pixels or
-.BR """fill""" ),
+.BR \(dqfill\(dq ),
 .B align
 .RB ( start ,
 .BR center ,
-.BR end ),
+.BR end ;
+like waybar's
+.BR fixed\-center ),
 .B module\-width
-(the default width for the zone's modules) and
+(the default width for the zone's modules, for example
+.B \(dqfill\(dq
+for tiny\-dfr\-style equal keys) and
 .BR class .
-A child layout's zone replaces the parent's zone of the same name, in place.
+Any number of zones with any names is allowed; the shipped
+.BR esc ,
+.B main
+and
+.B controls
+are a convention.
+A child layout's zone replaces the parent's zone of the same name, in place (the whole zone, not
+merged).
+New zone names go at the end, unless
 .B zone\-order
-sets the order of zones the child adds.
+lists the order.
 Zones become stylesheet classes
 .RB ( .zone\- \fIname\fP ).
 .TP
@@ -234,16 +304,28 @@ Rules are checked top to bottom, and the first match wins.
 If none matches, the
 .B [layers]
 default applies.
+.PP
+The built\-in base layout's main zone is
+.B app\-controls
+followed by
+.B group/fkeys
+(F1\(enF12, shown while no app fills App controls), so the bar shows F\-keys until the focused app
+publishes controls.
+The control strip is the drawer group
+.BR group/control\-strip ;
+nothing about it is hard\-coded.
+.PP
 The built\-in rules are one lock\-screen rule,
 .B when = { locked = true }
 showing layout
 .B locked
-(media keys, brightness, volume, mute).
-Your own
+(media keys, brightness and volume sliders, mute, and Esc where there's no physical Escape key).
+Like any array, your own
 .B rules
 replace it, and
 .B rules = []
 removes it.
+The settings app keeps it at the top and adds new rules below it.
 Whatever the rules say, published app items,
 .B custom/
 output, notifications, window titles and the taskbar are never shown while the screen is locked.
@@ -255,9 +337,9 @@ on rules and on modules) is a table of context keys, all of which must match.
 needs one of the sub\-tables to match, and
 .B not = {...}
 negates.
-A value can be a literal, an array (one of),
-.BR "{ regex = ""..."" }" ,
-.BR "{ contains = ""..."" }" ,
+A value can be a literal (bool, number or string), an array (one of),
+.BR "{ regex = \(dq...\(dq }" ,
+.BR "{ contains = \(dq...\(dq }" ,
 .BR "{ below = N }" ,
 .B "{ above = N }"
 or
@@ -278,17 +360,29 @@ Focus
 .BR pid ,
 .BR fullscreen ,
 .BR floating ,
-.BR xwayland
+.BR xwayland .
+.B app_id
+compares case\-insensitively and also matches the app's
+.B .desktop
+id (through
+.BR StartupWMClass ),
+so
+.B firefox
+and
+.B org.mozilla.firefox
+both work.
 .TP
 Desktop
 .BR workspace ,
 .BR workspace_name ,
 .BR special_workspace ,
 .BR monitor ,
-.BR monitors ,
+.B monitors
+(a count),
 .BR external_display ,
 .BR keyboard_layout ,
-.BR submap ,
+.B submap
+(Hyprland submap, sway mode),
 .B screencast
 .TP
 Session
@@ -307,7 +401,11 @@ Power
 .B power_profile
 .TP
 Media and audio
-.BR media_status ,
+.B media_status
+.RB ( playing ,
+.BR paused ,
+.BR stopped ,
+.BR none ),
 .BR media_player ,
 .BR media_title ,
 .BR media_artist ,
@@ -316,202 +414,241 @@ Media and audio
 .B volume
 .TP
 Other
-.BR brightness ,
-.BR time ,
-.BR weekday ,
+.B brightness
+(the main screen, percent),
+.B time
+.RB ( HH:MM ),
+.B weekday
+.RB ( mon ,
+\&...),
 .BR physical_esc ,
 .BR layer ,
 .BR layout ,
 .B app_controls
 (true while an app fills App controls, so a layout can show something else when none does)
 .PP
+.B layout
+is the layout the rules chose, so only module conditions can use it; a rule on it never matches.
 User variables set with
 .B sliverctl var set
 can be used too.
+.PP
+Which window has focus comes from the compositor: Hyprland, sway, niri and other wlroots
+compositors are read directly; GNOME and KDE need the extension or KWin script that ship with
+sliver.
+.B locked
+believes, in order, the desktop's screensaver
+.B ActiveChanged
+signal, logind's
+.B LockedHint
+on GNOME and KDE, and elsewhere whether a known locker
+.RB ( hyprlock ,
+.BR swaylock ,
+.BR gtklock ,
+.BR waylock ,
+.BR i3lock ,
+.BR physlock )
+is running.
 .SH MODULES
 A module reference is
 .IR type ,
 .IR type # instance
 or
 .IR namespace / name [# instance ],
-and is configured in
+as in waybar, and is configured in
 .BI [modules." reference "]\fR.
-The instance becomes a CSS class.
+.B battery#bat2
+is a second battery; the instance becomes a CSS class
+.RB ( #battery.bat2 ).
 .B key/\fIName\fP
 (for example
 .BR key/F1 ,
 .BR key/PlayPause )
-needs no block.
+needs no block: it is a key with a label and icon and
+.BR "on\-tap = { key = \(dq\fIName\fP\(dq }" ;
+a block, if present, is merged on top.
 A zone's
 .B modules
 list can also contain inline tables with a
 .B type
-key.
-Built\-in modules have no powers that user modules lack.
-.SS Module types
-.BR key ,
-.BR spacer ,
-.BR clock ,
-.BR battery ,
-.BR backlight ,
-.BR backlight/slider ,
-.BR kbd\-backlight ,
-.BR kbd\-backlight/slider ,
-.BR audio ,
-.BR audio/slider ,
-.BR mpris ,
-.BR workspaces ,
-.BR window ,
-.BR mode ,
-.BR language ,
-.BR idle\-inhibitor ,
-.BR dnd ,
-.BR dark\-mode ,
-.BR screenshot ,
-.BR lock ,
-.BR power ,
-.BR power\-profiles ,
-.BR cpu ,
-.BR memory ,
-.BR temperature ,
-.BR disk ,
-.BR load ,
-.BR network ,
-.BR bluetooth ,
-.B graph
-.RB ( custom\-graph/ \fIname\fP ),
-.BR privacy ,
-.BR systemd\-failed\-units ,
-.BR taskbar ,
-.BR notifications ,
-.BR emoji ,
-.BR timer ,
-.B cava
-(an audio spectrum from the
-.BR cava (1)
-program, run only while it is shown on the lit bar),
-.BR image ,
-.B group
-.RB ( group/ \fIname\fP ),
-.B app\-controls
-and
-.B status\-items
-(where items published by apps go;
-.B tray
-is an alias; their
-.B width
-sizes the slot: a pixel width reserves that much, even when empty, and drops the lowest\-priority
-items that don't fit, while
-.B fill
-adds a share of the zone's leftover after the items),
-.B app
-.RB ( app/ \fIprovider\fP # \fIitem\fP
-pins one published item), and
-.B custom
-.RB ( custom/ \fIname\fP ).
-waybar's names
-.RB ( pulseaudio ,
-.BR hyprland/workspaces ,
-.BR idle_inhibitor ,
-\&...) are accepted as aliases.
+key (a reference without an instance, such as
+.B \(dqkey/F1\(dq
+or
+.BR \(dqcustom\(dq ),
+for example
+.BR "{ type = \(dqcustom\(dq, format = \(dqTTY1\(dq, on\-tap = { keys = [\(dqLeftCtrl\(dq, \(dqLeftAlt\(dq, \(dqF1\(dq] } }" .
+An empty
+.B icon = \(dq\(dq
+or
+.B format = \(dq\(dq
+clears a default.
+Built\-in modules have no powers that user modules lack: they produce the same output fields as
+.BR custom/ ,
+take the same common keys, and are styled, bound and placed the same way.
 .SS Common keys
 Every module accepts these.
 waybar's names are accepted as aliases:
-.BR on\-click ,
-.BR on\-double\-click ,
-.BR on\-click\-right ,
-.BR on\-click\-release ,
-.BR on\-scroll\-up ,
-.BR on\-scroll\-down ,
-.BR tooltip ,
-.BR tooltip\-format ,
-.BR smooth\-scrolling\-threshold .
+.B on\-click
+.RB ( on\-tap ),
+.B on\-double\-click
+.RB ( on\-double\-tap ),
+.B on\-click\-right
+.RB ( on\-hold ),
+.B on\-click\-release
+.RB ( on\-release ),
+.B on\-scroll\-up
+.RB ( on\-swipe\-right ),
+.B on\-scroll\-down
+.RB ( on\-swipe\-left ),
+.B tooltip
+.RB ( detail ),
+.B tooltip\-format
+.RB ( detail\-format ),
+.B smooth\-scrolling\-threshold
+.RB ( swipe\-threshold ).
 .TP
 .B format
 Text with
 .BI { placeholder }
 and
-.BI { name : spec }
-(strftime for the clock).
-A subset of Pango markup is allowed.
+.BI { name : spec }\fR.
+The placeholders depend on the module (see
+.BR "Module types" ).
 .TP
 .BR format\-alt ", " format\- \fIstate\fP ", " format\- \fIstatus\fP ", " format\- \fIstatus\fP \- \fIstate\fP
-Alternatives, chosen in that order (most specific first).
+Alternatives (for example
+.BR format\-charging ,
+.BR format\-critical ).
 A tap toggles
 .B format\-alt
 when
 .B on\-tap
-is unset.
+is unset, and so does the
+.B { format = \(dqtoggle\-alt\(dq }
+action.
 .TP
 .B format\-icons
-An array (indexed by percentage), a table (by alt, status, state, then
-.BR default ),
-or a string.
-An entry can be
-.B { icon = "name\-or\-path" }
+An array (indexed by percentage, low to high), a table (by alt, status, state, then
+.BR default ;
+entries may be arrays), or a string.
+An entry is text (a glyph) or
+.B { icon = \(dqname\-or\-path\(dq }
 for an image.
 .TP
 .B states
-Name to threshold, for example
+Name to threshold on the percentage, for example
 .BR "{ warning = 30, critical = 15 }" .
 Adds a class and selects
 .BR format\- \fIstate\fP .
 .TP
-.BR icon ", " icon\-theme ", " icon\-size
+.B icon
 XDG icon name, file path, or
-.BI tiny\-dfr: name\fR.
+.BI tiny\-dfr: name
+(tiny\-dfr's icon directories).
+Paths can be absolute,
+.BR ~/... ,
+or relative to the configuration's directory; a name ending in
+.BR .png ,
+.B .svg
+or
+.B .svgz
+is a file.
+.TP
+.BR icon\-theme ", " icon\-size
+The icon theme for this module, and the icon size in pixels.
 .TP
 .B width
-.BR """auto""" ,
+.BR \(dqauto\(dq ,
 pixels,
-.B """fill"""
+.B \(dqfill\(dq
 or
 .BR "{ fill = N }" .
 .B expand = true
 means
-.BR """fill""" .
+.BR \(dqfill\(dq .
 .TP
 .BR min\-length ", " max\-length ", " align ", " justify
-Label length in characters (ellipsized), and alignment.
+Label length in characters (ellipsized past
+.BR max\-length ),
+and alignment within the module.
 .TP
 .B class
-Extra CSS classes.
+Extra CSS classes (a string or an array).
 .TP
 .B when
 A condition.
-The module is shown only while it holds.
+The module is shown only while it holds, for example the battery only on battery.
 .TP
 .B hide\-empty\-text
 Hide the module when its text is empty.
 .TP
 .BR detail ", " detail\-format
 There is no hover on a touch strip.
-The detail is the accessible description and the hold\-to\-peek overlay.
+The detail is the accessible description, the settings preview's, and the hold\-to\-peek overlay
+when
+.B on\-hold
+is unbound.
 .TP
-.BR fire\-on ", " repeat ", " swipe\-threshold
-Tap on press or release, hold\-to\-repeat, and swipe distance in pixels.
+.B fire\-on
+.B press
+or
+.BR release ,
+overriding
+.BR "[bar] fire\-on" .
+.B key/
+modules default to press.
+.TP
+.B repeat
+Hold\-to\-repeat, the default for
+.BR key/ .
+.TP
+.B swipe\-threshold
+Swipe distance in pixels (default 40).
 .TP
 .BR on\-tap ", " on\-double\-tap ", " on\-hold ", " on\-release ", " on\-swipe\-left ", " on\-swipe\-right ", " on\-drag ", " on\-update
 Actions (see ACTIONS).
-Binding
+A hold is 500\ ms.
+Only gestures a module binds are recognized, so its taps fire at once unless
 .B on\-double\-tap
-delays single taps on that module.
+is bound, which delays them.
+.B on\-drag
+runs at most every 50\ ms, always with the final value; a slider reports 0\(en100 along its track,
+other modules the position on the bar.
 .TP
 .B actions
 Gesture to built\-in module action, for example
-.BR "{ on\-hold = ""mode"" }" .
+.B { on\-hold = \(dqmode\(dq }
+on the clock.
+Built\-in behaviour (a slider's drag, audio's tap to mute, mpris's tap and swipes) goes through these
+same actions, and your own
+.B on\-*
+bindings win over it.
 .TP
 .BR menu ", " menu\-trigger
 An array of
 .B {label, icon, on\-tap}
-shown as a temporary sub\-bar with a close button, and the gesture that opens it.
+shown as a temporary sub\-bar, and the gesture that opens it (default tap, or hold when the module
+also has a tap action).
+The sub\-bar puts a close button where the module was (a second tap there, or on empty space,
+dismisses it), then the entries, each as wide as its label.
+It covers the layout except its first zone, and its last when there are more than two, and closes
+after 5\ s untouched.
+Labels can use the module's own placeholders, and a
+.B { module\-action = \fIname\fP }
+entry acts on the module that opened it, so on
+.B taskbar
+.B menu = [{ label = \(dqClose {name}\(dq, on\-tap = { module\-action = \(dqclose\(dq } }]
+asks before closing a window.
+Picking an entry runs it and closes the sub\-bar.
+.I examples/config/power\-menu.toml
+is a power menu to copy or include.
 .TP
 .B interval
 Polling period
-.RB ( """5s""" )
+.RB ( \(dq5s\(dq )
 or
-.BR """once""" .
-The floor is 100\ ms.
+.BR \(dqonce\(dq .
+The floor is 100\ ms, and anything under 1\ s gets a warning.
 .TP
 .B pass\-through
 For
@@ -520,6 +657,597 @@ modules: also send the gesture to the app when a user
 .B on\-*
 binding exists.
 By default the user's binding replaces the app's event.
+.TP
+.B slider
+.B true
+draws the module as a press\-and\-slide slider over its value (backlight, keyboard backlight and
+audio levels, or a custom module's
+.BR value ).
+.IB type /slider
+is the same as
+.I type
+with
+.BR "slider = true" .
+Dragging sets the value, and
+.B on\-drag
+gets it as
+.BR {value} .
+.B collapsed = true
+shows just the icon until touched: it opens on press, sliding without lifting moves the value from
+where it was, and it closes 5\ s after the last touch.
+.TP
+.B spectrum
+.B true
+draws the live audio spectrum under the module's content (along a slider's track), with
+.BR cava 's
+keys, in the colour of the stylesheet's
+.B spectrum
+node: a play/pause button that moves with the music, say.
+.SS Format strings
+The format used is the first that exists of
+.B format\-alt
+(when toggled),
+.BI format\- status \- state\fR,
+.BI format\- status\fR,
+.BI format\- state\fR,
+.BR format ,
+then the module's default.
+.B states
+count lower as worse for battery\-like modules
+.RB ( "warning = 30"
+means 30% or less) and higher as worse for cpu, memory and temperature.
+An array
+.B format\-icons
+of
+.I n
+entries is indexed by
+.IR "floor(percentage / (100 / n))" .
+An
+.B {icon}
+that is an image renders as empty text and the image is drawn as the module's icon.
+A
+.I spec
+is the module's own (strftime for the clock), else
+.BR [[\fIfill\fP]\fIalign\fP][0][\fIwidth\fP][.\fIprecision\fP] .
+Unknown placeholders render literally, and a bad format string is a validation error.
+.PP
+Format output is markup, a subset of Pango's: tags
+.BR b ,
+.BR i ,
+.BR u ,
+.BR s ,
+.BR big ,
+.BR small ,
+.BR sub ,
+.BR sup ,
+.B tt
+and
+.BR span ,
+whose attributes are
+.B foreground
+.RB ( fgcolor ,
+.BR color ),
+.BR weight ,
+.BR style ,
+.B size
+(keywords,
+.IR NN% ,
+.BR larger ,
+.BR smaller ),
+.BR underline ,
+.B strikethrough
+and
+.B font_family
+.RB ( face );
+entities
+.BR &amp; ,
+.BR &lt; ,
+.BR &gt; ,
+.BR &quot; ,
+.B &apos;
+and
+.BR &# \fIN\fP; .
+Background colours, baseline shift and font descriptions are ignored (stylesheets cover them).
+Bad markup keeps its text and reports a warning; it never blanks a module.
+.SS Module types
+Each type's placeholders, keys and gestures, beyond the common keys.
+waybar's names
+.RB ( pulseaudio ,
+.BR hyprland/workspaces ,
+.BR idle_inhibitor ,
+\&...) are accepted as aliases.
+.TP
+.BI key/ name
+Esc, F1\(enF24, media keys and other keys, sent by
+.BR sliverd (8)
+through uinput.
+Key names are tiny\-dfr's (see ACTIONS).
+A module whose only binding is a key tap is handled by
+.B sliverd
+itself: it presses the instant a finger lands, and keeps working if the agent hangs.
+.TP
+.B spacer
+Empty;
+.B width
+sets its size.
+.TP
+.B clock
+.BI {: strftime }
+and
+.BR {timezone} .
+.B locale
+(\fBde_DE\fP, or \fBde_DE.UTF\-8\fP) names days and months in that language.
+.B timezone
+(\fBAsia/Tokyo\fP), or
+.B timezones
+(a list;
+.B \(dq\(dq
+is local time) to cycle through by swiping.
+Unknown names show a warning sign on the module.
+.TP
+.B battery
+.BR {capacity} ,
+.BR {time} ,
+.BR {status} ;
+status formats such as
+.BR format\-charging .
+.TP
+.BR backlight ", " kbd\-backlight
+The screen and keyboard backlight:
+.BR {percent} .
+.B backlight/slider
+and
+.B kbd\-backlight/slider
+are the slider forms.
+.TP
+.B audio
+The default output:
+.BR {volume} ,
+the
+.B muted
+status; tap mutes.
+.B node = \(dqsource\(dq
+(say,
+.BR audio#mic )
+is the microphone.
+.B audio/slider
+is the slider form.
+.TP
+.B mpris
+.BR {title} ,
+.BR {artist} ,
+.BR {album} ,
+.BR {player} ,
+.BR {status_icon} ,
+.B {position}
+and
+.B {length}
+.RI ( m:ss ;
+a format that shows
+.B {position}
+redraws each second while playing).
+Tap plays or pauses, swipes skip, and hold switches to the next player when several run.
+The album art is the icon (local files, or
+.B http(s)
+fetched once into
+.IR ~/.cache/sliver/art ;
+PNG and JPEG);
+.B art = false
+turns it off.
+.B scrub = true
+makes the module a progress slider that seeks on drag.
+.TP
+.B workspaces
+One button per workspace of the focused output
+.RB ( "all\-outputs = true"
+for all), with classes
+.BR .active ,
+.BR .urgent ,
+.BR .empty ,
+.B .default
+and
+.B :checked
+on the active one;
+.BR {name} ,
+.BR {id} ,
+.BR {windows} .
+Tap switches workspace.
+.TP
+.B window
+.BR {title} ,
+.BR {app_id} .
+.B rewrite
+as in waybar: a table of \fIregex\fP = \fIreplacement\fP, or an array of
+.B { match, replace }
+tables when order matters.
+Every rule whose regex matches the whole title applies, in order
+.RB ( $1
+for captures).
+.TP
+.B mode
+The compositor's submap or mode.
+.TP
+.B language
+The keyboard layout.
+Tap switches to the next one; hold opens a sub\-bar of the configured layouts (Hyprland, sway,
+niri), unless the module has its own
+.BR menu .
+While fcitx5 runs and a window has an input method, the module shows the method's own label instead;
+tap toggles it and hold lists the active group.
+Placeholders
+.B {}
+or
+.B {short}
+(the label),
+.B {input_method}
+or
+.BR {long} ,
+and
+.BR {id} ;
+without fcitx5,
+.B {short}
+and
+.B {input_method}
+are the layout name, so one
+.B format
+serves both.
+fcitx5 is asked every 2\ s, only while the bar is on, fcitx5 runs and a layout uses the module.
+.TP
+.B idle\-inhibitor
+Caffeine: tap holds an idle inhibitor.
+Status
+.B activated
+or
+.BR deactivated .
+.TP
+.B dnd
+Do Not Disturb, from the notification daemon; hidden when the daemon doesn't say.
+Tap switches it on dunst, mako, swaync and KDE.
+.TP
+.B dark\-mode
+The desktop's light or dark scheme (from the XDG portal); classes
+.B .dark
+and
+.BR .light ,
+.BR {state} .
+Tap switches it on KDE and GNOME\-style desktops.
+.TP
+.BR screenshot ", " lock ", " power
+.B screenshot
+takes an interactive screenshot through the portal.
+.B lock
+locks the session through logind, so your locker runs.
+.B power
+opens a sub\-bar with Lock and Suspend on tap, and Reboot and Power off on hold, so those can't be
+tapped by accident;
+.B menu
+replaces its entries.
+.TP
+.B power\-profiles
+.BR {profile} .
+.TP
+.BR cpu ", " memory ", " temperature ", " disk ", " load
+Read from
+.I /proc
+and
+.I /sys
+on
+.B interval
+(defaults: cpu, temperature and load 10\ s; memory and disk 30\ s), only while shown on a lit bar.
+cpu:
+.BR {usage} ,
+.BR {load} ,
+.BR {avg_frequency} ,
+.B {spark}
+(a text sparkline of the last 16 samples).
+memory:
+.BR {percentage} ,
+.BR {used} ,
+.BR {total} ,
+.BR {avail} ,
+.BR {swapPercentage} ,
+.BR {swapUsed} ,
+.BR {swapTotal} ,
+.B {swapAvail}
+(GiB).
+load:
+.BR {load1} ,
+.BR {load5} ,
+.BR {load15} .
+temperature:
+.BR {temperatureC} ,
+.BR {temperatureF} ,
+.BR {temperatureK} ;
+keys
+.BR thermal\-zone ,
+.B hwmon\-path
+and
+.B critical\-threshold
+(adds
+.BR .critical );
+the default source is the hottest sensor.
+disk:
+.BR {percentage_used} ,
+.BR {percentage_free} ,
+.BR {used} ,
+.BR {free} ,
+.B {total}
+(GiB),
+.BR {path} ;
+key
+.B path
+(default
+.BR / ).
+.TP
+.B network
+From NetworkManager:
+.BR {essid} ,
+.BR {ifname} ,
+.BR {signalStrength} ,
+.BR {ipaddr} ,
+.BR {state} ;
+classes
+.BR .wifi ,
+.BR .ethernet ,
+.BR .vpn ,
+.BR .disconnected ,
+.B .connecting
+and
+.B .off
+(Wi\-Fi radio off); the percentage is the Wi\-Fi signal.
+Tap switches the Wi\-Fi radio.
+With an explicit
+.B interval
+only, throughput is read too:
+.BR {bandwidthDownBytes} ,
+.BR {bandwidthUpBytes} ,
+.BR {bandwidthTotalBytes} ,
+the same with
+.BR Bits ,
+and
+.B {spark}
+(download history).
+Hidden without NetworkManager.
+.TP
+.B bluetooth
+From BlueZ:
+.BR {device_alias} ,
+.BR {device_battery_percentage} ,
+.BR {num_connections} ,
+.BR {status} ;
+classes
+.BR .off ,
+.BR .on ,
+.BR .connected .
+Tap switches the adapter.
+Hidden without an adapter.
+.TP
+.B graph
+.RB ( custom\-graph/ \fIname\fP )
+A drawn sparkline of another module's percentage
+.RB ( "source = \(dqcpu\(dq" ,
+.BR \(dqmemory\(dq ,
+.BR \(dqbattery\(dq ,
+.BR \(dqcustom/x\(dq )
+or of its own
+.B exec
+(printing a number, or JSON with
+.BR percentage ),
+sampled every
+.B interval
+(default 2\ s) while the bar is on.
+.B samples
+(default 30, newest at the right),
+.B min
+and
+.B max
+(default 0 and 100).
+.B states
+apply to the latest value.
+Hidden until the first sample, and while locked.
+.TP
+.B cava
+A live audio spectrum from the
+.BR cava (1)
+program: one bar per band, growing out from the middle line, in the module's
+.BR color .
+cava runs only while the module (or one with
+.BR "spectrum = true" )
+is on the shown layer of a lit bar, and sleeps after
+.B sleep_timer
+seconds of silence (default 1).
+waybar's keys:
+.B bars
+(default 20, at most 128),
+.B framerate
+(default and at most 60; 30 halves the cost),
+.BR autosens ,
+.BR sensitivity ,
+.BR lower_cutoff_freq ,
+.BR higher_cutoff_freq ,
+.BR sleep_timer ,
+.BR method ,
+.BR source ,
+.BR stereo ,
+.BR reverse ,
+.BR monstercat ,
+.BR waves ,
+.BR noise_reduction .
+Its natural width is 12 pixels per bar.
+It has no gestures of its own; bind any.
+Without cava installed it stays flat.
+.TP
+.B privacy
+One icon per kind of capture in use (screen share, camera, microphone), nothing while idle;
+.BR {app} ,
+.BR {kind} ,
+.BR {count} ;
+classes
+.BR .privacy\-screen ,
+.BR .privacy\-camera ,
+.BR .privacy\-mic ;
+.B format\-screen
+and so on.
+Read from PipeWire, event\-driven: level meters, monitors and loopbacks don't count.
+Cameras opened through V4L2 directly are found too (your own processes only).
+Leave
+.B icon
+unset: it would replace all three icons.
+It stays on the locked screen.
+.TP
+.B systemd\-failed\-units
+Failed units of the system and user managers:
+.BR {nr_failed} ,
+.BR {nr_failed_system} ,
+.BR {nr_failed_user} ,
+.BR {units} ;
+.B format\-ok
+(default \(lq\[OK]\(rq), classes
+.B .degraded
+and
+.BR .ok .
+Hidden while nothing failed unless
+.BR "hide\-on\-ok = false" ;
+.B system = false
+or
+.B user = false
+leaves a manager out.
+Tap lists the failed units; an entry shows its status in your terminal.
+.TP
+.B taskbar
+One icon per window of the active workspace
+.RB ( "all\-workspaces = true"
+for all), from the app's
+.B .desktop
+entry.
+Classes
+.BR .focused ,
+.B .urgent
+and
+.BI .app\- id
+(lowercased, other characters as
+.BR \- ).
+.B {name}
+(the app's name),
+.BR {title} ,
+.BR {app_id} ;
+.B format\-focused
+for the focused window's button.
+Tap focuses, hold closes.
+.B pinned = [\(dqorg.mozilla.firefox\(dq, \(dqkitty\(dq]
+adds launchers first: a running pinned app is its window's button, an idle one starts the app on tap
+(classes
+.BR .pinned ,
+.BR .running ,
+.BR .idle ).
+.TP
+.B notifications
+A bell with the latest notification's summary
+.RB ( {summary} ,
+.BR {app} ;
+never the body) or the number open
+.RB ( {count} );
+classes
+.BR .pending ,
+.BR .none ,
+.BR .dnd .
+Tap invokes the default action (with
+.BR makoctl ),
+or dismisses; swipes dismiss.
+.TP
+.B emoji
+As a button it opens the built\-in
+.B emoji
+layer; with
+.B mode = \(dqstrip\(dq
+it is that layer: group tabs (recents first), one page of
+.B columns
+emoji (default 14), swipe to page.
+Tapping types the emoji:
+.B insert
+is
+.B auto
+(wtype if installed, else the clipboard),
+.BR wtype ,
+.B paste
+(replaces the clipboard) or
+.BR copy .
+Holding an emoji with skin tones offers them, and group pages then use the tone last picked.
+The search tab spells a query on the bar with a letter row; every word of the query is a prefix of
+the name.
+Recents are kept in
+.IR $XDG_STATE_HOME/sliver/emoji\-recents .
+Classes
+.B .emoji\-tone
+and
+.BR .emoji\-back .
+.TP
+.B timer
+A countdown:
+.B duration
+(default 25m),
+.BR {remaining} ,
+.BR {minutes} ,
+.BR {seconds} ;
+the percentage is left for
+.BR states .
+Tap starts and pauses, hold resets, and it calls
+.B notify\-send
+at zero.
+Status classes
+.BR .idle ,
+.BR .running ,
+.BR .paused ,
+.BR .finished .
+.TP
+.B image
+A picture that fills the module's height at its aspect ratio:
+.B path
+(a file or an icon name), or
+.B exec
+printing a path, re\-run on
+.B interval
+or
+.B signal
+as for custom modules.
+A changed file is picked up.
+PNG, JPEG or SVG, kept at most 120 pixels tall.
+Hidden without a picture, and while locked.
+.TP
+.B group
+.RB ( group/ \fIname\fP )
+See
+.BR Groups .
+.TP
+.BR app\-controls ", " status\-items
+Where items that apps publish go: App controls holds the focused app's, Status items holds
+background status items, including StatusNotifierItems
+.RB ( tray
+is an alias).
+A layout without them shows none.
+Their
+.B width
+sizes the slot:
+.B auto
+fits the items; a pixel width reserves that much, even when empty, and drops the lowest\-priority
+items that don't fit; while
+.B fill
+adds a share of the zone's leftover after the items.
+.TP
+.B app
+.BI app/ provider # item
+pins one published item anywhere, like any module, and
+.BI app/ provider
+a whole context.
+Pinned items leave the placeholders.
+.TP
+.B custom
+.RB ( custom/ \fIname\fP )
+A user module (see
+.BR "Custom modules" ).
+With only
+.B format
+set, it is a static button.
 .SS Groups
 .BI group/ name
 takes
@@ -527,61 +1255,62 @@ takes
 .B orientation
 .RB ( horizontal
 or
-.BR vertical )
-and
-.BR drawer ,
-a table with
+.BR vertical ),
+.B module\-width
+(as on a zone) and
+.BR drawer .
+.B vertical
+stacks children in two 30\-pixel rows, which suits display\-only modules; the check warns when a
+stacked child has actions.
+.PP
+.B drawer
+makes the first module the leader and hides the rest until the leader is tapped.
+It is a table with
 .B reveal
-.RB ( tap ,
-.BR hold ,
-.BR swipe ),
+.RB ( tap ;
+accepted for waybar's sake, a tap always opens it),
 .B mode
 .RB ( inline
-or
-.BR bar ),
+expands in place and pushes neighbours;
+.B bar
+opens the rest as a sub\-bar with a close button),
 .BR start\-expanded ,
-.BR collapse\-after ,
+.B collapse\-after
+(closes again after that long without a touch),
 .B children\-class
 (replaces the
 .B drawer\-child
 class) and
 .B transition\-left\-to\-right
 .RB ( false
-opens it towards the left).
-.SS Clock and window
-.B clock
-takes
-.B locale
-(\fBde_DE\fP: day and month names),
-.B timezone
-or
-.B timezones
-(a list; \fB""\fP is local time; swipe to cycle) and the placeholder
-.BR {timezone} .
-.B window
-takes waybar's
-.BR rewrite :
-a table of \fIregex\fP = \fIreplacement\fP, or an array of
-.B { match, replace }
-tables when order matters. Every rule whose regex matches the whole title applies, in order.
+puts the leader after the rest, so it opens towards the left).
+A drawer's modules appear at once; a stylesheet
+.B transition: width
+on the modules around it makes them glide.
 .SS Custom modules
 .BI custom/ name
 runs scripts the way waybar does.
 .TP
 .BR exec ", " exec\-if
-The command (run with
+The command and its guard (run only if the guard exits 0).
+Commands run with
 .BR "sh \-c" ,
-never as root) and its guard.
+as you and never as root, in their own process group (a timeout kills the whole tree), with
+.BR no_new_privs ,
+no stdin and at most 64\ KiB of output.
 .TP
 .BR interval ", " signal
 Run on a timer, on
 .B SIGRTMIN+\fIn\fP
+to
+.B sliver\-agent
 or
 .BR "sliverctl signal" .
 With neither, the script runs continuously and each output line is an update.
+Nothing runs while the bar is off or the screen is locked; everything re\-runs once when it comes back.
 .TP
 .B restart\-interval
-For continuous scripts that exit (minimum 1 s, with backoff).
+For continuous scripts that exit (minimum 1\ s, doubling up to 60\ s while they keep dying quickly).
 .TP
 .B exec\-on\-event
 Re\-run after an
@@ -589,33 +1318,49 @@ Re\-run after an
 action (default true).
 .TP
 .B return\-type
-.B """"""
+.B \(dq\(dq
 (lines: text, detail, class) or
-.B """json"""
-(one object per line with
+.B \(dqjson\(dq
+(one object per line with waybar's
 .BR text ,
 .BR alt ,
-.BR tooltip ,
-.BR class ,
+.B tooltip
+(the detail),
+.B class
+(a string or an array) and
 .BR percentage ,
-.BR icon ,
-.BR value ,
+plus
+.B icon
+(a name or path),
+.B value
+(0\(en100, for
+.BR "slider = true" )
+and
 .BR hidden ).
+Built\-in modules produce exactly these fields, and so do published items and
+.BR "sliverctl update" .
 .TP
 .BR escape ", " timeout ", " env
-Escape markup, per\-run timeout (default 2 s), and extra environment.
+Escape markup in the output, per\-run timeout (default 2\ s), and extra environment.
 Commands also get
 .BR SLIVER_MODULE ,
 .BR SLIVER_LAYER ,
 .B SLIVER_LAYOUT
 and
 .BR SLIVER_APP_ID .
+.PP
+A failed or timed\-out run shows
+.B !
+with the
+.B error
+class, and the last line of stderr as the detail.
+Updates are drawn only when the output changed, and at most 30 times a second.
 .SH ACTIONS
 An
 .B on\-*
 key takes one of:
 .TP
-.I """command"""
+.I \(dqcommand\(dq
 A shell command.
 .B {value}
 is substituted for
@@ -623,63 +1368,208 @@ is substituted for
 .TP
 .B { exec = [argv] }
 No shell.
+.IP
+Commands start in their own process group, and under systemd in their own scope, so restarting
+the agent doesn't kill apps opened from the bar.
 .TP
-.BR "{ key = ""F5"" }" ", " "{ keys = [""LeftCtrl"", ""LeftAlt"", ""F1""] }"
-Key presses (combos are released in reverse).
+.BR "{ key = \(dqF5\(dq }" ", " "{ keys = [\(dqLeftCtrl\(dq, \(dqLeftAlt\(dq, \(dqF1\(dq] }"
+Key presses, honouring
+.BR repeat .
+A combo is pressed in order and released in reverse.
 Key names are tiny\-dfr's
 .RB ( F1 ,
 .BR BrightnessDown ,
 .BR PlayPause ,
-\&...).
+\&...), matched case\-insensitively.
 Letters, digits and punctuation mean the character on a US keyboard, and are sent as the key that
 types that character in your keyboard layout, so
-.B "[""LeftCtrl"", ""Z""]"
+.B [\(dqLeftCtrl\(dq, \(dqZ\(dq]
 is undo on AZERTY and QWERTZ too.
 This needs a compositor that reports the layout (Hyprland); elsewhere, and for characters a layout
 only has with Shift (AZERTY digits) or not at all (Greek), the US key position is sent.
+.B SysRq
+is refused.
 .TP
-.BR "{ layer = ""media"", mode = ""toggle"" }" ", " "{ close\-layer = true }"
+.BR "{ layer = \(dqmedia\(dq, mode = \(dqtoggle\(dq }" ", " "{ close\-layer = true }"
 .B mode
 is
-.BR hold ,
+.B hold
+(until that finger lifts),
 .B toggle
 or
-.BR oneshot .
+.B oneshot
+(closes after the next action taken in it).
+.B close\-layer
+returns to the layer underneath.
 .TP
-.BR "{ layout = N }" ", " "{ profile = P }" ", " "{ open = ""app.desktop"" }" ", " "{ url = U }"
+.B { layout = \fIname\fP }
+Forces a layout until the context changes.
+.TP
+.B { profile = \fIname\fP }
+Switches to another profile.
+.TP
+.BR "{ open = \(dqapp.desktop\(dq }" ", " "{ url = \fIU\fP }"
+Launches an app by its desktop id, or opens a URL or file.
 .TP
 .B { dbus = { bus, dest, path, interface, method, args } }
+.B bus
+is
+.B session
+(default) or
+.BR system .
+.B args
+are converted to the method's real types, read from its introspection
+.RB ( [false]
+is a
+.BR b ,
+.B [7]
+a
+.B u
+if the method wants one; a table is
+.BR a{sv} );
+on a mismatch nothing is sent and the error is logged.
 .TP
-.BR "{ signal = N }" ", " "{ update = ""custom/vpn"" }" ", " "{ format = ""toggle\-alt"" }" ", " "{ module\-action = NAME }"
+.BR "{ signal = N }" ", " "{ update = \(dqcustom/vpn\(dq }"
+Refresh modules.
+.TP
+.B { format = \(dqtoggle\-alt\(dq }
+Toggles
+.BR format\-alt .
+.TP
+.B { module\-action = \fIname\fP }
+A built\-in action of the module, such as
+.B next\-player
+on
+.BR mpris .
 .TP
 .I [ step, ... ]
 A macro.
 Steps can include
-.BR "{ sleep = ""100ms"" }" .
-Macros are capped at 32 steps and 10 s.
-.PP
-Bar\-wide gestures go in
-.BR [gestures] :
-.BR two\-finger\-swipe\-left ,
-.BR two\-finger\-swipe\-right ,
-.BR edge\-swipe\-from\-left ,
-.BR edge\-swipe\-from\-right .
+.BR "{ sleep = \(dq100ms\(dq }" .
+Macros are capped at 32 steps and 10\ s.
 .PP
 Durations are written
-.BR """250ms""" ,
-.BR """5s""" ,
-.B """2m"""
+.BR \(dq250ms\(dq ,
+.BR \(dq5s\(dq ,
+.B \(dq2m\(dq
 or as a bare number of seconds.
+.SH GESTURES
+Bar\-wide gestures go in
+.BR [gestures] ,
+with the same action forms:
+.TP
+.BR two\-finger\-swipe\-left ", " two\-finger\-swipe\-right
+Both fingers travel at least 60 pixels the same way.
+Once a second finger lands, neither finger taps, holds, swipes or drags its module.
+It fires once per contact.
+Unbound, two fingers are just two touches.
+.TP
+.BR edge\-swipe\-from\-left ", " edge\-swipe\-from\-right
+Starts within 48 pixels of that end of the bar and travels at least 80 pixels inward.
+It takes precedence over that module's own swipe; a touch that doesn't move is still a tap, and
+sliders keep their drag.
+.PP
+Gestures are recognized over every module except plain key buttons.
+Those are pressed the instant a finger lands, so no bar gesture can start on one.
+The bar reports no pressure and no hover, and is too short for vertical swipes.
+.SH SCRIPTING FROM OUTSIDE
+.BR sliverctl (1)
+and the D\-Bus
+.B Control1
+interface reload the configuration, signal, update, tap, hold, show and hide modules, push, pop
+and toggle layers, force a layout, show or hide the whole bar, get and set configuration keys
+(written to the file, which then reloads), and render the bar, or how a file would look, to PNG.
+.B SIGUSR1
+to
+.B sliver\-agent
+toggles the bar, like waybar.
+Hiding the bar leaves the safe hatch working.
 .SH WHAT CANNOT BE CONFIGURED
 Every layout, including the Fn layer, is fully editable and may drop Escape and the F\-keys.
-Pressing Fn twice and holding it always shows the built\-in F1\(enF12 layer (with Esc on bars that have no physical Escape key).
+Pressing Fn twice (within 400\ ms) and holding it always shows the built\-in F1\(enF12 layer (with
+Esc first on bars that have no physical Escape key) for as long as Fn is held.
 This is enforced by
 .BR sliverd (8),
-and no configuration can change it.
+and no configuration, app or agent can change or block it.
+The check, and the settings app's banner, only warn when the base and fn layers have no F1\(enF12,
+or a bar without a physical Escape key has no Esc.
 .PP
-App items, custom module output and notification text are never shown on the lock screen.
-Intervals have a 100\ ms floor, and scripts have timeouts.
-A configuration error never reaches the bar.
+On bars without a physical Escape key (the 2170\-pixel models), the default configuration and the
+tiny\-dfr importer put
+.B key/Esc
+first in the base and fn layers.
+.PP
+Touch targets are advice: the check warns when a module with an action is narrower than 80 pixels
+(about 9\ mm), and more strongly below 60, but never refuses.
+.PP
+App items
+.RB ( app\-controls ,
+.BR status\-items ,
+.BR app/ ),
+.B custom/
+output,
+.BR image ,
+.BR graph ,
+notification text, media titles and art, window titles
+.RB ( window ,
+.BR taskbar )
+and emoji recents are never shown on the lock screen.
+By default notification text also stays off the bar while the screen is shared (the built\-in
+.B when
+of
+.BR notifications ,
+which you can remove).
+.PP
+Intervals have a 100\ ms floor, restarts a 1\ s floor, and scripts have timeouts.
+Modal app contexts never cover your first zone.
+A configuration error never reaches the bar: the last good configuration stays, and
+.BR sliverd 's
+built\-in layer is the backstop.
+.SH WAYBAR FEATURES THAT DON'T APPLY
+.TP
+.BR layer ", " output ", " position ", " height ", " width ", " exclusive ", " passthrough ", " mode ", " ipc ", " id ", " modifier\-reset
+There is one fixed panel, not a Wayland surface.
+Use
+.B [bar]
+margin and spacing, and rules on
+.BR monitor .
+.TP
+Several bars in one file
+There is one physical bar: use layouts, rules and layers.
+.TP
+.BR start_hidden ", " on\-sigusr1
+.B sliverctl bar hide
+and
+.BR toggle ,
+and
+.B SIGUSR1
+toggles.
+.TP
+Hover, tooltips and mouse buttons
+A touch strip has none: use
+.BR detail ,
+tap, double tap, hold, swipes and drag.
+.TP
+.B rotate
+The bar is 60 pixels tall.
+.TP
+Drawer \fBtransition\-duration\fP
+Animation belongs to the stylesheet:
+.BR "transition: width" .
+.TP
+.B cffi
+In\-process plugins could take the bar down: use
+.B custom/
+or the D\-Bus API.
+.TP
+GtkBuilder \fBmenu\-file\fP
+Use
+.BR menu .
+.TP
+Full Pango markup
+Only the subset under
+.B Format strings
+is drawn.
 .SH EXAMPLES
 .EX
 version = 1
@@ -687,6 +1577,7 @@ version = 1
 [layers]
 base = "default"
 fn = "fkeys"
+media = "media"
 
 [[layouts.default.zones]]
 name = "main"
@@ -695,17 +1586,31 @@ modules = ["app\-controls"]
 
 [[layouts.default.zones]]
 name = "controls"
-modules = ["status\-items", "battery", "clock"]
+modules = ["status\-items", "mpris", "group/control\-strip"]
+
+[layouts.firefox]
+extends = "default"
+[[layouts.firefox.zones]]
+name = "main"
+modules = ["key/Back", "key/Forward", "key/Refresh", "app\-controls"]
 
 [[rules]]
 name = "Terminals get F\-keys"
 when = { app\-id = ["foot", "kitty"] }
 layout = "fkeys"
 
+[modules.clock]
+format = "{:%H:%M}"
+format\-alt = "{:%a %d %b}"
+
 [modules.battery]
 states = { warning = 30, critical = 15 }
 format = "{icon} {capacity}%"
 format\-icons = ["empty", "low", "half", "high", "full"]
+
+[modules."group/control\-strip"]
+modules = ["backlight/slider", "audio/slider", "audio#mute"]
+drawer = { reveal = "tap", mode = "inline", collapse\-after = "5s" }
 
 [modules."custom/vpn"]
 exec = "~/bin/vpn\-status \-\-json"
@@ -713,13 +1618,16 @@ return\-type = "json"
 interval = "5s"
 signal = 8
 on\-tap = "~/bin/vpn\-toggle"
+on\-hold = { open = "org.gnome.Settings.desktop" }
+
+[gestures]
+two\-finger\-swipe\-left = { layer = "media" }
+edge\-swipe\-from\-left = { keys = ["LeftAlt", "Tab"] }
 .EE
 .SH SEE ALSO
 .BR sliver\-stylesheet (5),
 .BR sliverctl (1),
 .BR sliver\-agent (1),
+.BR sliver\-settings (1),
 .BR sliverd (8),
 .BR waybar (5)
-.PP
-.I docs/customization.md
-in the sliver sources (the full specification).

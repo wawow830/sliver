@@ -20,8 +20,8 @@ bar and for how long, and ask them to watch it and confirm tiny-dfr came back. T
 `bar snap` yourself.
 
 ## Which daemon comes back
-A run conflicts with **every** bar owner (`tiny-dfr.service` and, once the packaging from ADR-0005
-is installed, `sliverd.service`) and restores **whichever was active when the run started**
+A run conflicts with **every** bar owner (`tiny-dfr.service` and, when the sliver packages are
+installed, `sliverd.service`) and restores **whichever was active when the run started**
 (tiny-dfr if none was). Below, "tiny-dfr" means "the previous owner". `restore --restore-to` only
 accepts those two units.
 
@@ -142,8 +142,7 @@ harness/safeswap/bar run target/debug/sliver-hwprobe --seconds 40 -- --draw 15 -
                                                                             #    green bottom-right) + raw touches; snap during it
 ```
 
-## Known gaps
-- SELinux: the staged binary gets `chcon -t bin_t` so PID 1 can exec it from `/run`. If a run
-  fails with 203/EXEC, check `ausearch -m avc -ts recent`.
-- On T2 (`appletbdrm`) the scanout is emulated XRGB8888 and snap should work, but it's untested.
-- Systemd `OpenFile=` needs systemd ≥ 253 (Fedora 44 has 259).
+## Requirements and troubleshooting
+- `OpenFile=` needs systemd 253 or newer.
+- The staged binary gets `chcon -t bin_t` so PID 1 can exec it from `/run`. If a run fails with
+  203/EXEC, check `ausearch -m avc -ts recent`.

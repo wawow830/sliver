@@ -5,15 +5,6 @@ per app, with waybar-style modules and a stylesheet, or by dragging things aroun
 app. Apps and scripts can put their own buttons on it, and **Escape and the F-keys always stay
 reachable.**
 
-> Status: development snapshot (0.1.0). There are no published packages yet: you build the RPMs
-> from this repository (§3). See "What's been tested where" below before relying on it.
-
-Reference: `man sliverctl`, `man sliver-config`, `man sliver-stylesheet`, `man sliver-settings`,
-`man sliver-agent`, `man sliverd` (sources in `man/`; read one without installing via
-`man -l man/sliver-config.5`).
-
-## 1. How it fits together
-
 | Piece | Runs as | Does |
 |---|---|---|
 | `sliverd` | system service (replaces `tiny-dfr`) | Owns the bar's display, touch and backlight. Has a built-in F-key layer. |
@@ -24,34 +15,13 @@ Reference: `man sliverctl`, `man sliver-config`, `man sliver-stylesheet`, `man s
 If the agent isn't running, crashes, or your config is broken, `sliverd` shows its built-in
 F-keys. That's the safety net.
 
-### What's been tested where
-
-Only one setup is used every day: **Hyprland on an M2 MacBook Pro 13" (`Mac14,7`) with Fedora
-Asahi Remix**, with sliverd driving the real bar and the agent in a real session. Everything below
-is **experimental**: it has automated tests against fakes or headless/nested compositors, but has
-never been used in a real desktop session or on the real machine.
-
-| Experimental | What the tests cover |
-|---|---|
-| sway, niri | the agent's IPC backends against fake servers and a headless sway / nested niri |
-| labwc and other wlroots compositors | a mock compositor and a headless labwc |
-| river | windows and focus in a headless river; no workspaces |
-| KDE Plasma 6 (KWin script) | a nested `kwin_wayland --virtual` |
-| GNOME 50 (Shell extension) | a headless gnome-shell 50.5; 45–49 untested |
-| Browser extension | the native host and a syntax check; never loaded in a real browser |
-| Other Apple Silicon Touch Bar Macs (M1 13") | nothing: only the `Mac14,7` bar has been driven |
-| Intel T2 Macs | the T2 paths, headless (`docs/t2-testing.md` explains how to help) |
-
-If you try one of these, `sliverctl doctor` is the first thing to run and the most useful thing to
-report.
-
-## 2. The safe hatch: remember this one
+## The safe hatch: remember this one
 
 **Press Fn twice quickly and keep holding it.** As long as you hold it, the bar shows F1–F12 (with
 Esc first on models without a physical Escape key), whatever your config or any app is doing.
 Nothing can turn this off.
 
-## 3. Install
+## Install
 
 Build the RPMs and install them (Fedora; about 15 minutes for the release build):
 ```sh
@@ -59,7 +29,9 @@ sudo dnf builddep packaging/rpm/sliver.spec
 scripts/rpm-build --binary                      # RPMs land in target/rpmbuild/RPMS/
 sudo dnf install target/rpmbuild/RPMS/*/*.rpm   # sliver, sliverd, sliver-agent, sliverctl, sliver-settings
 ```
-`sliver-browser` (§10) is in the same folder; leave it out if you don't want it.
+`sliver-browser` is in the same folder: a Firefox and Chromium extension that puts the focused
+window's tabs, back, forward and reload on the bar (`integration/browser/README.md`). Leave it out
+if you don't want it.
 
 Installing doesn't take the bar from tiny-dfr right away: sliverd takes it from the next boot.
 No reboot is needed, though. To switch now:
@@ -75,159 +47,6 @@ Start it from the compositor's autostart instead:
 exec-once = systemctl --user start sliver-agent   # Hyprland
 exec systemctl --user start sliver-agent          # sway
 ```
-**Back to tiny-dfr:** `sudo systemctl start tiny-dfr` stops sliverd until the next boot. For good,
-uninstall: `sudo dnf remove sliver sliverd sliver-agent sliverctl sliver-settings` hands the bar to
-tiny-dfr at once. (`systemctl disable` doesn't help: udev starts sliverd, not an enabled unit.)
-If sliverd crashes 5 times within a minute, systemd brings tiny-dfr back by itself; run
-`sudo systemctl reset-failed sliverd` before starting sliverd again. Upgrades (`dnf upgrade`)
-restart sliverd (about half a second of bar) and running agents on their own.
-
-From source without packages, see `docs/sliverd.md` (the units and udev rule in `packaging/` are
-what make `sliverd` take over).
-
-## 4. First run: the settings app
-
-Open **Sliver** from your app menu (`sliver-settings`). The first time, it asks how to start:
-
-- **Import tiny-dfr setup** keeps your tiny-dfr keys and look (`theme = "classic"`).
-- **Use the default bar**: F-keys until an app adds its own buttons, plus brightness, volume and
-  now playing.
-
-On the **Bar** page the preview is your real bar, drawn by the same code:
-- Drag a module from the Library onto the bar, along it to move it (also into another zone), off it
-  to remove it, or its right edge to resize it. Click a module to edit its format, icon, width,
-  actions and "Show only when" conditions.
-- From the keyboard: Tab to the preview, ←/→ to select, Alt+←/→ to move, Delete to remove, Enter
-  to edit.
-- **Mirror** (on by default) shows the layout you're editing on the real bar while the window is
-  focused.
-- **Customize for app…** makes a layout for one app (say Firefox) and a rule that picks it.
-- Every edit applies at once and can be undone (Ctrl+Z, or Undo in the toast). A change that would
-  break the config is refused.
-
-The other pages: **Layouts & Rules** (which layout shows when; the rule active now is marked),
-**Gestures**, **Appearance** (theme, fonts, accent, animations), **Display & Power** (brightness,
-dim/off timers, the on-battery profile, the brightness curve), **Apps** (what apps may publish),
-**Profiles & Presets**, and **Status** (is the agent running, why this layout, errors).
-
-## 5. Configure by hand
-
-The settings app and your editor work on the same file, comments included. Change either and the
-agent reloads within a moment; a broken file is never applied (the last good config stays).
-```sh
-sliverctl config path                 # where sliver looks; * marks the file in use
-sliverctl config import-tiny-dfr      # start from your tiny-dfr setup, or:
-sliverctl config import-waybar        # start from your waybar modules
-$EDITOR ~/.config/sliver/config.toml  # changes apply on save
-sliverctl config check                # validate
-```
-
-A small config:
-```toml
-version = 1
-
-[[layouts.default.zones]]
-name = "main"
-width = "fill"
-modules = ["app-controls"]            # buttons published by the focused app go here
-
-[[layouts.default.zones]]
-name = "controls"
-modules = ["status-items", "audio/slider", "battery", "clock"]
-
-[[rules]]                             # first match wins
-name = "Terminals get F-keys"
-when = { app-id = ["foot", "kitty"] }
-layout = "fkeys"
-
-[modules.clock]
-format = "{:%H:%M}"
-format-alt = "{:%a %d %b}"            # tap to toggle
-
-[modules."custom/vpn"]                # your own module, waybar style
-exec = "~/bin/vpn-status --json"
-return-type = "json"
-interval = "5s"
-signal = 8                            # `sliverctl signal 8` re-runs it
-on-tap = "~/bin/vpn-toggle"
-```
-Everything, the Fn layer included, can be changed. The full reference is `man sliver-config` and
-`docs/customization.md`. Ready-made modules to copy or `include`: `examples/config/` (power menu,
-weather, exchange rate, calendar "up next").
-
-Try a config without the bar: `sliver-agent --render /tmp/preview --config my.toml` writes
-`/tmp/preview-base.png` and `/tmp/preview-fn.png`.
-
-## 6. Themes and stylesheets
-
-`theme = "…"` in config.toml picks the base look: `sliver` (dark, the default), `light`,
-`high-contrast` or `classic` (tiny-dfr's). Your `~/.config/sliver/style.css` goes on top, like
-waybar's:
-```css
-module:active     { background: @accent; }      /* while pressed */
-#battery.critical { background: #c01c28; }
-.zone-main        { background: alpha(white, 0.06); border-radius: 12px; }
-```
-`@accent` follows your desktop's accent colour. Animations stop when your desktop asks for reduced
-motion. Reference: `man sliver-stylesheet`, `docs/styling.md`.
-
-## 7. Gestures
-
-Every module takes `on-tap`, `on-hold`, `on-double-tap`, `on-swipe-left`, `on-swipe-right` and
-(sliders) `on-drag`: a shell command, a key (`{ key = "F5" }`), a combo, a layer or layout switch,
-a D-Bus call, a URL or app to open, or a macro. Swipes across the whole bar go in `[gestures]`:
-```toml
-[gestures]
-two-finger-swipe-left = { layer = "media" }
-edge-swipe-from-left = { keys = ["LeftAlt", "Tab"] }
-```
-Press-and-slide on a collapsed slider's icon sets it without lifting your finger. On Hyprland, key
-combos follow your keyboard layout (on AZERTY, `ctrl+z` is still undo).
-
-## 8. Profiles and presets
-
-A **profile** is a whole config you switch to, like "Work" or "Presenting":
-```sh
-sliverctl config profile new presenting      # your main config plus changes, in profiles/presenting.toml
-sliverctl profile presenting                 # switch (or the settings app, or a { profile = … } button)
-sliverctl profile default                    # back to config.toml
-```
-A **preset** is a whole setup (config, includes, stylesheet, icons) in one readable `.sliver` file:
-```sh
-sliverctl preset export desk --name "My desk"   # writes desk.sliver; env tables stay home
-sliverctl preset show desk.sliver               # files, everything it runs, does it load
-sliverctl preset import desk.sliver --profile desk   # as a new profile (or replace your config)
-```
-A preset's scripts run as you, so read the `runs` list before you say yes, or import with
-`--no-commands`. Double-clicking a `.sliver` file opens it in the settings app for review.
-
-## 9. The lock screen and privacy
-
-While the screen is locked, the bar shows the `locked` layout: media controls, brightness, volume,
-mute (and Esc on Macs without one). That comes from a built-in rule. Your own `rules` list replaces
-it (the settings app keeps it at the top for you), and `rules = []` removes it. Whatever your
-config says, the lock screen never shows buttons from apps, script output, notification text or
-window titles. Notification text also stays off the bar while you share your screen.
-
-## 10. Scripts and apps
-
-From the shell, buttons live as long as `sliverctl publish` runs:
-```sh
-sliverctl publish --provider org.example.Build button:build:'🔨 Build' |
-  while read -r item kind _; do [ "$kind" = tap ] && make; done
-```
-Drive the bar like waybar: `sliverctl signal 8`, `sliverctl hide clock`,
-`sliverctl layer push media 5000`, `sliverctl bar toggle`. See `man sliverctl` and `examples/shell/README.md`.
-
-Apps (any language, plain D-Bus) publish items for their own windows: buttons, toggles, sliders,
-segmented controls, scrollable strips and popovers. See `docs/api.md`, `examples/python/pomodoro.py`,
-the Rust crate `sliver-client`, and recipes for GTK/GJS, Qt and Electron/Node in
-`docs/integrating-apps.md`. Whatever apps publish is yours to move, restyle, rebind or hide
-(`app/<provider>#<item>` in your config; the settings app's **Apps** page).
-
-**Browsers:** the optional `sliver-browser` package adds a Firefox and Chromium extension that puts
-the focused window's tabs (swipe to scroll, tap to switch), back, forward and reload on the bar.
-Load the extension from `/usr/share/sliver/browser/` (see `integration/browser/README.md`).
 
 **GNOME and KDE** need a small integration so the agent knows the focused app, workspaces and
 windows. The packages `gnome-shell-extension-sliver` and `sliver-kwin` come along automatically
@@ -237,7 +56,53 @@ when GNOME or KWin is installed, but you enable them yourself, once:
 
 Hyprland, sway, niri and other wlroots compositors need nothing.
 
-## 11. Troubleshooting
+**Back to tiny-dfr:** `sudo systemctl start tiny-dfr` stops sliverd until the next boot. For good,
+uninstall: `sudo dnf remove sliver sliverd sliver-agent sliverctl sliver-settings` hands the bar to
+tiny-dfr at once. (`systemctl disable` doesn't help: udev starts sliverd, not an enabled unit.)
+If sliverd crashes 5 times within a minute, systemd brings tiny-dfr back by itself; run
+`sudo systemctl reset-failed sliverd` before starting sliverd again. Upgrades (`dnf upgrade`)
+restart sliverd (about half a second of bar) and running agents on their own. More in
+`docs/packaging.md`.
+
+## First run
+
+Open **Sliver** from your app menu (`sliver-settings`). The first time, it asks how to start:
+
+- **Import tiny-dfr setup** keeps your tiny-dfr keys and look (`theme = "classic"`).
+- **Use the default bar**: F-keys until an app adds its own buttons, plus brightness, volume and
+  now playing.
+
+On the **Bar** page the preview is your real bar, drawn by the same code. Drag modules from the
+Library onto it, along it, off it, or by their right edge to resize; click one to edit it.
+**Mirror** (on by default) shows the layout you're editing on the real bar while the window is
+focused, and **Customize for app…** makes a layout for one app and a rule that picks it. Every edit
+applies at once and can be undone (Ctrl+Z); a change that would break the config is refused.
+
+Prefer a text editor? The settings app and your editor work on the same file, comments included,
+and a broken file is never applied:
+```sh
+sliverctl config path                 # where sliver looks; * marks the file in use
+sliverctl config import-tiny-dfr      # start from your tiny-dfr setup, or:
+sliverctl config import-waybar        # start from your waybar modules
+$EDITOR ~/.config/sliver/config.toml  # changes apply on save
+sliverctl config check                # validate
+sliver-agent --render /tmp/preview --config my.toml   # see it without the bar
+```
+Ready-made modules to copy or `include` are in `examples/config/` (power menu, weather, exchange
+rate, calendar "up next").
+
+## Reference
+
+Everything, the Fn layer included, can be changed. The reference is in the man pages (sources in
+`man/`; read one without installing via `man -l man/sliver-config.5`):
+
+- `man sliver-config`: modules, zones, layers, rules, conditions, actions, gestures, profiles.
+- `man sliver-stylesheet`: selectors, properties, themes and animations.
+- `man sliverctl`: the command line, presets and scripting from outside.
+- `man sliver-settings`, `man sliver-agent`, `man sliverd`.
+- Apps and scripts that publish their own buttons: `docs/api.md`, `examples/`.
+
+## Troubleshooting
 
 **Start with `sliverctl doctor`.** It checks the whole install in a few seconds and prints one line
 per check, `ok`, `WARN` (a module will be empty: no NetworkManager, no tray host, no PipeWire) or
@@ -253,16 +118,16 @@ forced), the active profile, whether the display is on, dimmed or off, and what'
 
 | Symptom | Try |
 |---|---|
-| Bar shows only F-keys | The agent isn't driving it. `sliverctl doctor` says why; see §3 if it never starts at login. |
+| Bar shows only F-keys | The agent isn't driving it. `sliverctl doctor` says why; see Install if it never starts at login. |
 | My change didn't apply | `sliverctl config check`. Invalid configs are never applied, and the last good one stays. |
 | The wrong layout shows | `sliverctl status` names the rule that won; rules match top to bottom. |
 | A custom module shows `!` | Its script failed or timed out (default 2 s). Run it by hand. |
-| Bar is dark | It dims after 30 s and turns off after 60 s idle; the first touch only wakes it. With the lid closed it's off by design. See `[display]`. |
+| Bar is dark | It dims after 30 s and turns off after 60 s idle; the first touch only wakes it. With the lid closed it's off by design. See `[display]` in `man sliver-config`. |
 | An app's buttons are missing | The settings app's **Apps** page: is it hidden or not allowed? `sliverctl contexts` lists what's published. |
 | tiny-dfr has the bar after a crash | sliverd failed 5 times: read `journalctl -u sliverd -b`, then `sudo systemctl reset-failed sliverd && sudo systemctl start sliverd`. |
 | `refusing to open` in sliverd's log | Its safety gate found something else using the bar (another tiny-dfr, a test run). |
 | `backlight not writable` | `sudo udevadm trigger --action=change` on the bar's backlight, or reboot once after installing. |
-| Want tiny-dfr back | `sudo systemctl start tiny-dfr` until the next boot; uninstall for good (§3). |
+| Want tiny-dfr back | `sudo systemctl start tiny-dfr` until the next boot; uninstall for good (see Install). |
 
 Logs: `journalctl -u sliverd -b` (the daemon) and `journalctl --user -u sliver-agent` (config
 errors, failing scripts, compositor connection). For a debug log from the daemon, add
