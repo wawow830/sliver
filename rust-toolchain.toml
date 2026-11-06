@@ -1,0 +1,5 @@
+# The gate's toolchain, here and in CI, so a new clippy release can't turn it red by itself.
+# Bump it on purpose, with the fixes the new lints ask for.
+[toolchain]
+channel = "1.96"
+components = ["rustfmt", "clippy"]

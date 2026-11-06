@@ -20,12 +20,14 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False
           git gcc pkgconf-pkg-config gtk4-devel libadwaita-devel libxkbcommon-devel
           dbus-daemon groff systemd systemd-udev rpm-build desktop-file-utils libxml2
-          nodejs python3 procps-ng fontconfig dejavu-sans-fonts
+          nodejs python3 procps-ng fontconfig dejavu-sans-fonts curl
       - uses: actions/checkout@v4
       # The checkout belongs to another uid than the container's root.
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # rust-toolchain.toml picks the version.
+      - run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - run: scripts/check
