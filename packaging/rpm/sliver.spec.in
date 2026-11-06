@@ -1,8 +1,8 @@
 # Sliver: the Touch Bar platform for Linux Macs. Built from a git snapshot plus a cargo vendor
 # tarball (offline, so it works in mock/COPR). Local build: scripts/rpm-build.
 
-# Rendered by packaging/rpm/spec.py (scripts/rpm-build does): @CARGO_*@ and @BUNDLED_LICENSES@
-# come from Cargo.
+# Rendered by packaging/rpm/spec.py (scripts/rpm-build does): the version and licenses come from
+# Cargo, each binary package's from its own dependencies (the source package's: all of them).
 %global sliver_license @CARGO_LICENSE@
 %global bundled_licenses @BUNDLED_LICENSES@
 
@@ -44,7 +44,7 @@ reachable. This metapackage installs the daemon, the session agent and the CLI.
 
 %package -n sliverd
 Summary:        Sliver Touch Bar system daemon
-License:        (%{sliver_license}) AND %{bundled_licenses}
+License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliverd@
 %{?systemd_requires}
 Requires:       systemd-udev
 # The fallback when sliverd can't run (OnFailure=tiny-dfr.service): required, so the F-keys never
@@ -60,7 +60,7 @@ systemd hands the bar back to tiny-dfr.
 
 %package -n sliver-agent
 Summary:        Sliver Touch Bar session agent
-License:        (%{sliver_license}) AND %{bundled_licenses}
+License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliver-agent@
 Requires:       sliverd = %{version}-%{release}
 # The `cava` module's spectrum; nothing else needs it.
 Suggests:       cava
@@ -71,7 +71,7 @@ renders the bar and drives sliverd. It serves the public io.github.wawow830.Sliv
 
 %package -n sliverctl
 Summary:        Command-line control for the Sliver Touch Bar
-License:        (%{sliver_license}) AND %{bundled_licenses}
+License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliverctl@
 
 %description -n sliverctl
 sliverctl switches layers and profiles, edits and checks the config, publishes items from
@@ -79,7 +79,7 @@ scripts, and imports tiny-dfr and waybar configs.
 
 %package -n sliver-settings
 Summary:        Sliver Touch Bar settings app
-License:        (%{sliver_license}) AND %{bundled_licenses}
+License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliver-settings@
 Requires:       sliver-agent = %{version}-%{release}
 
 %description -n sliver-settings
