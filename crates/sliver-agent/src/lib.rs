@@ -51,6 +51,7 @@ pub mod pace;
 pub mod privacy;
 pub mod published;
 pub mod reload;
+pub mod scripts;
 pub mod stats;
 pub mod wait;
 

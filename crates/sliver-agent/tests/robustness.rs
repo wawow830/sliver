@@ -145,7 +145,7 @@ fn random_formats_and_outputs_render() {
             Some(f64::NAN),
             Some(f64::INFINITY),
         ];
-        let output = sliver_modules::Output {
+        let output = sliver_agent::scripts::Output {
             text: raw.clone(),
             alt: (i % 3 == 0).then(|| rng.soup(OUTPUT_BITS, 4)),
             classes: vec![rng.soup(OUTPUT_BITS, 3)],

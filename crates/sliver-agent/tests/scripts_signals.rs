@@ -1,7 +1,7 @@
 //! Real-time signals reach modules through `forward_realtime_signals`. Separate test binary:
 //! signal handlers are process-wide.
 
-use sliver_modules::{Runtime, Spec, forward_realtime_signals};
+use sliver_agent::scripts::{Runtime, Spec, forward_realtime_signals};
 use std::time::Duration;
 
 #[test]

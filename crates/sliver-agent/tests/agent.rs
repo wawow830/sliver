@@ -462,7 +462,7 @@ fn locked_screen_shows_nothing_private() {
     }];
     w.outputs.insert(
         "custom/secret".into(),
-        sliver_modules::Output {
+        sliver_agent::scripts::Output {
             text: "TOKEN 1234".into(),
             ..Default::default()
         },
@@ -924,7 +924,7 @@ fn runtime_layout_visibility_and_pushed_output() {
     let w = world(9, 41);
     a.pushed.insert(
         "custom/push".into(),
-        sliver_modules::Output {
+        sliver_agent::scripts::Output {
             text: "pushed".into(),
             ..Default::default()
         },
@@ -2348,7 +2348,7 @@ fn image_module() {
     // The script prints a path: shown.
     w.outputs.insert(
         "image#script".into(),
-        sliver_modules::Output {
+        sliver_agent::scripts::Output {
             text: format!("{}\n", wide.display()),
             ..Default::default()
         },
@@ -2415,7 +2415,7 @@ fn graph_module() {
     let set = |w: &mut World, load: f64, net: &str| {
         w.outputs.insert(
             "custom/load".into(),
-            sliver_modules::Output {
+            sliver_agent::scripts::Output {
                 text: format!("{load}"),
                 percentage: Some(load),
                 ..Default::default()
@@ -2423,7 +2423,7 @@ fn graph_module() {
         );
         w.outputs.insert(
             "graph/net".into(),
-            sliver_modules::Output {
+            sliver_agent::scripts::Output {
                 text: net.into(),
                 ..Default::default()
             },

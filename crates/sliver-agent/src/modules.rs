@@ -12,9 +12,9 @@ use sliver_config::{
 };
 use std::collections::HashMap;
 
+use crate::scripts::Output;
 use sliver_config::Context;
 use sliver_desktop::DesktopState;
-use sliver_modules::Output;
 use sliver_render::{Content, Width};
 use sliver_session::{BatteryState, SessionState};
 

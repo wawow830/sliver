@@ -181,7 +181,7 @@ pub struct Agent {
     /// What the base layer resolved to last: its layout and the rule (index) that picked it.
     active: Option<(String, Option<usize>)>,
     /// `sliverctl update MODULE …`: output pushed to exec-less custom modules.
-    pub pushed: HashMap<String, sliver_modules::Output>,
+    pub pushed: HashMap<String, crate::scripts::Output>,
 }
 
 /// A placed `graph`'s history: oldest first, 0..=1, how many it keeps, and when the last

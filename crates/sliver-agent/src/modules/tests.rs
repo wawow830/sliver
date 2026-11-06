@@ -915,7 +915,7 @@ fn drawer_options_class_direction_and_start() {
 /// `format-icons`, `states` and `hide-empty-text` over its text, alt and percentage.
 #[test]
 fn user_module_output_is_formatted_like_any_module() {
-    let cell = |block: &str, out: sliver_modules::Output, alt: bool| {
+    let cell = |block: &str, out: crate::scripts::Output, alt: bool| {
         let toml = format!(
             "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"custom/x\"]\n[modules.\"custom/x\"]\nexec = \"x\"\n{block}\n"
         );
@@ -942,14 +942,14 @@ fn user_module_output_is_formatted_like_any_module() {
         out.into_iter().next()
     };
     let text = |c: &Cell| c.look.content.label_text().unwrap_or_default().to_owned();
-    let plain = sliver_modules::Output {
+    let plain = crate::scripts::Output {
         text: "hi".into(),
         ..Default::default()
     };
     assert_eq!(text(&cell("", plain, false).unwrap()), "hi");
 
     let block = "format = \"{icon} {text} {percentage}%\"\nformat-alt = \"{alt}!\"\nformat-icons = [\"a\", \"b\", \"c\"]\nstates = { warning = 70, critical = 90 }";
-    let busy = sliver_modules::Output {
+    let busy = crate::scripts::Output {
         text: "cpu".into(),
         alt: Some("busy".into()),
         percentage: Some(95.0),
@@ -961,10 +961,10 @@ fn user_module_output_is_formatted_like_any_module() {
     assert!(c.look.classes.contains(&"mine".into()) && c.look.classes.contains(&"critical".into()));
     assert_eq!(text(&cell(block, busy, true).unwrap()), "busy!");
 
-    let empty = sliver_modules::Output::default();
+    let empty = crate::scripts::Output::default();
     assert!(
         cell("hide-empty-text = true", empty, false).is_none(),
         "no text: hidden"
     );
-    assert!(cell("", sliver_modules::Output::hidden(), false).is_none());
+    assert!(cell("", crate::scripts::Output::hidden(), false).is_none());
 }

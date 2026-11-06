@@ -1566,7 +1566,10 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "libc",
  "rustix",
+ "serde",
+ "serde_json",
  "signal-hook",
  "sliver-api",
  "sliver-bus",
@@ -1575,7 +1578,6 @@ dependencies = [
  "sliver-emoji",
  "sliver-icons",
  "sliver-ipc",
- "sliver-modules",
  "sliver-proc",
  "sliver-render",
  "sliver-session",
@@ -1676,19 +1678,6 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "sliver-modules"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "signal-hook",
- "sliver-config",
- "sliver-proc",
- "toml",
 ]
 
 [[package]]

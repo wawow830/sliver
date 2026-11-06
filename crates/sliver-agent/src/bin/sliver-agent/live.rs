@@ -7,7 +7,7 @@ use super::*;
 pub(super) struct Live {
     pub(super) feeds: Feeds,
     pub(super) agg: Aggregate,
-    pub(super) outputs: HashMap<String, sliver_modules::Output>,
+    pub(super) outputs: HashMap<String, sliver_agent::scripts::Output>,
     /// logind's raw `LockedHint`, before the plausibility check.
     pub(super) locked_hint: bool,
     pub(super) lock_watch: sliver_agent::context::LockWatch,
@@ -208,7 +208,7 @@ impl Live {
         }
     }
 
-    pub(super) fn modules(&self) -> Option<&sliver_modules::Runtime> {
+    pub(super) fn modules(&self) -> Option<&sliver_agent::scripts::Runtime> {
         self.feeds.modules.as_ref()
     }
 

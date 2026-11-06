@@ -5,7 +5,7 @@
 //! * the **desktop** (focused window, workspace, layout, outputs: `sliver-desktop`),
 //! * the **session** (lock, power, media, audio, brightness, notifications, tray:
 //!   `sliver-session`),
-//! * **user modules** (`custom/*` output: `sliver-modules`).
+//! * **user modules** (`custom/*` output: [`crate::scripts`]).
 //!
 //! The agent's loop polls [`Feeds::as_fd`] together with its other descriptors; when it is
 //! readable it calls [`Feeds::drain`], folds each [`Feed`] into an [`Aggregate`], and uses
@@ -20,11 +20,11 @@ mod spectrum;
 
 pub use context::{add_desktop, add_session};
 
+use crate::scripts::{Output, Runtime, Spec, Update};
 use sliver_config::Context;
 use sliver_desktop::{DesktopSource, DesktopState};
 use sliver_icons::SearchPaths;
 use sliver_icons::desktop::DesktopEntries;
-use sliver_modules::{Output, Runtime, Spec, Update};
 use sliver_session::{Handle, SessionSource, SessionState};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -471,7 +471,7 @@ impl Feeds {
             None => {
                 let target = Arc::new(std::sync::Mutex::new(Some(rt.clone())));
                 let t = target.clone();
-                let forwarded = sliver_modules::forward_realtime_signals_to(move |n| {
+                let forwarded = crate::scripts::forward_realtime_signals_to(move |n| {
                     if let Some(rt) = t.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                         rt.signal(n);
                     }

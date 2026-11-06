@@ -1,6 +1,6 @@
 //! The runtime against real `sh` commands (no hardware, no desktop).
 
-use sliver_modules::{Context, Mode, Runtime, Spec, Update};
+use sliver_agent::scripts::{Context, Mode, Runtime, Spec, Update};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};

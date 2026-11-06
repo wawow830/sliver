@@ -1,7 +1,7 @@
 //! `pkill -RTMIN+N sliver-agent`: real-time signals re-run modules with `signal = N`.
 
-use crate::Runtime;
-use crate::spec::MAX_SIGNAL;
+use super::Runtime;
+use super::spec::MAX_SIGNAL;
 use signal_hook::iterator::Signals;
 use std::io;
 

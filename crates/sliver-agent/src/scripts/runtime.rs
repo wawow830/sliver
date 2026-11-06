@@ -2,10 +2,10 @@
 //! deadline, a trigger or a signal. Nothing polls; an inactive runtime (display off, screen
 //! locked) has no timers armed at all.
 
-use crate::output::{Output, parse_json, parse_text};
-use crate::proc::{self, RunResult};
-use crate::spec::{Mode, Spec};
-use crate::{Context, Update};
+use super::output::{Output, parse_json, parse_text};
+use super::proc::{self, RunResult};
+use super::spec::{Mode, Spec};
+use super::{Context, Update};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

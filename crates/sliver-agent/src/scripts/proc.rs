@@ -2,8 +2,8 @@
 //! no stdin, `no_new_privs`, bounded output, SIGTERM when the agent dies (`sliver_proc`).
 //! Never as root.
 
-use crate::Context;
-use crate::spec::Spec;
+use super::Context;
+use super::spec::Spec;
 use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};

@@ -142,7 +142,7 @@ pub fn graph_sample(
 ) -> Option<f32> {
     use sliver_config::{ModuleId, ModuleRef};
     let block = &m.config;
-    let from_output = |out: &sliver_modules::Output| {
+    let from_output = |out: &crate::scripts::Output| {
         out.percentage.or_else(|| {
             out.text
                 .lines()

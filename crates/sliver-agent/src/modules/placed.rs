@@ -47,7 +47,7 @@ pub fn uses_kind(config: &sliver_config::Config, kind: &str) -> bool {
 /// (including group members), for the feeds' module runtime. Problems come back as messages.
 pub fn user_module_specs(
     config: &sliver_config::Config,
-) -> (Vec<sliver_modules::Spec>, Vec<String>) {
+) -> (Vec<crate::scripts::Spec>, Vec<String>) {
     let (mut specs, mut errors) = (Vec::new(), Vec::new());
     for m in placed_modules(config) {
         if !matches!(m.id.kind.as_str(), "custom" | "image" | "graph")
@@ -55,7 +55,7 @@ pub fn user_module_specs(
         {
             continue;
         }
-        match sliver_modules::Spec::from_instance(&m) {
+        match crate::scripts::Spec::from_instance(&m) {
             Ok(s) => specs.push(s),
             Err(e) => errors.push(format!("{}: {e}", m.id)),
         }
@@ -110,7 +110,7 @@ mod spec_tests {
         let keys: Vec<&str> = specs.iter().map(|s| s.key.as_str()).collect();
         assert_eq!(keys, ["custom/a", "custom/b"]);
         // `interval` is a common key: the runtime runs it on that period, not as a stream.
-        use sliver_modules::Mode;
+        use crate::scripts::Mode;
         assert_eq!(specs[0].mode, Mode::Continuous);
         assert_eq!(
             specs[1].mode,
