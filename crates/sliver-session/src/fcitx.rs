@@ -15,9 +15,10 @@
 //! * after our own switch ([`Handle::refresh_input_method`]) and when the focused window changes
 //!   (each window has its own input context),
 //! * on the tray item's `NewIcon`/`NewToolTip`/`NewTitle`, where a real session sends them,
-//! * and every [`POLL`] (one call, `CurrentInputMethod`) while the bar is on ([`Handle::set_awake`]) and fcitx5 is running: that is
-//!   the only way to see a hotkey switch. It stops when the bar is off, and never starts when
-//!   fcitx5 isn't running (invariant 3: wakes only while shown).
+//! * and every [`POLL`] (one call, `CurrentInputMethod`) while the bar is on
+//!   ([`Handle::set_awake`]) and fcitx5 is running: that is the only way to see a hotkey switch. It
+//!   stops when the bar is off, and never starts when fcitx5 isn't running (invariant 3: wakes only
+//!   while shown).
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};

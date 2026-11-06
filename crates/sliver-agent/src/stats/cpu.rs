@@ -19,8 +19,9 @@ impl CpuTimes {
     }
 }
 
-/// Parse the aggregate `cpu ` line: `cpu user nice system idle iowait irq softirq steal guest guest_nice`.
-/// `guest` time is already counted in `user`, so only the first eight numbers are summed.
+/// Parse the aggregate `cpu ` line: `cpu user nice system idle iowait irq softirq steal guest
+/// guest_nice`. `guest` time is already counted in `user`, so only the first eight numbers are
+/// summed.
 pub fn parse_cpu_line(stat: &str) -> Option<CpuTimes> {
     let line = stat.lines().find(|l| l.starts_with("cpu "))?;
     let n: Vec<u64> = line

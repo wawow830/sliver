@@ -359,7 +359,8 @@ pub struct HwReport {
     pub version: String,
     /// `real` or `fake`.
     pub backend: String,
-    /// Why sliverd may drive the bar: `safe-swap harness`, `sliverd.service (…)`, or `fake hardware`.
+    /// Why sliverd may drive the bar: `safe-swap harness`, `sliverd.service (…)`, or `fake
+    /// hardware`.
     pub gate: String,
     pub model: String,
     pub width: u32,

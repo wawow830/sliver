@@ -174,7 +174,8 @@ impl Registry {
         }
     }
 
-    /// Lower is better: 0 window-bound, 1 same app, 2 include-children, 3 target. `None` = no match.
+    /// Lower is better: 0 window-bound, 1 same app, 2 include-children, 3 target. `None` = no
+    /// match.
     fn app_rank(
         &self,
         c: &Context,

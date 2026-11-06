@@ -32,8 +32,8 @@ pub enum Touch {
     Agent,
 }
 
-/// One drawable module: what it looks like (the renderer's [`sliver_render::Item`]), what touching it does, and
-/// where it came from.
+/// One drawable module: what it looks like (the renderer's [`sliver_render::Item`]), what touching
+/// it does, and where it came from.
 #[derive(Debug, Clone)]
 pub struct Cell {
     /// Stable identity across frames: the module id plus its position in groups.

@@ -1,10 +1,11 @@
 //! An in-process sliverd for headless agent tests: the **real** daemon core on fake hardware,
 //! over a real `SOCK_SEQPACKET` pair with real sealed memfds.
 //!
-//! API-compatible with the former `sliver_ipc::fake::FakeDaemon` (same method and field names), so switching
-//! is an import change. It adds [`TestDaemon::frame`] (what the bar shows, as a pixmap with pressed
-//! feedback and the hatch included) and a simulated clock ([`TestDaemon::advance`]) for idle/ping
-//! deadlines. Single-threaded: call [`TestDaemon::pump`] after the agent sends something.
+//! API-compatible with the former `sliver_ipc::fake::FakeDaemon` (same method and field names), so
+//! switching is an import change. It adds [`TestDaemon::frame`] (what the bar shows, as a pixmap
+//! with pressed feedback and the hatch included) and a simulated clock ([`TestDaemon::advance`])
+//! for idle/ping deadlines. Single-threaded: call [`TestDaemon::pump`] after the agent sends
+//! something.
 //!
 //! ```
 //! use sliver_ipc::proto::*;

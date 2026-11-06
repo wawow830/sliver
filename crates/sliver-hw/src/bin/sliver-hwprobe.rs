@@ -1,7 +1,8 @@
 //! sliver-hwprobe: report what the Touch Bar hardware actually supports.
 //!
 //! Run it ONLY through the safe-swap harness (it refuses otherwise, except `--sysfs-only`):
-//!   harness/safeswap/bar run target/debug/sliver-hwprobe --seconds 30 -- [--draw 5] [--touch 15] [--backlight N]
+//!   harness/safeswap/bar run target/debug/sliver-hwprobe --seconds 30 -- \
+//!       [--draw 5] [--touch 15] [--backlight N]
 //!
 //! Default: read-only. Opens the card (becomes DRM master automatically since tiny-dfr is
 //! stopped) but never commits. Lists caps, connectors, CRTCs, planes and their properties,

@@ -1,7 +1,8 @@
 //! Real input: the bar digitizer (touch) + seat0 keyboards/pointers/lid (Fn, activity, lid),
 //! read as raw evdev (never grabbed) behind ONE pollable fd (an epoll fd), so the daemon's loop
 //! just adds [`HwInput::as_fd`] to its own epoll and calls [`HwInput::drain`] when it's readable.
-//! Only open this under the safe-swap harness or the real sliverd unit ([`crate::require_harness`]).
+//! Only open this under the safe-swap harness or the real sliverd unit
+//! ([`crate::require_harness`]).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};

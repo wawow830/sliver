@@ -1,6 +1,7 @@
-//! The public interfaces must match `docs/dbus/io.github.wawow830.Sliver.xml`. Regenerate after an intentional change with
-//! `SLIVER_UPDATE_DBUS_XML=1 cargo test -p sliver-api --test introspection`, and bump
-//! `API_MINOR` for additive changes (or the interface major for breaking ones).
+//! The public interfaces must match `docs/dbus/io.github.wawow830.Sliver.xml`. Regenerate after an
+//! intentional change with `SLIVER_UPDATE_DBUS_XML=1 cargo test -p sliver-api --test
+//! introspection`, and bump `API_MINOR` for additive changes (or the interface major for breaking
+//! ones).
 
 use sliver_api::identity::RealProc;
 use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};

@@ -27,7 +27,12 @@ sliver-client = { path = "crates/sliver-client" }
 sliver-testbus = { path = "crates/sliver-testbus" }
 sliver-hw = { path = "crates/sliver-hw" }
 sliver-render = { path = "crates/sliver-render" }
-# External crates shared by several members.
+sliverd = { path = "crates/sliverd" }
+# External crates shared by several members (members add features where they use them).
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+libc = "0.2"
+regex-lite = "0.1"
+zbus = "5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 rustix = { version = "1.1.5", features = ["event", "net", "fs", "mm", "process", "time"] }

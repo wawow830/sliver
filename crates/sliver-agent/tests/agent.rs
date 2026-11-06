@@ -1,6 +1,6 @@
 //! End-to-end: the agent core + link against sliverd's real core in-process (`TestDaemon`: real
-//! socket, real memfds, sliverd's validation, touch routing and pressed feedback). PNG snapshots in `tests/snapshots/`;
-//! bless with `SLIVER_BLESS=1`.
+//! socket, real memfds, sliverd's validation, touch routing and pressed feedback). PNG snapshots in
+//! `tests/snapshots/`; bless with `SLIVER_BLESS=1`.
 
 use std::path::PathBuf;
 use std::thread;

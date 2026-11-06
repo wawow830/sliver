@@ -68,7 +68,8 @@ pub fn is_device_event(line: &str) -> bool {
 /// or startup: give it this long, then kill it.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// `cmd.output()` with a deadline. Returns `None` on spawn failure or timeout (the child is killed).
+/// `cmd.output()` with a deadline. Returns `None` on spawn failure or timeout (the child is
+/// killed).
 pub(crate) fn output_with_timeout(
     mut cmd: Command,
     limit: Duration,

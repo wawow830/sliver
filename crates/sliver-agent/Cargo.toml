@@ -24,15 +24,15 @@ sliver-icons.workspace = true
 sliver-ipc.workspace = true
 sliver-render.workspace = true
 rustix = { workspace = true, features = ["event", "time", "pipe", "fs"] }
-zbus = "5"
+zbus.workspace = true
 signal-hook = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-libc = "0.2"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std", "unstable-locales"] }
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+chrono = { workspace = true, features = ["unstable-locales"] }
 chrono-tz = { version = "0.10", default-features = false, features = ["std"] }
 xkbcommon = { version = "0.8", default-features = false }
 
 [dev-dependencies]
 sliver-testbus.workspace = true
-sliverd = { path = "../sliverd", features = ["testing"] }
+sliverd = { workspace = true, features = ["testing"] }

@@ -5,8 +5,8 @@ use super::*;
 /// Keyboard and screen-reader access to the preview. The preview is
 /// one focusable widget; ←/→ (Home/End) select a module, Alt+←/→ move it, Delete removes it,
 /// Enter or Space opens the inspector. The selection is in the widget's accessible name
-/// ("Touch Bar preview: Volume slider, Controls zone, 3 of 4"), which screen readers speak; every edit rebuilds the page, so the selection
-/// and focus live in [`Ui`].
+/// ("Touch Bar preview: Volume slider, Controls zone, 3 of 4"), which screen readers speak; every
+/// edit rebuilds the page, so the selection and focus live in [`Ui`].
 pub(super) fn keyboard_access(
     ui: &Rc<Ui>,
     picture: &gtk::DrawingArea,

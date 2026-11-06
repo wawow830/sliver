@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 sliver-ipc.workspace = true
 sliver-bus.workspace = true
-zbus = "5"
+zbus.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

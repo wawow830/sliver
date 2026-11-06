@@ -13,4 +13,4 @@ workspace = true
 
 [dependencies]
 drm = "0.15"
-libc = "0.2"
+libc.workspace = true

@@ -23,7 +23,8 @@ impl Reloader {
         self.inner.current()
     }
 
-    /// Config text checked and loaded as if saved over the live config (`sliver_agent::reload::load_text`).
+    /// Config text checked and loaded as if saved over the live config
+    /// (`sliver_agent::reload::load_text`).
     pub(super) fn load_text(&self, text: &str) -> Result<Applied, Vec<String>> {
         self.inner.load_text(text)
     }

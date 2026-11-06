@@ -261,7 +261,8 @@ pub struct IconRef(pub String);
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Formatted {
     pub text: String,
-    /// Set when `{icon}` chose an image instead of a text glyph. The renderer draws it next to `text`.
+    /// Set when `{icon}` chose an image instead of a text glyph. The renderer draws it next to
+    /// `text`.
     pub icon: Option<IconRef>,
     /// The active `states` name, if any.
     pub state: Option<String>,

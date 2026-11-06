@@ -160,7 +160,8 @@ pub const BAR_GESTURES: &[&str] = &[
 pub struct Config {
     pub version: u32,
     pub stylesheet: Option<String>,
-    /// The built-in base theme (`sliver`, `classic`) under the user's stylesheet. `None` = `sliver`.
+    /// The built-in base theme (`sliver`, `classic`) under the user's stylesheet. `None` =
+    /// `sliver`.
     pub theme: Option<String>,
     pub bar: Bar,
     pub display: Display,

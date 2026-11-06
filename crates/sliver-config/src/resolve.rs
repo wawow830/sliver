@@ -77,7 +77,8 @@ pub struct ResolvedZone {
 pub struct Resolved {
     pub layer: String,
     pub layout: String,
-    /// Index into `Config::rules` of the rule that picked the layout, or `None` for the layer default.
+    /// Index into `Config::rules` of the rule that picked the layout, or `None` for the layer
+    /// default.
     pub rule: Option<usize>,
     pub zones: Vec<ResolvedZone>,
 }
@@ -335,7 +336,8 @@ pub(crate) fn group_members(config: &Table) -> Vec<ModuleId> {
         .unwrap_or_default()
 }
 
-/// Merges `over` into `base`. Tables merge recursively, and everything else (arrays included) is replaced.
+/// Merges `over` into `base`. Tables merge recursively, and everything else (arrays included) is
+/// replaced.
 pub fn deep_merge(base: &mut Table, over: &Table) {
     for (k, v) in over {
         match (base.get_mut(k), v) {

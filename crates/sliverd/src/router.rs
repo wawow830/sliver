@@ -1,9 +1,11 @@
-//! Touch → key/agent routing. It's pure state: feed it touches plus the regions currently on screen, and act on the output.
+//! Touch → key/agent routing. It's pure state: feed it touches plus the regions currently on
+//! screen, and act on the output.
 //!
 //! - A touch is **captured** by the region it starts in. Later layer swaps don't change it.
 //! - Key region: down presses its keys, sliding off releases them, sliding back presses again,
 //!   and up releases. Combos are released in reverse order.
-//! - Keys are reference-counted across touches. Two fingers on the same key emit one down and one up.
+//! - Keys are reference-counted across touches. Two fingers on the same key emit one down and one
+//!   up.
 //! - Agent region: every phase is forwarded with the captured region id.
 
 use sliver_ipc::proto::{Rect, Region, RegionKind, TouchPhase};

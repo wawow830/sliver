@@ -33,7 +33,8 @@ impl Hardware {
     }
 
     /// Reads the bar length from the Touch Bar's DSI connector (`/sys/class/drm/*DSI*/modes`, e.g.
-    /// "60x2008"). Unknown hardware assumes no physical Esc, which fails safe: more warnings, not fewer.
+    /// "60x2008"). Unknown hardware assumes no physical Esc, which fails safe: more warnings, not
+    /// fewer.
     pub fn detect() -> Self {
         let width = std::fs::read_dir("/sys/class/drm")
             .into_iter()

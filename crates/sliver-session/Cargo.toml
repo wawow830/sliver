@@ -13,8 +13,8 @@ workspace = true
 
 [dependencies]
 sliver-proc.workspace = true
-serde = { version = "1", features = ["derive"] }
-zbus = "5"
+serde.workspace = true
+zbus.workspace = true
 rustix = { workspace = true, features = ["process", "fs"] }
 
 [dev-dependencies]

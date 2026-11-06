@@ -133,7 +133,8 @@ pub fn coerce(sig: &Signature, v: &T) -> Result<Value<'static>, String> {
     })
 }
 
-/// All the arguments as a body (at least one: a call without arguments sends `()` instead). `types` are the method's declared `in` types (empty = guess).
+/// All the arguments as a body (at least one: a call without arguments sends `()` instead). `types`
+/// are the method's declared `in` types (empty = guess).
 pub fn body(types: &[Signature], args: &[T]) -> Result<Structure<'static>, String> {
     if !types.is_empty() && types.len() != args.len() {
         return Err(format!(

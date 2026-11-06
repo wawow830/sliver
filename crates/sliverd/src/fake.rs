@@ -23,7 +23,8 @@ pub struct FakeDisplayState {
     pub fb: Vec<u8>,
     /// Damage of every flush so far.
     pub flushes: Vec<Vec<Span>>,
-    /// If set, every flush also writes the panel contents here (dev runs: watch what sliverd shows).
+    /// If set, every flush also writes the panel contents here (dev runs: watch what sliverd
+    /// shows).
     pub png: Option<std::path::PathBuf>,
 }
 

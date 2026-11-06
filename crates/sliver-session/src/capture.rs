@@ -12,10 +12,11 @@
 //! `{id, opcode << 24 | size, seq, n_fds}` followed by an SPA POD struct.
 //!
 //! What counts: `Stream/Input/Audio` is a recording app (the microphone), unless it only records
-//! what a sink plays (`stream.monitor`, `stream.capture.sink`, or a level meter). `Stream/Input/Video`
-//! is an app *receiving* video: a camera when it says `media.role = Camera`, a screen share
-//! otherwise. Only streams in the `running` state count. A camera an app opens straight through
-//! V4L2, with PipeWire not involved, is found by [`v4l2`] and merged into `camera`.
+//! what a sink plays (`stream.monitor`, `stream.capture.sink`, or a level meter).
+//! `Stream/Input/Video` is an app *receiving* video: a camera when it says `media.role = Camera`, a
+//! screen share otherwise. Only streams in the `running` state count. A camera an app opens
+//! straight through V4L2, with PipeWire not involved, is found by [`v4l2`] and merged into
+//! `camera`.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -568,7 +569,8 @@ impl Handle {
 
     /// Follow who is capturing the microphone, camera or screen, from the PipeWire socket at
     /// `socket`, into [`SessionState::capture`](crate::SessionState). A missing PipeWire is waited
-    /// for (inotify), not retried on a timer. Starts once; later calls do nothing. See the module docs.
+    /// for (inotify), not retried on a timer. Starts once; later calls do nothing. See the module
+    /// docs.
     pub fn start_capture(&self, socket: PathBuf) {
         self.start_capture_in(socket, "/dev".into(), "/proc".into());
     }

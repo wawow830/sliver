@@ -1,4 +1,5 @@
-//! List the tray items and their menus (read-only): `cargo run -p sliver-session --example tray-dump`
+//! List the tray items and their menus (read-only): `cargo run -p sliver-session --example
+//! tray-dump`
 
 use sliver_session::{Session, SessionSource};
 use zbus::blocking::Connection;

@@ -7,10 +7,10 @@
 //! Each item is a label, `icon:NAME` (built-in) or `icon:/path/to.svg`, `-` (spacer) or `_` (blank
 //! button). Items are `Auto` width; prefix `xN:` for `Fill(N)` or `pN:` for `Fixed(N px)`. A `!`
 //! suffix shows it pressed. `|` splits Esc | Main | Controls zones. `--system-fonts` uses
-//! installed fonts (with fallback) instead of only the embedded one. `--size WxH` sets the bar size.
-//! `slider:0.6` or `slider:ICON:0.6` is a slider. `--style FILE.css` uses a stylesheet and
-//! `--theme NAME` a built-in theme (default: classic). An item may be
-//! followed by `#id` and `.class`es, e.g. `icon:bolt#battery.charging`.
+//! installed fonts (with fallback) instead of only the embedded one. `--size WxH` sets the bar
+//! size. `slider:0.6` or `slider:ICON:0.6` is a slider. `--style FILE.css` uses a stylesheet and
+//! `--theme NAME` a built-in theme (default: classic). An item may be followed by `#id` and
+//! `.class`es, e.g. `icon:bolt#battery.charging`.
 
 use std::time::Instant;
 

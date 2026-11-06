@@ -353,7 +353,8 @@ pub struct Hit {
 }
 
 impl Hit {
-    /// The index of the clicked module among `zone_ids` (the zone's top-level module ids, in order).
+    /// The index of the clicked module among `zone_ids` (the zone's top-level module ids, in
+    /// order).
     pub fn module_index(&self, zone_ids: &[String]) -> Option<usize> {
         sliver_agent::modules::module_index(zone_ids, &self.before, self.pos)
     }

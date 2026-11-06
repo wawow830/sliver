@@ -13,5 +13,5 @@ workspace = true
 
 [dependencies]
 toml.workspace = true
-regex-lite = "0.1"
+regex-lite.workspace = true
 toml_edit = "0.25"

@@ -1,6 +1,7 @@
 //! The event loop: one `poll(2)` over the IPC listener, agent connections, hardware input and the
 //! seat watch, with the timeout taken from [`Daemon::next_deadline`]. With nothing to time (display
-//! off, no ping outstanding) it blocks until input arrives, so there are no idle wakeups (invariant 3).
+//! off, no ping outstanding) it blocks until input arrives, so there are no idle wakeups (invariant
+//! 3).
 //!
 //! Single-threaded and bounded. Each wakeup reads at most [`MAX_PACKETS_PER_WAKE`] packets per
 //! connection, and an agent whose socket won't take a reply is disconnected, never waited for.

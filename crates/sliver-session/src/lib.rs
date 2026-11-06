@@ -121,8 +121,8 @@ pub struct Media {
 /// Everything in this crate, flat and comparable.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionState {
-    /// logind `LockedHint` plus `Lock`/`Unlock` edges. A hint the locker sets, not a fact: the agent
-    /// weighs it against the desktop's own signal and running lockers (`plausibly_locked`).
+    /// logind `LockedHint` plus `Lock`/`Unlock` edges. A hint the locker sets, not a fact: the
+    /// agent weighs it against the desktop's own signal and running lockers (`plausibly_locked`).
     pub locked: bool,
     /// The desktop's own lock/screen-saver state (`ActiveChanged`), when it has one. Unlike
     /// `locked` this is not a hint: it wins over it.
@@ -240,9 +240,9 @@ impl Handle {
 
     /// The bar is on (`true`) or off (`false`). While it is off nothing is on screen, so the
     /// NetworkManager, bluez and UPower subscriptions (they change several times a minute:
-    /// signal strength, scans, battery readings) are dropped and the session thread sleeps; they come
-    /// back with a fresh read of all three when the bar wakes (invariant 3). The work runs on its own
-    /// thread, so the caller never waits for the bus.
+    /// signal strength, scans, battery readings) are dropped and the session thread sleeps; they
+    /// come back with a fresh read of all three when the bar wakes (invariant 3). The work runs on
+    /// its own thread, so the caller never waits for the bus.
     pub fn set_awake(&self, on: bool) {
         use std::sync::atomic::Ordering;
         if self.awake.swap(on, Ordering::SeqCst) == on {

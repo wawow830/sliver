@@ -108,9 +108,11 @@ fn bad_json_and_failures_show_the_error_state() {
 fn interval_reruns_and_unchanged_output_is_not_an_update() {
     let d = tmp("interval");
     let counter = d.join("n");
-    // prints 1,2,3,... but stays at "3" after the third run
+    // prints 1,2,3,... but stays at "3" after the third run. The count is replaced atomically
+    // (rename), so the test never reads it half-written.
     let script = format!(
-        "n=$(cat {c} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {c}; [ $n -gt 3 ] && n=3; echo $n",
+        "n=$(cat {c} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {c}.new; mv {c}.new {c}; \
+         [ $n -gt 3 ] && n=3; echo $n",
         c = counter.display()
     );
     let (_rt, rx) = Runtime::start(vec![every("custom/i", &script, 80)]);
