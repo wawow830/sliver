@@ -1,6 +1,6 @@
 //! The ops thread: carries out session changes (brightness, volume, mute, MPRIS, caffeine) off
 //! the main loop, so rendering never waits on D-Bus or `wpctl`. The live state itself comes
-//! from `sliver-feeds`.
+//! from [`crate::feeds`].
 
 use std::io;
 use std::sync::mpsc::{Receiver, Sender, channel};

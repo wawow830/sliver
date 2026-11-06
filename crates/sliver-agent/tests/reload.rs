@@ -1,7 +1,7 @@
 //! Hot reload against real files and real inotify, in a temp directory.
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use sliver_reload::{Outcome, Reloader, load_text};
+use sliver_agent::reload::{Outcome, Reloader, load_text};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

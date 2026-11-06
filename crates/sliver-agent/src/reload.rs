@@ -1,4 +1,4 @@
-//! `sliver-reload`: hot reload for the config and the stylesheet (customization.md §1).
+//! Hot reload for the config and the stylesheet (customization.md §1).
 //!
 //! * [`Watcher`]: inotify on the watched files' directories (survives atomic-rename saves, sees a
 //!   config being created), debounced; one fd to poll, one deadline for the poll timeout.
@@ -11,8 +11,8 @@
 //! [`Reloader::deadline`] as the poll timeout and call [`Reloader::poll_due`] when it passes;
 //! `sliverctl reload` and SIGUSR2 call [`Reloader::reload_now`].
 
-mod reload;
+mod reloader;
 mod watch;
 
-pub use reload::{Applied, Outcome, Reloader, load_text};
+pub use reloader::{Applied, Outcome, Reloader, load_text};
 pub use watch::{DEBOUNCE, Watcher};

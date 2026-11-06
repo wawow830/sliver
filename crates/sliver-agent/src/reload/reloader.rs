@@ -1,4 +1,4 @@
-use crate::watch::Watcher;
+use super::watch::Watcher;
 use sliver_config::{Config, Loaded};
 use sliver_render::Stylesheet;
 use std::collections::hash_map::DefaultHasher;

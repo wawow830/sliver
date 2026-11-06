@@ -1,4 +1,4 @@
-//! `sliver-feeds`: everything the agent learns from outside, in one place.
+//! Everything the agent learns from outside, in one place.
 //!
 //! Three kinds of input run on their own threads and arrive on one channel:
 //!

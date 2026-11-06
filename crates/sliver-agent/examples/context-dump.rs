@@ -1,7 +1,7 @@
 //! Start the live feeds, wait a moment, print the rule context. Read-only.
-//! `cargo run -p sliver-feeds --example context-dump`
+//! `cargo run -p sliver-agent --example context-dump`
 
-use sliver_feeds::{Aggregate, Feed, Feeds};
+use sliver_agent::feeds::{Aggregate, Feed, Feeds};
 use std::time::{Duration, Instant};
 
 fn main() -> std::io::Result<()> {

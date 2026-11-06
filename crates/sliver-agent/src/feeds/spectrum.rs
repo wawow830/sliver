@@ -1,5 +1,5 @@
 //! The `cava` module's spectrum: the `cava` program with raw output, run only while a spectrum
-//! is on the lit bar (the agent decides, [`crate::Feeds::run_spectrum`]), so an idle, dark or
+//! is on the lit bar (the agent decides, [`super::Feeds::run_spectrum`]), so an idle, dark or
 //! spectrum-free bar costs nothing (invariant 3).
 
 use std::io::{BufRead, BufReader, Write};
@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use sliver_proc::ChildGuard;
 
-use crate::{Feed, Out};
+use super::{Feed, Out};
 
 /// One frame of cava's raw ASCII output: levels 0–1000 separated by spaces, as 0..=1.
 pub(crate) fn parse(line: &str) -> Vec<f32> {

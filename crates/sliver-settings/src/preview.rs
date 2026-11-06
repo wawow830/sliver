@@ -49,7 +49,7 @@ impl Preview {
         let mut problems = Vec::new();
         let (mut sheet, warning) = Stylesheet::theme(config.theme.as_deref(), None);
         problems.extend(warning);
-        // Like the agent (sliver-reload): `stylesheet = …`, else `style.css` beside the config.
+        // Like the agent's reload: `stylesheet = …`, else `style.css` beside the config.
         let path = match (&config.stylesheet, config_dir) {
             (Some(s), Some(d)) => d.join(s),
             (Some(s), None) => s.into(),

@@ -8,6 +8,7 @@ pub mod api;
 pub mod context;
 pub mod dbus_call;
 pub mod display;
+pub mod feeds;
 pub mod frame;
 pub mod gesture;
 pub mod icons;
@@ -18,6 +19,8 @@ pub mod ops;
 pub mod pace;
 pub mod privacy;
 pub mod published;
+pub mod reload;
+pub mod stats;
 
 pub mod wait;
 pub use agent::Agent;

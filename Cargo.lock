@@ -1573,14 +1573,12 @@ dependencies = [
  "sliver-config",
  "sliver-desktop",
  "sliver-emoji",
- "sliver-feeds",
  "sliver-icons",
  "sliver-ipc",
  "sliver-modules",
- "sliver-reload",
+ "sliver-proc",
  "sliver-render",
  "sliver-session",
- "sliver-stats",
  "sliver-testbus",
  "sliverd",
  "toml",
@@ -1651,21 +1649,6 @@ name = "sliver-emoji"
 version = "0.1.0"
 
 [[package]]
-name = "sliver-feeds"
-version = "0.1.0"
-dependencies = [
- "rustix",
- "sliver-bus",
- "sliver-config",
- "sliver-desktop",
- "sliver-icons",
- "sliver-modules",
- "sliver-proc",
- "sliver-session",
- "zbus",
-]
-
-[[package]]
 name = "sliver-hw"
 version = "0.1.0"
 dependencies = [
@@ -1704,15 +1687,6 @@ name = "sliver-proc"
 version = "0.1.0"
 dependencies = [
  "rustix",
-]
-
-[[package]]
-name = "sliver-reload"
-version = "0.1.0"
-dependencies = [
- "rustix",
- "sliver-config",
- "sliver-render",
 ]
 
 [[package]]
@@ -1759,13 +1733,6 @@ dependencies = [
  "sliver-waybar",
  "toml",
  "zbus",
-]
-
-[[package]]
-name = "sliver-stats"
-version = "0.1.0"
-dependencies = [
- "rustix",
 ]
 
 [[package]]

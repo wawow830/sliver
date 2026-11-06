@@ -62,7 +62,7 @@ impl EmojiHandle {
 /// Shared system-statistics sampler (CPU usage needs the previous sample, so one instance lives
 /// as long as the agent). Cheap to clone; reads files only when a stats module asks.
 #[derive(Clone, Default)]
-pub struct Stats(std::sync::Arc<std::sync::Mutex<sliver_stats::Sampler>>);
+pub struct Stats(std::sync::Arc<std::sync::Mutex<crate::stats::Sampler>>);
 
 impl std::fmt::Debug for Stats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -71,7 +71,7 @@ impl std::fmt::Debug for Stats {
 }
 
 impl Stats {
-    fn with<R>(&self, f: impl FnOnce(&mut sliver_stats::Sampler) -> R) -> R {
+    fn with<R>(&self, f: impl FnOnce(&mut crate::stats::Sampler) -> R) -> R {
         f(&mut self.0.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
@@ -81,7 +81,7 @@ impl Stats {
         sys_root: impl Into<std::path::PathBuf>,
     ) -> Stats {
         Stats(std::sync::Arc::new(std::sync::Mutex::new(
-            sliver_stats::Sampler::with_roots(proc_root, sys_root),
+            crate::stats::Sampler::with_roots(proc_root, sys_root),
         )))
     }
 }
@@ -1633,7 +1633,7 @@ fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
                 .with("", pct0(usage))
                 .with("load", load.map_or(0.0, |l| l.one))
                 .with("avg_frequency", (ghz.unwrap_or(0.0) * 10.0).round() / 10.0)
-                .with("spark", sliver_stats::sparkline(&hist, Some(100.0)));
+                .with("spark", crate::stats::sparkline(&hist, Some(100.0)));
             let mut sp = Spec::new(v, "CPU {usage}%");
             sp.percentage = Some(usage);
             sp
@@ -1680,7 +1680,7 @@ fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
         }
         "disk" => {
             let path = m.config.get("path").and_then(|p| p.as_str()).unwrap_or("/");
-            let d = sliver_stats::disk(std::path::Path::new(path))?;
+            let d = crate::stats::disk(std::path::Path::new(path))?;
             let v = ValueMap::new()
                 .with("percentage_used", pct0(d.percent_used()))
                 .with("percentage_free", pct0(d.percent_free()))
@@ -3052,7 +3052,7 @@ pub fn uses_kind(config: &sliver_config::Config, kind: &str) -> bool {
 }
 
 /// Runtime specs for every `custom/*`, `image` and `graph` module with an `exec`, in any layout (including group
-/// members), for `sliver-feeds`' module runtime. Problems come back as messages.
+/// members), for the feeds' module runtime. Problems come back as messages.
 pub fn user_module_specs(
     config: &sliver_config::Config,
 ) -> (Vec<sliver_modules::Spec>, Vec<String>) {

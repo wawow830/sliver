@@ -18,9 +18,6 @@ sliver-bus = { path = "crates/sliver-bus" }
 sliver-icons = { path = "crates/sliver-icons" }
 sliver-modules = { path = "crates/sliver-modules" }
 sliver-waybar = { path = "crates/sliver-waybar" }
-sliver-feeds = { path = "crates/sliver-feeds" }
-sliver-reload = { path = "crates/sliver-reload" }
-sliver-stats = { path = "crates/sliver-stats" }
 sliver-emoji = { path = "crates/sliver-emoji" }
 sliver-config = { path = "crates/sliver-config" }
 sliver-agent = { path = "crates/sliver-agent" }

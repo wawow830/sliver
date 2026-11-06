@@ -1,4 +1,4 @@
-//! The rule context. The compositor and session keys come from `sliver-feeds`
+//! The rule context. The compositor and session keys come from [`crate::feeds`]
 //! (`Aggregate::context`); the agent adds what only it knows: time, weekday, the physical Esc
 //! key, the current layer, and a sanity check on logind's lock hint.
 

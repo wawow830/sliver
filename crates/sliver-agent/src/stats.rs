@@ -1,4 +1,4 @@
-//! `sliver-stats`: the numbers behind the `cpu`, `memory`, `load`, `temperature`, `disk` and
+//! The numbers behind the `cpu`, `memory`, `load`, `temperature`, `disk` and
 //! network-throughput modules, read from `/proc` and `/sys`.
 //!
 //! Everything is a plain file read (no polling thread, no subprocess): the agent samples when it

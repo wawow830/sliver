@@ -24,6 +24,7 @@ use rustix::event::{PollFd, PollFlags, poll};
 use sliver_agent::Agent;
 use sliver_agent::agent::{Effect, SessionOp};
 use sliver_agent::api::{ApiLink, Reply};
+use sliver_agent::feeds::{Aggregate, Feed, Feeds};
 use sliver_agent::icons::Icons;
 use sliver_agent::link::{Event, Link};
 use sliver_agent::modules::World;
@@ -32,7 +33,6 @@ use sliver_agent::published::Published;
 use sliver_api::registry::Focus;
 use sliver_api::service::{Control, ControlReply, ControlState};
 use sliver_config::Config;
-use sliver_feeds::{Aggregate, Feed, Feeds};
 use sliver_ipc::proto::{AgentMsg, DisplayPolicy, DisplayState, Layer, Role, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
 use sliver_render::{Fonts, Renderer, Stylesheet};
@@ -95,11 +95,11 @@ fn die(msg: &str) -> ! {
     std::process::exit(2)
 }
 
-/// The current config and stylesheet, hot-reloaded by `sliver-reload` (customization.md §1):
+/// The current config and stylesheet, hot-reloaded by [`sliver_agent::reload`] (customization.md §1):
 /// file changes (inotify, debounced), SIGUSR2 and `Control1.ReloadConfig`. A config with errors is
 /// never applied; the last good one stays and `errors` says why.
 struct Reloader {
-    inner: Option<sliver_reload::Reloader>,
+    inner: Option<sliver_agent::reload::Reloader>,
     config: Config,
     sheet: Stylesheet,
     /// Why the newest config on disk isn't live. Empty = it is.
@@ -114,23 +114,23 @@ struct Reloader {
 }
 
 impl Reloader {
-    /// Config text checked and loaded as if saved over the live config (`sliver_reload::load_text`).
-    fn load_text(&self, text: &str) -> Result<sliver_reload::Applied, Vec<String>> {
+    /// Config text checked and loaded as if saved over the live config (`sliver_agent::reload::load_text`).
+    fn load_text(&self, text: &str) -> Result<sliver_agent::reload::Applied, Vec<String>> {
         match &self.inner {
             Some(r) => r.load_text(text),
-            None => sliver_reload::load_text(text, self.config_path.as_deref(), None),
+            None => sliver_agent::reload::load_text(text, self.config_path.as_deref(), None),
         }
     }
 
     fn start(explicit: Option<PathBuf>) -> Reloader {
-        let (inner, applied) = match sliver_reload::Reloader::start(explicit.as_deref()) {
+        let (inner, applied) = match sliver_agent::reload::Reloader::start(explicit.as_deref()) {
             Ok((r, a)) => (Some(r), a),
             Err(e) => {
                 eprintln!(
                     "sliver-agent: no hot reload (inotify: {e}); using the built-in defaults"
                 );
                 let config = sliver_config::load_str("", Path::new(".")).config;
-                let a = sliver_reload::Applied {
+                let a = sliver_agent::reload::Applied {
                     config,
                     sheet: Stylesheet::sliver(),
                     config_path: None,
@@ -192,7 +192,9 @@ impl Reloader {
     }
 
     fn watch_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
-        self.inner.as_ref().map(sliver_reload::Reloader::as_fd)
+        self.inner
+            .as_ref()
+            .map(sliver_agent::reload::Reloader::as_fd)
     }
 
     /// How long poll may sleep before a debounced change is due.
@@ -251,7 +253,11 @@ impl Reloader {
 
     /// Reloads now (`sliverctl reload`). Returns the errors (empty = the file's config is live).
     fn reload(&mut self, agent: Option<&mut Agent>, live: &mut Live) -> Vec<String> {
-        match self.inner.as_mut().map(sliver_reload::Reloader::reload_now) {
+        match self
+            .inner
+            .as_mut()
+            .map(sliver_agent::reload::Reloader::reload_now)
+        {
             Some(o) => {
                 self.handle(o, agent, live);
             }
@@ -262,11 +268,11 @@ impl Reloader {
 
     fn handle(
         &mut self,
-        o: sliver_reload::Outcome,
+        o: sliver_agent::reload::Outcome,
         agent: Option<&mut Agent>,
         live: &mut Live,
     ) -> bool {
-        use sliver_reload::Outcome;
+        use sliver_agent::reload::Outcome;
         self.read_profiles();
         match o {
             Outcome::Applied(a) => {
@@ -312,7 +318,7 @@ impl Reloader {
     }
 }
 
-/// The live world: sliver-feeds (desktop, session, user modules) plus the ops thread.
+/// The live world: the feeds (desktop, session, user modules) plus the ops thread.
 struct Live {
     feeds: Feeds,
     agg: Aggregate,

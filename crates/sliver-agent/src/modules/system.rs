@@ -135,26 +135,26 @@ pub(super) fn network(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let v = ValueMap::new()
         .with(
             "bandwidthDownBytes",
-            sliver_stats::human_rate(rates.down, false),
+            crate::stats::human_rate(rates.down, false),
         )
         .with(
             "bandwidthUpBytes",
-            sliver_stats::human_rate(rates.up, false),
+            crate::stats::human_rate(rates.up, false),
         )
         .with(
             "bandwidthTotalBytes",
-            sliver_stats::human_rate(rates.down + rates.up, false),
+            crate::stats::human_rate(rates.down + rates.up, false),
         )
         .with(
             "bandwidthDownBits",
-            sliver_stats::human_rate(rates.down, true),
+            crate::stats::human_rate(rates.down, true),
         )
-        .with("bandwidthUpBits", sliver_stats::human_rate(rates.up, true))
+        .with("bandwidthUpBits", crate::stats::human_rate(rates.up, true))
         .with(
             "bandwidthTotalBits",
-            sliver_stats::human_rate(rates.down + rates.up, true),
+            crate::stats::human_rate(rates.down + rates.up, true),
         )
-        .with("spark", sliver_stats::sparkline(&hist, None))
+        .with("spark", crate::stats::sparkline(&hist, None))
         .with("ifname", esc(n.iface.as_deref().unwrap_or("")))
         .with("essid", esc(&essid))
         .with(
