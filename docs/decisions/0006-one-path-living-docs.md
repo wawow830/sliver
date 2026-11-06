@@ -25,17 +25,18 @@ also primed readers, human or agent, to build towards the document instead of fr
   2. a procedure a person must follow: the README, `docs/safe-swap.md`, `docs/packaging.md`,
      `docs/api.md` for app authors;
   3. a decision record (this directory), which is dated and isn't edited after acceptance except
-     to change its status.
+     to change its status or to keep its references pointing at what exists (the gate checks
+     that every `docs/` path named anywhere exists).
 
   How a piece of code works, and why, goes in its module's `//!` comment, where it's read and
   changed with the code. Feature inventories, roadmaps, design specs, status tables and lists of
   what isn't implemented aren't kept: the code and its tests are the inventory.
 
 ## Consequences
-- `docs/customization.md` and `docs/styling.md` fold into `sliver-config(5)` and
+- The customization and styling guides fold into `sliver-config(5)` and
   `sliver-stylesheet(5)`, which tests keep complete.
-- `docs/agent.md`, `docs/sliverd.md` and `docs/integration.md` move into module comments.
-  `docs/features.md`, `docs/ux.md` and the T2 notes go. `GOAL.md` keeps the mission, the design
+- The agent, sliverd and integration guides move into module comments. The feature list, the UX
+  notes and the T2 notes go. `GOAL.md` keeps the mission, the design
   principle and the invariants.
 - `sliver-stats`, `sliver-reload` and `sliver-feeds` become modules of `sliver-agent`.
   `sliver-waybar` becomes `sliver-import` and takes the tiny-dfr importer from `sliver-config`.

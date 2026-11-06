@@ -1,6 +1,7 @@
-# ADR-0004: Stylesheets (waybar-style CSS) for the bar
+# ADR-0007: Stylesheets (waybar-style CSS) for the bar
 
-Status: accepted. Supersede with a new ADR. User reference: `docs/styling.md`.
+Status: accepted (as a second ADR-0004; renumbered). Supersede with a new ADR. User reference:
+`sliver-stylesheet(5)`.
 
 ## Context
 GOAL.md's design principle says to style the bar like waybar's `style.css`: target modules by id,
@@ -20,7 +21,7 @@ CSS engine isn't available.
   - Zones: class `.zone-<name>`. **`#id` only ever means a module.**
   - Bar: classes from the agent (`layer-fn`, `layout-x`, `locked`…).
 
-  This follows docs/customization.md §7.
+  This follows sliver-config(5).
 - **Selectors:** type, `*`, `#id`, `.class`, `:active` (pressed), `:checked` (toggle on), `:disabled`,
   `:first-child`, `:last-child`, `:not(compound)`, descendant and `>` combinators, and lists.
   `:hover`/`:focus`/… parse but never match (with a note). `+`/`~` are rejected for that selector

@@ -59,9 +59,9 @@ pub const MAX_CLIENTS: usize = 8;
 pub const EMIT_KEYS_PER_SEC: u32 = 100;
 /// `wake` at most this often.
 pub const WAKE_MIN_INTERVAL_MS: u64 = 1_000;
-/// After the agent's frames vanish (crash, hang, demotion) touch-downs are ignored this long: the
-/// finger was aiming at an agent button, not at whatever safe-layer key now sits under it
-/// (on the real bar, a tap 22 ms after an agent hang pressed F10).
+/// After the agent's frames vanish (crash, hang, demotion) touch-downs are ignored this long: a
+/// finger landing just after was aiming at an agent button, not at whatever safe-layer key (an
+/// F-key) now sits under it.
 pub const AGENT_LOSS_SETTLE_MS: u64 = 200;
 /// Damage spans closer than this are merged into one flush clip.
 const DAMAGE_MERGE_GAP: u32 = 16;

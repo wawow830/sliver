@@ -34,10 +34,10 @@ the only interfaces other people's code will depend on.
    physical Esc) can't be configured or blocked. Validation is strict, `KEY_SYSRQ` is refused, and only
    the active seat0 session's uid can drive the bar.
    *Amended:* this replaced an earlier "escape floor" that rejected frames without Esc/F-keys, once
-   layouts became fully editable. The hatch gesture is specified in docs/customization.md §9.
+   layouts became fully editable. The hatch gesture is specified in sliver-config(5).
 
 7. **Published items are first-class modules** (GOAL.md design principle: waybar-style
-   customization). Each one has a module id `app/<provider>#<item-id>` (grammar in docs/customization.md), is placeable anywhere,
+   customization). Each one has a module id `app/<provider>#<item-id>` (grammar in sliver-config(5)), is placeable anywhere,
    and is styled by the user's stylesheet (`classes`, states). Its content is reshaped by user `format`
    over app-supplied `values`, and user gesture bindings replace app events. `Control1` carries the
    waybar-style controls (`Signal`, `Refresh`, `Show`/`Hide`/`Toggle`, `Trigger`, `Update`).

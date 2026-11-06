@@ -34,7 +34,7 @@ or bundle a CBDT/SVG emoji set). Everything else favors pure Rust, especially in
   id, classes, width, pressed, disabled, background, foreground }`. This is a *resolved frame*, not config. The agent
   builds it from sliver-config's resolved layout plus live widget state. The IPC's `pressed`
   image is the same scene with every item `pressed`.
-- Styling: a `Stylesheet` (waybar-style CSS, **ADR-0004**, docs/styling.md) replaced the original
+- Styling: a `Stylesheet` (waybar-style CSS, **ADR-0007**, sliver-stylesheet(5)) replaced the original
   `Theme` struct. The built-in `classic` sheet matches tiny-dfr 0.3.7's look.
 - `Renderer` keeps font, glyph and shaped-label caches. Full 2008x60 frame: ~1.3 ms cold, ~0.4 ms
   cached (release, M2). Render on change only, then `panel::damage` diffs frames into column

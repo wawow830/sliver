@@ -5,7 +5,7 @@
 //! always renders (GOAL invariant 1).
 //!
 //! The pipeline:
-//! 1. A [`Stylesheet`] (waybar-style CSS, ADR-0004) styles the `bar > zone > module` tree.
+//! 1. A [`Stylesheet`] (waybar-style CSS, ADR-0007) styles the `bar > zone > module` tree.
 //! 2. [`Renderer::layout`] measures content and [`solve`]s zones and their `Auto`/`Fixed`/`Fill`
 //!    items into rectangles. Use the same rects for touch regions ([`hit_test`]), so what you see
 //!    is what you touch.
