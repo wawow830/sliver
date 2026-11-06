@@ -13,10 +13,10 @@
 //! touches, keys, Fn/lid, layer/display/hatch changes, flushes, backlight and agent traffic.
 //! Under the safe-swap harness (SLIVER_SAFESWAP=1) the socket defaults to $SLIVER_OUT_DIR/sliverd.sock
 //! and sliverd exits 2 s before SLIVER_SAFESWAP_SECONDS.
-//! ```
 //! sliverd [--socket PATH] [--config PATH]
 //!     Real hardware: only under the safe-swap harness (SLIVER_SAFESWAP=1) or the packaged
 //!     sliverd.service (SLIVER_SYSTEM_UNIT=1).
+//! ```
 //!
 //! The IPC socket comes from systemd socket activation
 //! (`FileDescriptorName=ipc`) or is bound at `--socket` (default `/run/sliver/sliverd.sock`).

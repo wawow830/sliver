@@ -22,13 +22,16 @@ missing=$(git grep -ohE 'docs/[A-Za-z0-9_/-]+\.(md|xml)' | sort -u | while read 
 
 echo "== cargo fmt";   cargo fmt --all -- --check
 echo "== cargo clippy"; cargo clippy --workspace --all-targets --quiet -- -D warnings
-echo "== cargo test";  cargo test --workspace --quiet
-
 # Tests must never start the real audio tools (they leak `pactl subscribe` orphans and touch the
 # real PipeWire): fakes go through audio::Tools { wpctl, pactl } or SessionOptions::hermetic().
-if grep -rnE 'Tools::default\(\)|SessionOptions::default\(\)|Command::new\("(pactl|wpctl)"\)' crates/*/tests; then
-  echo "tests must not start the real wpctl/pactl"; exit 1
-fi
+# While they run, `pactl` and `wpctl` are tripwires that note who reached them and fail.
+trip="$PWD/target/check-tripwire" && rm -rf "$trip" && mkdir -p "$trip/bin"
+for t in pactl wpctl; do
+  printf '#!/bin/sh\necho "%s $*" >> "%s/reached"\nexit 1\n' "$t" "$trip" > "$trip/bin/$t"
+  chmod +x "$trip/bin/$t"
+done
+echo "== cargo test";  PATH="$trip/bin:$PATH" cargo test --workspace --quiet
+[[ ! -s $trip/reached ]] || { echo "tests started the real audio tools:"; cat "$trip/reached"; exit 1; }
 
 # The files' own validators, where installed. The units' behaviour in a real user manager:
 # packaging/itest-units.sh (~10 s).
