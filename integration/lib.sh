@@ -29,11 +29,19 @@ need() {
 
 examples=$root/target/debug/examples
 pids=()
-# On exit: `on_exit` (if defined), then every spawned process, then $work.
+# On exit: `on_exit` (if defined), then every spawned process group gets SIGTERM, and SIGKILL
+# after 5 s (the same contract as scripts/sandbox.py), then $work goes.
 stop_all() {
     if declare -F on_exit >/dev/null; then on_exit || true; fi
-    for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
-    wait 2>/dev/null || true
+    if [ ${#pids[@]} -gt 0 ]; then
+        # A group, or a lone process started with `& pids+=($!)`.
+        local targets=("${pids[@]/#/-}" "${pids[@]}")
+        kill -- "${targets[@]}" 2>/dev/null || true
+        setsid sh -c 'sleep 5; kill -KILL -- "$@" 2>/dev/null' _ "${targets[@]}" &
+        local killer=$!
+        wait "${pids[@]}" 2>/dev/null || true
+        kill -- "-$killer" 2>/dev/null || true
+    fi
     rm -rf "$work"
 }
 
@@ -60,12 +68,12 @@ bus() {
     export DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS
 }
 
-# spawn CMD...: run it in the background under $clean (its output in $work/<program>.log; a
+# spawn CMD...: run it in the background under $clean, in its own process group (its output in $work/<program>.log; a
 # leading `env VAR=value…` is skipped for the name).
 spawn() {
     local name
     for name in "$@"; do [[ $name == env || $name == *=* ]] || break; done
-    "${clean[@]}" "$@" >"$work/$(basename "$name").log" 2>&1 &
+    "${clean[@]}" setsid "$@" >"$work/$(basename "$name").log" 2>&1 &
     pids+=($!)
     last_pid=$!
 }
@@ -82,13 +90,13 @@ wait_until() {
 watch() {
     unwatch
     : >"$work/states.jsonl"
-    "${clean[@]}" "$examples/$1" "${@:2}" >"$work/states.jsonl" 2>"$work/watch.err" &
+    "${clean[@]}" setsid "$examples/$1" "${@:2}" >"$work/states.jsonl" 2>"$work/watch.err" &
     pids+=($!)
     watcher=$!
 }
 unwatch() {
     if [ -n "${watcher:-}" ]; then
-        kill "$watcher" 2>/dev/null || true
+        kill -- "-$watcher" 2>/dev/null || true
         wait "$watcher" 2>/dev/null || true
     fi
     watcher=
