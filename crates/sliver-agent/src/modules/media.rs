@@ -93,12 +93,12 @@ pub(super) fn mpris(at: &At) -> Option<Spec> {
         .chain(c.format_variants.values())
         .any(|f| f.contains("{position"));
     if playing && shows_position {
-        sp.refresh = Some(std::time::Duration::from_secs(1));
+        sp.redraw(world.now.wall, std::time::Duration::from_secs(1));
     }
     // `scrub = true`: a progress slider; drag to seek.
     if m.config.get("scrub").and_then(|v| v.as_bool()) == Some(true) {
         if let Some(len) = length {
-            sp.slider = Some((pos as f64 / len as f64).clamp(0.0, 1.0) as f32);
+            sp.face = Face::Slider((pos as f64 / len as f64).clamp(0.0, 1.0) as f32);
             sp.percentage = Some(pos as f64 * 100.0 / len as f64);
             if media.can_seek {
                 sp.defaults
@@ -109,7 +109,7 @@ pub(super) fn mpris(at: &At) -> Option<Spec> {
                 sp = sp.does(Gesture::Drag, "seek", seek);
             }
             if playing {
-                sp.refresh = Some(std::time::Duration::from_secs(1));
+                sp.redraw(world.now.wall, std::time::Duration::from_secs(1));
             }
         }
     }

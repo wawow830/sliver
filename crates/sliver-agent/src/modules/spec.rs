@@ -47,8 +47,8 @@ pub(super) struct Spec {
     pub(super) default_icon: Option<String>,
     /// A level (0..1): what a slider shows. A `set` verb lets a drag change it.
     pub(super) level: Option<f32>,
-    /// Drawn as a slider at this value (0..1); set by [`as_slider`] from `level`.
-    pub(super) slider: Option<f32>,
+    /// What it draws.
+    pub(super) face: Face,
     pub(super) checked: bool,
     /// What the module's names mean ([`crate::act`]).
     pub(super) verbs: Verbs,
@@ -58,18 +58,28 @@ pub(super) struct Spec {
     pub(super) extra_classes: Vec<String>,
     /// waybar's `alt`: picks a `format-alt` / `format-icons` entry (user modules).
     pub(super) alt: Option<String>,
-    /// Polled modules: redraw after this long.
-    pub(super) refresh: Option<std::time::Duration>,
+    /// When what it shows changes next on its own (a clock's tick, a poll), if ever.
+    pub(super) next_change: Option<DateTime<Local>>,
     /// A sub-bar built from live data (the `language` picker), used when the config has no `menu`.
     pub(super) menu: Vec<MenuItem>,
-    /// Shown when there is no icon (and no text), instead of an empty cell.
-    pub(super) fallback_text: Option<String>,
-    /// The `image` module: a picture (path or icon name) that fills the cell.
-    pub(super) image: Option<String>,
-    /// `graph`: samples (oldest first, 0..=1) and how many fit.
-    pub(super) graph: Option<(Vec<f32>, usize)>,
-    /// `cava`: the spectrum's levels, 0..=1.
-    pub(super) bars: Option<Vec<f32>>,
+}
+
+/// What a module draws. Its formatted label is the usual; the others are what some modules
+/// show instead.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Face {
+    /// The formatted label (text and icon), or `fallback` when both come out empty.
+    Label { fallback: Option<String> },
+    /// A track at this level (0..1), with the label's icon.
+    Slider(f32),
+    /// A picture (path or icon name) filling the cell.
+    Image(String),
+    /// Samples, oldest first, 0..=1, and how many fit.
+    Graph { values: Vec<f32>, capacity: usize },
+    /// A spectrum's levels, 0..=1.
+    Bars(Vec<f32>),
+    /// Nothing but room.
+    Spacer,
 }
 
 impl Spec {
@@ -82,18 +92,14 @@ impl Spec {
             lower_is_worse: false,
             default_icon: None,
             level: None,
-            slider: None,
+            face: Face::Label { fallback: None },
             checked: false,
             verbs: Vec::new(),
             defaults: Vec::new(),
             extra_classes: Vec::new(),
             alt: None,
-            refresh: None,
+            next_change: None,
             menu: Vec::new(),
-            fallback_text: None,
-            image: None,
-            graph: None,
-            bars: None,
         }
     }
 
@@ -114,6 +120,11 @@ impl Spec {
         self.defaults.retain(|(x, _)| *x != g);
         self.defaults.push((g, name));
         self
+    }
+
+    /// Redraw `after` this long from `now` (a poll, a moving position).
+    pub(super) fn redraw(&mut self, now: DateTime<Local>, after: std::time::Duration) {
+        self.next_change = chrono::Duration::from_std(after).ok().map(|d| now + d);
     }
 
     /// [`Spec::verb`] and [`Spec::on`] at once.
@@ -214,7 +225,7 @@ pub(super) fn as_slider(mut sp: Spec, m: &ModuleInstance, ui: &UiState) -> Spec 
     if is_collapsible(m) && !ui.expanded {
         return sp;
     }
-    sp.slider = Some(level);
+    sp.face = Face::Slider(level);
     if sp.verbs.iter().any(|(n, _)| *n == "set") {
         sp = sp.on(Gesture::Drag, "set");
     }
@@ -233,7 +244,11 @@ pub(super) fn source(at: &At) -> Option<Spec> {
 pub(super) type Source = fn(&At) -> Option<Spec>;
 pub(super) const SOURCES: &[(&str, Source)] = &[
     ("key", |_| Some(Spec::new(ValueMap::new(), ""))),
-    ("spacer", |_| Some(Spec::new(ValueMap::new(), ""))),
+    ("spacer", |_| {
+        let mut sp = Spec::new(ValueMap::new(), "");
+        sp.face = Face::Spacer;
+        Some(sp)
+    }),
     ("custom", |at| {
         if at.world.outputs.contains_key(&at.m.id.to_string()) {
             widgets::custom_output(at.m, at.world)
@@ -324,16 +339,6 @@ pub(super) fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
     let c = &m.common;
     let mut sp = spec(&at)?;
     let key = at.key.to_owned();
-    let next_change = if m.id.kind == "clock" {
-        Some(next_clock_tick(
-            world.now.wall,
-            c.format.as_deref().unwrap_or(CLOCK_DEFAULT),
-        ))
-    } else {
-        sp.refresh
-            .and_then(|d| chrono::Duration::from_std(d).ok())
-            .map(|d| world.now.wall + d)
-    };
     let st = State {
         percentage: sp.percentage,
         status: sp.status,
@@ -342,39 +347,43 @@ pub(super) fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
         lower_is_worse: sp.lower_is_worse,
     };
     let mut classes = m.classes.clone();
-    let content = if m.id.kind == "spacer" {
-        Content::Spacer
-    } else if let Some((values, capacity)) = sp.graph.take() {
-        // `states` still apply (on the latest value): `.warning`, `.critical`.
-        let f = format_module(c, "", &st, sp.values.as_ref());
-        classes.extend(f.classes);
-        Content::Graph { values, capacity }
-    } else if let Some(levels) = sp.bars.take() {
-        Content::Bars(levels)
-    } else if let Some(name) = sp.image.take() {
+    let open_slider = matches!(sp.face, Face::Slider(_));
+    let content = match std::mem::replace(&mut sp.face, Face::Spacer) {
+        Face::Spacer => Content::Spacer,
+        Face::Bars(levels) => Content::Bars(levels),
         // A missing or unreadable picture hides the module (it may not exist yet).
-        Content::Image(icons.image(&name, IMAGE_MAX_HEIGHT)?)
-    } else {
-        let f = present(
-            c,
-            sp.default_format,
-            &st,
-            sp.values.as_ref(),
-            sp.default_icon.as_deref(),
-            icons,
-            icon_size,
-        )?;
-        classes.extend(sp.extra_classes.iter().cloned());
-        classes.extend(
-            f.classes
-                .into_iter()
-                .filter(|c| !sp.extra_classes.contains(c)),
-        );
-        match (sp.slider, f.icon, f.text.is_empty()) {
-            (Some(value), icon, _) => Content::Slider { icon, value },
-            (None, None, true) => Content::text(sp.fallback_text.as_deref().unwrap_or_default()),
-            // Format strings are Pango-style markup, like waybar (values from outside are escaped).
-            (None, icon, _) => Content::label(icon, f.text),
+        Face::Image(name) => Content::Image(icons.image(&name, IMAGE_MAX_HEIGHT)?),
+        Face::Graph { values, capacity } => {
+            // `states` still apply (on the latest value): `.warning`, `.critical`.
+            let f = format_module(c, "", &st, sp.values.as_ref());
+            classes.extend(f.classes);
+            Content::Graph { values, capacity }
+        }
+        face => {
+            let f = present(
+                c,
+                sp.default_format,
+                &st,
+                sp.values.as_ref(),
+                sp.default_icon.as_deref(),
+                icons,
+                icon_size,
+            )?;
+            classes.extend(sp.extra_classes.iter().cloned());
+            classes.extend(
+                f.classes
+                    .into_iter()
+                    .filter(|c| !sp.extra_classes.contains(c)),
+            );
+            match (face, f.icon, f.text.is_empty()) {
+                (Face::Slider(value), icon, _) => Content::Slider { icon, value },
+                (Face::Label { fallback }, None, true) => {
+                    Content::text(fallback.unwrap_or_default())
+                }
+                // Format strings are Pango-style markup, like waybar (values from outside are
+                // escaped).
+                (_, icon, _) => Content::label(icon, f.text),
+            }
         }
     };
     // Every module can be opened or closed (`expand`), and one with a `menu` opens it.
@@ -403,7 +412,7 @@ pub(super) fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
     let on = bindings(m, &verbs, &sp.defaults);
     let collapsed = is_slider(m) && is_collapsible(m) && sp.level.is_some();
     let mut touch = touch_kind(m, &on);
-    if collapsed && sp.slider.is_none() {
+    if collapsed && !open_slider {
         touch = Touch::Agent;
     }
     let mut cell = Cell::new(
@@ -417,7 +426,7 @@ pub(super) fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
     cell.look.width = width(c.width);
     cell.touch = touch;
     cell.on = on;
-    cell.next_change = next_change;
+    cell.next_change = sp.next_change;
     cell.look.checked = sp.checked;
     cell.look.spectrum = spectrum(m, world);
     // A collapsed slider opens like a drawer handle and closes on its own.

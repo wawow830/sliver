@@ -187,7 +187,7 @@ pub(super) fn network(m: &ModuleInstance, world: &World) -> Option<Spec> {
     sp.status = Some(status);
     sp.checked = n.wifi_enabled == Some(true) && status != "disconnected";
     if polled {
-        sp.refresh = Some(poll_every(m, 5));
+        sp.redraw(world.now.wall, poll_every(m, 5));
     }
     Some(sp)
 }
@@ -405,7 +405,9 @@ pub(super) fn privacy(world: &World, item: Option<Part>) -> Option<Spec> {
         _ => ("audio-input-microphone-symbolic", "🎙"),
     };
     let mut sp = Spec::new(v, "").icon(icon);
-    sp.fallback_text = Some(text.into());
+    sp.face = Face::Label {
+        fallback: Some(text.into()),
+    };
     sp.status = Some(match kind {
         "screen" => "screen",
         "camera" => "camera",
@@ -420,7 +422,9 @@ pub(super) fn screenshot() -> Option<Spec> {
     let mut sp = Spec::new(ValueMap::new(), "")
         .icon("applets-screenshooter-symbolic")
         .does(Gesture::Tap, "screenshot", Do::Run(screenshot_action()));
-    sp.fallback_text = Some("📷".into());
+    sp.face = Face::Label {
+        fallback: Some("📷".into()),
+    };
     Some(sp)
 }
 
@@ -428,7 +432,9 @@ pub(super) fn lock() -> Option<Spec> {
     let mut sp = Spec::new(ValueMap::new(), "")
         .icon("system-lock-screen-symbolic")
         .does(Gesture::Tap, "lock", Do::Run(lock_action()));
-    sp.fallback_text = Some("🔒".into());
+    sp.face = Face::Label {
+        fallback: Some("🔒".into()),
+    };
     Some(sp)
 }
 
@@ -441,7 +447,9 @@ pub(super) fn power(key: &str) -> Option<Spec> {
     let mut sp = Spec::new(ValueMap::new(), "")
         .icon("system-shutdown-symbolic")
         .does(Gesture::Hold, "shutdown", more);
-    sp.fallback_text = Some("⏻".into());
+    sp.face = Face::Label {
+        fallback: Some("⏻".into()),
+    };
     sp.menu = power_menu(false);
     Some(sp)
 }
@@ -548,7 +556,7 @@ pub(super) fn stat_spec(m: &ModuleInstance, world: &World) -> Option<Spec> {
         "memory" | "disk" => 30,
         _ => 10,
     };
-    sp.refresh = Some(poll_every(m, default));
+    sp.redraw(world.now.wall, poll_every(m, default));
     Some(sp)
 }
 

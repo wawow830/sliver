@@ -52,13 +52,17 @@ pub(super) fn graph(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
     }
     let mut sp = Spec::new(ValueMap::new(), "");
     sp.percentage = samples.last().map(|v| f64::from(*v) * 100.0);
-    sp.graph = Some((samples, cap));
+    sp.face = Face::Graph {
+        values: samples,
+        capacity: cap,
+    };
     // Wake for the next sample (never while the bar is off: Agent::next_change).
     // `interval` is a common key, so it's parsed into `common` here.
-    sp.refresh = Some(match m.common.interval {
+    let every = match m.common.interval {
         Some(sliver_config::Interval::Every(d)) => d.max(std::time::Duration::from_millis(100)),
         _ => GRAPH_EVERY,
-    });
+    };
+    sp.redraw(world.now.wall, every);
     Some(sp)
 }
 
@@ -79,7 +83,7 @@ pub(super) fn cava(m: &ModuleInstance, world: &World) -> Option<Spec> {
         vec![0.0; n]
     };
     let mut sp = Spec::new(ValueMap::new(), "");
-    sp.bars = Some(levels);
+    sp.face = Face::Bars(levels);
     Some(sp)
 }
 
@@ -101,20 +105,24 @@ pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
         return None;
     }
     let mut sp = Spec::new(ValueMap::new(), "");
-    sp.image = Some(path);
+    sp.face = Face::Image(path);
     // A fixed `path` with an `interval` is read again then (a script rewrites the file);
     // with `exec`, the script's runs rebuild the cell.
     if !m.config.contains_key("exec")
         && let Some(sliver_config::Interval::Every(d)) = m.common.interval
     {
-        sp.refresh = Some(d);
+        sp.redraw(world.now.wall, d);
     }
     Some(sp)
 }
 
 pub(super) fn clock(at: &At) -> Option<Spec> {
-    let (clock, zones) = Clock::new(at.m, at.world.now.wall, at.ui.tz);
+    let now = at.world.now.wall;
+    let (clock, zones) = Clock::new(at.m, now, at.ui.tz);
     let mut sp = Spec::new(clock, CLOCK_DEFAULT);
+    // Redrawn exactly when what its format shows changes (each second, or minute, or day).
+    let format = at.m.common.format.as_deref().unwrap_or(CLOCK_DEFAULT);
+    sp.next_change = Some(next_clock_tick(now, format));
     if zones > 1 {
         let step = |by| Act::Ui {
             key: at.key.to_owned(),
@@ -174,7 +182,7 @@ pub(super) fn timer(at: &At) -> Option<Spec> {
     sp.status = Some(status);
     sp.checked = status == "running";
     if status == "running" {
-        sp.refresh = Some(std::time::Duration::from_secs(1));
+        sp.redraw(world.now.wall, std::time::Duration::from_secs(1));
     }
     Some(sp)
 }

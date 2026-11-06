@@ -141,7 +141,9 @@ pub(super) fn taskbar(m: &ModuleInstance, world: &World, item: Option<Part>) -> 
             Act::Desktop(Control::CloseWindow { address }),
         );
     // A window whose app has no icon: its name's first letters.
-    sp.fallback_text = Some(w.class.chars().take(2).collect());
+    sp.face = Face::Label {
+        fallback: Some(w.class.chars().take(2).collect()),
+    };
     // `format-focused` labels just the window you're in.
     sp.status = w.focused.then_some("focused");
     sp.default_icon = Some(
@@ -220,7 +222,9 @@ fn pinned(m: &ModuleInstance, world: &World, p: usize) -> Option<Spec> {
             .and_then(|e| e.icon.clone())
             .unwrap_or_else(|| id.clone()),
     );
-    sp.fallback_text = Some(name.chars().take(2).collect());
+    sp.face = Face::Label {
+        fallback: Some(name.chars().take(2).collect()),
+    };
     sp.extra_classes = vec![
         "pinned".into(),
         app_class(&id),
