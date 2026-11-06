@@ -2,7 +2,8 @@
 # Build Sliver's source RPM (default) or binary RPMs from the current tree.
 #
 #   scripts/rpm-build            # SRPM only (fast): target/rpmbuild/SRPMS/
-#   scripts/rpm-build --binary   # SRPM + RPMs (full release build, ~10+ min): target/rpmbuild/RPMS/
+#   scripts/rpm-build --binary   # SRPM + RPMs (release build, ~10+ min the first time, then
+#                                # only sliver's crates rebuild): target/rpmbuild/RPMS/
 #   scripts/rpm-build --binary --nocheck
 #   SLIVER_RPM_JOBS=N scripts/rpm-build --binary   # build jobs (default 3)
 #
@@ -53,6 +54,12 @@ rpmbuild "${common[@]}" -bs "$top/SPECS/sliver.spec"
 
 if (( binary )); then
   echo "== rpms"
+  # Local builds keep cargo's output between runs: the vendored crates unpack to the same path
+  # each time and cargo knows them by version, so they compile once. Sliver's own sources all
+  # carry the tarball's mtime 0, so cargo can't see them change: forget their fingerprints and
+  # they always rebuild. The spec installs from $CARGO_TARGET_DIR, else target/.
+  export CARGO_TARGET_DIR="$PWD/target/rpm-cache"
+  rm -rf "$CARGO_TARGET_DIR"/rpm/.fingerprint/sliver*
   rpmbuild "${common[@]}" "${rpmargs[@]}" -bb "$top/SPECS/sliver.spec"
   ls -1 "$top"/RPMS/*/*.rpm
   if command -v rpmlint >/dev/null; then rpmlint "$top"/RPMS/*/*.rpm "$top"/SRPMS/*.src.rpm || true; fi

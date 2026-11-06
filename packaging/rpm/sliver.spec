@@ -141,10 +141,12 @@ publishes them through Sliver's public D-Bus API. Load the extension from
 %cargo_vendor_manifest
 
 %install
-install -Dpm0755 target/rpm/sliverd %{buildroot}%{_libexecdir}/sliverd
-install -Dpm0755 target/rpm/sliver-agent %{buildroot}%{_bindir}/sliver-agent
-install -Dpm0755 target/rpm/sliverctl %{buildroot}%{_bindir}/sliverctl
-install -Dpm0755 target/rpm/sliver-settings %{buildroot}%{_bindir}/sliver-settings
+# scripts/rpm-build keeps cargo's output outside the build tree between local builds.
+out=${CARGO_TARGET_DIR:-target}/rpm
+install -Dpm0755 $out/sliverd %{buildroot}%{_libexecdir}/sliverd
+install -Dpm0755 $out/sliver-agent %{buildroot}%{_bindir}/sliver-agent
+install -Dpm0755 $out/sliverctl %{buildroot}%{_bindir}/sliverctl
+install -Dpm0755 $out/sliver-settings %{buildroot}%{_bindir}/sliver-settings
 # Browser integration: host, per-browser native-messaging manifests, and ready-to-load
 # extension folders (what integration/browser/install.sh builds for a checkout).
 install -Dpm0755 integration/browser/host/sliver-browser-host %{buildroot}%{_libexecdir}/sliver-browser-host

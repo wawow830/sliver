@@ -23,7 +23,9 @@ check` skips them). Man pages live in `man/` and are installed by the spec;
 
 ```
 scripts/rpm-build                    # SRPM → target/rpmbuild/SRPMS (~30 s)
-scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (full release build)
+scripts/rpm-build --binary           # + RPMs → target/rpmbuild/RPMS (release build; the vendored
+                                     # crates stay compiled in target/rpm-cache, so later builds
+                                     # only recompile sliver's own)
 ```
 `scripts/check` runs `rpmspec -P` on the spec when rpm is installed.
 
