@@ -1,6 +1,6 @@
 # ADR-0003: Public D-Bus API and sliverd⇄agent IPC
 
-Status: accepted. The full spec is in `docs/api.md`. Bus name prefix `io.github.wawow830.Sliver`.
+Status: accepted; Ownership amended by ADR-0008. The full spec is in `docs/api.md`. Bus name prefix `io.github.wawow830.Sliver`.
 
 ## Ownership
 Both API surfaces (D-Bus schema and IPC wire format) are defined in one place, the `sliver-ipc`
