@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -97,7 +98,7 @@ class Agent(unittest.TestCase):
 
 
 class Rpm(unittest.TestCase):
-    spec = (ROOT / "packaging/rpm/sliver.spec").read_text()
+    spec = (ROOT / "packaging/rpm/sliver.spec.in").read_text()
 
     def sections(self):
         """The spec's %sections, by name, as lists of lines."""
@@ -110,13 +111,6 @@ class Rpm(unittest.TestCase):
                 cur = m.group(1)
             out.setdefault(cur, []).append(line)
         return out
-
-    def test_version_is_the_workspaces(self):
-        # The source tarball is named after Cargo.toml's version; the spec unpacks %{version}.
-        cargo = (ROOT / "Cargo.toml").read_text()
-        ws = re.search(r'^\[workspace\.package\][^\[]*?^version = "([^"]+)"', cargo, re.M | re.S)
-        spec = re.search(r"^Version:\s*(\S+)", self.spec, re.M)
-        self.assertEqual(spec.group(1), ws.group(1))
 
     def test_install_has_no_file_lists(self):
         # A %files line in %install runs as a command, and breaks the build only after compiling.
@@ -136,52 +130,14 @@ class Rpm(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
-def license_terms(expr):
-    """An SPDX expression's top-level AND terms, each a set of alternatives (`/` is the old OR)."""
-    terms, depth, cur = [], 0, ""
-    for tok in re.findall(r"\(|\)|[^()]+", expr):
-        depth += tok == "("
-        depth -= tok == ")"
-        cur += tok
-        if depth == 0:
-            terms.extend(re.split(r"\s+AND\s+", cur) if "(" not in cur else [cur])
-            cur = ""
-    out = set()
-    for t in terms:
-        t = t.strip().strip("()").strip()
-        if t:
-            out.add(frozenset(a.strip() for a in re.split(r"\s+OR\s+|/", t)))
-    return out
-
-
-class Licenses(unittest.TestCase):
-    def test_spec_lists_the_bundled_crates_licenses(self):
-        # The spec's bundled_licenses is written by hand: it must still be
-        # what the shipped binaries' dependencies are under, plus the embedded assets.
+class Spec(unittest.TestCase):
+    def test_renders_every_placeholder(self):
         if not shutil.which("cargo"):
             self.skipTest("no cargo")
-        out = subprocess.run(
-            ["cargo", "tree", "-Zavoid-dev-deps", "--workspace", "--edges=no-build,no-dev,no-proc-macro",
-             "--target=all", "--prefix=none", "--format", "{p}\t{l}"],
-            cwd=ROOT, env={**os.environ, "RUSTC_BOOTSTRAP": "1"},
-            capture_output=True, text=True, check=True,
-        ).stdout
-        crates = set()
-        for line in out.splitlines():
-            pkg, _, lic = line.partition("\t")
-            if str(ROOT) in pkg:  # our own crates: sliver_license
-                continue
-            for term in license_terms(lic.removesuffix(" (*)")):
-                crates.add(term)
-        spec = (ROOT / "packaging/rpm/sliver.spec").read_text()
-        bundled = re.search(r"^%global bundled_licenses (.*)$", spec, re.M).group(1)
-        own = re.search(r"^%global sliver_license (.*)$", spec, re.M).group(1)
-        assets = {frozenset({"OFL-1.1"}), frozenset({"Apache-2.0"})}  # Noto Sans, Material icons
-        self.assertEqual(license_terms(bundled), crates | assets)
-        # And every crate of ours is under sliver_license.
-        ours = [l.partition("\t")[2] for l in out.splitlines() if str(ROOT) in l.partition("\t")[0]]
-        self.assertTrue(ours)
-        self.assertEqual({license_terms(l.removesuffix(" (*)")) == license_terms(own) for l in ours}, {True})
+        out = subprocess.run([sys.executable, str(ROOT / "packaging/rpm/spec.py")],
+                             capture_output=True, text=True, check=True).stdout
+        self.assertNotRegex(out, r"@[A-Z_]+@")
+        self.assertRegex(out, r"(?m)^%global bundled_licenses .*\bOFL-1\.1\b")
 
 
 class Browser(unittest.TestCase):

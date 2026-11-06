@@ -43,7 +43,7 @@ trap 'rm -rf "$vdir"' EXIT
 cargo vendor --locked --quiet "$vdir/vendor" >/dev/null
 tar -C "$vdir" -cJf "$top/SOURCES/$name-$version-vendor.tar.xz" vendor
 
-cp packaging/rpm/sliver.spec "$top/SPECS/"
+packaging/rpm/spec.py > "$top/SPECS/sliver.spec"
 # Cap the jobs: rpmbuild otherwise passes -j$(nproc) to cargo (%cargo_build/%cargo_test use
 # RPM_BUILD_NCPUS), which ignores the peers' cargo jobs cap and swapped this 7.3 GB machine hard.
 # Local builds only: the SRPM carries no such define, so COPR/mock builds are unaffected.

@@ -1,16 +1,14 @@
 # Sliver: the Touch Bar platform for Linux Macs. Built from a git snapshot plus a cargo vendor
 # tarball (offline, so it works in mock/COPR). Local build: scripts/rpm-build.
 
-# Sliver's own license (MIT OR Apache-2.0, like most Rust projects).
-%global sliver_license MIT OR Apache-2.0
-# Bundled crates plus embedded assets (Noto Sans: OFL-1.1, Material icons: Apache-2.0); written
-# by hand, and packaging/test_packaging.py fails when the dependencies no longer match.
-%global bundled_licenses (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR GPL-2.0-only) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND BSD-2-Clause AND BSD-3-Clause AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Apache-2.0 OR LGPL-2.1-or-later) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT) AND Unicode-3.0 AND Zlib AND (Zlib OR Apache-2.0 OR MIT) AND OFL-1.1
+# Rendered by packaging/rpm/spec.py (scripts/rpm-build does): @...@ come from Cargo.
+%global sliver_license @LICENSE@
+%global bundled_licenses @BUNDLED_LICENSES@
 
 %bcond check 1
 
 Name:           sliver
-Version:        0.1.0
+Version:        @VERSION@
 Release:        0.1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Touch Bar platform and customizer for Linux Macs
 URL:            https://github.com/wawow830/sliver
