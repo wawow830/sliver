@@ -1746,6 +1746,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "serde",
+ "sliver-agent",
  "sliver-api",
  "sliver-bus",
  "sliver-client",
@@ -1754,6 +1755,7 @@ dependencies = [
  "sliver-import",
  "sliver-ipc",
  "sliver-testbus",
+ "sliverd",
  "toml",
  "zbus",
 ]

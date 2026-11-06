@@ -179,9 +179,32 @@ thread_local! {
     static WINDOW: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
 }
 
+/// What `sliver-settings --help` prints (GTK's own options aside).
+const USAGE: &str = "\
+usage: sliver-settings [FILE.sliver]
+           Edit the bar; with a preset file, review it before applying.
+       -V | --version, -h | --help
+";
+
+/// The sidebar's pages: (id, title, icon). sliver-settings(1) describes each.
+const PAGES: &[(&str, &str, &str)] = &[
+    ("bar", "Bar", "input-keyboard-symbolic"),
+    ("rules", "Layouts & Rules", "view-list-symbolic"),
+    ("gestures", "Gestures", "input-touchpad-symbolic"),
+    ("appearance", "Appearance", "applications-graphics-symbolic"),
+    ("display", "Display & Power", "display-brightness-symbolic"),
+    ("apps", "Apps", "application-x-executable-symbolic"),
+    ("profiles", "Profiles & Presets", "folder-symbolic"),
+    ("status", "Status", "dialog-information-symbolic"),
+];
+
 fn main() -> glib::ExitCode {
-    if std::env::args().any(|a| a == "--version" || a == "-V") {
-        println!("sliver-settings {}", env!("CARGO_PKG_VERSION"));
+    for a in std::env::args().skip(1) {
+        match a.as_str() {
+            "--version" | "-V" => println!("sliver-settings {}", env!("CARGO_PKG_VERSION")),
+            "--help" | "-h" => print!("{USAGE}"),
+            _ => continue,
+        }
         return glib::ExitCode::SUCCESS;
     }
     // `sliver-settings FILE.sliver` (or opening one from a file manager) reviews that preset.
@@ -361,51 +384,20 @@ pub(crate) fn rebuild(ui: &Rc<Ui>) {
     *ui.state.borrow_mut() = state.clone();
     *ui.last_text.borrow_mut() = std::fs::read_to_string(state.edit_target().0).ok();
     watch_config(ui, &state);
-    let pages: Vec<(&str, &str, &str, gtk::Widget)> = vec![
-        ("bar", "Bar", "input-keyboard-symbolic", bar::page(ui)),
-        (
-            "rules",
-            "Layouts & Rules",
-            "view-list-symbolic",
-            rules::page(ui),
-        ),
-        (
-            "gestures",
-            "Gestures",
-            "input-touchpad-symbolic",
-            prefs::gestures_page(ui),
-        ),
-        (
-            "appearance",
-            "Appearance",
-            "applications-graphics-symbolic",
-            prefs::appearance_page(ui),
-        ),
-        (
-            "display",
-            "Display & Power",
-            "display-brightness-symbolic",
-            prefs::display_page(ui),
-        ),
-        (
-            "apps",
-            "Apps",
-            "application-x-executable-symbolic",
-            apps::page(ui),
-        ),
-        (
-            "profiles",
-            "Profiles & Presets",
-            "folder-symbolic",
-            presets::page(ui),
-        ),
-        (
-            "status",
-            "Status",
-            "dialog-information-symbolic",
-            pages::status_page(&state),
-        ),
-    ];
+    let pages = PAGES.iter().map(|&(id, title, icon)| {
+        let widget = match id {
+            "bar" => bar::page(ui),
+            "rules" => rules::page(ui),
+            "gestures" => prefs::gestures_page(ui),
+            "appearance" => prefs::appearance_page(ui),
+            "display" => prefs::display_page(ui),
+            "apps" => apps::page(ui),
+            "profiles" => presets::page(ui),
+            _ => pages::status_page(&state),
+        };
+        (id, title, icon, widget)
+    });
+    let pages: Vec<_> = pages.collect();
 
     let stack = gtk::Stack::new();
     let sidebar = gtk::ListBox::new();
@@ -710,4 +702,24 @@ fn toolbar(content: &impl IsA<gtk::Widget>, start: Option<&gtk::Button>) -> adw:
     tv.add_top_bar(&header);
     tv.set_content(Some(content));
     tv
+}
+
+#[cfg(test)]
+mod man {
+    /// sliver-settings(1) describes every page and option.
+    #[test]
+    fn the_man_page_covers_pages_and_options() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../man/sliver-settings.1");
+        let page = std::fs::read_to_string(path).unwrap();
+        let page = page.replace("\\-", "-").replace("\\&", "");
+        let flags = super::USAGE
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .filter(|w| w.starts_with('-') && w.len() > 1);
+        let titles = super::PAGES.iter().map(|(_, title, _)| *title);
+        let missing: Vec<&str> = titles.chain(flags).filter(|w| !page.contains(w)).collect();
+        assert!(
+            missing.is_empty(),
+            "missing from man/sliver-settings.1: {missing:?}"
+        );
+    }
 }

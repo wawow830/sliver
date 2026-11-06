@@ -1,25 +1,7 @@
 //! `sliverd`: the system daemon. Owns the Touch Bar panel, touch input, backlight and uinput keys,
 //! and always keeps a built-in safe layer (Esc + F-keys) available.
 //!
-//! ```text
-//! sliverd --headless OUT.png [--fn] [PANEL]
-//!     Run the core once on fake hardware and write what the panel would show.
-//! sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH] [--config PATH] [PANEL]
-//!     Serve the real IPC socket with fake hardware: develop and test the agent without a bar.
-//!     The active uid defaults to your own. --frame-png rewrites a PNG on every panel flush.
-//!     --touch-socket PATH takes injected touches/Fn/lid as text lines (sliverd::inject).
-//! PANEL: [--width 2008] [--model Mac14,7] [--max-brightness 255]
-//! --backend real|fake (= --fake-hardware), --exit-after SECONDS, -v (or SLIVER_LOG=debug): log
-//! touches, keys, Fn/lid, layer/display/hatch changes, flushes, backlight and agent traffic.
-//! Under the safe-swap harness (SLIVER_SAFESWAP=1) the socket defaults to $SLIVER_OUT_DIR/sliverd.sock
-//! and sliverd exits 2 s before SLIVER_SAFESWAP_SECONDS.
-//! sliverd [--socket PATH] [--config PATH]
-//!     Real hardware: only under the safe-swap harness (SLIVER_SAFESWAP=1) or the packaged
-//!     sliverd.service (SLIVER_SYSTEM_UNIT=1).
-//! ```
-//!
-//! The IPC socket comes from systemd socket activation
-//! (`FileDescriptorName=ipc`) or is bound at `--socket` (default `/run/sliver/sliverd.sock`).
+//! Usage: [`sliverd::USAGE`], the flags it accepts.
 
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::PathBuf;
@@ -35,6 +17,7 @@ struct Args(Vec<String>);
 
 impl Args {
     fn value(&mut self, flag: &str) -> Option<String> {
+        debug_assert!(sliverd::accepts(flag), "{flag} isn't in sliverd::USAGE");
         let i = self.0.iter().position(|a| a == flag)?;
         self.0.remove(i);
         if i < self.0.len() {
@@ -44,6 +27,7 @@ impl Args {
         }
     }
     fn flag(&mut self, flag: &str) -> bool {
+        debug_assert!(sliverd::accepts(flag), "{flag} isn't in sliverd::USAGE");
         let found = self.0.iter().any(|a| a == flag);
         self.0.retain(|a| a != flag);
         found
@@ -63,6 +47,13 @@ fn die(msg: &str) -> ! {
 
 fn main() {
     let mut args = Args(std::env::args().skip(1).collect());
+    if let Some(a) = args.0.iter().find(|a| !sliverd::accepts(a)) {
+        die(&format!("unknown argument {a:?} (try --help)"));
+    }
+    if args.flag("--help") || args.flag("-h") {
+        print!("{}", sliverd::USAGE);
+        return;
+    }
     if args.flag("--version") || args.flag("-V") {
         println!("sliverd {}", env!("CARGO_PKG_VERSION"));
         return;

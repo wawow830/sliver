@@ -24,5 +24,7 @@ serde.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
+sliver-agent.workspace = true
 sliver-api.workspace = true
+sliverd = { path = "../sliverd" }
 sliver-testbus.workspace = true

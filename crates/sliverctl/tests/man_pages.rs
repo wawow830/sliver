@@ -1,8 +1,8 @@
 //! The man pages in `man/` must cover what the code knows about, so they can't silently drift:
-//! every `sliverctl` command and option in `sliverctl help`, every module type and its keys, common module
-//! key, context key and bar gesture in `sliver-config`, and every sidebar page and option of
-//! `sliver-settings`. Also lints the pages with groff if it's
-//! installed.
+//! every `sliverctl` command and option in `sliverctl help`, every option in `sliverd`'s and
+//! `sliver-agent`'s USAGE (the flags each accepts), and every module type and key, common module
+//! key, context key and bar gesture in `sliver-config` (sliver-settings checks its own page).
+//! Also lints the pages with groff if it's installed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -116,92 +116,27 @@ fn help_commands_are_real() {
     }
 }
 
-/// Long options parsed by a binary: the `"--name"` string literals in its source file.
-fn source_flags(rel: &str, ignore: &[&str]) -> Vec<String> {
-    let src = std::fs::read_to_string(man_dir().join("..").join(rel)).unwrap();
-    let mut flags: Vec<String> = src
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .filter(|s| {
-            s.starts_with("--")
-                && s.len() > 2
-                && s[2..].chars().all(|c| c.is_ascii_lowercase() || c == '-')
-        })
-        .filter(|s| !ignore.contains(s))
-        .map(str::to_owned)
-        .collect();
-    flags.sort();
-    flags.dedup();
-    flags
-}
-
-#[test]
-fn daemon_and_agent_pages_cover_their_flags() {
-    for (page_name, src, ignore) in [
-        ("sliverd.8", "crates/sliverd/src/main.rs", &[][..]),
-        (
-            "sliver-agent.1",
-            "crates/sliver-agent/src/bin/sliver-agent/main.rs",
-            // systemd-run arguments the agent passes when launching apps, not its own options.
-            &["--user", "--scope", "--collect", "--quiet"][..],
-        ),
-    ] {
-        let flags = source_flags(src, ignore);
-        assert!(flags.len() >= 3, "flag scan of {src} broke: {flags:?}");
-        let words: Vec<&str> = flags.iter().map(String::as_str).collect();
-        assert_eq!(
-            missing(&page(page_name), &words),
-            Vec::<String>::new(),
-            "options parsed in {src} missing from man/{page_name}"
-        );
-    }
-}
-
-/// The settings app's sidebar pages: the titles in `rebuild`'s `pages` list (`(id, title, icon,
-/// widget)` tuples), read from the source so a new page can't go undocumented.
-fn settings_pages() -> Vec<String> {
-    let src =
-        std::fs::read_to_string(man_dir().join("../crates/sliver-settings/src/main.rs")).unwrap();
-    let start = src
-        .find("let pages: Vec<")
-        .expect("pages list in sliver-settings main.rs");
-    let block = &src[start..start + src[start..].find("];").expect("end of pages list")];
-    block
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .filter(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
-        .map(str::to_owned)
+/// The flags a usage text names (`--socket`, `-v`).
+fn flags(usage: &str) -> Vec<&str> {
+    usage
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|w| w.starts_with('-') && w.len() > 1)
         .collect()
 }
 
 #[test]
-fn settings_page_covers_pages_and_flags() {
-    let man = page("sliver-settings.1");
-    let pages = settings_pages();
-    assert!(
-        pages.len() >= 5,
-        "page scan of sliver-settings broke: {pages:?}"
-    );
-    let words: Vec<&str> = pages.iter().map(String::as_str).collect();
-    assert_eq!(
-        missing(&man, &words),
-        Vec::<String>::new(),
-        "settings pages missing from man/sliver-settings.1"
-    );
-    // `--user`: the systemctl argument behind the "Start the agent" button, not an app option.
-    let flags = source_flags("crates/sliver-settings/src/main.rs", &["--user"]);
-    assert!(
-        flags.iter().any(|f| f == "--version"),
-        "flag scan broke: {flags:?}"
-    );
-    let words: Vec<&str> = flags.iter().map(String::as_str).collect();
-    assert_eq!(
-        missing(&man, &words),
-        Vec::<String>::new(),
-        "options parsed by sliver-settings missing from its man page"
-    );
+fn daemon_and_agent_pages_cover_their_usage() {
+    // Each binary accepts exactly the flags its USAGE names.
+    for (page_name, usage) in [
+        ("sliverd.8", sliverd::USAGE),
+        ("sliver-agent.1", sliver_agent::USAGE),
+    ] {
+        assert_eq!(
+            missing(&page(page_name), &flags(usage)),
+            Vec::<String>::new(),
+            "options missing from man/{page_name}"
+        );
+    }
 }
 
 #[test]

@@ -17,6 +17,32 @@
 //! - `testing` (feature): `TestDaemon`, the real core in-process for agent tests.
 //! - [`router`]: which touches become keys and which go to the agent. [`hatch`]: the Fn safe hatch.
 
+/// What `sliverd --help` prints, and the flags it accepts: [`accepts`] rejects any other.
+pub const USAGE: &str = "\
+usage: sliverd --headless OUT.png [--fn] [PANEL]
+           Run the core once on fake hardware and write what the panel would show.
+       sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH] [--config PATH]
+               [--touch-socket PATH] [PANEL]
+           Serve the real IPC socket with fake hardware, to develop and test the agent without a
+           bar. The active uid defaults to yours. --frame-png rewrites a PNG on every flush;
+           --touch-socket takes injected touches, Fn and lid as text lines (sliverd::inject).
+       sliverd [--socket PATH] [--config PATH]
+           Real hardware: only under the safe-swap harness (SLIVER_SAFESWAP=1) or the packaged
+           sliverd.service (SLIVER_SYSTEM_UNIT=1).
+PANEL: [--width 2008] [--model Mac14,7] [--max-brightness 255]
+Also: --backend real|fake (fake = --fake-hardware), --exit-after SECONDS,
+      -v | --verbose (or SLIVER_LOG=debug), -V | --version, -h | --help.
+The socket comes from systemd (FileDescriptorName=ipc) or --socket (default
+/run/sliver/sliverd.sock); under the harness it defaults to $SLIVER_OUT_DIR/sliverd.sock and
+sliverd exits 2 s before SLIVER_SAFESWAP_SECONDS.
+";
+
+/// Is `arg` acceptable on the command line: a value, or a flag [`USAGE`] names?
+pub fn accepts(arg: &str) -> bool {
+    let words = USAGE.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'));
+    !arg.starts_with('-') || words.into_iter().any(|w| w == arg)
+}
+
 pub mod backend;
 pub mod builtin;
 pub mod config;

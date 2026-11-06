@@ -1,12 +1,6 @@
 //! `sliver-agent`: the per-user session agent.
 //!
-//! ```text
-//! sliver-agent                      run: connect to sliverd and drive the bar
-//! sliver-agent --render out         headless: write out-base.png and out-fn.png, no sliverd
-//!   --config FILE   use this config instead of the search path (~/.config/sliver/config.toml)
-//!   --socket PATH   sliverd's socket (default /run/sliver/sliverd.sock, or $SLIVER_SOCKET)
-//!   --size WxH      bar size for --render (default 2008x60)
-//! ```
+//! Usage: [`sliver_agent::USAGE`], the flags it accepts.
 //!
 //! The config, its includes and stylesheets hot-reload on save (inotify, no polling), on
 //! `sliverctl reload` and on SIGUSR2. A config with errors is never applied: the last good one
@@ -69,6 +63,9 @@ fn args() -> Args {
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
+        if !sliver_agent::accepts(&arg) {
+            die(&format!("unknown argument {arg:?} (try --help)"));
+        }
         let mut val = |name: &str| {
             it.next()
                 .unwrap_or_else(|| die(&format!("{name} needs a value")))
@@ -79,9 +76,7 @@ fn args() -> Args {
                 std::process::exit(0);
             }
             "--help" | "-h" => {
-                println!(
-                    "usage: sliver-agent [--render OUT] [--config FILE] [--socket PATH] [--size WxH] [--replace]"
-                );
+                print!("{}", sliver_agent::USAGE);
                 std::process::exit(0);
             }
             "--render" => a.render = Some(val("--render").into()),
