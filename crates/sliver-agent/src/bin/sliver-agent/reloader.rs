@@ -7,9 +7,7 @@ use super::*;
 /// file changes (inotify, debounced), SIGUSR2 and `Control1.ReloadConfig`. A config with errors is
 /// never applied; the last good one stays and `errors` says why.
 pub(super) struct Reloader {
-    pub(super) inner: Option<sliver_agent::reload::Reloader>,
-    pub(super) config: Config,
-    pub(super) sheet: Stylesheet,
+    inner: sliver_agent::reload::Reloader,
     /// Why the newest config on disk isn't live. Empty = it is.
     pub(super) errors: Vec<String>,
     /// SIGUSR2 arrives here (signal-hook's self-pipe).
@@ -17,40 +15,21 @@ pub(super) struct Reloader {
     /// The active profile and all profiles, read on (re)load rather than every frame. Empty with
     /// `--config FILE`.
     pub(super) profile: (String, Vec<String>),
-    /// The live config file (`None`: built-in defaults); relative icon paths start here.
-    pub(super) config_path: Option<PathBuf>,
 }
 
 impl Reloader {
+    /// What's live: the last good config and stylesheet.
+    pub(super) fn applied(&self) -> &Applied {
+        self.inner.current()
+    }
+
     /// Config text checked and loaded as if saved over the live config (`sliver_agent::reload::load_text`).
-    pub(super) fn load_text(
-        &self,
-        text: &str,
-    ) -> Result<sliver_agent::reload::Applied, Vec<String>> {
-        match &self.inner {
-            Some(r) => r.load_text(text),
-            None => sliver_agent::reload::load_text(text, self.config_path.as_deref(), None),
-        }
+    pub(super) fn load_text(&self, text: &str) -> Result<Applied, Vec<String>> {
+        self.inner.load_text(text)
     }
 
     pub(super) fn start(explicit: Option<PathBuf>) -> Reloader {
-        let (inner, applied) = match sliver_agent::reload::Reloader::start(explicit.as_deref()) {
-            Ok((r, a)) => (Some(r), a),
-            Err(e) => {
-                eprintln!(
-                    "sliver-agent: no hot reload (inotify: {e}); using the built-in defaults"
-                );
-                let config = sliver_config::load_str("", Path::new(".")).config;
-                let a = sliver_agent::reload::Applied {
-                    config,
-                    sheet: Stylesheet::sliver(),
-                    config_path: None,
-                    warnings: Vec::new(),
-                    errors: vec![format!("hot reload unavailable: {e}")],
-                };
-                (None, a)
-            }
-        };
+        let (inner, applied) = sliver_agent::reload::Reloader::start(explicit.as_deref());
         let src = applied
             .config_path
             .as_ref()
@@ -63,7 +42,7 @@ impl Reloader {
             .errors
             .iter()
             .for_each(|e| eprintln!("sliver-agent: {src}: error: {e}"));
-        if !applied.errors.is_empty() {
+        if !applied.errors.is_empty() && applied.config_path.is_some() {
             eprintln!("sliver-agent: using the built-in defaults until the config is fixed");
         }
         let usr2 = UnixStream::pair().ok().and_then(|(r, w)| {
@@ -75,12 +54,9 @@ impl Reloader {
         });
         let mut me = Reloader {
             inner,
-            config: applied.config,
-            sheet: applied.sheet,
             errors: applied.errors,
             usr2,
             profile: Default::default(),
-            config_path: applied.config_path,
         };
         me.read_profiles();
         me
@@ -99,18 +75,16 @@ impl Reloader {
 
     /// Running with `--config FILE` (no profiles).
     pub(super) fn explicit(&self) -> bool {
-        self.inner.as_ref().is_some_and(|r| r.explicit().is_some())
+        self.inner.explicit().is_some()
     }
 
     pub(super) fn watch_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
-        self.inner
-            .as_ref()
-            .map(sliver_agent::reload::Reloader::as_fd)
+        self.inner.as_fd()
     }
 
     /// How long poll may sleep before a debounced change is due.
     pub(super) fn timeout_ms(&self) -> Option<i64> {
-        let d = self.inner.as_ref()?.deadline()?;
+        let d = self.inner.deadline()?;
         Some(d.saturating_duration_since(Instant::now()).as_millis() as i64 + 1)
     }
 
@@ -122,9 +96,7 @@ impl Reloader {
         agent: &mut Agent,
         live: &mut Live,
     ) -> bool {
-        let Some(inner) = &mut self.inner else {
-            return false;
-        };
+        let inner = &mut self.inner;
         let now = Instant::now();
         if watch_ready {
             inner.on_readable(now);
@@ -152,28 +124,17 @@ impl Reloader {
             .appearance
             .accent
             .map(|[r, g, b]| sliver_render::Color::rgb(r, g, b));
-        let Some(inner) = self.inner.as_mut() else {
-            return false;
-        };
-        if !inner.set_accent(accent) {
+        if !self.inner.set_accent(accent) {
             return false;
         }
-        let outcome = inner.reload_now();
+        let outcome = self.inner.reload_now();
         self.handle(outcome, Some(agent), live)
     }
 
     /// Reloads now (`sliverctl reload`). Returns the errors (empty = the file's config is live).
     pub(super) fn reload(&mut self, agent: Option<&mut Agent>, live: &mut Live) -> Vec<String> {
-        match self
-            .inner
-            .as_mut()
-            .map(sliver_agent::reload::Reloader::reload_now)
-        {
-            Some(o) => {
-                self.handle(o, agent, live);
-            }
-            None => self.errors = vec!["hot reload unavailable (no inotify)".into()],
-        }
+        let o = self.inner.reload_now();
+        self.handle(o, agent, live);
         self.errors.clone()
     }
 
@@ -194,20 +155,10 @@ impl Reloader {
                 a.warnings
                     .iter()
                     .for_each(|w| eprintln!("sliver-agent: {src}: warning: {w}"));
-                live.restart_modules(&a.config);
-                if let Some(api) = &live.api {
-                    api.set_policy(sliver_agent::api::policy_from_config(&a.config));
-                }
+                live.follow(&a.config);
                 if let Some(agent) = agent {
-                    agent.config = a.config.clone();
-                    agent.sheet = a.sheet.clone();
-                    agent.set_config_dir(a.config_path.as_deref().and_then(Path::parent));
-                    let layers = &agent.config.layers;
-                    agent.layers.retain(|l| layers.contains_key(l));
+                    agent.apply(&a);
                 }
-                self.config = a.config;
-                self.sheet = a.sheet;
-                self.config_path = a.config_path;
                 self.errors.clear();
                 eprintln!("sliver-agent: reloaded {src}");
                 true

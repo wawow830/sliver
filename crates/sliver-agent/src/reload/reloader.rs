@@ -3,7 +3,6 @@ use sliver_config::{Config, Loaded};
 use sliver_render::Stylesheet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::io;
 use std::os::fd::BorrowedFd;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -36,7 +35,8 @@ pub struct Reloader {
     explicit: Option<PathBuf>,
     applied: Applied,
     fingerprint: u64,
-    watcher: Watcher,
+    /// `None` without inotify: no hot reload, only [`Reloader::reload_now`].
+    watcher: Option<Watcher>,
 }
 
 fn fingerprint(files: &[PathBuf]) -> u64 {
@@ -141,8 +141,9 @@ fn errors_of(l: &Loaded) -> Vec<String> {
 
 impl Reloader {
     /// Load for the first time. An invalid config falls back to the built-in defaults (the bar must
-    /// come up), with the reasons in `Applied::errors`. `explicit` is `--config FILE`.
-    pub fn start(explicit: Option<&Path>) -> io::Result<(Reloader, Applied)> {
+    /// come up), with the reasons in `Applied::errors`. `explicit` is `--config FILE`. Without
+    /// inotify there is no hot reload, and `Applied::errors` says so.
+    pub fn start(explicit: Option<&Path>) -> (Reloader, Applied) {
         let r = read(explicit);
         let mut errors = errors_of(&r.loaded);
         let mut warnings: Vec<String> = r
@@ -165,6 +166,9 @@ impl Reloader {
             }
         };
         warnings.extend(sheet_warnings);
+        let watcher = Watcher::new()
+            .inspect_err(|e| errors.push(format!("hot reload unavailable (inotify: {e})")))
+            .ok();
         let applied = Applied {
             config,
             sheet,
@@ -176,11 +180,11 @@ impl Reloader {
             accent: None,
             explicit: explicit.map(Path::to_path_buf),
             fingerprint: 0,
-            watcher: Watcher::new()?,
+            watcher,
             applied: applied.clone(),
         };
         me.rearm(&r.loaded.files);
-        Ok((me, applied))
+        (me, applied)
     }
 
     /// Watch every file that went into the result, the stylesheet's imports, and the places a
@@ -208,7 +212,7 @@ impl Reloader {
             .accent
             .map_or(0, |c| u64::from_be_bytes([0, 1, c.r, c.g, c.b, 0, 0, 0]));
         self.fingerprint = fp;
-        self.watcher.set_files(files.iter().map(PathBuf::as_path));
+        self.watch(&files);
     }
 
     /// Use the desktop's accent colour for `@accent` in the default theme. Returns whether it
@@ -233,23 +237,33 @@ impl Reloader {
         load_text(text, self.applied.config_path.as_deref(), self.accent)
     }
 
-    pub fn as_fd(&self) -> BorrowedFd<'_> {
-        self.watcher.as_fd()
+    /// Readable when a watched file changed (`None`: no inotify).
+    pub fn as_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.watcher.as_ref().map(Watcher::as_fd)
     }
 
     /// Call when [`Reloader::as_fd`] is readable.
     pub fn on_readable(&mut self, now: Instant) {
-        self.watcher.on_readable(now);
+        if let Some(w) = &mut self.watcher {
+            w.on_readable(now);
+        }
     }
 
     /// Poll timeout: when a debounced change becomes due.
     pub fn deadline(&self) -> Option<Instant> {
-        self.watcher.deadline()
+        self.watcher.as_ref()?.deadline()
     }
 
     /// Reload if a change is due.
     pub fn poll_due(&mut self, now: Instant) -> Option<Outcome> {
-        self.watcher.take_due(now).then(|| self.reload_now())
+        let due = self.watcher.as_mut()?.take_due(now);
+        due.then(|| self.reload_now())
+    }
+
+    fn watch(&mut self, files: &[PathBuf]) {
+        if let Some(w) = &mut self.watcher {
+            w.set_files(files.iter().map(PathBuf::as_path));
+        }
     }
 
     /// Reload now (`sliverctl reload`, SIGUSR2), whether or not anything changed on disk.
@@ -260,7 +274,7 @@ impl Reloader {
             // any of them triggers the next attempt.
             let mut files = r.loaded.files.clone();
             files.extend(self.watched_files());
-            self.watcher.set_files(files.iter().map(PathBuf::as_path));
+            self.watch(&files);
             return Outcome::Rejected(errors_of(&r.loaded));
         }
         let (sheet, sheet_warnings) =

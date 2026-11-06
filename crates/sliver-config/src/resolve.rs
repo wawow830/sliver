@@ -155,6 +155,26 @@ impl Config {
     /// Everything one layer shows in this context.
     pub fn resolve(&self, layer: &str, ctx: &Context) -> Result<Resolved, ResolveError> {
         let (layout, rule) = self.select_layout(layer, ctx)?;
+        self.resolve_layout(layer, layout, rule, ctx)
+    }
+
+    /// `layout` shown on `layer`, whatever the rules would pick (`sliverctl layout`).
+    pub fn resolve_as(
+        &self,
+        layer: &str,
+        layout: &str,
+        ctx: &Context,
+    ) -> Result<Resolved, ResolveError> {
+        self.resolve_layout(layer, layout, None, ctx)
+    }
+
+    fn resolve_layout(
+        &self,
+        layer: &str,
+        layout: &str,
+        rule: Option<usize>,
+        ctx: &Context,
+    ) -> Result<Resolved, ResolveError> {
         // Modules' `when` can ask which layout they're in. Rules can't: they choose it.
         let ctx = &ctx.clone().with("layout", layout);
         let zones = self

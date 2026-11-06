@@ -45,7 +45,7 @@ fn next_outcome(r: &mut Reloader, secs: u64) -> Option<Outcome> {
         }
         let until = r.deadline().map_or(end, |d| d.min(end));
         let timeout = until.saturating_duration_since(now);
-        let fd = r.as_fd();
+        let fd = r.as_fd().expect("inotify");
         let mut fds = [PollFd::new(&fd, PollFlags::IN)];
         let ts = Timespec {
             tv_sec: timeout.as_secs() as i64,
@@ -65,7 +65,7 @@ fn next_outcome(r: &mut Reloader, secs: u64) -> Option<Outcome> {
 fn quiet(r: &mut Reloader, ms: u64) -> bool {
     let end = Instant::now() + Duration::from_millis(ms);
     while Instant::now() < end {
-        let fd = r.as_fd();
+        let fd = r.as_fd().expect("inotify");
         let mut fds = [PollFd::new(&fd, PollFlags::IN)];
         let ts = Timespec {
             tv_sec: 0,
@@ -89,7 +89,7 @@ fn bar_name(r: &Reloader) -> Option<String> {
 fn atomic_saves_reload_repeatedly_and_invalid_is_rejected() {
     let d = Dir::new("main");
     d.write("config.toml", "[bar]\nname = \"one\"\n");
-    let (mut r, first) = Reloader::start(Some(&d.path("config.toml"))).unwrap();
+    let (mut r, first) = Reloader::start(Some(&d.path("config.toml")));
     assert!(first.errors.is_empty());
     assert_eq!(bar_name(&r).as_deref(), Some("one"));
 
@@ -136,7 +136,7 @@ fn atomic_saves_reload_repeatedly_and_invalid_is_rejected() {
 fn unrelated_files_and_content_free_touches_do_nothing() {
     let d = Dir::new("quiet");
     d.write("config.toml", "[bar]\nname = \"x\"\n");
-    let (mut r, _) = Reloader::start(Some(&d.path("config.toml"))).unwrap();
+    let (mut r, _) = Reloader::start(Some(&d.path("config.toml")));
     d.write("notes.txt", "hi");
     assert!(quiet(&mut r, 400), "a file nobody asked about is ignored");
     // same content saved again: the event fires but the result is Unchanged
@@ -153,7 +153,7 @@ fn includes_and_stylesheets_are_watched() {
     );
     d.write("mods.toml", "[bar]\nname = \"a\"\n");
     d.write("style.css", "module { color: red }\n");
-    let (mut r, first) = Reloader::start(Some(&d.path("config.toml"))).unwrap();
+    let (mut r, first) = Reloader::start(Some(&d.path("config.toml")));
     assert!(first.errors.is_empty(), "{:?}", first.errors);
     assert_eq!(bar_name(&r).as_deref(), Some("a"));
 
@@ -187,7 +187,7 @@ fn includes_and_stylesheets_are_watched() {
 fn a_config_created_later_is_picked_up_and_reload_now_works() {
     let d = Dir::new("late");
     let path = d.path("config.toml");
-    let (mut r, first) = Reloader::start(Some(&path)).unwrap();
+    let (mut r, first) = Reloader::start(Some(&path));
     assert!(first.config_path.is_some());
     d.write("config.toml", "[bar]\nname = \"born\"\n");
     assert!(matches!(next_outcome(&mut r, 5), Some(Outcome::Applied(_))));
@@ -200,7 +200,7 @@ fn a_config_created_later_is_picked_up_and_reload_now_works() {
 fn a_config_in_a_directory_created_later_is_picked_up() {
     // A fresh install: no ~/.config/sliver/ when the agent starts.
     let d = Dir::new("nodir");
-    let (mut r, _) = Reloader::start(Some(&d.path("sliver/config.toml"))).unwrap();
+    let (mut r, _) = Reloader::start(Some(&d.path("sliver/config.toml")));
     std::fs::create_dir(d.path("sliver")).unwrap();
     // The new directory is a change; its reload finds no config yet and watches inside it.
     assert!(next_outcome(&mut r, 5).is_some());
@@ -214,7 +214,7 @@ fn a_config_in_a_directory_created_later_is_picked_up() {
 fn invalid_config_at_start_falls_back_to_the_defaults_with_reasons() {
     let d = Dir::new("bad");
     d.write("config.toml", "version = 99\n");
-    let (r, first) = Reloader::start(Some(&d.path("config.toml"))).unwrap();
+    let (r, first) = Reloader::start(Some(&d.path("config.toml")));
     assert!(!first.errors.is_empty());
     assert!(
         r.current().config.layouts.contains_key("default"),
@@ -235,7 +235,7 @@ fn describe(o: &Option<Outcome>) -> &'static str {
 fn a_new_accent_rebuilds_the_stylesheet_and_unchanged_is_unchanged() {
     let d = Dir::new("accent");
     d.write("config.toml", "[bar]\nname = \"x\"\n");
-    let (mut r, _) = Reloader::start(Some(&d.path("config.toml"))).unwrap();
+    let (mut r, _) = Reloader::start(Some(&d.path("config.toml")));
     assert!(matches!(r.reload_now(), Outcome::Unchanged));
     let c = sliver_render::Color::rgb(200, 30, 90);
     assert!(r.set_accent(Some(c)));
@@ -271,7 +271,7 @@ fn writing_active_profile_switches_the_config() {
         "include = [\"../config.toml\"]\n[bar]\nname = \"talk\"\n",
     )
     .unwrap();
-    let (mut r, _) = Reloader::start(None).unwrap();
+    let (mut r, _) = Reloader::start(None);
     assert_eq!(bar_name(&r).as_deref(), Some("main"));
 
     sliver_config::profile::set_active("talk").unwrap();

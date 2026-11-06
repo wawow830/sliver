@@ -15,7 +15,7 @@
 use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -31,12 +31,13 @@ use sliver_agent::link::{Event, Link};
 use sliver_agent::modules::World;
 use sliver_agent::ops::{Op, start_ops};
 use sliver_agent::published::Published;
+use sliver_agent::reload::Applied;
 use sliver_api::registry::Focus;
 use sliver_api::service::{Control, ControlReply, ControlState};
 use sliver_config::Config;
 use sliver_ipc::proto::{AgentMsg, DisplayState, Layer, Role, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
-use sliver_render::{Fonts, Renderer, Stylesheet};
+use sliver_render::{Fonts, Renderer};
 use std::collections::HashMap;
 
 mod control;
@@ -106,33 +107,26 @@ fn die(msg: &str) -> ! {
     std::process::exit(2)
 }
 
-/// A separate agent that draws a config without touching the live one (its frames, transitions
-/// and touch state): `--render` and `RenderPreview`.
-fn offscreen_agent(
-    config: Config,
-    sheet: Stylesheet,
-    config_path: Option<&Path>,
-    size: (u32, u32),
-) -> Agent {
+/// An agent showing `a` on a `size` bar. Besides the live one, separate agents draw a config
+/// without touching its frames, transitions and touch state (`--render`, `RenderPreview`).
+fn new_agent(a: &Applied, size: (u32, u32)) -> Agent {
     let mut agent = Agent::new(
-        config,
-        sheet,
+        a.config.clone(),
+        a.sheet.clone(),
         Renderer::new(Fonts::system()),
         Icons::system(),
         size.0,
         size.1,
     );
-    agent.set_config_dir(config_path.and_then(Path::parent));
+    agent.apply(a);
     agent
 }
 
 fn main() {
     let a = args();
     let mut reloader = Reloader::start(a.config.clone());
-    let (config, sheet) = (reloader.config.clone(), reloader.sheet.clone());
-
     if let Some(out) = a.render {
-        let mut agent = offscreen_agent(config, sheet, reloader.config_path.as_deref(), a.size);
+        let mut agent = new_agent(reloader.applied(), a.size);
         // Give the live sources a moment to report, so the preview shows real state.
         // No API: a headless render must never take the bus name from the running agent.
         let world = match Live::start(&agent.config, None) {
@@ -180,9 +174,8 @@ fn main() {
         return;
     }
 
-    let mut live = Live::start(&reloader.config, Some(a.replace))
+    let mut live = Live::start(&reloader.applied().config, Some(a.replace))
         .unwrap_or_else(|e| die(&format!("starting feeds: {e}")));
-    drop((config, sheet));
     let mut backoff = Duration::from_millis(250);
     // Log the first failure and the recovery, not every retry (tiny-dfr may own the bar for days).
     let mut failing = false;
@@ -204,17 +197,10 @@ fn main() {
                 if std::mem::take(&mut failing) {
                     eprintln!("sliver-agent: sliverd is back");
                 }
-                let mut agent = Agent::new(
-                    reloader.config.clone(),
-                    reloader.sheet.clone(),
-                    Renderer::new(Fonts::system()),
-                    Icons::system(),
-                    link.panel.width,
-                    link.panel.height,
-                );
+                let size = (link.panel.width, link.panel.height);
+                let mut agent = new_agent(reloader.applied(), size);
                 agent.set_emoji(live.emoji.clone());
                 agent.set_reduce_motion(reduce_motion(&live));
-                agent.set_config_dir(reloader.config_path.as_deref().and_then(Path::parent));
                 eprintln!(
                     "sliver-agent: connected to sliverd ({}, {}x{}, {:?})",
                     link.panel.model, link.panel.width, link.panel.height, link.role

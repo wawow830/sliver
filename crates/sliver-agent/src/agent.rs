@@ -182,8 +182,8 @@ pub struct Agent {
     pub hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
     pub hidden_modules: std::collections::BTreeSet<String>,
-    /// `sliverctl layout NAME`: a copy of the config whose current layers show that layout.
-    layout_override: Option<(String, Config)>,
+    /// `sliverctl layout NAME`: the layer it was forced on, and the layout it shows there.
+    layout_override: Option<(String, String)>,
     /// That override is held (`Control1.HoldLayout…`, Mirror to Touch Bar): touches on it go to
     /// the holder as `HeldPressed`. `Some(true)`: select only, nothing fires.
     held: Option<bool>,
@@ -392,11 +392,11 @@ impl Agent {
         let mut out = Vec::new();
         let base = self.base_layer().to_owned();
         for (layer, name) in [(Layer::Base, base.as_str()), (Layer::Fn, "fn")] {
-            let config = self
-                .layout_override
-                .as_ref()
-                .map_or(&self.config, |(_, c)| c);
-            match config.resolve(name, &self.ctx) {
+            let resolved = match &self.layout_override {
+                Some((on, layout)) if on == name => self.config.resolve_as(name, layout, &self.ctx),
+                _ => self.config.resolve(name, &self.ctx),
+            };
+            match resolved {
                 Ok(mut r) => {
                     if self.hidden && layer == Layer::Base {
                         r.zones.iter_mut().for_each(|z| z.modules.clear());
@@ -407,8 +407,7 @@ impl Agent {
                         0
                     };
                     if layer == Layer::Base {
-                        let rule = r.rule.filter(|_| self.layout_override.is_none());
-                        self.active = Some((r.layout.clone(), rule));
+                        self.active = Some((r.layout.clone(), r.rule));
                     }
                     for key in modules::start_expanded_drawers(&r.zones) {
                         self.ui.entry(key).or_insert_with(|| UiState {

@@ -91,7 +91,7 @@ pub(super) fn control(
         Control::RenderPreview(toml, _) => match reloader.load_text(&toml) {
             Ok(a) => {
                 let size = (agent.width, agent.height);
-                let mut p = offscreen_agent(a.config, a.sheet, a.config_path.as_deref(), size);
+                let mut p = new_agent(&a, size);
                 p.render(&live.world(Now::read()));
                 p.frame(Layer::Base)
                     .ok_or_else(|| "nothing to draw".to_string())

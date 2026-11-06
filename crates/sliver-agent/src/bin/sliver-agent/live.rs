@@ -52,15 +52,9 @@ impl Live {
                 None
             }
         };
-        if let Some(api) = &api {
-            api.set_policy(sliver_agent::api::policy_from_config(config));
-        }
         let mut feeds = Feeds::new()?;
         feeds.start_desktop(|k| std::env::var(k).ok());
         feeds.start_session();
-        for e in feeds.follow(config) {
-            eprintln!("sliver-agent: {e}");
-        }
         let ops = feeds.session.clone().and_then(|h| match start_ops(h) {
             Ok(tx) => Some(tx),
             Err(e) => {
@@ -68,7 +62,7 @@ impl Live {
                 None
             }
         });
-        Ok(Live {
+        let mut live = Live {
             feeds,
             agg: Aggregate::from_env(),
             outputs: HashMap::new(),
@@ -84,7 +78,9 @@ impl Live {
             apps: std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::from_paths(
                 &sliver_icons::SearchPaths::from_env(|k| std::env::var(k).ok()),
             )),
-        })
+        };
+        live.follow(config);
+        Ok(live)
     }
 
     /// Takes in everything the feeds sent. Returns whether anything did.
@@ -206,8 +202,12 @@ impl Live {
         self.feeds.modules.as_ref()
     }
 
-    /// New user module specs after a reload. Unchanged specs keep the running modules.
-    pub(super) fn restart_modules(&mut self, config: &Config) {
+    /// Runs what `config` needs (at start and after a reload): its user modules (unchanged
+    /// specs keep the running ones), the watchers its modules use, and the API's policy.
+    pub(super) fn follow(&mut self, config: &Config) {
+        if let Some(api) = &self.api {
+            api.set_policy(sliver_agent::api::policy_from_config(config));
+        }
         for e in self.feeds.follow(config) {
             eprintln!("sliver-agent: {e}");
         }

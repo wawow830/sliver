@@ -15,6 +15,24 @@ impl Agent {
         self.icons.set_base_dir(dir);
     }
 
+    /// Shows a newly loaded config and stylesheet. Opened layers, and a forced layout, that the
+    /// config no longer has close.
+    pub fn apply(&mut self, a: &crate::reload::Applied) {
+        self.config = a.config.clone();
+        self.sheet = a.sheet.clone();
+        self.set_config_dir(a.config_path.as_deref().and_then(std::path::Path::parent));
+        let c = &self.config;
+        self.layers.retain(|l| c.layers.contains_key(l));
+        if self
+            .layout_override
+            .as_ref()
+            .is_some_and(|(_, l)| !c.layouts.contains_key(l))
+        {
+            self.layout_override = None;
+            self.held = None;
+        }
+    }
+
     /// The desktop's reduce-motion setting: transitions (and layer slides) jump to their end.
     pub fn set_reduce_motion(&mut self, on: bool) {
         self.renderer.set_reduce_motion(on);
@@ -31,11 +49,7 @@ impl Agent {
         self.config
             .layout_zones(layout)
             .map_err(|e| e.to_string())?;
-        let layer = self.base_layer().to_owned();
-        let mut c = self.config.clone();
-        c.layers.insert(layer.clone(), layout.to_owned());
-        c.rules.retain(|r| r.layer != layer);
-        self.layout_override = Some((layout.to_owned(), c));
+        self.layout_override = Some((self.base_layer().to_owned(), layout.to_owned()));
         Ok(())
     }
 
@@ -55,7 +69,7 @@ impl Agent {
         self.held.is_some()
             && region <= FN_REGION_BASE
             && self.overlay.is_none()
-            && self.layout_override.as_ref().map(|o| &o.0) == self.active.as_ref().map(|a| &a.0)
+            && self.layout_override.as_ref().map(|o| &o.1) == self.active.as_ref().map(|a| &a.0)
     }
 
     /// What a touch on `region` selects in the held layout (`HeldPressed`): the cell's key, its
@@ -65,7 +79,7 @@ impl Agent {
         if !self.on_held(region) {
             return None;
         }
-        let (name, config) = self.layout_override.as_ref()?;
+        let (_, name) = self.layout_override.as_ref()?;
         let f = self.frames[0].as_ref()?;
         let i = f.cell_index(region)?;
         let center = |j: usize| f.layout.items.get(j).map(|r| r.x + r.w / 2.0);
@@ -81,7 +95,7 @@ impl Agent {
             .collect();
         let keys: Vec<String> = in_zone.iter().map(|j| f.cells[*j].key.clone()).collect();
         let pos = in_zone.iter().position(|j| *j == i)?;
-        let zones = config.layout_zones(name).ok()?;
+        let zones = self.config.layout_zones(name).ok()?;
         let zc = zones.get(zone)?;
         let ids: Vec<String> = zc.modules.iter().map(|m| m.id().to_string()).collect();
         let index = crate::modules::module_index(&ids, &keys, pos)?;
@@ -106,7 +120,7 @@ impl Agent {
 
     /// The layout forced by [`Agent::set_layout`], if any.
     pub fn layout_override(&self) -> Option<&str> {
-        self.layout_override.as_ref().map(|(n, _)| n.as_str())
+        self.layout_override.as_ref().map(|(_, n)| n.as_str())
     }
 
     /// Runs an action that didn't come from a touch (D-Bus `Control1`, sliverctl).
