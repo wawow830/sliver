@@ -34,20 +34,8 @@ pub struct TestBus {
     dir: PathBuf,
 }
 
-const CONFIG: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
- "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-<busconfig>
-  <type>session</type>
-  <listen>unix:path=@SOCKET@</listen>
-  <auth>EXTERNAL</auth>
-  <!-- Deliberately no <servicedir>/<standard_session_servicedirs/>: nothing can be activated. -->
-  <policy context="default">
-    <allow send_destination="*" eavesdrop="true"/>
-    <allow eavesdrop="true"/>
-    <allow own="*"/>
-  </policy>
-</busconfig>
-"#;
+/// The private bus every test and script shares: no service dirs, so nothing can be activated.
+const CONFIG: &str = include_str!("../../../integration/bus.conf");
 
 fn base_dir() -> PathBuf {
     std::env::var_os("XDG_RUNTIME_DIR")
@@ -87,7 +75,14 @@ impl TestBus {
         std::fs::create_dir_all(&dir).ok()?;
         let conf = dir.join("bus.conf");
         let socket = dir.join("bus.sock");
-        std::fs::write(&conf, CONFIG.replace("@SOCKET@", &socket.to_string_lossy())).ok()?;
+        std::fs::write(
+            &conf,
+            CONFIG.replace(
+                "unix:tmpdir=/tmp",
+                &format!("unix:path={}", socket.display()),
+            ),
+        )
+        .ok()?;
         let mut cmd = Command::new("dbus-run-session");
         cmd.arg(format!("--config-file={}", conf.display()))
             .args([
