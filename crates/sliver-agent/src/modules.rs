@@ -401,47 +401,17 @@ fn cells_in(
             emoji_strip(m, &key, world, &ui(&key).emoji, out);
             continue;
         }
-        if m.id.kind == "privacy" {
-            // One cell per kind in use (screen, camera, microphone), nothing while idle.
-            for (i, (kind, _)) in world.session.capture.kinds().into_iter().enumerate() {
-                let item_key = format!("{key}/{kind}");
+        // A module showing several items (workspaces, windows, who's recording) is a cell each.
+        if let Some(list) = items(m, world) {
+            for (suffix, item) in list {
+                let item_key = format!("{key}/{suffix}");
                 let ui = ui(&item_key);
                 let at = At {
                     m,
                     key: &item_key,
                     world,
                     ui: &ui,
-                    item: Some(i),
-                };
-                out.extend(cell(at, icons, icon_size));
-            }
-            continue;
-        }
-        if m.id.kind == "workspaces" || m.id.kind == "taskbar" {
-            // Pinned apps first (launchers, or the running app's window), then the other windows.
-            let mut shown = std::collections::HashSet::new();
-            if m.id.kind == "taskbar" {
-                for (pi, pin) in pinned_ids(m).iter().enumerate() {
-                    let window = pinned_window(world, pin);
-                    shown.extend(window);
-                    out.push(pinned_cell(
-                        m, &key, world, icons, icon_size, pi, pin, window,
-                    ));
-                }
-            }
-            for i in listed(m, world).into_iter().filter(|i| !shown.contains(i)) {
-                let id = match m.id.kind.as_str() {
-                    "workspaces" => world.desktop.workspaces[i].id.to_string(),
-                    _ => world.desktop.windows[i].address.clone(),
-                };
-                let item_key = format!("{key}/{id}");
-                let ui = ui(&item_key);
-                let at = At {
-                    m,
-                    key: &item_key,
-                    world,
-                    ui: &ui,
-                    item: Some(i),
+                    item: Some(item),
                 };
                 out.extend(cell(at, icons, icon_size));
             }
@@ -620,14 +590,54 @@ fn pct(v: Option<u8>) -> Option<f64> {
     v.map(f64::from)
 }
 
+/// Which item of a module that shows several ([`items`]) a cell is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Item {
+    /// The `n`th of what the module lists (a workspace, a window, a kind of capture).
+    Nth(usize),
+    /// The taskbar's `n`th pinned app.
+    Pin(usize),
+}
+
+impl Item {
+    fn nth(self) -> Option<usize> {
+        match self {
+            Item::Nth(i) => Some(i),
+            Item::Pin(_) => None,
+        }
+    }
+}
+
+/// The items of a module that shows several, each with its key suffix; `None` for a module that
+/// is one cell.
+fn items(m: &ModuleInstance, world: &World) -> Option<Vec<(String, Item)>> {
+    Some(match m.id.kind.as_str() {
+        // One per kind in use (screen, camera, microphone), nothing while idle.
+        "privacy" => world
+            .session
+            .capture
+            .kinds()
+            .into_iter()
+            .enumerate()
+            .map(|(i, (kind, _))| (kind.to_owned(), Item::Nth(i)))
+            .collect(),
+        "workspaces" => listed(m, world)
+            .into_iter()
+            .map(|i| (world.desktop.workspaces[i].id.to_string(), Item::Nth(i)))
+            .collect(),
+        "taskbar" => desktop::taskbar_items(m, world),
+        _ => return None,
+    })
+}
+
 /// Where a module is drawn, for its spec: the module, its cell's key, the world, its state, and
-/// which item of a multi-item module (workspaces, taskbar, privacy) this cell is.
+/// which of its items this cell is.
 struct At<'a> {
     m: &'a ModuleInstance,
     key: &'a str,
     world: &'a World,
     ui: &'a UiState,
-    item: Option<usize>,
+    item: Option<Item>,
 }
 
 /// The module's spec for this world, or `None` to hide it (no data, nothing to show).
@@ -710,7 +720,7 @@ fn source(at: &At) -> Option<Spec> {
         "dark-mode" => system::dark_mode(world),
         "privacy" => system::privacy(world, item),
         "workspaces" => desktop::workspaces(world, item),
-        "taskbar" => desktop::taskbar(world, item),
+        "taskbar" => desktop::taskbar(m, world, item),
         // No data source wired yet: show nothing rather than a broken placeholder.
         _ => None,
     }

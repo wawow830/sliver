@@ -90,8 +90,8 @@ pub(super) fn mode(world: &World) -> Option<Spec> {
     Some(Spec::new(ValueMap::new().with("", esc(submap)), "{}"))
 }
 
-pub(super) fn workspaces(world: &World, item: Option<usize>) -> Option<Spec> {
-    let ws = world.desktop.workspaces.get(item?)?;
+pub(super) fn workspaces(world: &World, item: Option<Item>) -> Option<Spec> {
+    let ws = world.desktop.workspaces.get(item?.nth()?)?;
     let status = if ws.urgent {
         "urgent"
     } else if ws.active {
@@ -113,8 +113,12 @@ pub(super) fn workspaces(world: &World, item: Option<usize>) -> Option<Spec> {
     Some(sp)
 }
 
-pub(super) fn taskbar(world: &World, item: Option<usize>) -> Option<Spec> {
-    let w = world.desktop.windows.get(item?)?;
+pub(super) fn taskbar(m: &ModuleInstance, world: &World, item: Option<Item>) -> Option<Spec> {
+    let i = match item? {
+        Item::Pin(p) => return pinned(m, world, p),
+        Item::Nth(i) => i,
+    };
+    let w = world.desktop.windows.get(i)?;
     let entry = world.apps.find_by_app_id(&w.class);
     let v = ValueMap::new()
         .with("title", esc(&w.title))
@@ -195,99 +199,71 @@ pub(crate) fn app_class(id: &str) -> String {
     format!("app-{id}")
 }
 
-/// A launcher for a pinned app: tap focuses its window when it is running, else starts it
-/// (`gtk-launch`); hold closes the running window.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn pinned_cell(
-    m: &ModuleInstance,
-    key: &str,
-    world: &World,
-    icons: &mut Icons,
-    icon_size: u32,
-    index: usize,
-    id: &str,
-    window: Option<usize>,
-) -> Cell {
-    let entry = world.apps.get(id);
-    let name = entry.map_or(id, |e| e.name.as_str());
-    let win = window.map(|i| &world.desktop.windows[i]);
+/// A launcher for the module's `p`th pinned app: tap focuses its window when it is running, else
+/// starts it (`gtk-launch`); hold closes the running window. The same `format` as the window
+/// buttons (icon only by default).
+fn pinned(m: &ModuleInstance, world: &World, p: usize) -> Option<Spec> {
+    let id = pinned_ids(m).into_iter().nth(p)?;
+    let entry = world.apps.get(&id);
+    let name = entry.map_or(id.as_str(), |e| e.name.as_str());
+    let win = pinned_window(world, &id).map(|i| &world.desktop.windows[i]);
     let focused = win.is_some_and(|w| w.focused);
-    // The same `format` as the window buttons (icon only by default).
-    let esc = |s: &str| FmtValue::Text(sliver_render::markup::escape(s));
-    let values = ValueMap::new()
+    let v = ValueMap::new()
         .with("name", esc(name))
         .with("title", esc(win.map_or("", |w| w.title.as_str())))
-        .with("app_id", esc(win.map_or(id, |w| w.class.as_str())));
-    let st = State {
-        status: focused.then_some("focused"),
-        ..Default::default()
-    };
-    let icon_name = entry.and_then(|e| e.icon.as_deref()).unwrap_or(id);
-    let shown = present(
-        &m.common,
-        "",
-        &st,
-        &values,
-        Some(icon_name),
-        icons,
-        icon_size,
+        .with("app_id", esc(win.map_or(id.as_str(), |w| w.class.as_str())));
+    let mut sp = Spec::new(v, "");
+    sp.status = focused.then_some("focused");
+    sp.checked = focused;
+    sp.default_icon = Some(
+        entry
+            .and_then(|e| e.icon.clone())
+            .unwrap_or_else(|| id.clone()),
     );
-    let content = match shown {
-        Some(Shown {
-            icon: None, text, ..
-        }) if text.is_empty() => Content::text(name.chars().take(2).collect::<String>()),
-        Some(f) => Content::label(f.icon, f.text),
-        None => Content::blank(),
-    };
-    let mut classes = vec!["pinned".to_string(), app_class(id)];
-    classes.push(if win.is_some() { "running" } else { "idle" }.to_string());
-    if focused {
-        classes.push("focused".into());
-    }
-    if win.is_some_and(|w| w.urgent) {
-        classes.push("urgent".into());
-    }
-    classes.extend(m.classes.iter().cloned());
-    // Tap focuses the running app's window, else starts the app; hold closes the window.
-    let mut verbs: Verbs = vec![];
-    let mut defaults = vec![(Gesture::Tap, "focus")];
-    match win {
+    sp.fallback_text = Some(name.chars().take(2).collect());
+    sp.extra_classes = vec![
+        "pinned".into(),
+        app_class(&id),
+        if win.is_some() { "running" } else { "idle" }.into(),
+    ];
+    sp.extra_classes.extend(
+        [
+            (focused, "focused"),
+            (win.is_some_and(|w| w.urgent), "urgent"),
+        ]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, c)| c.to_owned()),
+    );
+    Some(match win {
         Some(w) => {
             let address = w.address.clone();
-            verbs.push((
-                "focus",
-                Act::Desktop(Control::FocusWindow {
-                    address: address.clone(),
-                })
-                .into(),
-            ));
-            verbs.push((
+            let focus = Control::FocusWindow {
+                address: address.clone(),
+            };
+            sp.does(Gesture::Tap, "focus", Act::Desktop(focus)).does(
+                Gesture::Hold,
                 "close",
-                Act::Desktop(Control::CloseWindow { address }).into(),
-            ));
-            defaults.push((Gesture::Hold, "close"));
+                Act::Desktop(Control::CloseWindow { address }),
+            )
         }
-        None => verbs.push(("focus", Do::Run(Action::Open(id.to_string())))),
-    }
-    let key = format!("{key}/pin{index}");
-    // The module's own bindings and `menu` apply to its launchers too.
-    let menu = button_menu(&m.common.menu, &values, "taskbar", &verbs);
-    if !menu.is_empty() {
-        verbs.push((
-            "menu",
-            Act::Menu {
-                key: key.clone(),
-                items: menu,
-            }
-            .into(),
-        ));
-    }
-    let mut cell = Cell::new(key, m.id.to_string(), "taskbar", m.css_id.clone(), content);
-    cell.classes = classes;
-    cell.touch = Touch::Agent;
-    cell.on = bindings(m, &verbs, &defaults);
-    cell.checked = focused;
-    cell
+        None => sp.does(Gesture::Tap, "focus", Do::Run(Action::Open(id))),
+    })
+}
+
+/// A taskbar's items: its pinned apps first (launchers, or the running app's window), then the
+/// other windows it lists.
+pub(super) fn taskbar_items(m: &ModuleInstance, world: &World) -> Vec<(String, Item)> {
+    let pins = pinned_ids(m);
+    let shown: Vec<usize> = pins
+        .iter()
+        .filter_map(|p| pinned_window(world, p))
+        .collect();
+    let windows = listed(m, world).into_iter().filter(|i| !shown.contains(i));
+    (0..pins.len())
+        .map(|p| (format!("pin{p}"), Item::Pin(p)))
+        .chain(windows.map(|i| (world.desktop.windows[i].address.clone(), Item::Nth(i))))
+        .collect()
 }
 
 /// Which workspaces/windows a `workspaces` / `taskbar` module shows (indexes into the lists).

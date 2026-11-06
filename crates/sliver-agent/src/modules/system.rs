@@ -389,10 +389,10 @@ pub(super) fn dark_mode(world: &World) -> Option<Spec> {
 
 /// Who is recording the microphone, the camera or the screen (PipeWire). One item per kind
 /// in use: icon only by default, the apps' names in `{app}`.
-pub(super) fn privacy(world: &World, item: Option<usize>) -> Option<Spec> {
+pub(super) fn privacy(world: &World, item: Option<Item>) -> Option<Spec> {
     let s = &world.session;
     let kinds = s.capture.kinds();
-    let (kind, apps) = *kinds.get(item?)?;
+    let (kind, apps) = *kinds.get(item?.nth()?)?;
     let names = apps.join(", ");
     let v = ValueMap::new()
         .with("kind", kind)
