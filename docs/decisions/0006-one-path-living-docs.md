@@ -20,8 +20,10 @@ also primed readers, human or agent, to build towards the document instead of fr
   `sliver-client`), or test isolation (`sliver-testbus`). Code only the agent uses lives in the
   agent. Importers of foreign configs (waybar, tiny-dfr) live together in `sliver-import`.
 - **A doc exists only if it can't silently drift.** That means one of:
-  1. a reference a test checks against the code: the man pages (module types, keys, gestures,
-     stylesheet properties, CLI options) and the D-Bus introspection XML;
+  1. a reference a test checks against the code: the D-Bus introspection XML, compared whole, and
+     the man pages, which tests hold to naming everything the code accepts (module types, keys,
+     gestures, stylesheet properties, CLI options). What a page says about each is kept true by
+     review, beside the code change that alters it;
   2. a procedure a person must follow: the README, `docs/safe-swap.md`, `docs/packaging.md`,
      `docs/api.md` for app authors;
   3. a decision record (this directory), which is dated and isn't edited after acceptance except

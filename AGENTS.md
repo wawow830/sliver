@@ -14,8 +14,8 @@ architecture decisions are in `docs/decisions/`. Write a new ADR to change one.
     Shared deps go in `[workspace.dependencies]`; crates opt into `[lints] workspace = true`.
 - `scripts/check` is the gate: fmt, clippy (`-D warnings`), tests, packaging lints. CI
   (`.github/workflows/ci.yml`) runs it on aarch64. Keep it fast and green; run it before pushing.
-- Docs (ADR-0006): a doc exists only if a test checks it against the code (the man pages in
-  `man/`, `docs/dbus/`), it's a procedure (README, `docs/user-guide.md`, `docs/safe-swap.md`,
+- Docs (ADR-0006): a doc exists only if a test checks it against the code (`docs/dbus/` whole;
+  the man pages in `man/` name everything the code accepts), it's a procedure (README, `docs/user-guide.md`, `docs/safe-swap.md`,
   `docs/packaging.md`, `docs/api.md`), or it's an ADR (`docs/decisions/`). How and why code works
   goes in its module's `//!` comment. No feature inventories, roadmaps or status tables.
   The one exception is `docs/hardware.md`: measured hardware facts that several crates cite.

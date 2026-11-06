@@ -31,9 +31,10 @@ top="$PWD/target/rpmbuild"
 mkdir -p "$top"/{SOURCES,SPECS,SRPMS,RPMS,BUILD}
 
 echo "== source tarball ($name-$version, $snapshot)"
-# Tracked + untracked-but-not-ignored files, as they are on disk (uncommitted work included).
+# Tracked + untracked-but-not-ignored files, as they are on disk (uncommitted work included), with
+# their own mtimes so a local rebuild's cargo sees what changed.
 git ls-files -co --exclude-standard | while IFS= read -r f; do [[ -e "$f" ]] && printf '%s\0' "$f"; done \
-  | tar --null -T - --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+  | tar --null -T - --sort=name --owner=0 --group=0 --numeric-owner \
         --transform "s,^,$name-$version/," -czf "$top/SOURCES/$name-$version.tar.gz"
 
 echo "== vendor tarball"
@@ -55,11 +56,9 @@ rpmbuild "${common[@]}" -bs "$top/SPECS/sliver.spec"
 if (( binary )); then
   echo "== rpms"
   # Local builds keep cargo's output between runs: the vendored crates unpack to the same path
-  # each time and cargo knows them by version, so they compile once. Sliver's own sources all
-  # carry the tarball's mtime 0, so cargo can't see them change: forget their fingerprints and
-  # they always rebuild. The spec installs from $CARGO_TARGET_DIR, else target/.
+  # each time and cargo knows them by version, so they compile once, and sliver's own sources
+  # keep their mtimes, so only what changed rebuilds. The spec installs from $CARGO_TARGET_DIR.
   export CARGO_TARGET_DIR="$PWD/target/rpm-cache"
-  rm -rf "$CARGO_TARGET_DIR"/rpm/.fingerprint/sliver*
   rpmbuild "${common[@]}" "${rpmargs[@]}" -bb "$top/SPECS/sliver.spec"
   ls -1 "$top"/RPMS/*/*.rpm
   if command -v rpmlint >/dev/null; then rpmlint "$top"/RPMS/*/*.rpm "$top"/SRPMS/*.src.rpm || true; fi

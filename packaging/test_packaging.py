@@ -111,6 +111,13 @@ class Rpm(unittest.TestCase):
             out.setdefault(cur, []).append(line)
         return out
 
+    def test_version_is_the_workspaces(self):
+        # The source tarball is named after Cargo.toml's version; the spec unpacks %{version}.
+        cargo = (ROOT / "Cargo.toml").read_text()
+        ws = re.search(r'^\[workspace\.package\][^\[]*?^version = "([^"]+)"', cargo, re.M | re.S)
+        spec = re.search(r"^Version:\s*(\S+)", self.spec, re.M)
+        self.assertEqual(spec.group(1), ws.group(1))
+
     def test_install_has_no_file_lists(self):
         # A %files line in %install runs as a command, and breaks the build only after compiling.
         bad = [l for l in self.sections().get("install", []) if re.match(r"^%\{_[a-z]+\}/", l)]

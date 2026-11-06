@@ -6,16 +6,9 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 # Nothing the checks start may outlive them (orphaned test daemons and helpers pile up on the
-# developer's machine): leftovers are listed and killed, and fail the gate, however it ends.
-gate=$$
-finish() {
-  local rc=$?
-  echo "== no orphaned processes"
-  python3 scripts/orphans.py --since "$gate" --root "$PWD" || rc=1
-  [[ $rc -eq 0 ]] && echo "check: ok"
-  exit "$rc"
-}
-trap finish EXIT
+# developer's machine): the gate runs under scripts/reap.py, which owns everything it starts and
+# stops, lists and fails on whatever is left, however the gate ends.
+[[ -n ${SLIVER_REAPED:-} ]] || exec env SLIVER_REAPED=1 python3 scripts/reap.py "$0" "$@"
 
 echo "== harness and packaging"
 python3 -m unittest discover -s harness/safeswap -p 'test_*.py' -q
@@ -61,3 +54,5 @@ fi
 for f in integration/kwin/sliver-focus/metadata.json integration/gnome-shell/*/metadata.json integration/browser/extension/*.json integration/browser/native/*.json; do
   python3 -m json.tool "$f" >/dev/null
 done
+
+echo "check: ok"
