@@ -445,6 +445,8 @@ pub struct Cell {
     pub kind: String,
     /// `audio` modules with `node = "source"`: the microphone.
     pub mic: bool,
+    /// Drawn as a slider (`slider = true`), open or collapsed.
+    pub slider: bool,
     pub css_id: String,
     pub classes: Vec<String>,
     pub width: Width,
@@ -845,6 +847,7 @@ fn emoji_strip(m: &ModuleInstance, key: &str, world: &World, ui: &EmojiUi, out: 
         id: m.id.to_string(),
         kind: "emoji".into(),
         mic: false,
+        slider: false,
         css_id: m.css_id.clone(),
         classes: classes
             .iter()
@@ -1123,6 +1126,7 @@ pub fn menu_cells(
         id: "menu".into(),
         kind: "menu".into(),
         mic: false,
+        slider: false,
         css_id: "menu".into(),
         classes: classes.iter().map(|c| c.to_string()).collect(),
         width,
@@ -1357,6 +1361,7 @@ fn pinned_cell(
         id: m.id.to_string(),
         kind: "taskbar".into(),
         mic: false,
+        slider: false,
         css_id: m.css_id.clone(),
         classes,
         width: Width::Auto,
@@ -1421,7 +1426,12 @@ struct Spec {
     /// Battery-style: lower percentages are worse.
     lower_is_worse: bool,
     default_icon: Option<String>,
-    /// Draw as a slider at this value (0..1).
+    /// A level (0..1): what a slider shows.
+    level: Option<f32>,
+    /// The agent sets `level` itself (the module action `set`). User modules set theirs through
+    /// their own `on-drag`.
+    settable: bool,
+    /// Drawn as a slider at this value (0..1); set by [`as_slider`] from `level`.
     slider: Option<f32>,
     checked: bool,
     /// Bindings used for gestures the user didn't bind (`ModuleAction`s the agent runs).
@@ -1456,6 +1466,8 @@ impl Spec {
             status: None,
             lower_is_worse: false,
             default_icon: None,
+            level: None,
+            settable: false,
             slider: None,
             checked: false,
             defaults: Vec::new(),
@@ -1503,6 +1515,49 @@ fn pct(v: Option<u8>) -> Option<f64> {
 
 /// The module's spec for this world, or `None` to hide it (no data, nothing to show).
 fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) -> Option<Spec> {
+    let sp = source(m, world, ui, item)?;
+    Some(if is_slider(m) {
+        as_slider(sp, m, ui)
+    } else {
+        sp
+    })
+}
+
+/// Does the module draw as a slider? `slider = true`, which the resolver also sets for a module
+/// written as waybar's `<type>/slider`.
+fn is_slider(m: &ModuleInstance) -> bool {
+    m.config
+        .get("slider")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// The slider presentation, for any module with a [`Spec::level`]: no text, a drag sets the level,
+/// and a tap no longer does the button's thing. A `collapsed = true` slider shows just its icon
+/// until it's tapped open (like macOS's control strip).
+fn as_slider(mut sp: Spec, m: &ModuleInstance, ui: &UiState) -> Spec {
+    let Some(level) = sp.level else {
+        return sp;
+    };
+    sp.default_format = "";
+    sp.defaults.retain(|(g, _)| *g != Gesture::Tap);
+    let collapsed = m
+        .config
+        .get("collapsed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if collapsed && !ui.expanded {
+        return sp;
+    }
+    sp.slider = Some(level);
+    if sp.settable {
+        sp = sp.on(Gesture::Drag, "set");
+    }
+    sp
+}
+
+/// What the module shows, before any presentation.
+fn source(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) -> Option<Spec> {
     match m.id.kind.as_str() {
         "custom" if world.outputs.contains_key(&m.id.to_string()) => {
             widgets::custom_output(m, world, ui)
@@ -1513,10 +1568,8 @@ fn spec(m: &ModuleInstance, world: &World, ui: &UiState, item: Option<usize>) ->
         "image" => widgets::image(m, world),
         "clock" => widgets::clock(m, world, ui),
         "battery" => system::battery(world),
-        "backlight" | "kbd-backlight" | "backlight/slider" | "kbd-backlight/slider" => {
-            system::backlight(m, world, ui)
-        }
-        "audio" | "audio/slider" => system::audio(m, world, ui),
+        "backlight" | "kbd-backlight" => system::backlight(m, world),
+        "audio" => system::audio(m, world),
         "mpris" => media::mpris(m, world, ui),
         "idle-inhibitor" => system::idle_inhibitor(world),
         "power-profiles" => system::power_profiles(world),
@@ -1675,21 +1728,6 @@ fn temperature(m: &ModuleInstance, stats: &Stats) -> Option<f64> {
         .fold(None, |a: Option<f64>, c| Some(a.map_or(c, |a| a.max(c))))
 }
 
-/// Sliders: collapsed ones show just their icon until tapped open (like macOS's control strip).
-fn slider(mut sp: Spec, m: &ModuleInstance, ui: &UiState, level: u8) -> Spec {
-    let collapsed = m
-        .config
-        .get("collapsed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if collapsed && !ui.expanded {
-        return sp;
-    }
-    sp.slider = Some(level as f32 / 100.0);
-    sp.defaults.retain(|(g, _)| *g != Gesture::Tap);
-    sp.on(Gesture::Drag, "set")
-}
-
 /// tiny-dfr's battery icon thresholds, on the built-in icon set.
 fn battery_icon(level: u8, charging: bool) -> &'static str {
     if charging {
@@ -1802,7 +1840,7 @@ fn cell(
         button_menu(&m.common.menu, sp.values.as_ref())
     };
     let on = bindings(m, sp.defaults, !menu.is_empty());
-    let collapsed_slider = m.id.kind.ends_with("/slider") && sp.slider.is_none();
+    let collapsed_slider = is_slider(m) && sp.level.is_some() && sp.slider.is_none();
     let mut touch = touch_kind(m, &on);
     if collapsed_slider {
         touch = Touch::Agent;
@@ -1812,6 +1850,7 @@ fn cell(
         id: m.id.to_string(),
         kind: m.id.kind.clone(),
         mic: m.config.get("node").and_then(|v| v.as_str()) == Some("source"),
+        slider: is_slider(m),
         css_id: m.css_id.clone(),
         classes,
         width: width(c.width),
@@ -1832,12 +1871,12 @@ fn cell(
         menu,
         slot: None,
         spectrum: spectrum(m, world),
-        drawer: (collapsed_slider
-            || m.id.kind.ends_with("/slider") && ui.expanded && is_collapsible(m))
-        .then(|| Drawer {
-            group: key,
-            collapse_after: Some(std::time::Duration::from_secs(5)),
-            bar: false,
+        drawer: (collapsed_slider || is_slider(m) && ui.expanded && is_collapsible(m)).then(|| {
+            Drawer {
+                group: key,
+                collapse_after: Some(std::time::Duration::from_secs(5)),
+                bar: false,
+            }
         }),
     })
 }
@@ -2514,7 +2553,7 @@ mod tests {
         let kinds: Vec<&str> = out
             .iter()
             .filter(|c| !c.key.starts_with("group/fkeys/"))
-            .map(|c| c.kind.as_str())
+            .map(|c| c.id.as_str())
             .collect();
         assert_eq!(
             kinds,
@@ -2522,13 +2561,47 @@ mod tests {
                 "app-controls",
                 "status-items",
                 "mpris",
-                "custom",
+                "custom/expand",
                 "backlight/slider",
                 "audio/slider",
-                "key"
+                "key/Mute"
             ],
         );
         assert!(out[0].classes.contains(&"placeholder".to_string()));
+        assert_eq!(out.iter().filter(|c| c.slider).count(), 2);
+    }
+
+    #[test]
+    fn slider_is_one_switch_for_every_module_with_a_level() {
+        let l = load_str(
+            "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"audio/slider\", \"audio#s\", \"audio#b\"]\n[modules.\"audio/slider\"]\ncollapsed = false\n[modules.\"audio#s\"]\nslider = true\n",
+            std::path::Path::new("."),
+        );
+        assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
+        let r = l.config.resolve("base", &Context::new()).unwrap();
+        let w = World::sample(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
+        let mut out = Vec::new();
+        for z in &r.zones {
+            let ui = |_: &str| UiState::default();
+            cells(
+                &z.modules,
+                &w,
+                &mut Icons::builtin_only(),
+                36,
+                &ui,
+                &mut out,
+            );
+        }
+        let drags = |c: &Cell| c.on.iter().any(|(g, _)| *g == Gesture::Drag);
+        let taps = |c: &Cell| c.on.iter().any(|(g, _)| *g == Gesture::Tap);
+        // Written as waybar's `audio/slider` or as `slider = true`: the same slider.
+        for c in &out[..2] {
+            assert!(matches!(c.content, Content::Slider { .. }), "{}", c.id);
+            assert!(c.slider && drags(c) && !taps(c), "{}", c.id);
+        }
+        // Without it, the volume is a button whose tap mutes.
+        assert!(!out[2].slider && taps(&out[2]) && !drags(&out[2]));
+        assert!(!matches!(out[2].content, Content::Slider { .. }));
     }
 
     #[test]
@@ -2911,6 +2984,7 @@ fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell 
         id: m.id.to_string(),
         kind: m.id.kind.clone(),
         mic: false,
+        slider: false,
         css_id: m.css_id.clone(),
         classes: vec!["placeholder".into(), class.into()],
         width: width(m.common.width),

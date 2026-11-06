@@ -1725,15 +1725,13 @@ impl Agent {
         let pct = value.map(|v| v.clamp(0.0, 100.0).round() as u8);
         let kind = cell.kind.as_str();
         let op = match (kind, name, pct) {
-            ("backlight" | "backlight/slider", "set", Some(p)) => SessionOp::ScreenBrightness(p),
-            ("kbd-backlight" | "kbd-backlight/slider", "set", Some(p)) => {
-                SessionOp::KeyboardBrightness(p)
-            }
-            ("audio" | "audio/slider", "set", Some(p)) => SessionOp::Volume {
+            ("backlight", "set", Some(p)) => SessionOp::ScreenBrightness(p),
+            ("kbd-backlight", "set", Some(p)) => SessionOp::KeyboardBrightness(p),
+            ("audio", "set", Some(p)) => SessionOp::Volume {
                 mic: cell.mic,
                 pct: p,
             },
-            ("audio" | "audio/slider", "toggle-mute", _) => SessionOp::ToggleMute { mic: cell.mic },
+            ("audio", "toggle-mute", _) => SessionOp::ToggleMute { mic: cell.mic },
             ("mpris", "play-pause" | "next" | "previous", _) => {
                 let cmd = match name {
                     "play-pause" => Command::PlayPause,
@@ -2028,14 +2026,12 @@ fn tool_exists(name: &str) -> bool {
         .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
 }
 
-/// What the recognizer should look for on this cell.
 /// A slider shown as just its icon until opened (`collapsed = true`).
 fn collapsed_slider(c: &Cell) -> bool {
-    c.kind.ends_with("/slider")
-        && c.drawer.is_some()
-        && !matches!(c.content, sliver_render::Content::Slider { .. })
+    c.slider && c.drawer.is_some() && !matches!(c.content, sliver_render::Content::Slider { .. })
 }
 
+/// What the recognizer should look for on this cell.
 fn bindings(c: &Cell) -> Bindings {
     if let Some(p) = &c.published {
         use sliver_api::item::Gesture as AG;

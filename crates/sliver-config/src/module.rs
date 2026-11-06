@@ -67,7 +67,6 @@ pub const MODULE_TYPES: &[&str] = &[
 fn type_alias(t: &str) -> Option<&'static str> {
     Some(match t {
         "pulseaudio" | "wireplumber" => "audio",
-        "pulseaudio/slider" => "audio/slider",
         "hyprland/workspaces"
         | "sway/workspaces"
         | "niri/workspaces"
@@ -86,11 +85,18 @@ fn type_alias(t: &str) -> Option<&'static str> {
     })
 }
 
+/// Types that waybar also names as `<type>/slider`.
+const SLIDER_KINDS: &[&str] = &["backlight", "kbd-backlight", "audio"];
+
 /// A parsed module reference: `battery#bat2`, `custom/vpn`, `key/F1#auto`, `backlight/slider`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ModuleId {
-    /// Canonical type after aliasing (`audio`, `backlight/slider`, `custom`, `key`).
+    /// Canonical type after aliasing (`audio`, `backlight`, `custom`, `key`).
     pub kind: String,
+    /// Written as waybar's `<type>/slider`. It's part of the module's identity (its config block
+    /// and CSS id), and the resolver turns it into `slider = true`, the one switch every module
+    /// with a value uses.
+    pub slider: bool,
     /// The name inside a parametric namespace (`vpn` in `custom/vpn`, `F1` in `key/F1`).
     pub name: Option<String>,
     /// The `#instance` suffix.
@@ -108,6 +114,10 @@ impl ModuleId {
         if base.is_empty() {
             return Err("empty module name".into());
         }
+        let (base, slider) = match base.strip_suffix("/slider") {
+            Some(b) if SLIDER_KINDS.contains(&type_alias(b).unwrap_or(b)) => (b, true),
+            _ => (base, false),
+        };
         let base = type_alias(base).unwrap_or(base);
         if let Some((ns, name)) = base.split_once('/') {
             let ns = type_alias(ns).unwrap_or(ns);
@@ -117,6 +127,7 @@ impl ModuleId {
                 }
                 return Ok(ModuleId {
                     kind: ns.to_owned(),
+                    slider: false,
                     name: Some(name.to_owned()),
                     instance,
                 });
@@ -124,6 +135,7 @@ impl ModuleId {
         }
         Ok(ModuleId {
             kind: base.to_owned(),
+            slider,
             name: None,
             instance,
         })
@@ -132,6 +144,9 @@ impl ModuleId {
     /// The CSS id (customization.md §7): `custom/vpn` → `custom-vpn`, `key/F1` → `key-f1`.
     pub fn css_id(&self) -> String {
         let mut s = self.kind.replace('/', "-");
+        if self.slider {
+            s.push_str("-slider");
+        }
         if let Some(n) = &self.name {
             s.push('-');
             s.push_str(n);
@@ -154,6 +169,9 @@ impl ModuleId {
 impl fmt::Display for ModuleId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.kind)?;
+        if self.slider {
+            f.write_str("/slider")?;
+        }
         if let Some(n) = &self.name {
             write!(f, "/{n}")?;
         }
@@ -611,17 +629,20 @@ mod tests {
             (id.kind.as_str(), id.name, id.instance.as_deref()),
             ("battery", None, Some("bat2"))
         );
-        assert_eq!(
-            ModuleId::parse("backlight/slider").unwrap().kind,
-            "backlight/slider"
-        );
+        let id = ModuleId::parse("backlight/slider#locked").unwrap();
+        assert_eq!((id.kind.as_str(), id.slider), ("backlight", true));
+        assert_eq!(id.to_string(), "backlight/slider#locked");
+        assert_eq!(id.css_id(), "backlight-slider");
         assert_eq!(
             ModuleId::parse("hyprland/workspaces").unwrap().kind,
             "workspaces"
         );
+        let id = ModuleId::parse("pulseaudio/slider").unwrap();
+        assert_eq!((id.kind.as_str(), id.slider), ("audio", true));
+        // Only types with a settable level have a slider form.
         assert_eq!(
-            ModuleId::parse("pulseaudio/slider").unwrap().kind,
-            "audio/slider"
+            ModuleId::parse("battery/slider").unwrap().kind,
+            "battery/slider"
         );
         assert_eq!(
             ModuleId::parse("key/F1").unwrap().key().map(Key::code),

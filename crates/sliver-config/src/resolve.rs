@@ -200,7 +200,10 @@ impl Config {
         }
         let block = self.module_block(m);
         // Diagnostics are reported by `validate`; resolving is best-effort.
-        let (mut common, config) = Common::parse(&block, "", &mut Diagnostics::default());
+        let (mut common, mut config) = Common::parse(&block, "", &mut Diagnostics::default());
+        if id.slider {
+            config.entry("slider").or_insert(Value::Boolean(true));
+        }
         if common.when.as_ref().is_some_and(|w| !w.eval(ctx)) {
             return None;
         }

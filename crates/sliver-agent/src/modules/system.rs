@@ -27,7 +27,7 @@ pub(super) fn battery(world: &World) -> Option<Spec> {
     Some(sp)
 }
 
-pub(super) fn backlight(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+pub(super) fn backlight(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let s = &world.session;
     let kind = m.id.kind.as_str();
     let kbd = kind.starts_with("kbd");
@@ -41,25 +41,15 @@ pub(super) fn backlight(m: &ModuleInstance, world: &World, ui: &UiState) -> Opti
     } else {
         "display-brightness-symbolic"
     };
-    let mut sp = Spec::new(
-        ValueMap::new().with("percent", level as f64),
-        if kind.ends_with("/slider") {
-            ""
-        } else {
-            "{percent}%"
-        },
-    )
-    .icon(icon);
+    let mut sp = Spec::new(ValueMap::new().with("percent", level as f64), "{percent}%").icon(icon);
     sp.percentage = pct(Some(level));
-    if kind.ends_with("/slider") {
-        sp = slider(sp, m, ui, level);
-    }
+    sp.level = Some(f32::from(level.min(100)) / 100.0);
+    sp.settable = true;
     Some(sp)
 }
 
-pub(super) fn audio(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+pub(super) fn audio(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let s = &world.session;
-    let kind = m.id.kind.as_str();
     let a = &s.audio;
     let mic = m.config.get("node").and_then(|v| v.as_str()) == Some("source");
     let (vol, muted) = if mic {
@@ -75,23 +65,12 @@ pub(super) fn audio(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
         (false, false, 34..=66) => "audio-volume-medium-symbolic",
         _ => "audio-volume-high-symbolic",
     };
-    let mut sp = Spec::new(
-        ValueMap::new().with("volume", vol as f64),
-        if kind.ends_with("/slider") {
-            ""
-        } else {
-            "{volume}%"
-        },
-    )
-    .icon(icon);
+    let mut sp = Spec::new(ValueMap::new().with("volume", vol as f64), "{volume}%").icon(icon);
     sp.percentage = pct(Some(vol));
+    sp.level = Some(f32::from(vol.min(100)) / 100.0);
+    sp.settable = true;
     sp.status = muted.then_some("muted");
-    sp = sp.on(Gesture::Tap, "toggle-mute");
-    if kind == "audio/slider" {
-        sp.defaults.clear();
-        sp = slider(sp, m, ui, vol.min(100));
-    }
-    Some(sp)
+    Some(sp.on(Gesture::Tap, "toggle-mute"))
 }
 
 pub(super) fn idle_inhibitor(world: &World) -> Option<Spec> {

@@ -174,6 +174,7 @@ pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
         id: format!("app/{}#close", ctx.provider),
         kind: "app".into(),
         mic: false,
+        slider: false,
         css_id: "modal-close".into(),
         classes: vec!["app".into(), "modal-close".into()],
         width: Width::Auto,
@@ -376,6 +377,7 @@ fn push(
         id: format!("app/{}#{id}", ctx.provider),
         kind: class.into(),
         mic: false,
+        slider: false,
         css_id: format!(
             "{class}-{}",
             ctx.provider.replace(['.', '/'], "-").to_ascii_lowercase()

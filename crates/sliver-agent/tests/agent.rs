@@ -501,10 +501,13 @@ fn locked_screen_shows_nothing_private() {
         .unwrap()
         .cells
         .iter()
-        .map(|c| c.kind.clone())
+        .map(|c| c.id.clone())
         .collect();
     for gone in ["custom", "window", "taskbar"] {
-        assert!(!kinds.iter().any(|k| k == gone), "{gone}: {kinds:?}");
+        assert!(
+            !kinds.iter().any(|k| k.starts_with(gone)),
+            "{gone}: {kinds:?}"
+        );
     }
     for kept in ["clock", "backlight/slider", "audio/slider"] {
         assert!(kinds.iter().any(|k| k == kept), "{kept}: {kinds:?}");
@@ -590,11 +593,7 @@ fn session_modules() {
 
     // Dragging the open volume slider sets the volume along its trough.
     let f = a.frame(Layer::Base).unwrap();
-    let i = f
-        .cells
-        .iter()
-        .position(|c| c.kind == "audio/slider")
-        .unwrap();
+    let i = f.cells.iter().position(|c| c.id == "audio/slider").unwrap();
     let t = f.layout.tracks[i].expect("slider track");
     fake.touch(2, TouchPhase::Down, t.x + t.w * 0.75, 30.0)
         .unwrap();

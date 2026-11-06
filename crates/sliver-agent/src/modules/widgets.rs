@@ -12,14 +12,7 @@ pub(super) fn custom_output(m: &ModuleInstance, world: &World, ui: &UiState) -> 
     let mut sp = Spec::new(ValueMap::new().with("", FmtValue::Text(v.text)), "{}");
     sp.extra_classes = v.classes;
     sp.default_icon = v.icon;
-    let slider = m
-        .config
-        .get("slider")
-        .and_then(|x| x.as_bool())
-        .unwrap_or(false);
-    if slider && let Some(value) = v.value {
-        sp.slider = Some((value / 100.0).clamp(0.0, 1.0) as f32);
-    }
+    sp.level = v.value.map(|value| (value / 100.0).clamp(0.0, 1.0) as f32);
     sp.raw = true;
     Some(sp)
 }
