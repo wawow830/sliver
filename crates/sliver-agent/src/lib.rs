@@ -31,24 +31,36 @@
 //!   `catch_unwind`, so a panicking module leaves that layer's last good frame up. Fixed-seed
 //!   random inputs in `tests/robustness.rs` check that nothing panics.
 
-/// What `sliver-agent --help` prints, and the flags it accepts: [`accepts`] rejects any other.
-pub const USAGE: &str = "\
-usage: sliver-agent [--config FILE] [--socket PATH] [--replace]
-           Connect to sliverd and drive the bar. --replace takes the D-Bus name from a running
-           agent, which gets it back when this one exits.
-       sliver-agent --render OUT [--config FILE] [--size WxH]
-           Headless: write OUT-base.png and OUT-fn.png, without sliverd.
-  --config FILE   this config instead of the search path (~/.config/sliver/config.toml)
-  --socket PATH   sliverd's socket (default /run/sliver/sliverd.sock, or $SLIVER_SOCKET)
-  --size WxH      the bar's size for --render (default 2008x60)
-  -V | --version, -h | --help
-";
-
-/// Is `arg` acceptable on the command line: a value, or a flag [`USAGE`] names?
-pub fn accepts(arg: &str) -> bool {
-    let words = USAGE.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'));
-    !arg.starts_with('-') || words.into_iter().any(|w| w == arg)
-}
+/// sliver-agent's command line (`sliver-agent --help`).
+pub const CLI: sliver_cli::Cli = sliver_cli::Cli {
+    name: "sliver-agent",
+    version: env!("CARGO_PKG_VERSION"),
+    synopsis: "\
+sliver-agent [--config FILE] [--socket PATH] [--replace]
+sliver-agent --render OUT [--config FILE] [--size WxH]",
+    options: &[
+        (
+            "--config FILE",
+            "this config, not the search path (~/.config/sliver/config.toml)",
+        ),
+        (
+            "--socket PATH",
+            "sliverd's socket (default /run/sliver/sliverd.sock, or $SLIVER_SOCKET)",
+        ),
+        (
+            "--replace",
+            "take the D-Bus name from a running agent (it's handed back on exit)",
+        ),
+        (
+            "--render OUT",
+            "headless, without sliverd: write OUT-base.png and OUT-fn.png",
+        ),
+        (
+            "--size WxH",
+            "the bar's size for --render (default 2008x60)",
+        ),
+    ],
+};
 
 pub mod act;
 pub mod agent;

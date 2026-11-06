@@ -17,31 +17,61 @@
 //! - `testing` (feature): `TestDaemon`, the real core in-process for agent tests.
 //! - [`router`]: which touches become keys and which go to the agent. [`hatch`]: the Fn safe hatch.
 
-/// What `sliverd --help` prints, and the flags it accepts: [`accepts`] rejects any other.
-pub const USAGE: &str = "\
-usage: sliverd --headless OUT.png [--fn] [PANEL]
-           Run the core once on fake hardware and write what the panel would show.
-       sliverd --fake-hardware [--socket PATH] [--uid N] [--frame-png PATH] [--config PATH]
-               [--touch-socket PATH] [PANEL]
-           Serve the real IPC socket with fake hardware, to develop and test the agent without a
-           bar. The active uid defaults to yours. --frame-png rewrites a PNG on every flush;
-           --touch-socket takes injected touches, Fn and lid as text lines (sliverd::inject).
-       sliverd [--socket PATH] [--config PATH]
-           Real hardware: only under the safe-swap harness (SLIVER_SAFESWAP=1) or the packaged
-           sliverd.service (SLIVER_SYSTEM_UNIT=1).
-PANEL: [--width 2008] [--model Mac14,7] [--max-brightness 255]
-Also: --backend real|fake (fake = --fake-hardware), --exit-after SECONDS,
-      -v | --verbose (or SLIVER_LOG=debug), -V | --version, -h | --help.
-The socket comes from systemd (FileDescriptorName=ipc) or --socket (default
-/run/sliver/sliverd.sock); under the harness it defaults to $SLIVER_OUT_DIR/sliverd.sock and
-sliverd exits 2 s before SLIVER_SAFESWAP_SECONDS.
-";
-
-/// Is `arg` acceptable on the command line: a value, or a flag [`USAGE`] names?
-pub fn accepts(arg: &str) -> bool {
-    let words = USAGE.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'));
-    !arg.starts_with('-') || words.into_iter().any(|w| w == arg)
-}
+/// sliverd's command line (`sliverd --help`).
+pub const CLI: sliver_cli::Cli = sliver_cli::Cli {
+    name: "sliverd",
+    version: env!("CARGO_PKG_VERSION"),
+    synopsis: "\
+sliverd [--socket PATH] [--config PATH]    (as sliverd.service, or under the safe-swap harness)
+sliverd --fake-hardware [OPTION...]
+sliverd --headless OUT.png [--fn] [OPTION...]",
+    options: &[
+        (
+            "--socket PATH",
+            "the IPC socket if systemd passes none (default /run/sliver/sliverd.sock)",
+        ),
+        (
+            "--config PATH",
+            "sliverd's own config (default /etc/sliver/sliverd.toml)",
+        ),
+        (
+            "--fake-hardware",
+            "fake panel, touch and keys: run the agent without a bar",
+        ),
+        (
+            "--backend real|fake",
+            "the same, spelled out (fake is --fake-hardware)",
+        ),
+        (
+            "--uid N",
+            "the active session's uid on fake hardware (default yours)",
+        ),
+        (
+            "--frame-png PATH",
+            "rewrite this PNG on every panel flush (fake hardware)",
+        ),
+        (
+            "--touch-socket PATH",
+            "take touches, Fn and lid as text lines (fake hardware)",
+        ),
+        (
+            "--headless OUT.png",
+            "write what the panel shows, once, and exit",
+        ),
+        ("--fn", "with --headless: Fn held"),
+        ("--width N", "the fake panel's width (default 2008)"),
+        ("--model ID", "the fake panel's model (default Mac14,7)"),
+        (
+            "--max-brightness N",
+            "the fake panel's top brightness (default 255)",
+        ),
+        ("--exit-after SECONDS", "exit on its own after this long"),
+        (
+            "-v, --verbose",
+            "log input, keys, state changes and agent traffic (or SLIVER_LOG=debug)",
+        ),
+    ],
+};
 
 pub mod backend;
 pub mod builtin;

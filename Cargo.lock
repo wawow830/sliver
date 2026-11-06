@@ -1573,6 +1573,7 @@ dependencies = [
  "signal-hook",
  "sliver-api",
  "sliver-bus",
+ "sliver-cli",
  "sliver-config",
  "sliver-desktop",
  "sliver-emoji",
@@ -1610,6 +1611,10 @@ dependencies = [
  "sliver-testbus",
  "zbus",
 ]
+
+[[package]]
+name = "sliver-cli"
+version = "0.1.0"
 
 [[package]]
 name = "sliver-client"
@@ -1723,6 +1728,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "sliver-agent",
+ "sliver-cli",
  "sliver-config",
  "sliver-emoji",
  "sliver-icons",
@@ -1766,6 +1772,7 @@ version = "0.1.0"
 dependencies = [
  "rustix",
  "serde",
+ "sliver-cli",
  "sliver-hw",
  "sliver-ipc",
  "sliver-render",

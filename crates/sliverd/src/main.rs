@@ -1,7 +1,7 @@
 //! `sliverd`: the system daemon. Owns the Touch Bar panel, touch input, backlight and uinput keys,
 //! and always keeps a built-in safe layer (Esc + F-keys) available.
 //!
-//! Usage: [`sliverd::USAGE`], the flags it accepts.
+//! Its command line is [`sliverd::CLI`].
 
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::path::PathBuf;
@@ -13,51 +13,13 @@ use sliverd::fake::FakeHardware;
 use sliverd::session::{FixedSession, LOGIND_SEATS, SeatWatch};
 use sliverd::{Config, Daemon, Input, config, server::Server};
 
-struct Args(Vec<String>);
-
-impl Args {
-    fn value(&mut self, flag: &str) -> Option<String> {
-        debug_assert!(sliverd::accepts(flag), "{flag} isn't in sliverd::USAGE");
-        let i = self.0.iter().position(|a| a == flag)?;
-        self.0.remove(i);
-        if i < self.0.len() {
-            Some(self.0.remove(i))
-        } else {
-            die(&format!("{flag} needs a value"))
-        }
-    }
-    fn flag(&mut self, flag: &str) -> bool {
-        debug_assert!(sliverd::accepts(flag), "{flag} isn't in sliverd::USAGE");
-        let found = self.0.iter().any(|a| a == flag);
-        self.0.retain(|a| a != flag);
-        found
-    }
-    fn parse<T: std::str::FromStr>(&mut self, flag: &str, default: T) -> T {
-        self.value(flag).map_or(default, |v| {
-            v.parse()
-                .unwrap_or_else(|_| die(&format!("bad value for {flag}: {v}")))
-        })
-    }
-}
-
 fn die(msg: &str) -> ! {
     eprintln!("sliverd: {msg}");
     std::process::exit(2);
 }
 
 fn main() {
-    let mut args = Args(std::env::args().skip(1).collect());
-    if let Some(a) = args.0.iter().find(|a| !sliverd::accepts(a)) {
-        die(&format!("unknown argument {a:?} (try --help)"));
-    }
-    if args.flag("--help") || args.flag("-h") {
-        print!("{}", sliverd::USAGE);
-        return;
-    }
-    if args.flag("--version") || args.flag("-V") {
-        println!("sliverd {}", env!("CARGO_PKG_VERSION"));
-        return;
-    }
+    let mut args = sliverd::CLI.args(std::env::args().skip(1));
     if args.flag("-v") || args.flag("--verbose") || sliverd::log::from_env() {
         sliverd::log::enable();
     }
@@ -120,8 +82,8 @@ fn main() {
     if touch_socket.is_some() && !fake {
         die("--touch-socket needs --fake-hardware (real hardware has a real digitizer)");
     }
-    if !args.0.is_empty() {
-        die(&format!("unknown arguments: {:?}", args.0));
+    if let Some(a) = args.finish().first() {
+        die(&format!("unexpected argument {a:?} (try --help)"));
     }
 
     let listener = match (sliver_hw::listen_fd("ipc"), socket) {

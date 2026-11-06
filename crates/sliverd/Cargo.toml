@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+sliver-cli.workspace = true
 sliver-hw.workspace = true
 sliver-ipc.workspace = true
 sliver-render.workspace = true

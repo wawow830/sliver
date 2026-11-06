@@ -179,12 +179,13 @@ thread_local! {
     static WINDOW: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
 }
 
-/// What `sliver-settings --help` prints (GTK's own options aside).
-const USAGE: &str = "\
-usage: sliver-settings [FILE.sliver]
-           Edit the bar; with a preset file, review it before applying.
-       -V | --version, -h | --help
-";
+/// sliver-settings' command line (`sliver-settings --help`).
+const CLI: sliver_cli::Cli = sliver_cli::Cli {
+    name: "sliver-settings",
+    version: env!("CARGO_PKG_VERSION"),
+    synopsis: "sliver-settings [PRESET.sliver...]    (a preset is reviewed before it's applied)",
+    options: &[],
+};
 
 /// The sidebar's pages: (id, title, icon). sliver-settings(1) describes each.
 const PAGES: &[(&str, &str, &str)] = &[
@@ -199,14 +200,8 @@ const PAGES: &[(&str, &str, &str)] = &[
 ];
 
 fn main() -> glib::ExitCode {
-    for a in std::env::args().skip(1) {
-        match a.as_str() {
-            "--version" | "-V" => println!("sliver-settings {}", env!("CARGO_PKG_VERSION")),
-            "--help" | "-h" => print!("{USAGE}"),
-            _ => continue,
-        }
-        return glib::ExitCode::SUCCESS;
-    }
+    // `--help`, `--version` and unknown options end here; the presets go on to GTK's `open`.
+    CLI.args(std::env::args().skip(1)).finish();
     // `sliver-settings FILE.sliver` (or opening one from a file manager) reviews that preset.
     let app = adw::Application::builder()
         .application_id(APP_ID)
@@ -712,9 +707,7 @@ mod man {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../man/sliver-settings.1");
         let page = std::fs::read_to_string(path).unwrap();
         let page = page.replace("\\-", "-").replace("\\&", "");
-        let flags = super::USAGE
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-            .filter(|w| w.starts_with('-') && w.len() > 1);
+        let flags = super::CLI.flags();
         let titles = super::PAGES.iter().map(|(_, title, _)| *title);
         let missing: Vec<&str> = titles.chain(flags).filter(|w| !page.contains(w)).collect();
         assert!(

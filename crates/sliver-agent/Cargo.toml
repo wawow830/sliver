@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+sliver-cli.workspace = true
 sliver-bus.workspace = true
 sliver-api.workspace = true
 sliver-config.workspace = true

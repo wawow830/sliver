@@ -1,6 +1,6 @@
 //! The man pages in `man/` must cover what the code knows about, so they can't silently drift:
-//! every `sliverctl` command and option in `sliverctl help`, every option in `sliverd`'s and
-//! `sliver-agent`'s USAGE (the flags each accepts), and every module type and key, common module
+//! every `sliverctl` command and option in `sliverctl help`, every option of `sliverd` and
+//! `sliver-agent` (their `sliver_cli::Cli`), and every module type and key, common module
 //! key, context key and bar gesture in `sliver-config` (sliver-settings checks its own page).
 //! Also lints the pages with groff if it's installed.
 
@@ -116,23 +116,15 @@ fn help_commands_are_real() {
     }
 }
 
-/// The flags a usage text names (`--socket`, `-v`).
-fn flags(usage: &str) -> Vec<&str> {
-    usage
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-        .filter(|w| w.starts_with('-') && w.len() > 1)
-        .collect()
-}
-
 #[test]
-fn daemon_and_agent_pages_cover_their_usage() {
-    // Each binary accepts exactly the flags its USAGE names.
-    for (page_name, usage) in [
-        ("sliverd.8", sliverd::USAGE),
-        ("sliver-agent.1", sliver_agent::USAGE),
+fn daemon_and_agent_pages_cover_their_options() {
+    for (page_name, cli) in [
+        ("sliverd.8", sliverd::CLI),
+        ("sliver-agent.1", sliver_agent::CLI),
     ] {
+        let flags: Vec<&str> = cli.flags().collect();
         assert_eq!(
-            missing(&page(page_name), &flags(usage)),
+            missing(&page(page_name), &flags),
             Vec::<String>::new(),
             "options missing from man/{page_name}"
         );

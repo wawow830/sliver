@@ -1,6 +1,6 @@
 //! `sliver-agent`: the per-user session agent.
 //!
-//! Usage: [`sliver_agent::USAGE`], the flags it accepts.
+//! Its command line is [`sliver_agent::CLI`].
 //!
 //! The config, its includes and stylesheets hot-reload on save (inotify, no polling), on
 //! `sliverctl reload` and on SIGUSR2. A config with errors is never applied: the last good one
@@ -54,45 +54,25 @@ struct Args {
 }
 
 fn args() -> Args {
-    let mut a = Args {
-        render: None,
-        config: None,
-        socket: std::env::var_os("SLIVER_SOCKET").map_or_else(|| SOCKET_PATH.into(), PathBuf::from),
-        size: (2008, 60),
-        replace: false,
+    let mut args = sliver_agent::CLI.args(std::env::args().skip(1));
+    let size = args.value("--size").map_or((2008, 60), |v| {
+        let wh = v
+            .split_once('x')
+            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+        wh.unwrap_or_else(|| args.die("--size is WxH, say 2008x60"))
+    });
+    let a = Args {
+        render: args.value("--render").map(PathBuf::from),
+        config: args.value("--config").map(PathBuf::from),
+        socket: args
+            .value("--socket")
+            .or_else(|| std::env::var("SLIVER_SOCKET").ok())
+            .map_or_else(|| SOCKET_PATH.into(), PathBuf::from),
+        size,
+        replace: args.flag("--replace"),
     };
-    let mut it = std::env::args().skip(1);
-    while let Some(arg) = it.next() {
-        if !sliver_agent::accepts(&arg) {
-            die(&format!("unknown argument {arg:?} (try --help)"));
-        }
-        let mut val = |name: &str| {
-            it.next()
-                .unwrap_or_else(|| die(&format!("{name} needs a value")))
-        };
-        match arg.as_str() {
-            "--version" | "-V" => {
-                println!("sliver-agent {}", env!("CARGO_PKG_VERSION"));
-                std::process::exit(0);
-            }
-            "--help" | "-h" => {
-                print!("{}", sliver_agent::USAGE);
-                std::process::exit(0);
-            }
-            "--render" => a.render = Some(val("--render").into()),
-            "--config" => a.config = Some(val("--config").into()),
-            "--socket" => a.socket = val("--socket").into(),
-            "--replace" => a.replace = true,
-            "--size" => {
-                let v = val("--size");
-                let (w, h) = v.split_once('x').unwrap_or_else(|| die("--size WxH"));
-                a.size = (
-                    w.parse().unwrap_or_else(|_| die("--size WxH")),
-                    h.parse().unwrap_or_else(|_| die("--size WxH")),
-                );
-            }
-            other => die(&format!("unknown argument {other:?} (try --help)")),
-        }
+    if let Some(x) = args.finish().first() {
+        die(&format!("unexpected argument {x:?} (try --help)"));
     }
     a
 }
