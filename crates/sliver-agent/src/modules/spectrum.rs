@@ -168,7 +168,14 @@ pub fn graph_sample(
                 common: sliver_config::Common::default(),
                 children: Vec::new(),
             };
-            spec(&inst, world, &UiState::default(), None)?.percentage?
+            let at = At {
+                m: &inst,
+                key: "",
+                world,
+                ui: &UiState::default(),
+                item: None,
+            };
+            spec(&at)?.percentage?
         }
     };
     let num = |k: &str, d: f64| {

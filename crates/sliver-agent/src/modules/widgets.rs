@@ -100,13 +100,19 @@ pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
     Some(sp)
 }
 
-pub(super) fn clock(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
-    let (clock, zones) = Clock::new(m, world.now, ui.tz);
+pub(super) fn clock(at: &At) -> Option<Spec> {
+    let (clock, zones) = Clock::new(at.m, at.world.now, at.ui.tz);
     let mut sp = Spec::new(clock, CLOCK_DEFAULT);
     if zones > 1 {
-        sp = sp
-            .on(Gesture::SwipeLeft, "tz-next")
-            .on(Gesture::SwipeRight, "tz-prev");
+        let step = |by| Act::Ui {
+            key: at.key.to_owned(),
+            change: UiChange::Zone(by),
+        };
+        sp = sp.does(Gesture::SwipeLeft, "tz-next", step(1)).does(
+            Gesture::SwipeRight,
+            "tz-prev",
+            step(-1),
+        );
     }
     Some(sp)
 }
@@ -118,18 +124,15 @@ pub(super) fn emoji(m: &ModuleInstance) -> Option<Spec> {
         .get("layer")
         .and_then(|v| v.as_str())
         .unwrap_or("emoji");
-    let mut sp = Spec::new(ValueMap::new(), "😀");
-    sp.defaults.push((
-        Gesture::Tap,
-        Action::Layer {
-            name: layer.into(),
-            mode: sliver_config::LayerMode::Toggle,
-        },
-    ));
-    Some(sp)
+    let open = Action::Layer {
+        name: layer.into(),
+        mode: sliver_config::LayerMode::Toggle,
+    };
+    Some(Spec::new(ValueMap::new(), "😀").does(Gesture::Tap, "open", Do::Run(open)))
 }
 
-pub(super) fn timer(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+pub(super) fn timer(at: &At) -> Option<Spec> {
+    let (m, world, ui) = (at.m, at.world, at.ui);
     let total = m
         .config
         .get("duration")
@@ -148,13 +151,16 @@ pub(super) fn timer(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
         .with("minutes", (left.as_secs() / 60) as i64)
         .with("seconds", (left.as_secs() % 60) as i64)
         .with("", clock_text(left));
+    let change = |change| Act::Ui {
+        key: at.key.to_owned(),
+        change,
+    };
     let mut sp = Spec::new(v, "{remaining}")
-        .on(Gesture::Tap, "toggle")
-        .on(Gesture::Hold, "reset");
+        .does(Gesture::Tap, "toggle", change(UiChange::Timer { total }))
+        .does(Gesture::Hold, "reset", change(UiChange::TimerReset));
     sp.percentage = Some(pct.clamp(0.0, 100.0));
     sp.status = Some(status);
     sp.checked = status == "running";
-    sp.timer_total = Some(total);
     if status == "running" {
         sp.refresh = Some(std::time::Duration::from_secs(1));
     }

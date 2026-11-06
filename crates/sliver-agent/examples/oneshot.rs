@@ -13,9 +13,13 @@ fn main() {
         .nth(2)
         .and_then(|w| w.parse().ok())
         .unwrap_or(0);
-    let Some(action) = sliver_agent::modules::oneshot_action(&name) else {
-        eprintln!("usage: oneshot screenshot|lock [WAIT_MS]");
-        std::process::exit(2);
+    let action = match name.as_str() {
+        "screenshot" => sliver_agent::modules::screenshot_action(),
+        "lock" => sliver_agent::modules::lock_action(),
+        _ => {
+            eprintln!("usage: oneshot screenshot|lock [WAIT_MS]");
+            std::process::exit(2);
+        }
     };
     let sliver_config::Action::DBus(call) = action else {
         eprintln!("{name} is not a D-Bus action");

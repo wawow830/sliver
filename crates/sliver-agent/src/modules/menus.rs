@@ -16,11 +16,11 @@ pub(super) fn logind(method: &str, args: Vec<toml::Value>) -> Action {
 }
 
 /// The `power` module's sub-bars: `dangerous` = the long-press one (reboot, power off).
-pub fn power_menu(dangerous: bool) -> Vec<sliver_config::MenuEntry> {
-    let entry = |label: &str, icon: &str, on_tap: Action| sliver_config::MenuEntry {
+pub fn power_menu(dangerous: bool) -> Vec<MenuItem> {
+    let entry = |label: &str, icon: &str, action: Action| MenuItem {
         label: label.into(),
         icon: Some(icon.into()),
-        on_tap,
+        on_tap: Do::Run(action),
     };
     let interactive = vec![toml::Value::Boolean(false)];
     if dangerous {
@@ -49,7 +49,7 @@ pub fn power_menu(dangerous: bool) -> Vec<sliver_config::MenuEntry> {
 }
 
 /// Lock this session the way `loginctl lock-session` does: logind tells the locker.
-pub(super) fn lock_action() -> Action {
+pub fn lock_action() -> Action {
     Action::DBus(sliver_config::DBusCall {
         system_bus: true,
         dest: "org.freedesktop.login1".into(),
@@ -61,7 +61,7 @@ pub(super) fn lock_action() -> Action {
 }
 
 /// The portal's interactive screenshot (the user picks area/window in the portal's own UI).
-pub(super) fn screenshot_action() -> Action {
+pub fn screenshot_action() -> Action {
     let mut opts = toml::Table::new();
     opts.insert("interactive".into(), toml::Value::Boolean(true));
     Action::DBus(sliver_config::DBusCall {
@@ -74,51 +74,21 @@ pub(super) fn screenshot_action() -> Action {
     })
 }
 
-/// What the `screenshot` and `lock` modules do on tap.
-pub fn oneshot_action(name: &str) -> Option<Action> {
-    match name {
-        "screenshot" => Some(screenshot_action()),
-        "lock" => Some(lock_action()),
-        _ => None,
-    }
-}
-
 /// The cells of an open `menu` sub-bar: a ✕, then one per entry (label and/or icon, as wide as
 /// that needs). The ✕ comes first and, given the opening button's `slot` (offset, width), takes
 /// its place, so tapping there again dismisses instead of acting; so does any space around the
 /// entries.
 pub fn menu_cells(
-    entries: &[sliver_config::MenuEntry],
+    items: &[MenuItem],
     slot: Option<(f32, f32)>,
     icons: &mut Icons,
     icon_size: u32,
 ) -> Vec<Cell> {
-    let cell = |key: String, content: Content, width: Width, classes: &[&str], tap: String| Cell {
-        key,
-        id: "menu".into(),
-        kind: "menu".into(),
-        mic: false,
-        slider: false,
-        css_id: "menu".into(),
-        classes: classes.iter().map(|c| c.to_string()).collect(),
-        width,
-        content,
-        touch: Touch::Agent,
-        on: vec![(Gesture::Tap, Action::ModuleAction(tap))],
-        next_change: None,
-        pressed: false,
-        checked: false,
-        drawer: None,
-        disabled: false,
-        foreground: None,
-        background: None,
-        published: None,
-        pass_through: false,
-        target: None,
-        timer_total: None,
-        menu: Vec::new(),
-        slot: None,
-        spectrum: Vec::new(),
+    let cell = |key: &str, content: Content, width: Width, class: &str, tap: Act| {
+        let mut c = Cell::new(key, "menu", "menu", "menu", content).tapped(tap);
+        c.classes = vec![class.to_owned()];
+        c.width = width;
+        c
     };
     let x = icons
         .get("window-close-symbolic", None, icon_size)
@@ -126,64 +96,64 @@ pub fn menu_cells(
     let mut out = Vec::new();
     if let Some((offset, _)) = slot.filter(|s| s.0 > 0.0) {
         out.push(cell(
-            "menu/before".into(),
+            "menu/before",
             Content::Spacer,
             Width::Fixed(offset),
-            &["menu-spacer"],
-            "menu:close".into(),
+            "menu-spacer",
+            Act::Close,
         ));
     }
     out.push(cell(
-        "menu/close".into(),
+        "menu/close",
         x,
         Width::Fixed(slot.map_or(72.0, |s| s.1)),
-        &["menu-close"],
-        "menu:close".into(),
+        "menu-close",
+        Act::Close,
     ));
-    for (i, e) in entries.iter().enumerate() {
+    for (i, e) in items.iter().enumerate() {
         let icon = e
             .icon
             .as_deref()
             .and_then(|n| icons.get(n, None, icon_size));
-        let label = sliver_render::markup::escape(&e.label);
-        let content = match (icon, label.is_empty()) {
-            (Some(ic), false) => Content::label(Some(ic), label),
-            (Some(ic), true) => Content::icon(ic),
-            (None, _) => Content::markup(label),
-        };
         out.push(cell(
-            format!("menu/{i}"),
-            content,
+            &format!("menu/{i}"),
+            Content::label(icon, sliver_render::markup::escape(&e.label)),
             Width::Auto,
-            &["menu-item"],
-            format!("menu:pick:{i}"),
+            "menu-item",
+            Act::Choose(Box::new(e.on_tap.clone())),
         ));
     }
-    if !entries.is_empty() {
+    if !items.is_empty() {
         out.push(cell(
-            "menu/after".into(),
+            "menu/after",
             Content::Spacer,
             Width::Fill(1),
-            &["menu-spacer"],
-            "menu:close".into(),
+            "menu-spacer",
+            Act::Close,
         ));
     }
     out
 }
 
 /// A button's `menu`, its labels filled in with the button's own placeholders, so one entry
-/// names what it acts on ("Close {name}" reads "Close Firefox"). Labels stay plain text.
+/// names what it acts on ("Close {name}" reads "Close Firefox"), and its actions bound like the
+/// button's own (a module action is one of the button's verbs). Labels stay plain text.
 pub(super) fn button_menu(
     menu: &[sliver_config::MenuEntry],
     values: &dyn sliver_config::Values,
-) -> Vec<sliver_config::MenuEntry> {
+    kind: &str,
+    verbs: &[(&'static str, Do)],
+) -> Vec<MenuItem> {
     menu.iter()
-        .map(|e| match sliver_config::Template::parse(&e.label) {
-            Ok(t) if e.label.contains('{') => sliver_config::MenuEntry {
-                label: sliver_render::markup::parse(&t.render(values)).plain(),
-                ..e.clone()
+        .map(|e| MenuItem {
+            label: match sliver_config::Template::parse(&e.label) {
+                Ok(t) if e.label.contains('{') => {
+                    sliver_render::markup::parse(&t.render(values)).plain()
+                }
+                _ => e.label.clone(),
             },
-            _ => e.clone(),
+            icon: e.icon.clone(),
+            on_tap: Do::bind(&e.on_tap, kind, verbs),
         })
         .collect()
 }

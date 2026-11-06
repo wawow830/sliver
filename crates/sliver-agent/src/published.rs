@@ -17,6 +17,18 @@ pub struct PubContext {
     pub items: Vec<Item>,
 }
 
+impl PubContext {
+    /// The item `id`, at the top level or in a group.
+    pub fn item(&self, id: &str) -> Option<&Item> {
+        self.items.iter().find(|i| i.id == id).or_else(|| {
+            self.items.iter().find_map(|i| match &i.kind {
+                ItemKind::Group { items } => items.iter().find(|c| c.id == id),
+                _ => None,
+            })
+        })
+    }
+}
+
 /// Who fills the placeholders right now.
 #[derive(Debug, Clone, Default)]
 pub struct Published {
@@ -97,6 +109,20 @@ pub struct PubRef {
     pub unit: String,
 }
 
+impl PubRef {
+    /// One of the bar's own controls for an app's items (a ✕): never gives way to overflow.
+    fn control(context: ContextId, item: &str, kind: PubKind) -> PubRef {
+        PubRef {
+            context,
+            item: item.to_owned(),
+            kind,
+            gestures: Vec::new(),
+            priority: i32::MAX,
+            unit: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PubKind {
     Button,
@@ -169,40 +195,18 @@ fn color(s: &Option<String>) -> Option<Color> {
 /// The ✕ at the end of a modal context (api.md §4).
 pub fn close_cell(ctx: &PubContext, icons: &mut Icons, icon_size: u32) -> Cell {
     let icon = icons.get("window-close-symbolic", None, icon_size);
-    Cell {
-        key: format!("modal/{}#close", ctx.provider),
-        id: format!("app/{}#close", ctx.provider),
-        kind: "app".into(),
-        mic: false,
-        slider: false,
-        css_id: "modal-close".into(),
-        classes: vec!["app".into(), "modal-close".into()],
-        width: Width::Auto,
-        content: icon.map_or_else(|| Content::text("×"), Content::icon),
-        touch: Touch::Agent,
-        on: Vec::new(),
-        next_change: None,
-        pressed: false,
-        checked: false,
-        disabled: false,
-        drawer: None,
-        foreground: None,
-        background: None,
-        published: Some(PubRef {
-            context: ctx.id,
-            item: String::new(),
-            kind: PubKind::Close,
-            gestures: Vec::new(),
-            priority: i32::MAX,
-            unit: String::new(),
-        }),
-        pass_through: false,
-        target: None,
-        timer_total: None,
-        menu: Vec::new(),
-        slot: None,
-        spectrum: Vec::new(),
-    }
+    let content = icon.map_or_else(|| Content::text("×"), Content::icon);
+    let mut c = Cell::new(
+        format!("modal/{}#close", ctx.provider),
+        format!("app/{}#close", ctx.provider),
+        "app",
+        "modal-close",
+        content,
+    );
+    c.classes = vec!["app".into(), "modal-close".into()];
+    c.touch = Touch::Agent;
+    c.published = Some(PubRef::control(ctx.id, "", PubKind::Close));
+    c
 }
 
 /// An open popover: its items as cells (`class` is the context's, `app` or `status`), then a ✕.
@@ -239,14 +243,7 @@ pub fn popover_cells(
     close.id = format!("app/{}#{popover}.close", ctx.provider);
     close.css_id = "popover-close".into();
     close.classes = vec![class.to_owned(), "popover-close".into()];
-    close.published = Some(PubRef {
-        context: ctx.id,
-        item: popover.to_owned(),
-        kind: PubKind::PopoverClose,
-        gestures: Vec::new(),
-        priority: i32::MAX,
-        unit: String::new(),
-    });
+    close.published = Some(PubRef::control(ctx.id, popover, PubKind::PopoverClose));
     out.push(close);
     Some(out)
 }
@@ -361,29 +358,27 @@ fn push(
                 .and_then(|n| icons.get(n, None, icon_size))
         });
     let label = item.label.clone().unwrap_or_default();
-    let label_content = |icon: Option<Icon>, text: String| match (icon, text.is_empty()) {
-        (Some(i), true) => Content::icon(i),
-        (Some(i), false) => Content::label(Some(i), sliver_render::markup::escape(&text)),
-        (None, false) => Content::text(text),
-        (None, true) => Content::blank(),
+    let label_content = |icon: Option<Icon>, text: String| {
+        Content::label(icon, sliver_render::markup::escape(&text))
     };
     let mut classes = vec![class.to_owned(), item.kind.type_name().to_owned()];
     if focused {
         classes.push("focused-app".into());
     }
     classes.extend(item.classes.iter().cloned());
-    let base = |content: Content, kind: Option<PubKind>, checked: bool, id: &str| Cell {
-        key: format!("{class}/{}#{id}", ctx.provider),
-        id: format!("app/{}#{id}", ctx.provider),
-        kind: class.into(),
-        mic: false,
-        slider: false,
-        css_id: format!(
-            "{class}-{}",
-            ctx.provider.replace(['.', '/'], "-").to_ascii_lowercase()
-        ),
-        classes: classes.clone(),
-        width: match (&item.kind, item.min_width, item.max_width) {
+    let base = |content: Content, kind: Option<PubKind>, checked: bool, id: &str| {
+        let mut c = Cell::new(
+            format!("{class}/{}#{id}", ctx.provider),
+            format!("app/{}#{id}", ctx.provider),
+            class,
+            format!(
+                "{class}-{}",
+                ctx.provider.replace(['.', '/'], "-").to_ascii_lowercase()
+            ),
+            content,
+        );
+        c.classes = classes.clone();
+        c.width = match (&item.kind, item.min_width, item.max_width) {
             (ItemKind::Spacer { size }, ..) => match size {
                 SpacerSize::Flexible => Width::Fill(1),
                 SpacerSize::Small => Width::Fixed(SPACER_SMALL),
@@ -395,35 +390,23 @@ fn push(
                 lo.unwrap_or(0) as f32,
                 hi.map_or(f32::INFINITY, |h| h as f32),
             ),
-        },
-        content,
-        touch: if kind.is_some() && item.enabled {
-            Touch::Agent
-        } else {
-            Touch::None
-        },
-        on: Vec::new(),
-        next_change: None,
-        pressed: false,
-        checked,
-        disabled: !item.enabled,
-        drawer: None,
-        foreground: color(&item.fg),
-        background: color(&item.bg),
-        published: kind.map(|kind| PubRef {
+        };
+        if kind.is_some() && item.enabled {
+            c.touch = Touch::Agent;
+        }
+        c.checked = checked;
+        c.disabled = !item.enabled;
+        c.foreground = color(&item.fg);
+        c.background = color(&item.bg);
+        c.published = kind.map(|kind| PubRef {
             context: ctx.id,
             item: item.id.clone(),
             kind,
             gestures: item.gestures.clone(),
             priority: group.map_or(item.priority, |g| g.priority),
             unit: group.map_or(&item.id, |g| &g.id).clone(),
-        }),
-        pass_through: false,
-        target: None,
-        timer_total: None,
-        menu: Vec::new(),
-        slot: None,
-        spectrum: Vec::new(),
+        });
+        c
     };
     match &item.kind {
         ItemKind::Button => out.push(base(

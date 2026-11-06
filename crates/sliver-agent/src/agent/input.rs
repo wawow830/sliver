@@ -2,6 +2,7 @@
 //! drags and holds keep their value until the system reports it.
 
 use super::*;
+use crate::modules::Opens;
 
 impl Agent {
     /// A touch on one of our agent regions (sliverd's `touch`, timestamps in µs).
@@ -203,22 +204,17 @@ impl Agent {
             Gesture::SwipeLeft => CGesture::SwipeLeft,
             Gesture::SwipeRight => CGesture::SwipeRight,
         };
-        let action = cell
-            .on
-            .iter()
-            .find(|(cg, _)| *cg == want)
-            .map(|(_, a)| a.clone());
-        match (action, &cell.drawer) {
-            (Some(a), _) => {
+        match (cell.binding(want).cloned(), &cell.drawer) {
+            (Some(d), _) => {
                 let layer_before = self.base_layer().to_owned();
-                self.execute(&a, None, Some(region), now, fx);
+                self.run(&d, None, Some(region), now, fx);
                 if cell.kind == "custom" {
                     fx.push(Effect::ModuleFired(cell.id.clone()));
                 }
                 // A oneshot layer closes after the first action taken from it.
                 if self.oneshot.as_deref() == Some(layer_before.as_str())
                     && region <= FN_REGION_BASE
-                    && !matches!(a, Action::Layer { .. })
+                    && !matches!(d, Do::Run(Action::Layer { .. }))
                 {
                     self.oneshot = None;
                     if self.layers.last() == Some(&layer_before) {
@@ -228,8 +224,8 @@ impl Agent {
                     }
                 }
             }
-            (None, Some(d)) if want == CGesture::Tap && d.bar => {
-                self.subbar = Some(d.group.clone());
+            (None, Some(d)) if want == CGesture::Tap && d.opens == Opens::SubBar => {
+                self.overlay = Some(overlay::Overlay::Drawer(d.group.clone()));
                 fx.extend(self.cancel_touches());
                 fx.push(Effect::Redraw);
             }
@@ -300,16 +296,42 @@ impl Agent {
         }
         let Some(v) = d.pending.take() else { return };
         d.last_run = Some(now);
-        let action = self.cell(region).and_then(|c| {
-            c.on.iter()
-                .find(|(g, _)| *g == CGesture::Drag)
-                .map(|(_, a)| a.clone())
-        });
-        if let Some(a) = action {
-            self.execute(&a, Some(v), Some(region), now, fx);
+        if let Some(d) = self
+            .cell(region)
+            .and_then(|c| c.binding(CGesture::Drag).cloned())
+        {
+            self.run(&d, Some(v), Some(region), now, fx);
         }
     }
 
+    /// Does what a binding says. `value` is a drag's (0–100 on a slider), `region` the cell it
+    /// was bound on.
+    pub(super) fn run(
+        &mut self,
+        d: &Do,
+        value: Option<f64>,
+        region: Option<u32>,
+        now: u64,
+        fx: &mut Vec<Effect>,
+    ) {
+        match d {
+            Do::Run(a) => self.execute(a, value, region, now, fx),
+            Do::Agent(act) => self.act(act, value, now, fx),
+            Do::Steps(steps) => {
+                let mut at = now;
+                for s in steps {
+                    match s {
+                        Do::Run(Action::Sleep(d)) => at += d.as_micros() as u64,
+                        s if at == now => self.run(s, value, region, now, fx),
+                        s => self.scheduled.push((at, Scheduled::Do(s.clone()))),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Runs a config action. One that names a module's verb needs that module: from a cell's
+    /// bindings it was resolved when the cell was built ([`crate::act`]).
     pub(super) fn execute(
         &mut self,
         a: &Action,
@@ -375,16 +397,7 @@ impl Agent {
                     fx.push(Effect::Redraw);
                 }
             }
-            Action::Macro(steps) => {
-                let mut at = now;
-                for s in steps {
-                    match s {
-                        Action::Sleep(d) => at += d.as_micros() as u64,
-                        a if at == now => self.execute(a, value, region, now, fx),
-                        a => self.scheduled.push((at, Scheduled::Action(a.clone()))),
-                    }
-                }
-            }
+            Action::Macro(_) => self.run(&Do::bind(a, "", &[]), value, region, now, fx),
             Action::Sleep(_) => {}
             Action::DBus(c) => fx.push(Effect::Session(SessionOp::DBus(c.clone()))),
             Action::Layout(name) => match self.set_layout(name) {
@@ -397,19 +410,17 @@ impl Agent {
             Action::Profile(name) => fx.push(Effect::Profile(name.clone())),
             Action::Signal(n) => fx.push(Effect::Signal(*n)),
             Action::Update(m) => fx.push(Effect::Update(m.clone())),
-            Action::ModuleAction(name) => {
-                let Some(cell) = region.and_then(|r| self.cell(r)).cloned() else {
-                    return;
-                };
-                self.module_action(&cell, name, value, now, fx);
-            }
+            Action::ModuleAction(name) => fx.push(Effect::Log(format!(
+                "module action {name:?} outside a module's bindings does nothing"
+            ))),
         }
     }
 }
 
 /// A slider shown as just its icon until opened (`collapsed = true`).
 pub(super) fn collapsed_slider(c: &Cell) -> bool {
-    c.slider && c.drawer.is_some() && !matches!(c.content, sliver_render::Content::Slider { .. })
+    c.drawer.as_ref().is_some_and(|d| d.opens == Opens::Slider)
+        && !matches!(c.content, sliver_render::Content::Slider { .. })
 }
 
 /// What the recognizer should look for on this cell.
@@ -437,16 +448,13 @@ pub(super) fn bindings(c: &Cell) -> Bindings {
         };
     }
     let has = |g: CGesture| c.on.iter().any(|(x, _)| *x == g);
-    let hold_layer = c.on.iter().any(|(g, a)| {
-        *g == CGesture::Tap
-            && matches!(
-                a,
-                Action::Layer {
-                    mode: LayerMode::Hold,
-                    ..
-                }
-            )
-    });
+    let hold_layer = matches!(
+        c.binding(CGesture::Tap).and_then(Do::action),
+        Some(Action::Layer {
+            mode: LayerMode::Hold,
+            ..
+        })
+    );
     let swipe = has(CGesture::SwipeLeft) || has(CGesture::SwipeRight);
     // Keys fire on press, for latency, unless the module waits to see what the finger does.
     let waits = swipe || has(CGesture::Hold) || has(CGesture::DoubleTap) || has(CGesture::Drag);
@@ -462,9 +470,10 @@ pub(super) fn bindings(c: &Cell) -> Bindings {
         on_press: collapsed_slider(c)
             || hold_layer
             || !waits
-                && c.on.iter().any(|(g, a)| {
-                    *g == CGesture::Tap && matches!(a, Action::Key(_) | Action::Keys(_))
-                }),
+                && matches!(
+                    c.binding(CGesture::Tap).and_then(Do::action),
+                    Some(Action::Key(_) | Action::Keys(_))
+                ),
         swipe_threshold: None,
     }
 }

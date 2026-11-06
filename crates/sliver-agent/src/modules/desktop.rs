@@ -1,6 +1,8 @@
 //! Specs for modules showing the compositor's state: keyboard layout, window, workspaces, taskbar.
 
 use super::*;
+use crate::agent::SessionOp;
+use sliver_desktop::control::Action as Control;
 
 /// fcitx5 (CJK input methods) takes over while it is running and has a current method:
 /// the label is the method's own (拼, あ, en); the compositor's layout shows otherwise.
@@ -13,12 +15,16 @@ pub(super) fn language_input_method(world: &World) -> Option<Spec> {
         .with("input_method", esc(&im.current.name))
         .with("long", esc(&im.current.name))
         .with("id", esc(&im.current.id));
-    let mut sp = Spec::new(v, "{}").on(Gesture::Tap, "im-toggle");
+    let mut sp = Spec::new(v, "{}").does(
+        Gesture::Tap,
+        "im-toggle",
+        Act::Session(SessionOp::InputMethod(None)),
+    );
     if im.group.len() > 1 {
         sp.menu = im
             .group
             .iter()
-            .map(|i| sliver_config::MenuEntry {
+            .map(|i| MenuItem {
                 label: format!(
                     "{}{} {}",
                     if i.id == im.current.id { "✓ " } else { "" },
@@ -26,7 +32,7 @@ pub(super) fn language_input_method(world: &World) -> Option<Spec> {
                     i.name
                 ),
                 icon: None,
-                on_tap: Action::ModuleAction(format!("language:im:{}", i.id)),
+                on_tap: Act::Session(SessionOp::InputMethod(Some(i.id.clone()))).into(),
             })
             .collect();
     }
@@ -41,8 +47,7 @@ pub(super) fn language(world: &World) -> Option<Spec> {
         .with("long", esc(l))
         .with("short", esc(l))
         .with("input_method", esc(l));
-    let mut sp = Spec::new(v, "{}").on(Gesture::Tap, "next");
-    sp.target = Some(sliver_desktop::control::Action::NextLayout);
+    let mut sp = Spec::new(v, "{}").does(Gesture::Tap, "next", Act::Desktop(Control::NextLayout));
     // Hold lists the configured layouts (when the compositor says what they are).
     let d = &world.desktop;
     if d.keyboard_layouts.len() > 1 {
@@ -50,14 +55,14 @@ pub(super) fn language(world: &World) -> Option<Spec> {
             .keyboard_layouts
             .iter()
             .enumerate()
-            .map(|(i, name)| sliver_config::MenuEntry {
+            .map(|(i, name)| MenuItem {
                 label: if d.keyboard_layout_index == Some(i) {
                     format!("✓ {name}")
                 } else {
                     name.clone()
                 },
                 icon: None,
-                on_tap: Action::ModuleAction(format!("language:set:{i}")),
+                on_tap: Act::Desktop(Control::SetLayout(i)).into(),
             })
             .collect();
     }
@@ -101,10 +106,10 @@ pub(super) fn workspaces(world: &World, item: Option<usize>) -> Option<Spec> {
         .with("id", ws.id)
         .with("windows", ws.windows as i64)
         .with("", esc(&ws.name));
-    let mut sp = Spec::new(v, "{name}").on(Gesture::Tap, "focus");
+    let focus = Act::Desktop(Control::FocusWorkspace(ws.clone()));
+    let mut sp = Spec::new(v, "{name}").does(Gesture::Tap, "focus", focus);
     sp.status = Some(status);
     sp.checked = ws.active;
-    sp.target = Some(sliver_desktop::control::Action::FocusWorkspace(ws.clone()));
     Some(sp)
 }
 
@@ -117,9 +122,22 @@ pub(super) fn taskbar(world: &World, item: Option<usize>) -> Option<Spec> {
         .with("name", esc(entry.map_or(&w.class, |e| &e.name)))
         .with("", esc(&w.title));
     // Icon only by default: the bar is too narrow for titles.
+    let address = w.address.clone();
     let mut sp = Spec::new(v, "")
-        .on(Gesture::Tap, "focus")
-        .on(Gesture::Hold, "close");
+        .does(
+            Gesture::Tap,
+            "focus",
+            Act::Desktop(Control::FocusWindow {
+                address: address.clone(),
+            }),
+        )
+        .does(
+            Gesture::Hold,
+            "close",
+            Act::Desktop(Control::CloseWindow { address }),
+        );
+    // A window whose app has no icon: its name's first letters.
+    sp.fallback_text = Some(w.class.chars().take(2).collect());
     // `format-focused` labels just the window you're in.
     sp.status = w.focused.then_some("focused");
     sp.default_icon = Some(
@@ -134,9 +152,6 @@ pub(super) fn taskbar(world: &World, item: Option<usize>) -> Option<Spec> {
         .map(|(_, c)| c.to_string())
         .chain([super::app_class(entry.map_or(&w.class, |e| &e.id))])
         .collect();
-    sp.target = Some(sliver_desktop::control::Action::FocusWindow {
-        address: w.address.clone(),
-    });
     Some(sp)
 }
 
@@ -194,16 +209,6 @@ pub(super) fn pinned_cell(
     window: Option<usize>,
 ) -> Cell {
     let entry = world.apps.get(id);
-    let icon = entry
-        .and_then(|e| e.icon.as_deref())
-        .or(Some(id))
-        .and_then(|n| {
-            icons.get(
-                n,
-                m.common.icon_theme.as_deref(),
-                m.common.icon_size.unwrap_or(icon_size),
-            )
-        });
     let name = entry.map_or(id, |e| e.name.as_str());
     let win = window.map(|i| &world.desktop.windows[i]);
     let focused = win.is_some_and(|w| w.focused);
@@ -217,18 +222,23 @@ pub(super) fn pinned_cell(
         status: focused.then_some("focused"),
         ..Default::default()
     };
-    let label = format_module(&m.common, "", &st, &values).text;
-    let content = match icon {
-        Some(icon) if label.is_empty() => Content::icon(icon),
-        Some(icon) => Content::label(Some(icon), label),
-        None if label.is_empty() => Content::markup(sliver_render::markup::escape(
-            &name.chars().take(2).collect::<String>(),
-        )),
-        None => Content::markup(label),
+    let icon_name = entry.and_then(|e| e.icon.as_deref()).unwrap_or(id);
+    let shown = present(
+        &m.common,
+        "",
+        &st,
+        &values,
+        Some(icon_name),
+        icons,
+        icon_size,
+    );
+    let content = match shown {
+        Some(Shown {
+            icon: None, text, ..
+        }) if text.is_empty() => Content::text(name.chars().take(2).collect::<String>()),
+        Some(f) => Content::label(f.icon, f.text),
+        None => Content::blank(),
     };
-    let target = win.map(|w| sliver_desktop::control::Action::FocusWindow {
-        address: w.address.clone(),
-    });
     let mut classes = vec!["pinned".to_string(), app_class(id)];
     classes.push(if win.is_some() { "running" } else { "idle" }.to_string());
     if focused {
@@ -238,44 +248,46 @@ pub(super) fn pinned_cell(
         classes.push("urgent".into());
     }
     classes.extend(m.classes.iter().cloned());
-    let tap = if win.is_some() {
-        Action::ModuleAction("focus".into())
-    } else {
-        Action::Open(id.to_string())
-    };
-    let mut defaults = vec![(Gesture::Tap, tap)];
-    if win.is_some() {
-        defaults.push((Gesture::Hold, Action::ModuleAction("close".into())));
+    // Tap focuses the running app's window, else starts the app; hold closes the window.
+    let mut verbs: Verbs = vec![];
+    let mut defaults = vec![(Gesture::Tap, "focus")];
+    match win {
+        Some(w) => {
+            let address = w.address.clone();
+            verbs.push((
+                "focus",
+                Act::Desktop(Control::FocusWindow {
+                    address: address.clone(),
+                })
+                .into(),
+            ));
+            verbs.push((
+                "close",
+                Act::Desktop(Control::CloseWindow { address }).into(),
+            ));
+            defaults.push((Gesture::Hold, "close"));
+        }
+        None => verbs.push(("focus", Do::Run(Action::Open(id.to_string())))),
     }
+    let key = format!("{key}/pin{index}");
     // The module's own bindings and `menu` apply to its launchers too.
-    let on = bindings(m, defaults, !m.common.menu.is_empty());
-    Cell {
-        key: format!("{key}/pin{index}"),
-        id: m.id.to_string(),
-        kind: "taskbar".into(),
-        mic: false,
-        slider: false,
-        css_id: m.css_id.clone(),
-        classes,
-        width: Width::Auto,
-        content,
-        touch: Touch::Agent,
-        on,
-        next_change: None,
-        pressed: false,
-        checked: win.is_some_and(|w| w.focused),
-        drawer: None,
-        disabled: false,
-        foreground: None,
-        background: None,
-        published: None,
-        pass_through: false,
-        target,
-        timer_total: None,
-        menu: button_menu(&m.common.menu, &values),
-        slot: None,
-        spectrum: Vec::new(),
+    let menu = button_menu(&m.common.menu, &values, "taskbar", &verbs);
+    if !menu.is_empty() {
+        verbs.push((
+            "menu",
+            Act::Menu {
+                key: key.clone(),
+                items: menu,
+            }
+            .into(),
+        ));
     }
+    let mut cell = Cell::new(key, m.id.to_string(), "taskbar", m.css_id.clone(), content);
+    cell.classes = classes;
+    cell.touch = Touch::Agent;
+    cell.on = bindings(m, &verbs, &defaults);
+    cell.checked = focused;
+    cell
 }
 
 /// Which workspaces/windows a `workspaces` / `taskbar` module shows (indexes into the lists).

@@ -2,6 +2,7 @@
 //! items, and the emoji picker.
 
 use super::*;
+use crate::act::{Act, EmojiOp, Insert, UiChange};
 
 impl Agent {
     /// Share the emoji picker's recents with the worlds this agent draws (main does this once).
@@ -53,9 +54,7 @@ impl Agent {
     pub(super) fn on_held(&self, region: u32) -> bool {
         self.held.is_some()
             && region <= FN_REGION_BASE
-            && self.menu.is_none()
-            && self.popover.is_none()
-            && self.subbar.is_none()
+            && self.overlay.is_none()
             && self.layout_override.as_ref().map(|o| &o.0) == self.active.as_ref().map(|a| &a.0)
     }
 
@@ -245,13 +244,8 @@ impl Agent {
             Gesture::SwipeRight => (CGesture::SwipeRight, AG::SwipeRight),
             _ => return,
         };
-        let user = cell
-            .on
-            .iter()
-            .find(|(cg, _)| *cg == want)
-            .map(|(_, a)| a.clone());
-        if let Some(a) = &user {
-            self.execute(a, None, Some(region), now, fx);
+        if let Some(d) = cell.binding(want).cloned() {
+            self.run(&d, None, Some(region), now, fx);
             if !cell.pass_through {
                 return;
             }
@@ -273,13 +267,17 @@ impl Agent {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| "app".into());
-                self.popover = Some((p.context, p.item.clone(), class));
+                self.overlay = Some(overlay::Overlay::Popover {
+                    context: p.context,
+                    item: p.item.clone(),
+                    class,
+                });
                 fx.extend(self.cancel_touches());
                 fx.push(Effect::Redraw);
                 send(I::Popover(true), fx);
             }
             (PubKind::PopoverClose, AG::Tap) => {
-                self.popover = None;
+                self.overlay = None;
                 fx.extend(self.cancel_touches());
                 fx.push(Effect::Redraw);
                 send(I::Popover(false), fx);
@@ -290,13 +288,12 @@ impl Agent {
         }
     }
 
-    /// A built-in module's own action (`actions = { on-hold = "…" }`, or its default bindings).
-    /// Opens `entries` as `cell`'s menu: their module actions act on it, the ✕ takes its place
-    /// if the menu covers it, and it closes on its own after [`MENU_TIMEOUT_US`].
+    /// Opens `items` as the menu of the cell `key`: the ✕ takes that cell's place if the menu
+    /// covers it, and the menu closes on its own after [`MENU_TIMEOUT_US`].
     pub(super) fn open_menu(
         &mut self,
-        cell: &Cell,
-        entries: Vec<sliver_config::MenuEntry>,
+        key: &str,
+        items: Vec<crate::act::MenuItem>,
         now: u64,
         fx: &mut Vec<Effect>,
     ) {
@@ -304,8 +301,8 @@ impl Agent {
             .retain(|s| !matches!(s.1, Scheduled::CloseMenu));
         self.scheduled
             .push((now + MENU_TIMEOUT_US, Scheduled::CloseMenu));
-        self.menu_slot = self.frame(Layer::Base).and_then(|f| {
-            let i = f.cells.iter().position(|c| c.key == cell.key)?;
+        let slot = self.frame(Layer::Base).and_then(|f| {
+            let i = f.cells.iter().position(|c| c.key == key)?;
             let (r, zones) = (*f.layout.items.get(i)?, &f.layout.zones);
             let zi = zones.iter().position(|z| r.x >= z.x && r.x < z.x + z.w)?;
             // The menu covers every zone but the first, and the last when there are more.
@@ -318,79 +315,59 @@ impl Agent {
                 .map_or(0.0, |p| r.x - (p.x + p.w));
             covered.then(|| ((r.x - zones[1].x - gap).max(0.0), r.w))
         });
-        self.menu = Some(entries);
-        self.menu_owner = Some(cell.clone());
+        self.overlay = Some(overlay::Overlay::Menu { items, slot });
         fx.extend(self.cancel_touches());
         fx.push(Effect::Redraw);
     }
 
-    pub(super) fn module_action(
-        &mut self,
-        cell: &Cell,
-        name: &str,
-        value: Option<f64>,
-        now: u64,
-        fx: &mut Vec<Effect>,
-    ) {
-        use sliver_session::mpris::Command;
+    /// Closes the menu or drawer covering the bar.
+    fn close_overlay(&mut self, fx: &mut Vec<Effect>) {
+        self.overlay = None;
+        fx.extend(self.cancel_touches());
+        fx.push(Effect::Redraw);
+    }
+
+    /// One of the agent's own operations ([`crate::act`]). `value` is a drag's, 0–100.
+    pub(super) fn act(&mut self, act: &Act, value: Option<f64>, now: u64, fx: &mut Vec<Effect>) {
         let pct = value.map(|v| v.clamp(0.0, 100.0).round() as u8);
-        let kind = cell.kind.as_str();
-        let op = match (kind, name, pct) {
-            ("backlight", "set", Some(p)) => SessionOp::ScreenBrightness(p),
-            ("kbd-backlight", "set", Some(p)) => SessionOp::KeyboardBrightness(p),
-            ("audio", "set", Some(p)) => SessionOp::Volume {
-                mic: cell.mic,
-                pct: p,
-            },
-            ("audio", "toggle-mute", _) => SessionOp::ToggleMute { mic: cell.mic },
-            ("mpris", "play-pause" | "next" | "previous", _) => {
-                let cmd = match name {
-                    "play-pause" => Command::PlayPause,
-                    "next" => Command::Next,
-                    _ => Command::Previous,
-                };
-                match self.ui(&cell.key).player.clone() {
-                    Some(player) => SessionOp::MediaOn { player, cmd },
-                    None => SessionOp::Media(cmd),
-                }
+        match act {
+            Act::Session(op) => fx.push(Effect::Session(op.clone())),
+            Act::Desktop(a) => fx.push(Effect::Desktop(a.clone())),
+            Act::Set(level) => fx.extend(pct.map(|p| Effect::Session(level.set(p)))),
+            Act::Seek { player } => fx.extend(pct.map(|pct| {
+                Effect::Session(SessionOp::Seek {
+                    player: player.clone(),
+                    pct,
+                })
+            })),
+            Act::Ui { key, change } => self.change_ui(key, change, now, fx),
+            Act::Menu { key, items } => self.open_menu(key, items.clone(), now, fx),
+            Act::Choose(d) => {
+                self.close_overlay(fx);
+                self.run(d, None, None, now, fx);
             }
-            ("mpris", "seek", Some(p)) => SessionOp::Seek {
-                player: self.ui(&cell.key).player.clone(),
-                pct: p,
-            },
-            ("mpris", n, _) if n.starts_with("player:") => {
-                let key = cell.key.clone();
-                self.ui(&key).player = Some(n["player:".len()..].to_string());
-                fx.push(Effect::Redraw);
-                return;
+            Act::Close => self.close_overlay(fx),
+            Act::Unknown { kind, name } => {
+                fx.push(Effect::Log(format!("{kind}: no action {name:?}")))
             }
-            ("idle-inhibitor", "toggle", _) => SessionOp::ToggleCaffeine,
-            ("network", "toggle", _) => SessionOp::ToggleWifi,
-            ("bluetooth", "toggle", _) => SessionOp::ToggleBluetooth,
-            ("dnd", "toggle", _) => SessionOp::ToggleDnd,
-            ("dark-mode", "toggle", _) => SessionOp::ToggleDark,
-            ("notifications", "open", _) => SessionOp::OpenNotification,
-            ("notifications", "dismiss", _) => SessionOp::DismissNotification,
-            ("clock", "tz-next" | "tz-prev", _) => {
-                let key = cell.key.clone();
-                let step = if name == "tz-next" { 1 } else { -1 };
-                let ui = self.ui(&key);
-                ui.tz = ui.tz.wrapping_add(step);
-                fx.push(Effect::Redraw);
-                return;
-            }
-            ("timer", "toggle", _) => {
-                let total = cell
-                    .timer_total
-                    .unwrap_or(std::time::Duration::from_secs(25 * 60));
+        }
+    }
+
+    /// The agent-side state of the cell `key` changes.
+    fn change_ui(&mut self, key: &str, change: &UiChange, now: u64, fx: &mut Vec<Effect>) {
+        let ui = self.ui(key);
+        match change {
+            UiChange::Expand => ui.expanded = !ui.expanded,
+            UiChange::Zone(step) => ui.tz = ui.tz.wrapping_add(*step),
+            UiChange::Player(p) => ui.player = Some(p.clone()),
+            UiChange::TimerReset => ui.timer = None,
+            UiChange::Timer { total } => {
                 let wall = Local::now();
-                let key = cell.key.clone();
-                let t = self
-                    .ui(&key)
+                let t = ui
                     .timer
-                    .get_or_insert_with(|| modules::TimerState::new(total));
+                    .get_or_insert_with(|| modules::TimerState::new(*total));
                 if t.finished {
-                    *t = modules::TimerState::new(total);
+                    *t = modules::TimerState::new(*total);
                 } else if t.running_since.is_some() {
                     t.remaining = t.left(wall);
                     t.running_since = None;
@@ -400,239 +377,88 @@ impl Agent {
                     t.generation += 1;
                     let due = now + t.remaining.as_micros() as u64;
                     let generation = t.generation;
+                    let key = key.to_owned();
                     self.scheduled
                         .push((due, Scheduled::TimerDone { key, generation }));
                 }
-                fx.push(Effect::Redraw);
-                return;
             }
-            ("timer", "reset", _) => {
-                let key = cell.key.clone();
-                self.ui(&key).timer = None;
-                fx.push(Effect::Redraw);
-                return;
-            }
-            (_, "menu:open", _) => {
-                if !cell.menu.is_empty() {
-                    self.open_menu(cell, cell.menu.clone(), now, fx);
-                }
-                return;
-            }
-            ("menu", "menu:close", _) => {
-                self.menu = None;
-                self.menu_owner = None;
-                self.menu_slot = None;
-                self.subbar = None;
-                fx.extend(self.cancel_touches());
-                fx.push(Effect::Redraw);
-                return;
-            }
-            ("menu", n, _) if n.starts_with("menu:pick:") => {
-                let pick = n["menu:pick:".len()..].parse::<usize>().ok();
-                if let Some(entry) =
-                    pick.and_then(|i| self.menu.as_ref().and_then(|m| m.get(i)).cloned())
-                {
-                    self.menu = None;
-                    self.menu_slot = None;
-                    fx.extend(self.cancel_touches());
-                    fx.push(Effect::Redraw);
-                    // The `language` picker's entries are not config actions.
-                    if let sliver_config::Action::ModuleAction(a) = &entry.on_tap
-                        && let Some(id) = a.strip_prefix("language:im:")
-                    {
-                        fx.push(Effect::Session(SessionOp::InputMethod(Some(id.to_owned()))));
-                        return;
-                    }
-                    if let sliver_config::Action::ModuleAction(a) = &entry.on_tap
-                        && let Some(i) =
-                            a.strip_prefix("language:set:").and_then(|n| n.parse().ok())
-                    {
-                        fx.push(Effect::Desktop(sliver_desktop::control::Action::SetLayout(
-                            i,
-                        )));
-                        return;
-                    }
-                    match (&entry.on_tap, self.menu_owner.take()) {
-                        (sliver_config::Action::ModuleAction(name), Some(owner)) => {
-                            self.module_action(&owner, name, None, now, fx)
-                        }
-                        (a, _) => self.execute(a, None, None, now, fx),
-                    }
-                }
-                return;
-            }
-            ("emoji", n, _) => {
-                self.emoji_action(&cell.key, n, now, fx);
-                return;
-            }
-            ("screenshot" | "lock", n, _) if crate::modules::oneshot_action(n).is_some() => {
-                if let Some(act) = crate::modules::oneshot_action(n) {
-                    self.execute(&act, None, None, now, fx);
-                }
-                return;
-            }
-            ("power", "power:hold", _) => {
-                self.open_menu(cell, crate::modules::power_menu(true), now, fx);
-                return;
-            }
-            ("language", "im-toggle", _) => {
-                fx.push(Effect::Session(SessionOp::InputMethod(None)));
-                return;
-            }
-            ("language", "next", _) => {
-                fx.push(Effect::Desktop(sliver_desktop::control::Action::NextLayout));
-                return;
-            }
-            ("workspaces" | "taskbar", "focus", _) => {
-                if let Some(t) = &cell.target {
-                    fx.push(Effect::Desktop(t.clone()));
-                }
-                return;
-            }
-            ("taskbar", "close", _) => {
-                if let Some(sliver_desktop::control::Action::FocusWindow { address }) = &cell.target
-                {
-                    fx.push(Effect::Desktop(
-                        sliver_desktop::control::Action::CloseWindow {
-                            address: address.clone(),
-                        },
-                    ));
-                }
-                return;
-            }
-            (_, "expand", _) => {
-                let ui = self.ui(&cell.key);
-                ui.expanded = !ui.expanded;
-                fx.push(Effect::Redraw);
-                return;
-            }
-            _ => {
-                fx.push(Effect::Log(format!("{kind}: no action {name:?}")));
-                return;
-            }
-        };
-        fx.push(Effect::Session(op));
+            UiChange::Emoji(op) => return self.emoji(key, op, now, fx),
+        }
+        fx.push(Effect::Redraw);
     }
 }
 
 impl Agent {
-    /// The emoji strip's actions: `pick:<method>:<emoji>`, `tab:N`, `page:±N`, `close`, and
-    /// `tones:<emoji>` / `tones-close` for the skin-tone choice.
-    pub(super) fn emoji_action(
-        &mut self,
-        cell_key: &str,
-        name: &str,
-        now: u64,
-        fx: &mut Vec<Effect>,
-    ) {
-        // The strip's own key is the cell key without its `/tab…`, `/e…`, `/close` suffix.
-        let strip = cell_key
-            .rsplit_once('/')
-            .map_or(cell_key, |(k, _)| k)
-            .to_string();
-        if let Some(rest) = name.strip_prefix("pick:") {
-            let Some((method, text)) = rest.split_once(':') else {
-                return;
-            };
-            self.emoji.push(text);
-            self.type_text(method, text, now, fx);
-            self.ui(&strip).emoji.tones = None;
-            fx.push(Effect::Redraw);
-        } else if let Some(e) = name.strip_prefix("tones:") {
-            self.ui(&strip).emoji.tones = Some(e.to_string());
-            fx.push(Effect::Redraw);
-        } else if name == "tones-close" {
-            self.ui(&strip).emoji.tones = None;
-            fx.push(Effect::Redraw);
-        } else if name == "search" {
-            let ui = self.ui(&strip);
-            ui.emoji.search = Some(String::new());
-            ui.emoji.offset = 0;
-            ui.emoji.tones = None;
-            fx.push(Effect::Redraw);
-        } else if let Some(c) = name.strip_prefix("s:").and_then(|c| c.chars().next()) {
-            let ui = self.ui(&strip);
-            let q = ui.emoji.search.get_or_insert_with(String::new);
-            // Letters and single spaces only; the query stays short enough to mean something.
-            if (c.is_ascii_lowercase() || (c == ' ' && !q.is_empty() && !q.ends_with(' ')))
-                && q.len() < 24
-            {
-                q.push(c);
+    /// The emoji strip `strip`'s controls.
+    fn emoji(&mut self, strip: &str, op: &EmojiOp, now: u64, fx: &mut Vec<Effect>) {
+        let ui = &mut self.ui(strip).emoji;
+        match op {
+            EmojiOp::Pick { insert, text } => {
+                ui.tones = None;
+                self.emoji.push(text);
+                self.type_text(*insert, text, now, fx);
             }
-            ui.emoji.offset = 0;
-            fx.push(Effect::Redraw);
-        } else if name == "s-back" || name == "s-clear" {
-            let ui = self.ui(&strip);
-            if let Some(q) = ui.emoji.search.as_mut() {
-                if name == "s-clear" {
-                    q.clear();
-                } else {
-                    q.pop();
+            EmojiOp::Tones(e) => ui.tones = e.clone(),
+            EmojiOp::Search => {
+                ui.search = Some(String::new());
+                ui.offset = 0;
+                ui.tones = None;
+            }
+            EmojiOp::Type(c) => {
+                let q = ui.search.get_or_insert_with(String::new);
+                // Letters and single spaces only; the query stays short enough to mean something.
+                let c = *c;
+                if (c.is_ascii_lowercase() || (c == ' ' && !q.is_empty() && !q.ends_with(' ')))
+                    && q.len() < 24
+                {
+                    q.push(c);
                 }
+                ui.offset = 0;
             }
-            ui.emoji.offset = 0;
-            fx.push(Effect::Redraw);
-        } else if name == "s-close" {
-            let ui = self.ui(&strip);
-            ui.emoji.search = None;
-            ui.emoji.offset = 0;
-            fx.push(Effect::Redraw);
-        } else if let Some(t) = name
-            .strip_prefix("tab:")
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            let ui = self.ui(&strip);
-            ui.emoji.tab = t;
-            ui.emoji.offset = 0;
-            ui.emoji.tones = None;
-            fx.push(Effect::Redraw);
-        } else if let Some(d) = name
-            .strip_prefix("page:")
-            .and_then(|n| n.parse::<i64>().ok())
-        {
-            let ui = self.ui(&strip);
-            ui.emoji.offset = (ui.emoji.offset as i64 + d).max(0) as usize;
-            fx.push(Effect::Redraw);
-        } else if name == "close" {
-            self.execute(&Action::CloseLayer, None, None, now, fx);
+            EmojiOp::Erase { all } => {
+                if let Some(q) = ui.search.as_mut() {
+                    if *all {
+                        q.clear();
+                    } else {
+                        q.pop();
+                    }
+                }
+                ui.offset = 0;
+            }
+            EmojiOp::EndSearch => {
+                ui.search = None;
+                ui.offset = 0;
+            }
+            EmojiOp::Tab(t) => {
+                ui.tab = *t;
+                ui.offset = 0;
+                ui.tones = None;
+            }
+            EmojiOp::Page(d) => ui.offset = (ui.offset as i64 + d).max(0) as usize,
         }
+        fx.push(Effect::Redraw);
     }
 
     /// Type `text` into the focused app. `auto` = wtype if installed, else copy to the clipboard;
     /// `wtype` types directly (virtual keyboard); `paste` copies and presses Ctrl+V through
     /// sliverd (works anywhere on Wayland, replaces the clipboard); `copy` only copies.
-    pub(super) fn type_text(&mut self, method: &str, text: &str, now: u64, fx: &mut Vec<Effect>) {
-        let method = match method {
-            "auto" if tool_exists("wtype") => "wtype",
-            "auto" => "copy",
-            m => m,
+    fn type_text(&mut self, insert: Insert, text: &str, now: u64, fx: &mut Vec<Effect>) {
+        let wtype = match insert {
+            Insert::Auto => tool_exists("wtype"),
+            i => i == Insert::Wtype,
         };
-        match method {
-            "wtype" => fx.push(Effect::Spawn(vec![
-                "wtype".into(),
-                "--".into(),
-                text.into(),
-            ])),
-            "paste" | "copy" => {
-                fx.push(Effect::Spawn(vec![
-                    "wl-copy".into(),
-                    "--".into(),
-                    text.into(),
-                ]));
-                if method == "paste" {
-                    // Give wl-copy a moment to own the selection before pasting.
-                    if let (Some(ctrl), Some(v)) = (Key::from_name("LeftCtrl"), Key::from_name("V"))
-                    {
-                        self.scheduled.push((
-                            now + 120_000,
-                            Scheduled::Action(Action::Keys(vec![ctrl, v])),
-                        ));
-                    }
-                }
-            }
-            other => fx.push(Effect::Log(format!(
-                "emoji: unknown insert method {other:?}"
-            ))),
+        let spawn = |argv: [&str; 3]| Effect::Spawn(argv.map(String::from).into());
+        if wtype {
+            fx.push(spawn(["wtype", "--", text]));
+            return;
+        }
+        fx.push(spawn(["wl-copy", "--", text]));
+        if insert == Insert::Paste
+            && let (Some(ctrl), Some(v)) = (Key::from_name("LeftCtrl"), Key::from_name("V"))
+        {
+            // Give wl-copy a moment to own the selection before pasting.
+            let paste = Do::Run(Action::Keys(vec![ctrl, v]));
+            self.scheduled.push((now + 120_000, Scheduled::Do(paste)));
         }
     }
 }

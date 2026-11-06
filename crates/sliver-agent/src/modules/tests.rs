@@ -314,21 +314,22 @@ fn workspaces_and_taskbar_follow_the_compositor_lists() {
     assert!(wsc[2].classes.contains(&"empty".to_string()));
     assert_eq!(wsc[0].touch, Touch::Agent);
     assert_eq!(wsc[1].key, "workspaces/2");
-    assert!(
-        matches!(&wsc[0].target, Some(sliver_desktop::control::Action::FocusWorkspace(x)) if x.id == 1)
-    );
+    assert!(matches!(
+        wsc[0].binding(Gesture::Tap),
+        Some(Do::Agent(Act::Desktop(sliver_desktop::control::Action::FocusWorkspace(x)))) if x.id == 1
+    ));
     let tb: Vec<&Cell> = cells.iter().filter(|c| c.kind == "taskbar").collect();
     assert_eq!(tb.len(), 2, "only the active workspace's windows");
     assert!(tb[0].classes.contains(&"focused".to_string()) && tb[0].checked);
     assert!(tb[1].classes.contains(&"urgent".to_string()));
     // no icon theme in tests: the app's first letters stand in
     assert_eq!(text(tb[0]), "fi");
-    let hold = tb[0]
-        .on
-        .iter()
-        .find(|(g, _)| *g == sliver_config::Gesture::Hold)
-        .map(|(_, a)| a.clone());
-    assert!(matches!(hold, Some(sliver_config::Action::ModuleAction(n)) if n == "close"));
+    assert!(matches!(
+        tb[0].binding(Gesture::Hold),
+        Some(Do::Agent(Act::Desktop(
+            sliver_desktop::control::Action::CloseWindow { .. }
+        )))
+    ));
     // no compositor list (no backend): the modules show nothing
     let none = stat_cells(
         "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"workspaces\", \"taskbar\"]\n",
@@ -466,16 +467,16 @@ fn taskbar_pinned_apps() {
                 .contains(&"app-org-mozilla-firefox".to_string())
             && cells[0].checked
     );
+    assert!(matches!(
+        cells[0].binding(Gesture::Tap),
+        Some(Do::Agent(Act::Desktop(sliver_desktop::control::Action::FocusWindow { address }))) if address == "b2"
+    ));
+    assert!(cells[1].classes.contains(&"idle".to_string()));
     assert!(
-        matches!(&cells[0].target, Some(sliver_desktop::control::Action::FocusWindow { address }) if address == "b2")
-    );
-    assert!(cells[1].classes.contains(&"idle".to_string()) && cells[1].target.is_none());
-    assert!(
-        cells[1]
-            .on
-            .iter()
-            .any(|(g, a)| *g == sliver_config::Gesture::Tap
-                && matches!(a, sliver_config::Action::Open(id) if id == "kitty")),
+        matches!(
+            cells[1].binding(Gesture::Tap),
+            Some(Do::Run(Action::Open(id))) if id == "kitty"
+        ),
         "an idle launcher starts the app"
     );
     // `format-focused` labels only the app you're in, with its name (`{name}`): a pinned
@@ -568,7 +569,12 @@ fn preview_shows_samples_and_placeholders() {
         ],
     );
     assert!(out[0].classes.contains(&"placeholder".to_string()));
-    assert_eq!(out.iter().filter(|c| c.slider).count(), 2);
+    // Collapsed by default: an icon that opens into a slider.
+    let sliders = |c: &&Cell| {
+        matches!(c.content, Content::Slider { .. })
+            || c.drawer.as_ref().is_some_and(|d| d.opens == Opens::Slider)
+    };
+    assert_eq!(out.iter().filter(sliders).count(), 2);
 }
 
 #[test]
@@ -597,10 +603,10 @@ fn slider_is_one_switch_for_every_module_with_a_level() {
     // Written as waybar's `audio/slider` or as `slider = true`: the same slider.
     for c in &out[..2] {
         assert!(matches!(c.content, Content::Slider { .. }), "{}", c.id);
-        assert!(c.slider && drags(c) && !taps(c), "{}", c.id);
+        assert!(drags(c) && !taps(c), "{}", c.id);
     }
     // Without it, the volume is a button whose tap mutes.
-    assert!(!out[2].slider && taps(&out[2]) && !drags(&out[2]));
+    assert!(taps(&out[2]) && !drags(&out[2]));
     assert!(!matches!(out[2].content, Content::Slider { .. }));
 }
 
@@ -734,11 +740,14 @@ fn systemd_failed_units() {
     let c = run("", &some);
     assert_eq!(text(&c[0]), "2 failed");
     assert!(c[0].classes.contains(&"degraded".to_owned()));
-    let labels: Vec<&str> = c[0].menu.iter().map(|e| e.label.as_str()).collect();
+    let Some(Do::Agent(Act::Menu { items, .. })) = c[0].binding(Gesture::Tap) else {
+        panic!("a tap opens the menu: {:?}", c[0].on);
+    };
+    let labels: Vec<&str> = items.iter().map(|e| e.label.as_str()).collect();
     assert_eq!(labels, ["nfs.mount", "pipewire.service (user)"]);
     assert_eq!(
-        c[0].menu[1].on_tap,
-        Action::Exec(
+        items[1].on_tap,
+        Do::Run(Action::Exec(
             [
                 "xdg-terminal-exec",
                 "systemctl",
@@ -748,12 +757,7 @@ fn systemd_failed_units() {
             ]
             .map(String::from)
             .into()
-        )
-    );
-    assert!(
-        c[0].on
-            .iter()
-            .any(|(g, a)| *g == Gesture::Tap && *a == Action::ModuleAction("menu:open".into()))
+        ))
     );
     let c = run(
         "user = false\nformat = \"{nr_failed_system}/{nr_failed_user}: {units}\"",

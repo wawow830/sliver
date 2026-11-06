@@ -11,6 +11,7 @@ use sliver_config::{
 use sliver_ipc::proto::{DisplayState, KeyMode, Layer, TouchPhase};
 use sliver_render::{Renderer, Stylesheet};
 
+use crate::act::Do;
 use crate::frame::{self, Frame};
 use crate::gesture::{Bindings, Gesture, Recognizer};
 use crate::icons::Icons;
@@ -18,6 +19,7 @@ use crate::modules::{self, Cell, UiState, World};
 
 mod actions;
 mod input;
+mod overlay;
 
 use input::*;
 
@@ -169,23 +171,12 @@ pub struct Agent {
     graphs: HashMap<String, (std::collections::VecDeque<f32>, Option<DateTime<Local>>)>,
     /// The emoji picker's recents (shared with the worlds it draws).
     emoji: modules::EmojiHandle,
-    /// An open `menu` sub-bar: the entries it shows.
-    menu: Option<Vec<sliver_config::MenuEntry>>,
-    /// The button whose `menu` is open: its entries' module actions act on it (which window to
-    /// close, for instance).
-    menu_owner: Option<Cell>,
-    /// Where that button was among the zones the menu covers (offset from the menu's start,
-    /// width): the menu's ✕ takes its place, under the finger that opened it.
-    menu_slot: Option<(f32, f32)>,
+    /// A menu, drawer sub-bar or popover covering the bar.
+    overlay: Option<overlay::Overlay>,
     /// Sliders under a finger, by cell key: the value there, and when it was let go. They show
     /// it at once (the system's level is set at most every [`DRAG_INTERVAL_US`] and reported back
     /// later), and after release until the system reports it or [`HELD_GRACE`] passes.
     under_finger: HashMap<String, (f32, Option<std::time::Instant>)>,
-    /// An open popover a published item showed (api.md §3): context, popover item id, and the
-    /// context's class (`app` / `status`).
-    popover: Option<(sliver_api::registry::ContextId, String, String)>,
-    /// An open bar-mode drawer: the group's key.
-    subbar: Option<String>,
     /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
     pub hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
@@ -203,7 +194,7 @@ pub struct Agent {
 
 #[derive(Debug, Clone)]
 enum Scheduled {
-    Action(Action),
+    Do(Do),
     CloseDrawer(String),
     CloseMenu,
     /// A running timer reaches zero (ignored if it was paused or reset since).
@@ -271,12 +262,8 @@ impl Agent {
             errors: Vec::new(),
             graphs: HashMap::new(),
             emoji: Default::default(),
-            menu: None,
-            menu_owner: None,
-            menu_slot: None,
+            overlay: None,
             under_finger: HashMap::new(),
-            popover: None,
-            subbar: None,
         }
     }
 
@@ -548,78 +535,6 @@ impl Agent {
             world_pushed.published.configured = configured;
             &world_pushed
         };
-        // A modal app context covers everything but the user's first zone (api.md §4).
-        let modal = (id_base == 0 && world.published.modal)
-            .then(|| world.published.app.clone())
-            .flatten();
-        // An open popover replaces everything but the first zone, over a modal context too.
-        let mut popover = match (id_base, self.popover.clone()) {
-            (0, Some((ctx, item, class))) => {
-                let cells = world
-                    .published
-                    .contexts()
-                    .find(|c| c.id == ctx)
-                    .and_then(|c| {
-                        crate::published::popover_cells(
-                            c,
-                            &item,
-                            &class,
-                            &mut self.icons,
-                            ICON_LOOKUP_SIZE,
-                        )
-                    });
-                if cells.is_none() {
-                    // Its context or item went away (app closed, focus moved): it's closed.
-                    self.popover = None;
-                }
-                cells
-            }
-            _ => None,
-        };
-        let modal = if popover.is_some() { None } else { modal };
-        let mut zones = r.zones.clone();
-        if popover.is_some() && !zones.is_empty() {
-            zones.truncate(1);
-            zones.push(sliver_config::ResolvedZone {
-                name: "popover".into(),
-                width: sliver_config::Width::Fill(1),
-                align: sliver_config::Align::Start,
-                class: vec!["menu".into(), "popover".into()],
-                modules: Vec::new(),
-            });
-        }
-        let menu = (id_base == 0 && modal.is_none() && popover.is_none())
-            .then(|| self.menu.clone())
-            .flatten();
-        let subbar = (id_base == 0 && modal.is_none() && popover.is_none())
-            .then(|| self.subbar.clone())
-            .flatten();
-        if (menu.is_some() || subbar.is_some()) && !zones.is_empty() {
-            // A menu's entries fit their labels, so the layout's last zone (volume, say) stays
-            // too, unless it's the only one to cover; a drawer's items take the room.
-            let last = (menu.is_some() && zones.len() > 2)
-                .then(|| zones.pop())
-                .flatten();
-            zones.truncate(1);
-            zones.push(sliver_config::ResolvedZone {
-                name: "menu".into(),
-                width: sliver_config::Width::Fill(1),
-                align: sliver_config::Align::Start,
-                class: vec!["menu".into()],
-                modules: Vec::new(),
-            });
-            zones.extend(last);
-        }
-        if modal.is_some() && !zones.is_empty() {
-            zones.truncate(1);
-            zones.push(sliver_config::ResolvedZone {
-                name: "modal".into(),
-                width: sliver_config::Width::Fill(1),
-                align: sliver_config::Align::Start,
-                class: vec!["modal".into()],
-                modules: Vec::new(),
-            });
-        }
         let ui = &self.ui;
         let (graphs, config) = (&self.graphs, &self.config);
         let lookup = |k: &str| {
@@ -629,84 +544,33 @@ impl Agent {
             }
             s
         };
+        // A menu, drawer, popover or modal app context covers all but the first zone (api.md §4).
+        let mut cover = (id_base == 0)
+            .then(|| overlay::cover(&mut self.overlay, &r.zones, world, &mut self.icons, &lookup))
+            .flatten();
+        let modal = cover.as_ref().is_some_and(|c| c.modal);
+        let (zones, covered) = overlay::zones(&r.zones, cover.as_ref());
         let hidden = &self.hidden_modules;
         let per_zone: Vec<Vec<Cell>> = zones
             .iter()
-            .map(|z| {
-                if z.name == "popover"
-                    && let Some(mut cells) = popover.take()
-                {
-                    for c in &mut cells {
-                        c.pressed = self.pressed.contains(&c.key);
+            .enumerate()
+            .map(|(zi, z)| {
+                let mut cells = match cover.as_mut().filter(|_| covered == Some(zi)) {
+                    Some(c) => std::mem::take(&mut c.cells),
+                    None => {
+                        let mut cells = Vec::new();
+                        modules::cells(
+                            &z.modules,
+                            world,
+                            &mut self.icons,
+                            ICON_LOOKUP_SIZE,
+                            &lookup,
+                            &mut cells,
+                        );
+                        cells.retain(|c| !hidden.contains(&c.id) && !hidden.contains(&c.key));
+                        cells
                     }
-                    return cells;
-                }
-                if z.name == "menu"
-                    && menu.is_none()
-                    && let Some(key) = &subbar
-                {
-                    // Looked up in the full zone list (the sub-bar replaces all but the first).
-                    let mut cells = crate::modules::subbar_cells(
-                        &r.zones,
-                        key,
-                        world,
-                        &mut self.icons,
-                        ICON_LOOKUP_SIZE,
-                        &lookup,
-                    )
-                    .unwrap_or_default();
-                    for c in &mut cells {
-                        c.pressed = self.pressed.contains(&c.key);
-                    }
-                    return cells;
-                }
-                if z.name == "menu"
-                    && let Some(entries) = &menu
-                {
-                    let mut cells = crate::modules::menu_cells(
-                        entries,
-                        self.menu_slot,
-                        &mut self.icons,
-                        ICON_LOOKUP_SIZE,
-                    );
-                    for c in &mut cells {
-                        c.pressed = self.pressed.contains(&c.key);
-                    }
-                    return cells;
-                }
-                if z.name == "modal"
-                    && let Some(ctx) = &modal
-                {
-                    let mut cells = Vec::new();
-                    crate::published::cells(
-                        ctx,
-                        "app",
-                        true,
-                        &mut self.icons,
-                        ICON_LOOKUP_SIZE,
-                        &|_| false,
-                        &mut cells,
-                    );
-                    cells.push(crate::published::close_cell(
-                        ctx,
-                        &mut self.icons,
-                        ICON_LOOKUP_SIZE,
-                    ));
-                    for c in &mut cells {
-                        c.pressed = self.pressed.contains(&c.key);
-                    }
-                    return cells;
-                }
-                let mut cells = Vec::new();
-                modules::cells(
-                    &z.modules,
-                    world,
-                    &mut self.icons,
-                    ICON_LOOKUP_SIZE,
-                    &lookup,
-                    &mut cells,
-                );
-                cells.retain(|c| !hidden.contains(&c.id) && !hidden.contains(&c.key));
+                };
                 for c in &mut cells {
                     c.pressed = self.pressed.contains(&c.key);
                     if let (Some(&(v, up)), sliver_render::Content::Slider { value, .. }) =
@@ -724,7 +588,7 @@ impl Agent {
             })
             .collect();
         let mut classes = vec![format!("layer-{}", r.layer), format!("layout-{}", r.layout)];
-        if modal.is_some() {
+        if modal {
             classes.push("modal".into());
         }
         let mut per_zone = per_zone;
@@ -947,7 +811,7 @@ impl Agent {
         self.scheduled = later;
         for (_, s) in due {
             match s {
-                Scheduled::Action(a) => self.execute(&a, None, None, now, &mut fx),
+                Scheduled::Do(d) => self.run(&d, None, None, now, &mut fx),
                 Scheduled::TimerDone { key, generation } => {
                     if let Some(t) = self.ui(&key).timer.as_mut()
                         && t.generation == generation
@@ -977,9 +841,8 @@ impl Agent {
                     }
                 }
                 Scheduled::CloseMenu => {
-                    if self.menu.take().is_some() {
-                        self.menu_owner = None;
-                        self.menu_slot = None;
+                    if matches!(self.overlay, Some(overlay::Overlay::Menu { .. })) {
+                        self.overlay = None;
                         fx.push(Effect::Redraw);
                     }
                 }

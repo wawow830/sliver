@@ -1,8 +1,11 @@
 //! The `mpris` module's spec.
 
 use super::*;
+use crate::agent::SessionOp;
+use sliver_session::mpris::Command;
 
-pub(super) fn mpris(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
+pub(super) fn mpris(at: &At) -> Option<Spec> {
+    let (m, world, ui) = (at.m, at.world, at.ui);
     let s = &world.session;
     // The picked player, if it is still there; else the session's choice.
     let media = ui
@@ -40,10 +43,20 @@ pub(super) fn mpris(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
         .map(|(k, v)| (k.to_owned(), v))
         .collect(),
     );
+    // Transport commands go to the picked player, else the session's.
+    let command = |cmd: Command| {
+        Act::Session(match &ui.player {
+            Some(player) => SessionOp::MediaOn {
+                player: player.clone(),
+                cmd,
+            },
+            None => SessionOp::Media(cmd),
+        })
+    };
     let mut sp = Spec::new(v, "{title}")
-        .on(Gesture::Tap, "play-pause")
-        .on(Gesture::SwipeLeft, "next")
-        .on(Gesture::SwipeRight, "previous");
+        .does(Gesture::Tap, "play-pause", command(Command::PlayPause))
+        .does(Gesture::SwipeLeft, "next", command(Command::Next))
+        .does(Gesture::SwipeRight, "previous", command(Command::Previous));
     sp.status = Some(status);
     // Album art as the icon (when it is the session's own player and has been fetched).
     let art = m
@@ -65,10 +78,11 @@ pub(super) fn mpris(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
             .position(|m| m.player == media.player)
             .unwrap_or(0);
         let next = &s.players[(idx + 1) % s.players.len()].player;
-        sp.defaults.push((
-            Gesture::Hold,
-            Action::ModuleAction(format!("player:{next}")),
-        ));
+        let pick = Act::Ui {
+            key: at.key.to_owned(),
+            change: UiChange::Player(next.clone()),
+        };
+        sp = sp.does(Gesture::Hold, "next-player", pick);
     }
     // `{position}` moves while playing: redraw each second (only while it's on the bar).
     let c = &m.common;
@@ -89,8 +103,10 @@ pub(super) fn mpris(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
             if media.can_seek {
                 sp.defaults
                     .retain(|(g, _)| *g != Gesture::SwipeLeft && *g != Gesture::SwipeRight);
-                sp.defaults
-                    .push((Gesture::Drag, Action::ModuleAction("seek".into())));
+                let seek = Act::Seek {
+                    player: ui.player.clone(),
+                };
+                sp = sp.does(Gesture::Drag, "seek", seek);
             }
             if playing {
                 sp.refresh = Some(std::time::Duration::from_secs(1));

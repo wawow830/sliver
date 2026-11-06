@@ -1,6 +1,7 @@
 //! The emoji picker strip and its search row.
 
 use super::*;
+use crate::act::{EmojiOp, Insert};
 
 /// The emoji picker as a row of cells: group tabs, one page of emoji, a close button.
 /// Tap an emoji to type it, tap a tab to switch group, swipe to page, ✕ to close the layer.
@@ -23,7 +24,8 @@ pub(super) fn emoji_strip(
         .config
         .get("insert")
         .and_then(|v| v.as_str())
-        .unwrap_or("auto");
+        .and_then(Insert::parse)
+        .unwrap_or(Insert::Auto);
     let recents = world.emoji.items();
     // An empty recents tab shows the first group rather than a blank bar.
     let tab = if ui.tab == 0 && recents.is_empty() {
@@ -49,38 +51,20 @@ pub(super) fn emoji_strip(
             .collect()
     };
     let offset = ui.offset.min(items.len().saturating_sub(cols));
-    let bare = |k: String, text: &str, w: f32, classes: &[&str], on: Vec<(Gesture, Action)>| Cell {
-        key: k,
-        id: m.id.to_string(),
-        kind: "emoji".into(),
-        mic: false,
-        slider: false,
-        css_id: m.css_id.clone(),
-        classes: classes
+    let bare = |k: String, text: &str, w: f32, classes: &[&str], on: Vec<(Gesture, Do)>| {
+        let content = Content::text(text);
+        let mut c = Cell::new(k, m.id.to_string(), "emoji", m.css_id.clone(), content);
+        c.classes = classes
             .iter()
             .map(|c| c.to_string())
             .chain(m.classes.iter().cloned())
-            .collect(),
-        width: Width::Fixed(w),
-        content: Content::markup(sliver_render::markup::escape(text)),
-        touch: Touch::Agent,
-        on,
-        next_change: None,
-        pressed: false,
-        checked: false,
-        drawer: None,
-        disabled: false,
-        foreground: None,
-        background: None,
-        published: None,
-        pass_through: false,
-        target: None,
-        timer_total: None,
-        menu: Vec::new(),
-        slot: None,
-        spectrum: Vec::new(),
+            .collect();
+        c.width = Width::Fixed(w);
+        c.touch = Touch::Agent;
+        c.on = on;
+        c
     };
-    let act = |name: String| Action::ModuleAction(name);
+    let act = |op: EmojiOp| emoji_act(key, op);
     if let Some(query) = ui.search.as_ref().filter(|_| ui.tones.is_none()) {
         search_strip(m, key, world, ui, query, insert, &bare, out);
         return;
@@ -96,7 +80,7 @@ pub(super) fn emoji_strip(
             icon,
             52.0,
             &["emoji-tab"],
-            vec![(Gesture::Tap, act(format!("tab:{t}")))],
+            vec![(Gesture::Tap, act(EmojiOp::Tab(t)))],
         );
         c.checked = t == tab;
         out.push(c);
@@ -106,7 +90,7 @@ pub(super) fn emoji_strip(
         "🔍",
         52.0,
         &["emoji-tab", "emoji-search"],
-        vec![(Gesture::Tap, act("search".into()))],
+        vec![(Gesture::Tap, act(EmojiOp::Search))],
     ));
     let tones = ui
         .tones
@@ -119,7 +103,7 @@ pub(super) fn emoji_strip(
             "‹",
             52.0,
             &["emoji-back"],
-            vec![(Gesture::Tap, act("tones-close".into()))],
+            vec![(Gesture::Tap, act(EmojiOp::Tones(None)))],
         ));
         for (i, text) in std::iter::once(plain).chain(variants).enumerate() {
             out.push(bare(
@@ -127,18 +111,18 @@ pub(super) fn emoji_strip(
                 text,
                 76.0,
                 &["emoji", "emoji-tone"],
-                vec![(Gesture::Tap, act(format!("pick:{insert}:{text}")))],
+                vec![(Gesture::Tap, pick(key, insert, text))],
             ));
         }
     } else {
         for (i, (text, plain)) in items.iter().enumerate().skip(offset).take(cols) {
             let mut on = vec![
-                (Gesture::Tap, act(format!("pick:{insert}:{text}"))),
-                (Gesture::SwipeLeft, act(format!("page:{}", cols))),
-                (Gesture::SwipeRight, act(format!("page:-{}", cols))),
+                (Gesture::Tap, pick(key, insert, text)),
+                (Gesture::SwipeLeft, act(EmojiOp::Page(cols as i64))),
+                (Gesture::SwipeRight, act(EmojiOp::Page(-(cols as i64)))),
             ];
             if let Some(p) = plain {
-                on.push((Gesture::Hold, act(format!("tones:{p}"))));
+                on.push((Gesture::Hold, act(EmojiOp::Tones(Some(p.to_string())))));
             }
             out.push(bare(format!("{key}/e{i}"), text, 76.0, &["emoji"], on));
         }
@@ -148,14 +132,29 @@ pub(super) fn emoji_strip(
         "✕",
         52.0,
         &["emoji-close"],
-        vec![(Gesture::Tap, act("close".into()))],
+        vec![(Gesture::Tap, Do::Run(Action::CloseLayer))],
     ));
 }
 
 /// How many results fit next to the keys.
 pub(super) const SEARCH_RESULTS: usize = 6;
 
-pub(super) type Bare<'a> = dyn Fn(String, &str, f32, &[&str], Vec<(Gesture, Action)>) -> Cell + 'a;
+pub(super) type Bare<'a> = dyn Fn(String, &str, f32, &[&str], Vec<(Gesture, Do)>) -> Cell + 'a;
+
+/// A control of the strip `key`.
+fn emoji_act(key: &str, op: EmojiOp) -> Do {
+    Act::Ui {
+        key: key.to_owned(),
+        change: UiChange::Emoji(op),
+    }
+    .into()
+}
+
+/// On the strip `key`: type `text`, the way the module's `insert` says.
+fn pick(key: &str, insert: Insert, text: &str) -> Do {
+    let text = text.to_owned();
+    emoji_act(key, EmojiOp::Pick { insert, text })
+}
 
 /// Emoji search: no keyboard is grabbed. A row of letters (and a space) builds the query on the
 /// bar itself; the matches (names, word prefixes) sit at the right, swipe to page. ⌫ erases,
@@ -167,11 +166,11 @@ pub(super) fn search_strip(
     world: &World,
     ui: &EmojiUi,
     query: &str,
-    insert: &str,
+    insert: Insert,
     bare: &Bare<'_>,
     out: &mut Vec<Cell>,
 ) {
-    let act = |name: String| Action::ModuleAction(name);
+    let act = |op: EmojiOp| emoji_act(key, op);
     let shown = if query.is_empty() {
         "🔍".to_string()
     } else {
@@ -182,7 +181,7 @@ pub(super) fn search_strip(
         &shown,
         150.0,
         &["emoji-query"],
-        vec![(Gesture::Tap, act("s-clear".into()))],
+        vec![(Gesture::Tap, act(EmojiOp::Erase { all: true }))],
     ));
     for c in "abcdefghijklmnopqrstuvwxyz ".chars() {
         let label = if c == ' ' {
@@ -195,7 +194,7 @@ pub(super) fn search_strip(
             &label,
             36.0,
             &["emoji-key"],
-            vec![(Gesture::Tap, act(format!("s:{c}")))],
+            vec![(Gesture::Tap, act(EmojiOp::Type(c)))],
         ));
     }
     out.push(bare(
@@ -203,19 +202,20 @@ pub(super) fn search_strip(
         "⌫",
         52.0,
         &["emoji-key", "emoji-back"],
-        vec![(Gesture::Tap, act("s-back".into()))],
+        vec![(Gesture::Tap, act(EmojiOp::Erase { all: false }))],
     ));
     let hits = sliver_emoji::search(query, 120);
     let offset = ui.offset.min(hits.len().saturating_sub(SEARCH_RESULTS));
     for (i, e) in hits.iter().enumerate().skip(offset).take(SEARCH_RESULTS) {
         let text = world.emoji.preferred(e);
+        let page = SEARCH_RESULTS as i64;
         let mut on = vec![
-            (Gesture::Tap, act(format!("pick:{insert}:{text}"))),
-            (Gesture::SwipeLeft, act(format!("page:{SEARCH_RESULTS}"))),
-            (Gesture::SwipeRight, act(format!("page:-{SEARCH_RESULTS}"))),
+            (Gesture::Tap, pick(key, insert, &text)),
+            (Gesture::SwipeLeft, act(EmojiOp::Page(page))),
+            (Gesture::SwipeRight, act(EmojiOp::Page(-page))),
         ];
         if e.tones.is_some() {
-            on.push((Gesture::Hold, act(format!("tones:{}", e.text))));
+            on.push((Gesture::Hold, act(EmojiOp::Tones(Some(e.text.to_string())))));
         }
         out.push(bare(format!("{key}/e{i}"), &text, 64.0, &["emoji"], on));
     }
@@ -234,6 +234,6 @@ pub(super) fn search_strip(
         "✕",
         52.0,
         &["emoji-close"],
-        vec![(Gesture::Tap, act("s-close".into()))],
+        vec![(Gesture::Tap, act(EmojiOp::EndSearch))],
     ));
 }

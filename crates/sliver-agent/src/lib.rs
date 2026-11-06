@@ -31,6 +31,7 @@
 //!   `catch_unwind`, so a panicking module leaves that layer's last good frame up. Fixed-seed
 //!   random inputs in `tests/robustness.rs` check that nothing panics.
 
+pub mod act;
 pub mod agent;
 pub mod api;
 pub mod context;
@@ -50,6 +51,6 @@ pub mod privacy;
 pub mod published;
 pub mod reload;
 pub mod stats;
-
 pub mod wait;
+
 pub use agent::Agent;

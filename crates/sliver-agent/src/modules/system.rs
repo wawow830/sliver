@@ -2,6 +2,12 @@
 //! and services.
 
 use super::*;
+use crate::act::Level;
+use crate::agent::SessionOp;
+
+fn session(op: SessionOp) -> Act {
+    Act::Session(op)
+}
 
 pub(super) fn battery(world: &World) -> Option<Spec> {
     let s = &world.session;
@@ -44,8 +50,8 @@ pub(super) fn backlight(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let mut sp = Spec::new(ValueMap::new().with("percent", level as f64), "{percent}%").icon(icon);
     sp.percentage = pct(Some(level));
     sp.level = Some(f32::from(level.min(100)) / 100.0);
-    sp.settable = true;
-    Some(sp)
+    let which = if kbd { Level::Keyboard } else { Level::Screen };
+    Some(sp.verb("set", Act::Set(which)))
 }
 
 pub(super) fn audio(m: &ModuleInstance, world: &World) -> Option<Spec> {
@@ -68,9 +74,12 @@ pub(super) fn audio(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let mut sp = Spec::new(ValueMap::new().with("volume", vol as f64), "{volume}%").icon(icon);
     sp.percentage = pct(Some(vol));
     sp.level = Some(f32::from(vol.min(100)) / 100.0);
-    sp.settable = true;
     sp.status = muted.then_some("muted");
-    Some(sp.on(Gesture::Tap, "toggle-mute"))
+    Some(sp.verb("set", Act::Set(Level::Volume { mic })).does(
+        Gesture::Tap,
+        "toggle-mute",
+        session(SessionOp::ToggleMute { mic }),
+    ))
 }
 
 pub(super) fn idle_inhibitor(world: &World) -> Option<Spec> {
@@ -80,7 +89,7 @@ pub(super) fn idle_inhibitor(world: &World) -> Option<Spec> {
         ValueMap::new().with("status", if on { "activated" } else { "deactivated" }),
         "☕",
     )
-    .on(Gesture::Tap, "toggle");
+    .does(Gesture::Tap, "toggle", session(SessionOp::ToggleCaffeine));
     sp.status = Some(if on { "activated" } else { "deactivated" });
     sp.checked = on;
     Some(sp)
@@ -169,7 +178,11 @@ pub(super) fn network(m: &ModuleInstance, world: &World) -> Option<Spec> {
         "disconnected" | "connecting" => "",
         _ => "{ifname}",
     };
-    let mut sp = Spec::new(v, default).icon(icon).on(Gesture::Tap, "toggle");
+    let mut sp = Spec::new(v, default).icon(icon).does(
+        Gesture::Tap,
+        "toggle",
+        session(SessionOp::ToggleWifi),
+    );
     sp.percentage = n.signal_pct.map(f64::from);
     sp.status = Some(status);
     sp.checked = n.wifi_enabled == Some(true) && status != "disconnected";
@@ -212,7 +225,11 @@ pub(super) fn bluetooth(world: &World) -> Option<Spec> {
     } else {
         ""
     };
-    let mut sp = Spec::new(v, default).icon(icon).on(Gesture::Tap, "toggle");
+    let mut sp = Spec::new(v, default).icon(icon).does(
+        Gesture::Tap,
+        "toggle",
+        session(SessionOp::ToggleBluetooth),
+    );
     sp.status = Some(status);
     sp.checked = status == "connected";
     Some(sp)
@@ -249,8 +266,12 @@ pub(super) fn notifications(world: &World) -> Option<Spec> {
         } else {
             "notifications-symbolic"
         })
-        .on(Gesture::Tap, "open")
-        .on(Gesture::SwipeLeft, "dismiss")
+        .does(Gesture::Tap, "open", session(SessionOp::OpenNotification))
+        .does(
+            Gesture::SwipeLeft,
+            "dismiss",
+            session(SessionOp::DismissNotification),
+        )
         .on(Gesture::SwipeRight, "dismiss");
     sp.status = Some(if n.count > 0 { "pending" } else { "none" });
     sp.extra_classes = n
@@ -305,9 +326,7 @@ pub(super) fn failed_units(m: &ModuleInstance, world: &World) -> Option<Spec> {
         },
     );
     if total > 0 {
-        sp = sp
-            .icon("dialog-warning-symbolic")
-            .on(Gesture::Tap, "menu:open");
+        sp = sp.icon("dialog-warning-symbolic").on(Gesture::Tap, "menu");
     }
     sp.status = Some(status);
     sp.menu = names
@@ -318,14 +337,14 @@ pub(super) fn failed_units(m: &ModuleInstance, world: &World) -> Option<Spec> {
                 argv.push("--user".into());
             }
             argv.extend(["status".to_owned(), (*u).clone()]);
-            sliver_config::MenuEntry {
+            MenuItem {
                 label: if *is_user {
                     format!("{u} (user)")
                 } else {
                     (*u).clone()
                 },
                 icon: None,
-                on_tap: Action::Exec(argv),
+                on_tap: Do::Run(Action::Exec(argv)),
             }
         })
         .collect();
@@ -347,9 +366,7 @@ pub(super) fn dnd(world: &World) -> Option<Spec> {
     });
     sp.status = Some(if on { "on" } else { "off" });
     sp.checked = on;
-    sp.defaults
-        .push((Gesture::Tap, Action::ModuleAction("toggle".into())));
-    Some(sp)
+    Some(sp.does(Gesture::Tap, "toggle", session(SessionOp::ToggleDnd)))
 }
 
 /// Light/dark colour scheme, when the portal reports one.
@@ -367,9 +384,7 @@ pub(super) fn dark_mode(world: &World) -> Option<Spec> {
     });
     sp.status = Some(if dark { "dark" } else { "light" });
     sp.checked = dark;
-    sp.defaults
-        .push((Gesture::Tap, Action::ModuleAction("toggle".into())));
-    Some(sp)
+    Some(sp.does(Gesture::Tap, "toggle", session(SessionOp::ToggleDark)))
 }
 
 /// Who is recording the microphone, the camera or the screen (PipeWire). One item per kind
@@ -390,7 +405,7 @@ pub(super) fn privacy(world: &World, item: Option<usize>) -> Option<Spec> {
         _ => ("audio-input-microphone-symbolic", "🎙"),
     };
     let mut sp = Spec::new(v, "").icon(icon);
-    sp.fallback_text = Some(text);
+    sp.fallback_text = Some(text.into());
     sp.status = Some(match kind {
         "screen" => "screen",
         "camera" => "camera",
@@ -404,25 +419,29 @@ pub(super) fn privacy(world: &World, item: Option<usize>) -> Option<Spec> {
 pub(super) fn screenshot() -> Option<Spec> {
     let mut sp = Spec::new(ValueMap::new(), "")
         .icon("applets-screenshooter-symbolic")
-        .on(Gesture::Tap, "screenshot");
-    sp.fallback_text = Some("📷");
+        .does(Gesture::Tap, "screenshot", Do::Run(screenshot_action()));
+    sp.fallback_text = Some("📷".into());
     Some(sp)
 }
 
 pub(super) fn lock() -> Option<Spec> {
     let mut sp = Spec::new(ValueMap::new(), "")
         .icon("system-lock-screen-symbolic")
-        .on(Gesture::Tap, "lock");
-    sp.fallback_text = Some("🔒");
+        .does(Gesture::Tap, "lock", Do::Run(lock_action()));
+    sp.fallback_text = Some("🔒".into());
     Some(sp)
 }
 
 /// Tap: lock and suspend. Hold: reboot and power off, so they can't be tapped by accident.
-pub(super) fn power() -> Option<Spec> {
+pub(super) fn power(key: &str) -> Option<Spec> {
+    let more = Act::Menu {
+        key: key.to_owned(),
+        items: power_menu(true),
+    };
     let mut sp = Spec::new(ValueMap::new(), "")
         .icon("system-shutdown-symbolic")
-        .on(Gesture::Hold, "power:hold");
-    sp.fallback_text = Some("⏻");
+        .does(Gesture::Hold, "shutdown", more);
+    sp.fallback_text = Some("⏻".into());
     sp.menu = power_menu(false);
     Some(sp)
 }
