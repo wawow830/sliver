@@ -1,44 +1,46 @@
 #!/usr/bin/env bash
 # The gate every change to main passes (CI runs it too). Keep it fast, deterministic and hardware-free.
+# Each step runs a test suite or a file format's own validator; what a step checks lives beside the
+# files it checks.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-echo "== safe-swap harness"
+# Nothing the checks start may outlive them (orphaned test daemons and helpers pile up on the
+# developer's machine): leftovers are listed and killed, and fail the gate, however it ends.
+gate=$$
+finish() {
+  local rc=$?
+  echo "== no orphaned processes"
+  python3 scripts/orphans.py --since "$gate" --root "$PWD" || rc=1
+  [[ $rc -eq 0 ]] && echo "check: ok"
+  exit "$rc"
+}
+trap finish EXIT
+
+echo "== harness and packaging"
 python3 -m unittest discover -s harness/safeswap -p 'test_*.py' -q
 python3 -m unittest discover -s harness/checks -p 'test_*.py' -q
+python3 -m unittest discover -s packaging -p 'test_*.py' -q
 
 echo "== docs"
 # Every docs/ path named in the tree exists: references are kept pointing at what exists (ADR-0006).
 missing=$(git grep -ohE 'docs/[A-Za-z0-9_/-]+\.(md|xml)' | sort -u | while read -r p; do [[ -e $p ]] || echo "$p"; done)
 [[ -z $missing ]] || { echo "named but missing: $missing"; exit 1; }
 
-if [[ -f Cargo.toml ]]; then
-  echo "== cargo fmt";   cargo fmt --all -- --check
-  echo "== cargo clippy"; cargo clippy --workspace --all-targets --quiet -- -D warnings
-  echo "== cargo test";  cargo test --workspace --quiet
+echo "== cargo fmt";   cargo fmt --all -- --check
+echo "== cargo clippy"; cargo clippy --workspace --all-targets --quiet -- -D warnings
+echo "== cargo test";  cargo test --workspace --quiet
+
+# Tests must never start the real audio tools (they leak `pactl subscribe` orphans and touch the
+# real PipeWire): fakes go through audio::Tools { wpctl, pactl } or SessionOptions::hermetic().
+if grep -rnE 'Tools::default\(\)|SessionOptions::default\(\)|Command::new\("(pactl|wpctl)"\)' crates/*/tests; then
+  echo "tests must not start the real wpctl/pactl"; exit 1
 fi
 
-# The installed sliverd must be allowed past sliver-hw's harness gate, and must not pretend to be
-# a harness run.
-grep -qx 'Environment=SLIVER_SYSTEM_UNIT=1' packaging/systemd/sliverd.service \
-  || { echo "sliverd.service must set Environment=SLIVER_SYSTEM_UNIT=1"; exit 1; }
-! grep -q 'SLIVER_SAFESWAP' packaging/systemd/sliverd.service \
-  || { echo "sliverd.service must not set SLIVER_SAFESWAP"; exit 1; }
-# Conflicts=tiny-dfr stops the fallback even for starts the start limit refuses, which leaves the
-# bar with no daemon. The handover is ExecStartPre= in both directions; itest-units.sh tests it.
-! grep -q '^Conflicts=.*tiny-dfr' packaging/systemd/sliverd.service packaging/systemd/sliverd.socket \
-  || { echo "sliverd units must not use Conflicts=tiny-dfr (see sliverd.service)"; exit 1; }
-# sliverd must start where tiny-dfr isn't installed (systemctl stop exits 5 for an unknown unit).
-grep -qF "ExecStartPre=+/bin/sh -c '/usr/bin/systemctl stop tiny-dfr.service; r=\$\$?; [ \$\$r -eq 0 ] || [ \$\$r -eq 5 ]'" \
-  packaging/systemd/sliverd.service \
-  || { echo "sliverd.service must stop tiny-dfr, tolerating only its absence (exit 5)"; exit 1; }
-grep -q '^ExecStartPre=+-/usr/bin/systemctl stop sliverd.socket sliverd.service' \
-  packaging/systemd/tiny-dfr.service.d/50-sliver.conf \
-  || { echo "tiny-dfr drop-in must stop sliverd"; exit 1; }
-# sliverd units + udev rules (ADR-0005). Skipped where the tools are missing. Full behaviour test:
-# packaging/itest-units.sh (needs a user systemd manager, ~10 s).
+# The files' own validators, where installed. The units' behaviour in a real user manager:
+# packaging/itest-units.sh (~10 s).
+echo "== validators"
 if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then
-  echo "== packaging"
   d=target/check-units && rm -rf "$d" && mkdir -p "$d"
   # Documentation= names man pages that are only on the system once the RPM is installed.
   sed -e 's|^ExecStart=.*|ExecStart=/usr/bin/true|' -e '/^Documentation=/d' \
@@ -48,61 +50,14 @@ if command -v systemd-analyze >/dev/null && command -v udevadm >/dev/null; then
   [[ -z "$out" ]] || { echo "$out"; exit 1; }
   udevadm verify --no-summary packaging/udev/*.rules
 fi
-if command -v rpmspec >/dev/null; then
-  rpmspec -P packaging/rpm/sliver.spec >/dev/null
-fi
-# A bare file path in %install (a %files line put in the wrong section) runs as a command and breaks
-# the build only after a 10-minute compile, so catch it here.
-if awk '/^%install/{i=1;next} /^%(check|files|post|pre|changelog)/{i=0} i && /^%\{_[a-z]+\}\//{print FILENAME": "FNR": "$0; bad=1} END{exit bad}' packaging/rpm/sliver.spec; then :; else
-  echo "packaging/rpm/sliver.spec: %files entries inside %install (see above)"; exit 1
-fi
-if command -v desktop-file-validate >/dev/null; then
-  desktop-file-validate packaging/desktop/*.desktop
-fi
-if command -v xmllint >/dev/null; then
-  xmllint --noout packaging/mime/*.xml
-fi
-
-# Tests must never start the real audio tools (they leak `pactl subscribe` orphans and touch the
-# real PipeWire): use fake scripts via audio::Tools { wpctl, pactl } or SessionOptions::hermetic().
-echo "== no real audio tools in tests"
-if grep -rnE 'Tools::default\(\)|SessionOptions::default\(\)|Command::new\("(pactl|wpctl)"\)' crates/*/tests 2>/dev/null; then
-  echo "tests must not start the real wpctl/pactl (see scripts/check)"; exit 1
-fi
-
+if command -v rpmspec >/dev/null; then rpmspec -P packaging/rpm/sliver.spec >/dev/null; fi
+if command -v desktop-file-validate >/dev/null; then desktop-file-validate packaging/desktop/*.desktop; fi
+if command -v xmllint >/dev/null; then xmllint --noout packaging/mime/*.xml; fi
 if command -v node >/dev/null; then
-  echo "== desktop integration scripts"
   for f in integration/kwin/sliver-focus/contents/code/main.js integration/gnome-shell/*/extension.js integration/browser/extension/background.js; do
     tmp=$(mktemp --suffix=.mjs); cp "$f" "$tmp"; node --check "$tmp"; rm -f "$tmp"
   done
-  for f in integration/kwin/sliver-focus/metadata.json integration/gnome-shell/*/metadata.json integration/browser/extension/*.json integration/browser/native/*.json; do
-    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f"
-  done
 fi
-
-# The agent must come back from a stray SIGTERM (systemd counts it as a clean exit).
-grep -qx 'Restart=always' packaging/systemd/user/sliver-agent.service \
-  || { echo "sliver-agent.service needs Restart=always"; exit 1; }
-
-# The RPM must not send udev events to the digitizers: SYSTEMD_WANTS=sliverd.service fires on
-# 'change' too, so that would take the bar over at every install and upgrade.
-! grep -E '^\s*udevadm trigger.*subsystem-match=input' packaging/rpm/sliver.spec \
-  || { echo "sliver.spec must not trigger udev events on input devices (takes the bar over)"; exit 1; }
-
-# The Chromium extension's id comes from the public "key" in its manifest. The system
-# native-messaging manifest must allow exactly that id, or the packaged host won't connect.
-python3 - <<'PY'
-import base64, hashlib, json
-key = json.load(open("integration/browser/extension/manifest.chromium.json"))["key"]
-h = hashlib.sha256(base64.b64decode(key)).hexdigest()[:32]
-ext_id = "".join(chr(ord("a") + int(c, 16)) for c in h)
-allowed = json.load(open("integration/browser/native/io.github.wawow830.sliver_browser.chromium.json"))["allowed_origins"]
-assert f"chrome-extension://{ext_id}/" in allowed, f"chromium native manifest must allow {ext_id}"
-PY
-
-# Nothing the checks started may outlive them: orphaned test daemons and helpers pile up on the
-# developer's machine. Lists and kills leftovers, then fails.
-echo "== no orphaned processes"
-python3 scripts/orphans.py --since $$ --root "$PWD"
-
-echo "check: ok"
+for f in integration/kwin/sliver-focus/metadata.json integration/gnome-shell/*/metadata.json integration/browser/extension/*.json integration/browser/native/*.json; do
+  python3 -m json.tool "$f" >/dev/null
+done
