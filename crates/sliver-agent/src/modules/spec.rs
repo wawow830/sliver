@@ -184,8 +184,20 @@ pub(super) struct At<'a> {
     pub(super) m: &'a ModuleInstance,
     pub(super) key: &'a str,
     pub(super) world: &'a World,
+    pub(super) placed: &'a Placed,
     pub(super) ui: &'a UiState,
     pub(super) item: Option<Part>,
+}
+
+impl At<'_> {
+    /// The module's latest output: its script's, else what `sliverctl update` gave it.
+    pub(super) fn output(&self) -> Option<&crate::scripts::Output> {
+        let id = self.m.id.to_string();
+        self.world
+            .outputs
+            .get(&id)
+            .or_else(|| self.placed.pushed.get(&id))
+    }
 }
 
 /// The module's spec for this world, or `None` to hide it (no data, nothing to show).
@@ -250,8 +262,8 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
         Some(sp)
     }),
     ("custom", |at| {
-        if at.world.outputs.contains_key(&at.m.id.to_string()) {
-            widgets::custom_output(at.m, at.world)
+        if at.output().is_some() {
+            widgets::custom_output(at)
         } else {
             // No script, or none has printed yet: its `format` alone.
             Some(Spec::new(ValueMap::new(), ""))
@@ -259,7 +271,7 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
     }),
     ("graph", |at| widgets::graph(at.m, at.world, at.ui)),
     ("cava", |at| widgets::cava(at.m, at.world)),
-    ("image", |at| widgets::image(at.m, at.world)),
+    ("image", widgets::image),
     ("clock", widgets::clock),
     ("emoji", |_| widgets::emoji()),
     ("timer", widgets::timer),

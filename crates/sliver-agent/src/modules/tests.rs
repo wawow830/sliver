@@ -17,6 +17,7 @@ fn build(toml: &str, layer: &str) -> Vec<Cell> {
         cells(
             &z.modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &world(),
                 icons: &mut icons,
                 icon_size: 36,
@@ -56,6 +57,7 @@ fn stat_cells(toml: &str, w: &World) -> Vec<Cell> {
         cells(
             &z.modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: w,
                 icons: &mut icons,
                 icon_size: 36,
@@ -94,6 +96,7 @@ fn clock_time_zones_and_locale() {
         cells(
             &r.zones[0].modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &world(),
                 icons: &mut icons,
                 icon_size: 36,
@@ -121,6 +124,7 @@ fn clock_time_zones_and_locale() {
     cells(
         &r.zones[0].modules,
         &mut Build {
+            placed: &Placed::default(),
             world: &world(),
             icons: &mut icons,
             icon_size: 36,
@@ -569,6 +573,7 @@ fn preview_shows_samples_and_placeholders() {
         cells(
             &z.modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &w,
                 icons: &mut icons,
                 icon_size: 36,
@@ -624,6 +629,7 @@ fn slider_is_one_switch_for_every_module_with_a_level() {
         cells(
             &z.modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &w,
                 icons: &mut Icons::builtin_only(),
                 icon_size: 36,
@@ -660,6 +666,7 @@ fn graphs_preview_with_a_made_up_history() {
         cells(
             &z.modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &w,
                 icons: &mut icons,
                 icon_size: 36,
@@ -692,6 +699,7 @@ fn pinned_app_placeholders_have_short_labels() {
         cells(
             &z.modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &w,
                 icons: &mut icons,
                 icon_size: 36,
@@ -734,6 +742,7 @@ fn systemd_failed_units() {
             cells(
                 &z.modules,
                 &mut Build {
+                    placed: &Placed::default(),
                     world: &w,
                     icons: &mut icons,
                     icon_size: 36,
@@ -822,6 +831,7 @@ fn placeholders_take_the_module_width() {
         cells(
             &z.modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &w,
                 icons: &mut icons,
                 icon_size: 36,
@@ -889,6 +899,7 @@ fn drawer_options_class_direction_and_start() {
     cells(
         &r.zones[0].modules,
         &mut Build {
+            placed: &Placed::default(),
             world: &world(),
             icons: &mut icons,
             icon_size: 36,
@@ -932,6 +943,7 @@ fn user_module_output_is_formatted_like_any_module() {
         cells(
             &r.zones[0].modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &w,
                 icons: &mut Icons::builtin_only(),
                 icon_size: 36,
@@ -1053,6 +1065,7 @@ fn every_module_type_reads_its_keys_as_declared() {
         cells(
             &r.zones[0].modules,
             &mut Build {
+                placed: &Placed::default(),
                 world: &w,
                 icons: &mut icons,
                 icon_size: 36,

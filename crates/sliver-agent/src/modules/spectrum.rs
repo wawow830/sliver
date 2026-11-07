@@ -137,6 +137,7 @@ pub fn graph_sample(
                 m: &inst,
                 key: "",
                 world,
+                placed: &Placed::default(),
                 ui: &UiState::default(),
                 item: None,
             };

@@ -36,12 +36,6 @@ pub struct Published {
     /// The app context may cover Main + Controls.
     pub modal: bool,
     pub status: Vec<PubContext>,
-    /// Items the layout places itself (`app/<provider>#<item>`, or `app/<provider>` for a whole
-    /// context): they leave App controls / Status items. `None` = every item.
-    pub pinned: std::collections::HashSet<(String, Option<String>)>,
-    /// `[modules."app/<provider>#<item>"]` blocks for items that show in a placeholder: their
-    /// format, classes and bindings still apply. Keyed by module id.
-    pub configured: std::collections::HashMap<String, sliver_config::ModuleInstance>,
 }
 
 impl Published {
@@ -60,22 +54,11 @@ impl Published {
             app: r.app.and_then(get),
             modal: r.modal,
             status: r.status.into_iter().filter_map(get).collect(),
-            pinned: Default::default(),
-            configured: Default::default(),
         }
     }
 
     pub fn contexts(&self) -> impl Iterator<Item = &PubContext> {
         self.app.iter().chain(&self.status)
-    }
-
-    /// Is this item placed by the layout itself (so the placeholders skip it)?
-    pub fn is_pinned(&self, provider: &str, item: &str) -> bool {
-        !self.pinned.is_empty()
-            && (self.pinned.contains(&(provider.to_owned(), None))
-                || self
-                    .pinned
-                    .contains(&(provider.to_owned(), Some(item.to_owned()))))
     }
 
     /// Where a pinned `app/<provider>` module finds its items: the focused app's context, else a

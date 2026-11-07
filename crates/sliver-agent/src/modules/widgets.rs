@@ -5,8 +5,8 @@ use super::*;
 /// A user module's latest output, as values like any module's: `{text}` (also `{}`), `{alt}`,
 /// `{tooltip}` and `{percentage}`, its classes and icon, and `value` as a slider's level. Its
 /// text is markup already (`escape = true` escaped it in the runtime).
-pub(super) fn custom_output(m: &ModuleInstance, world: &World) -> Option<Spec> {
-    let out = &world.outputs[&m.id.to_string()];
+pub(super) fn custom_output(at: &At) -> Option<Spec> {
+    let out = at.output()?;
     if out.hidden {
         return None;
     }
@@ -89,8 +89,9 @@ pub(super) fn cava(m: &ModuleInstance, world: &World) -> Option<Spec> {
 
 /// waybar's `image`: `exec` prints the path (first line), else `path`. Hidden without
 /// one, like waybar.
-pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
-    let path = match world.outputs.get(&m.id.to_string()) {
+pub(super) fn image(at: &At) -> Option<Spec> {
+    let m = at.m;
+    let path = match at.output() {
         Some(out) if out.hidden => return None,
         Some(out) => out.text.lines().next().unwrap_or("").trim().to_owned(),
         None => m.text("path").unwrap_or("").trim().to_owned(),
@@ -105,7 +106,7 @@ pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
     if !m.has("exec")
         && let Some(sliver_config::Interval::Every(d)) = m.common.interval
     {
-        sp.redraw(world.now.wall, d);
+        sp.redraw(at.world.now.wall, d);
     }
     Some(sp)
 }

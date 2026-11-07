@@ -44,6 +44,7 @@ pub(super) fn cover(
     overlay: &mut Option<Overlay>,
     zones: &[ResolvedZone],
     world: &World,
+    placed: &modules::Placed,
     icons: &mut Icons,
     ui: &dyn Fn(&str) -> UiState,
 ) -> Option<Cover> {
@@ -96,6 +97,7 @@ pub(super) fn cover(
         Overlay::Drawer(key) => {
             let mut b = modules::Build {
                 world,
+                placed,
                 icons,
                 icon_size: ICON_LOOKUP_SIZE,
                 ui,

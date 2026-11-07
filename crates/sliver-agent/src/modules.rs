@@ -110,8 +110,30 @@ pub enum Opens {
 }
 
 /// `ui` gives each cell's agent-side state, by cell key.
+/// What the agent adds to the world for one frame.
+#[derive(Debug, Default)]
+pub struct Placed {
+    /// Output given with `sliverctl update` to modules without `exec`. A script's output wins.
+    pub pushed: HashMap<String, crate::scripts::Output>,
+    /// Published items the layout places itself (`app/<provider>#<item>`, or `app/<provider>`
+    /// for a whole context): App controls / Status items leave them out.
+    pub pinned: std::collections::HashSet<(String, Option<String>)>,
+    /// `[modules."app/<provider>#<item>"]` blocks for items that show in a placeholder, by id.
+    pub configured: HashMap<String, ModuleInstance>,
+}
+
+impl Placed {
+    pub fn is_pinned(&self, provider: &str, item: &str) -> bool {
+        self.pinned.contains(&(provider.to_owned(), None))
+            || self
+                .pinned
+                .contains(&(provider.to_owned(), Some(item.to_owned())))
+    }
+}
+
 pub struct Build<'a> {
     pub world: &'a World,
+    pub placed: &'a Placed,
     pub icons: &'a mut Icons,
     pub icon_size: u32,
     pub ui: &'a dyn Fn(&str) -> UiState,
@@ -149,6 +171,7 @@ fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut V
                         m,
                         key: &key,
                         world: b.world,
+                        placed: b.placed,
                         ui: &ui,
                         item,
                     };

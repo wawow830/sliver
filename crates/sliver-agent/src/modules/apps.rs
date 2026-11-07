@@ -115,12 +115,12 @@ pub(super) fn placeholder_cells(
     let p = &world.published;
     if m.id.kind == "app-controls" {
         if let Some(ctx) = &p.app {
-            let skip = |id: &str| p.is_pinned(&ctx.provider, id);
+            let skip = |id: &str| b.placed.is_pinned(&ctx.provider, id);
             crate::published::cells(ctx, "app", icons, icon_size, &skip, out);
         }
     } else {
         for ctx in &p.status {
-            let skip = |id: &str| p.is_pinned(&ctx.provider, id);
+            let skip = |id: &str| b.placed.is_pinned(&ctx.provider, id);
             crate::published::cells(ctx, "status", icons, icon_size, &skip, out);
         }
     }
@@ -150,10 +150,10 @@ pub(super) fn placeholder_cells(
         c.key = format!("{prefix}{}", c.key);
     }
     // `[modules."app/<provider>#<item>"]` applies here too.
-    if !world.published.configured.is_empty() {
+    if !b.placed.configured.is_empty() {
         let cells: Vec<Cell> = out.drain(start..).collect();
         for cell in cells {
-            let conf = world.published.configured.get(&cell.id);
+            let conf = b.placed.configured.get(&cell.id);
             let ctx = cell
                 .id
                 .strip_prefix("app/")

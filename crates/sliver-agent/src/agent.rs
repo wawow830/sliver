@@ -561,20 +561,10 @@ impl Agent {
             })
             .filter_map(|id| Some((id.to_string(), self.config.instance(id, &self.ctx)?)))
             .collect();
-        let mut world_pushed;
-        let world = if self.pushed.is_empty() && pins.is_empty() && configured.is_empty() {
-            world
-        } else {
-            world_pushed = world.clone();
-            for (k, v) in &self.pushed {
-                world_pushed
-                    .outputs
-                    .entry(k.clone())
-                    .or_insert_with(|| v.clone());
-            }
-            world_pushed.published.pinned = pins.into_iter().collect();
-            world_pushed.published.configured = configured;
-            &world_pushed
+        let placed = modules::Placed {
+            pushed: self.pushed.clone(),
+            pinned: pins.into_iter().collect(),
+            configured,
         };
         let ui = &self.ui;
         let graphs = &self.graphs;
@@ -587,7 +577,16 @@ impl Agent {
         };
         // A menu, drawer, popover or modal app context covers all but the first zone.
         let mut cover = (id_base == 0)
-            .then(|| overlay::cover(&mut self.overlay, &r.zones, world, &mut self.icons, &lookup))
+            .then(|| {
+                overlay::cover(
+                    &mut self.overlay,
+                    &r.zones,
+                    world,
+                    &placed,
+                    &mut self.icons,
+                    &lookup,
+                )
+            })
             .flatten();
         let modal = cover.as_ref().is_some_and(|c| c.modal);
         let (zones, covered) = overlay::zones(&r.zones, cover.as_ref());
@@ -602,6 +601,7 @@ impl Agent {
                         let mut cells = Vec::new();
                         let mut b = modules::Build {
                             world,
+                            placed: &placed,
                             icons: &mut self.icons,
                             icon_size: ICON_LOOKUP_SIZE,
                             ui: &lookup,
