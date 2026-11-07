@@ -137,10 +137,9 @@ pub(super) fn clock(at: &At) -> Option<Spec> {
 }
 
 /// The picker's entry button: opens the `emoji` layer (the strip lives there).
-pub(super) fn emoji(m: &ModuleInstance) -> Option<Spec> {
-    let layer = m.get("layer").and_then(|v| v.as_str()).unwrap_or("emoji");
+pub(super) fn emoji() -> Option<Spec> {
     let open = Action::Layer {
-        name: layer.into(),
+        name: "emoji".into(),
         mode: sliver_config::LayerMode::Toggle,
     };
     Some(Spec::new(ValueMap::new(), "😀").does(Gesture::Tap, "open", Do::Run(open)))

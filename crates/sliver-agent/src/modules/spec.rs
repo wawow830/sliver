@@ -261,7 +261,7 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
     ("cava", |at| widgets::cava(at.m, at.world)),
     ("image", |at| widgets::image(at.m, at.world)),
     ("clock", widgets::clock),
-    ("emoji", |at| widgets::emoji(at.m)),
+    ("emoji", |_| widgets::emoji()),
     ("timer", widgets::timer),
     ("battery", |at| system::battery(at.world)),
     ("backlight", |at| system::backlight(at.m, at.world)),
