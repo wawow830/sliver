@@ -15,7 +15,6 @@ sliver-desktop = { path = "crates/sliver-desktop" }
 sliver-session = { path = "crates/sliver-session" }
 sliver-bus = { path = "crates/sliver-bus" }
 sliver-icons = { path = "crates/sliver-icons" }
-sliver-import = { path = "crates/sliver-import" }
 sliver-cli = { path = "crates/sliver-cli" }
 sliver-config = { path = "crates/sliver-config" }
 sliver-agent = { path = "crates/sliver-agent" }

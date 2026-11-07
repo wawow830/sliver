@@ -1,6 +1,6 @@
 //! Sliver's config language (`sliver-config(5)`): parses and validates config files and resolves
-//! what each layer shows for a given context. Pixel layout is sliver-render's, modules run in the
-//! agent, and foreign configs are converted by `sliver-import`.
+//! what each layer shows for a given context. Pixel layout is sliver-render's; modules run in the
+//! agent.
 //!
 //! ```
 //! use sliver_config::{Context, Hardware, load_str};

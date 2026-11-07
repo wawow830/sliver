@@ -28,7 +28,7 @@ Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.
   render [--config FILE] -o OUT.png  the bar as it is, or FILE drawn with the live state
 
 Config (offline: edits ~/.config/sliver/config.toml, keeps comments; `sliverctl config help`)
-  config path|check|get|set|unset|resolve|import-tiny-dfr ...
+  config path|check|get|set|unset|resolve|profile ...
 
 Publish (stays connected; prints `ITEM KIND [KEY=VALUE...]` per event)
   publish [--scope app|status|target] [--provider ID] [--title T] [--target-app APP_ID]
