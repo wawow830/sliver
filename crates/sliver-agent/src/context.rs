@@ -45,37 +45,31 @@ const LOCKERS: &[&str] = &[
 ///
 /// 1. The desktop's own `ActiveChanged` (GNOME, KDE, anything with `org.freedesktop.ScreenSaver`).
 /// 2. On GNOME and KDE without it: logind's `LockedHint`, which those shells keep honest.
-/// 3. Elsewhere, whether a known locker process is running: lockers started by a keybind or
-///    `swayidle` never touch logind (the hint stays `false`: a leak), and others never clear it
-///    (the hint stays `yes` after unlocking: a stuck privacy layout). The
-///    hint alone is not believed.
+/// 3. Elsewhere, whether one of our own known locker processes runs: lockers started by a keybind
+///    or `swayidle` never set the hint, and others never clear it.
 ///
-/// `running` lists process names (`/proc/*/comm`); it is only called when the answer needs it.
+/// `locker_running` is only called when the answer needs it.
 pub fn plausibly_locked(
     hint: bool,
     screensaver: Option<bool>,
     backend: sliver_desktop::Backend,
-    running: impl FnOnce() -> Vec<String>,
+    locker_running: impl FnOnce() -> bool,
 ) -> bool {
     use sliver_desktop::Backend::*;
-    if let Some(active) = screensaver {
-        return active;
-    }
-    match backend {
-        Gnome | Kde => hint,
-        _ => running().iter().any(|p| LOCKERS.contains(&p.as_str())),
+    match (screensaver, backend) {
+        (Some(active), _) => active,
+        (None, Gnome | Kde) => hint,
+        (None, _) => locker_running(),
     }
 }
 
-/// [`plausibly_locked`] with the process scan cached for a moment: world snapshots are built on
-/// every render, and `/proc` has hundreds of entries. The cache is dropped on [`LockWatch::wake`]
-/// so a bar waking up never shows a stale "unlocked".
+/// [`plausibly_locked`] with the process scan cached for [`SCAN_TTL`]: worlds are built on every
+/// render, and `/proc` has hundreds of entries. [`LockWatch::wake`] drops the cache.
 #[derive(Debug, Default)]
 pub struct LockWatch {
     cache: std::sync::Mutex<Option<(std::time::Instant, bool)>>,
 }
 
-/// How long a process scan result is reused.
 const SCAN_TTL: std::time::Duration = std::time::Duration::from_millis(1500);
 
 impl LockWatch {
@@ -88,6 +82,7 @@ impl LockWatch {
         self.locked_with(hint, screensaver, backend, process_names)
     }
 
+    /// `running`: the names of this user's processes.
     pub fn locked_with(
         &self,
         hint: bool,
@@ -95,12 +90,7 @@ impl LockWatch {
         backend: sliver_desktop::Backend,
         running: impl FnOnce() -> Vec<String>,
     ) -> bool {
-        use sliver_desktop::Backend::*;
-        match (screensaver, backend) {
-            (Some(active), _) => active,
-            (None, Gnome | Kde) => hint,
-            (None, _) => self.locker_running(running),
-        }
+        plausibly_locked(hint, screensaver, backend, || self.locker_running(running))
     }
 
     fn locker_running(&self, running: impl FnOnce() -> Vec<String>) -> bool {
@@ -116,26 +106,30 @@ impl LockWatch {
         v
     }
 
-    /// The display woke up: look again.
     pub fn wake(&self) {
         *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
-/// Names of running processes (`comm`).
+/// Names (`comm`) of the processes this user runs: another user's locker doesn't lock our screen.
 pub fn process_names() -> Vec<String> {
+    own_processes().into_iter().map(|(_, comm)| comm).collect()
+}
+
+/// This user's processes: pid and `comm`.
+fn own_processes() -> Vec<(u32, String)> {
+    use std::os::unix::fs::MetadataExt;
     let Ok(dir) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
+    let me = rustix::process::getuid().as_raw();
     dir.flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .bytes()
-                .all(|b| b.is_ascii_digit())
+        .filter_map(|e| Some((e.file_name().to_str()?.parse::<u32>().ok()?, e)))
+        .filter(|(_, e)| e.metadata().is_ok_and(|m| m.uid() == me))
+        .filter_map(|(pid, e)| {
+            let comm = std::fs::read_to_string(e.path().join("comm")).ok()?;
+            Some((pid, comm.trim().to_owned()))
         })
-        .filter_map(|e| std::fs::read_to_string(e.path().join("comm")).ok())
-        .map(|s| s.trim().to_owned())
         .collect()
 }
 
@@ -193,29 +187,38 @@ mod tests {
         assert_eq!((n(false), n(true)), (2, 1));
     }
 
+    /// The policy, through the path production uses.
     #[test]
     fn lock_sources_in_order_of_trust() {
-        let none = || Vec::new();
-        let hyprlock = || vec!["bash".to_string(), "hyprlock".to_string()];
+        let locked = |hint, ss, backend, names: &'static [&'static str]| {
+            LockWatch::default().locked_with(hint, ss, backend, || {
+                names.iter().map(|s| s.to_string()).collect()
+            })
+        };
         // a stale hint on Hyprland is not believed; a running locker is, hint or not
-        assert!(!plausibly_locked(true, None, Backend::Hyprland, none));
-        assert!(plausibly_locked(true, None, Backend::Hyprland, hyprlock));
+        assert!(!locked(true, None, Backend::Hyprland, &[]));
+        assert!(locked(true, None, Backend::Hyprland, &["bash", "hyprlock"]));
         assert!(
-            plausibly_locked(false, None, Backend::Sway, || vec!["swaylock".into()]),
+            locked(false, None, Backend::Sway, &["swaylock"]),
             "a locker started by a keybind never touches logind"
         );
         // GNOME and KDE keep the hint honest
-        assert!(plausibly_locked(true, None, Backend::Gnome, none));
-        assert!(!plausibly_locked(false, None, Backend::Kde, hyprlock));
+        assert!(locked(true, None, Backend::Gnome, &[]));
+        assert!(!locked(false, None, Backend::Kde, &["hyprlock"]));
         // the desktop's own ActiveChanged beats everything
-        assert!(plausibly_locked(false, Some(true), Backend::Hyprland, none));
-        assert!(!plausibly_locked(true, Some(false), Backend::Gnome, none));
-        assert!(!plausibly_locked(
-            true,
-            Some(false),
-            Backend::Hyprland,
-            hyprlock
-        ));
+        assert!(locked(false, Some(true), Backend::Hyprland, &[]));
+        assert!(!locked(true, Some(false), Backend::Gnome, &[]));
+        assert!(!locked(true, Some(false), Backend::Hyprland, &["hyprlock"]));
+    }
+
+    /// Only this user's processes count: this one is listed, init (root's) isn't.
+    #[test]
+    fn process_names_are_this_users() {
+        let pids: Vec<u32> = own_processes().into_iter().map(|(pid, _)| pid).collect();
+        assert!(pids.contains(&std::process::id()));
+        if rustix::process::getuid().as_raw() != 0 {
+            assert!(!pids.contains(&1));
+        }
     }
 
     #[test]
