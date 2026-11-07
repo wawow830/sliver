@@ -1,4 +1,4 @@
-use crate::{Align, Color, Icon, Width};
+use crate::{Align, Icon, Width};
 
 /// What one item shows.
 #[derive(Clone, Debug, Default)]
@@ -70,14 +70,8 @@ pub struct Item {
     pub width: Width,
     /// Matches `:active` in the stylesheet.
     pub pressed: bool,
-    /// Matches `:disabled` (e.g. a control with nothing to control).
-    pub disabled: bool,
     /// Matches `:checked`: a toggle that is on.
     pub checked: bool,
-    /// Inline override of the computed `background-color` (like a `style` attribute).
-    pub background: Option<Color>,
-    /// Inline override of the computed `color` (labels and symbolic icons).
-    pub foreground: Option<Color>,
 }
 
 impl Item {
@@ -89,10 +83,7 @@ impl Item {
             classes: Vec::new(),
             width: Width::Auto,
             pressed: false,
-            disabled: false,
             checked: false,
-            background: None,
-            foreground: None,
         }
     }
 
@@ -138,23 +129,8 @@ impl Item {
         self
     }
 
-    pub fn disabled(mut self, disabled: bool) -> Item {
-        self.disabled = disabled;
-        self
-    }
-
     pub fn checked(mut self, checked: bool) -> Item {
         self.checked = checked;
-        self
-    }
-
-    pub fn background(mut self, color: Color) -> Item {
-        self.background = Some(color);
-        self
-    }
-
-    pub fn foreground(mut self, color: Color) -> Item {
-        self.foreground = Some(color);
         self
     }
 }

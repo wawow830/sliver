@@ -190,7 +190,7 @@ impl Renderer {
         pixmap.fill(tiny_skia::Color::BLACK);
         let full = Rect::new(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
         let bar_opacity = st.bar.opacity;
-        draw_box(pixmap, full, &st.bar, None, bar_opacity);
+        draw_box(pixmap, full, &st.bar, bar_opacity);
         let mut items = scene
             .items()
             .zip(&layout.items)
@@ -207,7 +207,7 @@ impl Renderer {
                 zs,
                 now,
             );
-            draw_box(pixmap, zrect, zs, None, zone_opacity);
+            draw_box(pixmap, zrect, zs, zone_opacity);
             // Several items can share an id (an app's items, two clocks): number repeats so each
             // element keeps its own transition state.
             let mut seen_ids: HashMap<String, usize> = HashMap::new();

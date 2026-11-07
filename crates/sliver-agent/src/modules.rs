@@ -39,8 +39,7 @@ pub struct Cell {
     pub id: String,
     /// The module type (`clock`, `audio`, …).
     pub kind: String,
-    /// What it draws: content, `#id` and classes, width, states (`:active`, `:checked`,
-    /// `:disabled`) and inline colours.
+    /// What it draws: content, `#id` and classes, width and states (`:active`, `:checked`).
     pub look: sliver_render::Item,
     pub touch: Touch,
     pub on: Vec<(Gesture, Do)>,

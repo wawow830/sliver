@@ -36,14 +36,10 @@ impl Renderer {
                         - (s.margin[0] + s.margin[2] + s.padding[0] + s.padding[2])
                         - 2.0 * s.border_width;
                     let content = self.content_width(&item.content, s, parts.as_ref(), content_h);
-                    let mut natural = (content + chrome).max(s.min_width);
+                    let natural = (content + chrome).max(s.min_width);
                     let margins = s.margin[1] + s.margin[3];
                     let width = match item.width {
                         Width::Fixed(px) => Width::Fixed(px + margins),
-                        Width::Between(lo, hi) => {
-                            natural = natural.max(lo).min(hi.max(lo));
-                            Width::Auto
-                        }
                         w => w,
                     };
                     Sizing {

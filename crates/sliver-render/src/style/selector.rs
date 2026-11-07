@@ -8,7 +8,6 @@ pub struct Element<'a> {
     pub classes: &'a [String],
     /// Pressed (`:active`).
     pub active: bool,
-    pub disabled: bool,
     /// A toggle that is on (`:checked`).
     pub checked: bool,
     pub first: bool,
@@ -18,7 +17,6 @@ pub struct Element<'a> {
 #[derive(Clone, Debug, PartialEq)]
 enum Pseudo {
     Active,
-    Disabled,
     Checked,
     FirstChild,
     LastChild,
@@ -90,7 +88,6 @@ fn compound<'a>(mut s: &'a str, notes: &mut Vec<String>) -> Result<(Compound, &'
                 let pseudo = match name.to_ascii_lowercase().as_str() {
                     "active" => Pseudo::Active,
                     "checked" => Pseudo::Checked,
-                    "disabled" => Pseudo::Disabled,
                     "first-child" => Pseudo::FirstChild,
                     "last-child" => Pseudo::LastChild,
                     "not" => {
@@ -106,7 +103,7 @@ fn compound<'a>(mut s: &'a str, notes: &mut Vec<String>) -> Result<(Compound, &'
                         Pseudo::Not(Box::new(inner_c))
                     }
                     "hover" | "focus" | "focus-visible" | "focus-within" | "backdrop"
-                    | "visited" | "link" => {
+                    | "visited" | "link" | "disabled" => {
                         notes.push(format!("':{name}' never matches on the Touch Bar"));
                         Pseudo::Never
                     }
@@ -209,7 +206,6 @@ fn compound_matches(c: &Compound, el: &Element<'_>) -> bool {
             .all(|cl| el.classes.iter().any(|x| x == cl))
         && c.pseudos.iter().all(|p| match p {
             Pseudo::Active => el.active,
-            Pseudo::Disabled => el.disabled,
             Pseudo::Checked => el.checked,
             Pseudo::FirstChild => el.first,
             Pseudo::LastChild => el.last,
@@ -228,7 +224,6 @@ mod tests {
             id,
             classes,
             active: false,
-            disabled: false,
             checked: false,
             first: false,
             last: false,

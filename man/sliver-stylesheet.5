@@ -98,7 +98,6 @@ the parts above,
 (a toggle that is on, or the selected segment; the built\-in themes treat
 .B .on
 the same),
-.BR :disabled ,
 .BR :first\-child ,
 .BR :last\-child ,
 .BR :not( \fIsimple\fP ) ,
@@ -107,9 +106,10 @@ descendant
 and child
 .RB ( "a > b" )
 combinators, and comma lists.
-.B :hover
-and
+.BR :hover ,
 .B :focus
+and
+.B :disabled
 are accepted but never match on a touch strip.
 Sibling combinators
 .RB ( + ,

@@ -23,7 +23,6 @@ fn styles(sheet: &Stylesheet, t: &Tree, module_id: &str, active: bool) -> [Style
         id: None,
         classes: &t.bar,
         active: false,
-        disabled: false,
         checked: false,
         first: true,
         last: true,
@@ -200,13 +199,13 @@ fn builtin_themes_are_clean() {
 }
 
 #[test]
-fn predefined_colors_and_disabled() {
+fn predefined_colors() {
     let mut s = Stylesheet::new();
     s.define_color("accent", Color::rgb(1, 2, 3));
     let mut d = Vec::new();
     s.add_str(
         "user.css",
-        "module { color: @accent; transition: background 200ms }\nmodule:disabled { opacity: 0.5 }",
+        "module { color: @accent; transition: background 200ms }",
         None,
         &mut d,
     );
@@ -216,16 +215,14 @@ fn predefined_colors_and_disabled() {
         id: None,
         classes: &[],
         active: false,
-        disabled: false,
         checked: false,
         first: true,
         last: true,
     };
     let m = Element {
         tag: "module",
-        disabled: true,
         ..bar
     };
     let st = s.compute(&[bar, m], None);
-    assert_eq!((st.color, st.opacity), (Color::rgb(1, 2, 3), 0.5));
+    assert_eq!(st.color, Color::rgb(1, 2, 3));
 }

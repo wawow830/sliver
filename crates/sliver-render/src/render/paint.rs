@@ -14,8 +14,8 @@ impl Renderer {
         if matches!(item.content, Content::Spacer) || opacity <= 0.0 {
             return;
         }
-        draw_box(pixmap, rect, s, item.background, opacity);
-        let fg = fade(item.foreground.unwrap_or(s.color), opacity);
+        draw_box(pixmap, rect, s, opacity);
+        let fg = fade(s.color, opacity);
         let content = rect.inset(s.padding.map(|p| p + s.border_width));
         let avail = content.w.max(1.0);
         let icon_size = s
@@ -316,17 +316,11 @@ pub(super) fn draw_graph(
 }
 
 /// Background and border of a bar, zone or module.
-pub(super) fn draw_box(
-    pixmap: &mut Pixmap,
-    r: Rect,
-    s: &Style,
-    bg_override: Option<Color>,
-    opacity: f32,
-) {
+pub(super) fn draw_box(pixmap: &mut Pixmap, r: Rect, s: &Style, opacity: f32) {
     if r.w <= 0.0 || r.h <= 0.0 {
         return;
     }
-    let bg = fade(bg_override.unwrap_or(s.background), opacity);
+    let bg = fade(s.background, opacity);
     if bg.a > 0
         && let Some(path) = rounded_rect(r, s.radius)
     {
@@ -372,15 +366,9 @@ pub(super) fn draw_slider(
     } else {
         0.0
     };
-    draw_box(pixmap, track, trough, None, opacity * trough.opacity);
+    draw_box(pixmap, track, trough, opacity * trough.opacity);
     let fill = Rect::new(track.x, track.y, track.w * value, track.h);
-    draw_box(
-        pixmap,
-        fill,
-        hl,
-        None,
-        opacity * trough.opacity * hl.opacity,
-    );
+    draw_box(pixmap, fill, hl, opacity * trough.opacity * hl.opacity);
     let (kw, kh) = (knob.min_width, knob.min_height.max(knob.min_width));
     // The knob stays inside the trough's ends; a trough too short for it (mid-glide while a
     // slider opens) shows no knob yet.
@@ -388,13 +376,7 @@ pub(super) fn draw_slider(
     if kw > 0.0 && lo <= hi {
         let cx = (track.x + track.w * value).clamp(lo, hi);
         let r = Rect::new(cx - kw / 2.0, track.center().1 - kh / 2.0, kw, kh);
-        draw_box(
-            pixmap,
-            r,
-            knob,
-            None,
-            opacity * trough.opacity * knob.opacity,
-        );
+        draw_box(pixmap, r, knob, opacity * trough.opacity * knob.opacity);
     }
 }
 

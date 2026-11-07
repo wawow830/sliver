@@ -28,7 +28,6 @@ module {
 }
 
 module:active { background-color: #fff; color: #000; }
-module:disabled { border-color: #8e8e93; color: #8e8e93; }
 
 module:checked, module.on, module.activated { background-color: #ffd60a; border-color: #ffd60a; color: #000; }
 module:checked:active, module.on:active, module.activated:active { background-color: #fff; border-color: #fff; }

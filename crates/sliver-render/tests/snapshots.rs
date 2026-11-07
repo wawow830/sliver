@@ -6,9 +6,7 @@
 
 use std::path::PathBuf;
 
-use sliver_render::{
-    Color, Content, Fonts, Icon, Item, Pixmap, Renderer, Scene, Stylesheet, Width,
-};
+use sliver_render::{Content, Fonts, Icon, Item, Pixmap, Renderer, Scene, Stylesheet, Width};
 
 const W: u32 = 2008;
 const H: u32 = 60;
@@ -115,9 +113,7 @@ fn mixed_stretch_widgets_and_fitting() {
         Item::text("A label far too long for one slot").fill(1),
         Item::new(Content::blank()).fill(1),
         Item::text("Ünïcødé €…").fill(3),
-        Item::icon(icon("volume_up"))
-            .fill(1)
-            .foreground(Color::rgb(255, 200, 0)),
+        Item::icon(icon("volume_up")).fill(1),
     ];
     check("mixed", &Scene::new(items), &Stylesheet::classic());
 }
@@ -227,7 +223,7 @@ fn theme_controls() -> Scene {
             Item::new(Content::label(Some(icon("battery_1_bar")), "9%".into()))
                 .id("battery")
                 .class("critical"),
-            Item::icon(icon("mic_off")).disabled(true),
+            Item::icon(icon("mic_off")),
             Item::text("12:34").id("clock"),
         ],
     )
@@ -450,19 +446,14 @@ fn colr_emoji_has_colour() {
 }
 
 #[test]
-fn between_widths_and_zone_overflow() {
+fn zone_overflow() {
     let mut r = Renderer::new(Fonts::embedded());
     let long = "a label that is far wider than eighty pixels";
-    let scene = Scene::new(vec![
-        Item::text(long).width(Width::Between(0.0, 80.0)),
-        Item::text("x").width(Width::Between(120.0, f32::INFINITY)),
-        Item::text(long),
-    ]);
-    let layout = r.layout(&scene, &Stylesheet::sliver(), W, H);
-    assert!(layout.items[0].w <= 80.0, "capped: {:?}", layout.items[0]);
-    assert!(layout.items[1].w >= 120.0, "floored: {:?}", layout.items[1]);
-    assert!(layout.items[2].w > 200.0, "free: {:?}", layout.items[2]);
-    assert_eq!(layout.overflow, [false]);
+    let scene = Scene::new(vec![Item::text("x"), Item::text(long)]);
+    assert_eq!(
+        r.layout(&scene, &Stylesheet::sliver(), W, H).overflow,
+        [false]
+    );
     let crowded = Scene::new(
         (0..40)
             .map(|i| Item::text(format!("item {i} {long}")))
