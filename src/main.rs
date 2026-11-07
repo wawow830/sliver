@@ -8,6 +8,7 @@ use std::{
     collections::HashMap,
     io,
     os::unix::net::UnixStream,
+    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -32,7 +33,9 @@ use smithay::{
             timer::{TimeoutAction, Timer},
         },
         pixman::Image,
-        wayland_server::{Display, Resource, backend::ClientId, protocol::wl_surface::WlSurface},
+        wayland_server::{
+            Display, ListeningSocket, Resource, backend::ClientId, protocol::wl_surface::WlSurface,
+        },
     },
     utils::{Logical, Physical, Point, SERIAL_COUNTER, Scale, Size, Transform},
 };
@@ -136,6 +139,27 @@ impl Sliver {
         };
         sliver.activity();
         Ok(sliver)
+    }
+
+    pub fn listen(&self, path: &Path) -> io::Result<()> {
+        let socket = ListeningSocket::bind_absolute(path.into()).map_err(io::Error::other)?;
+        self.lh
+            .insert_source(
+                Generic::new(socket, Interest::READ, Mode::Level),
+                |_, socket, s| {
+                    while let Some(stream) = socket.accept()? {
+                        if let Err(e) =
+                            s.wl.dh
+                                .insert_client(stream, Arc::new(ClientState::default()))
+                        {
+                            eprintln!("sliverd: client: {e}");
+                        }
+                    }
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(io::Error::other)?;
+        Ok(())
     }
 
     fn update(&mut self) {

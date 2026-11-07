@@ -550,3 +550,65 @@ fn held_keeps_the_bar_on() {
     b.s.tick(Instant::now() + IDLE);
     assert!(!b.log().on);
 }
+
+/// Needs Quickshell and the module built into target/bar: run with `--ignored`.
+#[test]
+#[ignore]
+fn quickshell_draws_and_types() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let build = root.join("target/bar");
+    let cmake = |args: &[&str]| {
+        assert!(
+            std::process::Command::new("cmake")
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        )
+    };
+    cmake(&[
+        "-S",
+        root.join("bar/Sliver").to_str().unwrap(),
+        "-B",
+        build.to_str().unwrap(),
+        "-G",
+        "Ninja",
+        "-Wno-dev",
+    ]);
+    cmake(&["--build", build.to_str().unwrap()]);
+
+    let mut b = Bench::new();
+    let socket = build.join("wayland");
+    let _ = std::fs::remove_file(&socket);
+    b.s.listen(&socket).unwrap();
+    let mut qs = std::process::Command::new("qs")
+        .args(["-p", root.join("bar").to_str().unwrap()])
+        .env("WAYLAND_DISPLAY", &socket)
+        .env("QT_QPA_PLATFORM", "wayland")
+        .env("QML_IMPORT_PATH", build.join("qml"))
+        .spawn()
+        .unwrap();
+    b.until("Quickshell's window", |b| {
+        b.s.wl.windows.len() == 2 && b.picture().iter().any(|&px| px == 0x2a2a2a)
+    });
+    b.settle();
+    b.png("quickshell");
+    let shows = b.log().shows;
+    for _ in 0..500 {
+        b.pump();
+    }
+    assert_eq!(b.log().shows, shows, "an idle bar redraws");
+    b.touch([Touch::Down(0, (100.0, 30.0).into())]);
+    b.touch([Touch::Up(0)]);
+    b.until("Esc", |b| b.log().keys.contains(&Device::Key(1, 1, false)));
+    qs.kill().unwrap();
+    qs.wait().unwrap();
+    assert_eq!(
+        b.log().keys[1..],
+        [
+            Device::Created(1),
+            Device::Key(1, 1, true),
+            Device::Key(1, 1, false)
+        ]
+    );
+}
