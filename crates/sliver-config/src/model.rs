@@ -9,6 +9,7 @@ use crate::action::Action;
 use crate::condition::Condition;
 use crate::diag::{Diagnostics, Reader, join};
 use crate::module::ModuleId;
+use crate::resolve::Parsed;
 use crate::values::{Align, FireOn, Width, parse_duration};
 
 /// Current config schema version.
@@ -110,14 +111,15 @@ pub struct LayerOptions {
 pub enum ModuleRef {
     /// `"battery#bat2"`: configured by `[modules."battery#bat2"]`.
     Named(ModuleId),
-    /// `{ type = "custom", format = "TTY1", … }`. The id gets a generated instance name.
-    Inline(ModuleId, Table),
+    /// `{ type = "custom", format = "TTY1", … }`. The id gets a generated instance name. The
+    /// block is parsed when the config loads.
+    Inline(ModuleId, Table, std::sync::Arc<Parsed>),
 }
 
 impl ModuleRef {
     pub fn id(&self) -> &ModuleId {
         match self {
-            ModuleRef::Named(id) | ModuleRef::Inline(id, _) => id,
+            ModuleRef::Named(id) | ModuleRef::Inline(id, ..) => id,
         }
     }
 }
@@ -172,6 +174,9 @@ pub struct Config {
     pub rules: Vec<Rule>,
     /// Module blocks, keyed by the canonical id (so `[modules.pulseaudio]` configures `audio`).
     pub modules: BTreeMap<ModuleId, Table>,
+    /// Every named module the config refers to (blocks, zones, groups), parsed when it loads:
+    /// rendering reads these, it doesn't parse ([`Config::module`]).
+    pub(crate) parsed: BTreeMap<ModuleId, std::sync::Arc<Parsed>>,
     pub gestures: BTreeMap<String, Action>,
     /// Per-app API preferences, keyed by app id (`"*"` = defaults).
     pub apps: BTreeMap<String, AppPrefs>,
@@ -228,31 +233,7 @@ impl Config {
                 }
             }
         }
-        if let Some(layouts) = r.table("layouts", &mut d) {
-            for (name, v) in layouts {
-                let p = join("layouts", name);
-                match v.as_table() {
-                    Some(t) => {
-                        c.layouts
-                            .insert(name.clone(), parse_layout(name, t, &p, &mut d));
-                    }
-                    None => d.error(p, "expected a table"),
-                }
-            }
-        }
-        match r.get("rules") {
-            None => {}
-            Some(Value::Array(rules)) => {
-                for (i, v) in rules.iter().enumerate() {
-                    let p = format!("rules[{i}]");
-                    match v.as_table() {
-                        Some(t) => c.rules.extend(parse_rule(t, &p, &mut d)),
-                        None => d.error(p, "expected a table ([[rules]])"),
-                    }
-                }
-            }
-            Some(_) => d.error("rules", "rules is an array of tables: [[rules]]"),
-        }
+        // Before layouts: an inline module is parsed with its named block.
         if let Some(modules) = r.table("modules", &mut d) {
             for (k, v) in modules {
                 let p = join("modules", k);
@@ -270,6 +251,31 @@ impl Config {
                     );
                 }
             }
+        }
+        if let Some(layouts) = r.table("layouts", &mut d) {
+            for (name, v) in layouts {
+                let p = join("layouts", name);
+                match v.as_table() {
+                    Some(t) => {
+                        c.layouts
+                            .insert(name.clone(), parse_layout(name, t, &p, &c.modules, &mut d));
+                    }
+                    None => d.error(p, "expected a table"),
+                }
+            }
+        }
+        match r.get("rules") {
+            None => {}
+            Some(Value::Array(rules)) => {
+                for (i, v) in rules.iter().enumerate() {
+                    let p = format!("rules[{i}]");
+                    match v.as_table() {
+                        Some(t) => c.rules.extend(parse_rule(t, &p, &mut d)),
+                        None => d.error(p, "expected a table ([[rules]])"),
+                    }
+                }
+            }
+            Some(_) => d.error("rules", "rules is an array of tables: [[rules]]"),
         }
         if let Some(t) = r.table("apps", &mut d) {
             for (id, v) in t {
@@ -316,6 +322,7 @@ impl Config {
             }
         }
         r.finish(&mut d);
+        c.parsed = c.parse_named();
         (c, d)
     }
 }
@@ -573,7 +580,13 @@ fn parse_layer_options(t: &Table, path: &str, d: &mut Diagnostics) -> LayerOptio
     o
 }
 
-fn parse_layout(name: &str, t: &Table, path: &str, d: &mut Diagnostics) -> Layout {
+fn parse_layout(
+    name: &str,
+    t: &Table,
+    path: &str,
+    blocks: &BTreeMap<ModuleId, Table>,
+    d: &mut Diagnostics,
+) -> Layout {
     let mut r = Reader::new(t, path);
     let mut l = Layout {
         extends: r.string("extends", d),
@@ -589,7 +602,7 @@ fn parse_layout(name: &str, t: &Table, path: &str, d: &mut Diagnostics) -> Layou
                 let p = format!("{path}.zones[{i}]");
                 match z.as_table() {
                     Some(zt) => {
-                        if let Some(z) = parse_zone(name, zt, &p, d) {
+                        if let Some(z) = parse_zone(name, zt, &p, blocks, d) {
                             if l.zones.iter().any(|o| o.name == z.name) {
                                 d.error(&p, format!("zone {:?} appears twice", z.name));
                             }
@@ -606,7 +619,13 @@ fn parse_layout(name: &str, t: &Table, path: &str, d: &mut Diagnostics) -> Layou
     l
 }
 
-fn parse_zone(layout: &str, t: &Table, path: &str, d: &mut Diagnostics) -> Option<Zone> {
+fn parse_zone(
+    layout: &str,
+    t: &Table,
+    path: &str,
+    blocks: &BTreeMap<ModuleId, Table>,
+    d: &mut Diagnostics,
+) -> Option<Zone> {
     let mut r = Reader::new(t, path);
     let name = r.string("name", d);
     if name.is_none() {
@@ -642,7 +661,7 @@ fn parse_zone(layout: &str, t: &Table, path: &str, d: &mut Diagnostics) -> Optio
                 let p = format!("{path}.modules[{i}]");
                 let parsed = match item {
                     Value::String(s) => ModuleId::parse(s).map(ModuleRef::Named),
-                    Value::Table(t) => parse_inline(layout, &z.name, i, t),
+                    Value::Table(t) => parse_inline(layout, &z.name, i, t, blocks),
                     other => Err(format!(
                         "expected a module name or inline table, got {}",
                         other.type_str()
@@ -668,7 +687,13 @@ fn parse_zone(layout: &str, t: &Table, path: &str, d: &mut Diagnostics) -> Optio
     name.map(|_| z)
 }
 
-fn parse_inline(layout: &str, zone: &str, i: usize, t: &Table) -> Result<ModuleRef, String> {
+fn parse_inline(
+    layout: &str,
+    zone: &str,
+    i: usize,
+    t: &Table,
+    blocks: &BTreeMap<ModuleId, Table>,
+) -> Result<ModuleRef, String> {
     let ty = t
         .get("type")
         .and_then(Value::as_str)
@@ -679,7 +704,11 @@ fn parse_inline(layout: &str, zone: &str, i: usize, t: &Table) -> Result<ModuleR
     }
     let mut block = t.clone();
     block.remove("type");
-    Ok(ModuleRef::Inline(id, block))
+    let parsed = Parsed::new(
+        &id,
+        &crate::resolve::merged_block(&id, blocks.get(&id), &block),
+    );
+    Ok(ModuleRef::Inline(id, block, std::sync::Arc::new(parsed)))
 }
 
 fn parse_rule(t: &Table, path: &str, d: &mut Diagnostics) -> Option<Rule> {

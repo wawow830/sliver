@@ -72,8 +72,8 @@ pub(super) fn language(world: &World) -> Option<Spec> {
 pub(super) fn window(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let w = world.desktop.window.as_ref()?;
     // waybar's `rewrite`; bad rules were already reported by the config validator.
-    let title = match m.get("rewrite") {
-        Some(r) => sliver_config::Rewrite::parse(r, "", &mut Default::default()).apply(&w.title),
+    let title = match &m.rewrite {
+        Some(r) => r.apply(&w.title),
         None => w.title.clone(),
     };
     Some(Spec::new(

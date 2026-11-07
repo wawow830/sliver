@@ -12,6 +12,42 @@ use toml::Value;
 
 use crate::module::Common;
 
+/// A config's format string, parsed once when the config loads. It reads as the text it was
+/// written as (`Deref<Target = str>`); [`Format::template`] is what renders it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Format {
+    source: String,
+    template: Result<Template, String>,
+}
+
+impl Format {
+    pub fn new(source: impl Into<String>) -> Format {
+        let source = source.into();
+        let template = Template::parse(&source);
+        Format { source, template }
+    }
+
+    /// The parsed template, or why it doesn't parse (the validator reports it).
+    pub fn template(&self) -> Result<&Template, &str> {
+        self.template.as_ref().map_err(String::as_str)
+    }
+
+    /// The rendered text; a format that doesn't parse shows its error, so it's seen on the bar.
+    pub fn render(&self, values: &dyn Values) -> String {
+        match &self.template {
+            Ok(t) => t.render(values),
+            Err(e) => format!("⚠ {e}"),
+        }
+    }
+}
+
+impl std::ops::Deref for Format {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.source
+    }
+}
+
 /// A parsed format string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
@@ -297,20 +333,18 @@ pub fn select_format<'c>(
     status: Option<&str>,
     state: Option<&str>,
     show_alt: bool,
-    default: &'c str,
-) -> &'c str {
+) -> Option<&'c Format> {
     if show_alt {
         if let Some(f) = &c.format_alt {
-            return f;
+            return Some(f);
         }
     }
-    let v = |k: String| c.format_variants.get(&k).map(String::as_str);
+    let v = |k: String| c.format_variants.get(&k);
     let combo = status.zip(state).and_then(|(s, st)| v(format!("{s}-{st}")));
     combo
         .or_else(|| status.and_then(|s| v(s.to_owned())))
         .or_else(|| state.and_then(|st| v(st.to_owned())))
-        .or(c.format.as_deref())
-        .unwrap_or(default)
+        .or(c.format.as_ref())
 }
 
 enum Icon<'v> {
@@ -383,7 +417,7 @@ pub fn format_module(
     let state = st
         .percentage
         .and_then(|p| active_state(&c.states, p, st.lower_is_worse));
-    let fmt = select_format(c, st.status, state, st.show_alt, default_format);
+    let fmt = select_format(c, st.status, state, st.show_alt);
     let (icon_text, icon_image) = match c
         .format_icons
         .as_ref()
@@ -393,13 +427,15 @@ pub fn format_module(
         Some(Icon::Image(i)) => (None, Some(IconRef(i.to_owned()))),
         None => (None, None),
     };
-    let text = match Template::parse(fmt) {
-        Ok(t) => t.render(&WithEngine {
-            inner: values,
-            icon_text,
-            percentage: st.percentage,
-        }),
-        Err(e) => format!("⚠ {e}"),
+    let values = WithEngine {
+        inner: values,
+        icon_text,
+        percentage: st.percentage,
+    };
+    // The module's own default is code, not config: parsed here.
+    let text = match fmt {
+        Some(f) => f.render(&values),
+        None => Format::new(default_format).render(&values),
     };
     let text = text.trim().to_owned();
     let text = apply_lengths(text, c.min_length, c.max_length);

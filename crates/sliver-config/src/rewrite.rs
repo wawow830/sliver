@@ -18,6 +18,18 @@ use crate::diag::{Diagnostics, join};
 #[derive(Debug, Clone, Default)]
 pub struct Rewrite(Vec<(Regex, String)>);
 
+/// The same rules: the same patterns and replacements, in order.
+impl PartialEq for Rewrite {
+    fn eq(&self, o: &Rewrite) -> bool {
+        let rules = |r: &Rewrite| -> Vec<(String, String)> {
+            r.0.iter()
+                .map(|(re, to)| (re.as_str().to_owned(), to.clone()))
+                .collect()
+        };
+        rules(self) == rules(o)
+    }
+}
+
 impl Rewrite {
     /// The rules in `v`. Bad entries are reported in `d` and skipped.
     pub fn parse(v: &Value, path: &str, d: &mut Diagnostics) -> Rewrite {

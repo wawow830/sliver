@@ -9,6 +9,7 @@ use toml::{Table, Value};
 use crate::action::Action;
 use crate::condition::Condition;
 use crate::diag::{Diagnostics, Reader};
+use crate::format::Format;
 use crate::keys::Key;
 use crate::values::{FireOn, Interval, Width};
 
@@ -318,7 +319,8 @@ const NO_TOUCH_EQUIVALENT: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MenuEntry {
-    pub label: String,
+    /// A format: `{placeholders}` show the module's values.
+    pub label: Format,
     pub icon: Option<String>,
     pub on_tap: Action,
 }
@@ -326,10 +328,10 @@ pub struct MenuEntry {
 /// Keys every module understands. Type-specific keys are read with [`crate::ModuleInstance::get`].
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Common {
-    pub format: Option<String>,
-    pub format_alt: Option<String>,
+    pub format: Option<Format>,
+    pub format_alt: Option<Format>,
     /// `format-<state>`, `format-<status>`, `format-<status>-<state>`, keyed by the suffix.
-    pub format_variants: BTreeMap<String, String>,
+    pub format_variants: BTreeMap<String, Format>,
     /// Raw `format-icons` (array, table or string). The format engine interprets it.
     pub format_icons: Option<Value>,
     /// `states`, sorted by threshold.
@@ -346,7 +348,7 @@ pub struct Common {
     pub when: Option<Condition>,
     pub hide_empty_text: bool,
     pub detail: bool,
-    pub detail_format: Option<String>,
+    pub detail_format: Option<Format>,
     pub fire_on: Option<FireOn>,
     pub repeat: Option<bool>,
     pub on: BTreeMap<Gesture, Action>,
@@ -366,8 +368,8 @@ impl Common {
     pub(crate) fn parse(t: &Table, path: &str, d: &mut Diagnostics) -> (Common, Table) {
         let mut r = Reader::new(t, path);
         let mut c = Common {
-            format: r.string("format", d),
-            format_alt: r.string("format-alt", d),
+            format: r.string("format", d).map(Format::new),
+            format_alt: r.string("format-alt", d).map(Format::new),
             format_icons: r.get("format-icons").cloned(),
             icon: r.string("icon", d).filter(|s| !s.is_empty()),
             icon_theme: r.string("icon-theme", d),
@@ -380,7 +382,8 @@ impl Common {
             hide_empty_text: r.bool("hide-empty-text", d).unwrap_or(false),
             detail_format: r
                 .string("detail-format", d)
-                .or_else(|| r.string("tooltip-format", d)),
+                .or_else(|| r.string("tooltip-format", d))
+                .map(Format::new),
             detail: r
                 .bool("detail", d)
                 .or_else(|| r.bool("tooltip", d))
@@ -485,7 +488,7 @@ impl Common {
                 r.skip(k);
                 match v.as_str() {
                     Some(s) => {
-                        c.format_variants.insert(suffix.to_owned(), s.to_owned());
+                        c.format_variants.insert(suffix.to_owned(), Format::new(s));
                     }
                     None => d.error(r.path(k), "expected a format string"),
                 }
@@ -584,7 +587,7 @@ fn parse_menu(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<MenuEntry> {
             }
             r.finish(d);
             Some(MenuEntry {
-                label: label?,
+                label: Format::new(label?),
                 icon,
                 on_tap: on_tap?,
             })
@@ -721,7 +724,7 @@ mod tests {
             vec![("critical".into(), 15.0), ("warning".into(), 30.0)]
         );
         assert_eq!(
-            c.format_variants.get("charging").map(String::as_str),
+            c.format_variants.get("charging").map(|f| &**f),
             Some("C {capacity}%")
         );
         assert_eq!(

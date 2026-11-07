@@ -1,6 +1,9 @@
 //! What the bar shows right now: rule selection, zone inheritance, module instantiation
 //! (sliver-config(5)). Runs in the agent. Pixel layout is the renderer's job.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use toml::{Table, Value};
 
 use crate::condition::Context;
@@ -37,6 +40,8 @@ pub struct ModuleInstance {
     pub common: Common,
     /// Type-specific keys, read through [`ModuleInstance::get`].
     config: Table,
+    /// `rewrite` (`window`), its regexes compiled when the config loads.
+    pub rewrite: Option<crate::Rewrite>,
     /// Children of a `group/*`, in order.
     pub children: Vec<ModuleInstance>,
 }
@@ -104,6 +109,51 @@ impl std::fmt::Display for ResolveError {
 
 impl std::error::Error for ResolveError {}
 
+/// A module's merged block, parsed: what rendering reads. Made when the config loads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parsed {
+    pub(crate) instance: ModuleInstance,
+    /// The block sets its own width (a zone's `module-width` doesn't apply).
+    pub(crate) sized: bool,
+}
+
+impl Parsed {
+    pub(crate) fn new(id: &ModuleId, block: &Table) -> Parsed {
+        let sized = block.contains_key("width") || block.contains_key("expand");
+        // Diagnostics are reported by `validate`; parsing here is best-effort.
+        let (common, mut config) = Common::parse(block, "", &mut Diagnostics::default());
+        if id.slider {
+            config.entry("slider").or_insert(Value::Boolean(true));
+        }
+        let mut classes: Vec<String> = id.instance.iter().cloned().collect();
+        classes.extend(common.class.iter().cloned());
+        let rewrite = config
+            .get("rewrite")
+            .filter(|_| crate::module::takes_key(&id.kind, "rewrite") == Some(true))
+            .map(|r| crate::Rewrite::parse(r, "", &mut Diagnostics::default()));
+        let instance = ModuleInstance {
+            css_id: id.css_id(),
+            id: id.clone(),
+            classes,
+            common,
+            config,
+            rewrite,
+            children: Vec::new(),
+        };
+        Parsed { instance, sized }
+    }
+}
+
+/// Built-in defaults, then the module's `[modules."<id>"]` block, then an inline table.
+pub(crate) fn merged_block(id: &ModuleId, named: Option<&Table>, inline: &Table) -> Table {
+    let mut block = id.key().map(key_defaults).unwrap_or_default();
+    if let Some(b) = named {
+        deep_merge(&mut block, b);
+    }
+    deep_merge(&mut block, inline);
+    block
+}
+
 impl Config {
     /// Picks the layout for `layer`: the first matching rule top to bottom, else the layer default.
     pub fn select_layout(
@@ -138,15 +188,47 @@ impl Config {
     /// The merged config block for a module reference: built-in defaults, then
     /// `[modules."<id>"]`, then the inline table.
     pub fn module_block(&self, m: &ModuleRef) -> Table {
-        let id = m.id();
-        let mut block = id.key().map(key_defaults).unwrap_or_default();
-        if let Some(b) = self.modules.get(id) {
-            deep_merge(&mut block, b);
+        let inline = match m {
+            ModuleRef::Inline(_, t, _) => t,
+            ModuleRef::Named(_) => &Table::new(),
+        };
+        merged_block(m.id(), self.modules.get(m.id()), inline)
+    }
+
+    /// Every named module the config refers to, parsed: the `[modules]` blocks, the zones' named
+    /// modules and the groups' members.
+    pub(crate) fn parse_named(&self) -> BTreeMap<ModuleId, Arc<Parsed>> {
+        let mut todo: Vec<ModuleId> = self.modules.keys().cloned().collect();
+        for m in self
+            .layouts
+            .values()
+            .flat_map(|l| &l.zones)
+            .flat_map(|z| &z.modules)
+        {
+            match m {
+                ModuleRef::Named(id) => todo.push(id.clone()),
+                // An inline group's members are named.
+                ModuleRef::Inline(id, _, p) if id.kind == "group" => {
+                    todo.extend(group_members(&p.instance.config))
+                }
+                ModuleRef::Inline(..) => {}
+            }
         }
-        if let ModuleRef::Inline(_, t) = m {
-            deep_merge(&mut block, t);
+        let mut out = BTreeMap::new();
+        while let Some(id) = todo.pop() {
+            if out.contains_key(&id) {
+                continue;
+            }
+            let p = Parsed::new(
+                &id,
+                &merged_block(&id, self.modules.get(&id), &Table::new()),
+            );
+            if id.kind == "group" {
+                todo.extend(group_members(&p.instance.config));
+            }
+            out.insert(id, Arc::new(p));
         }
-        block
+        out
     }
 
     /// Everything one layer shows in this context.
@@ -211,27 +293,17 @@ impl Config {
         self.parse_module(m).0
     }
 
-    /// [`Config::module`], and whether its block sets its own width.
+    /// [`Config::module`], and whether its block sets its own width: parsed when the config
+    /// loaded. A module nothing in the config names (an app's item) is parsed now.
     fn parse_module(&self, m: &ModuleRef) -> (ModuleInstance, bool) {
-        let id = m.id();
-        let block = self.module_block(m);
-        let sized = block.contains_key("width") || block.contains_key("expand");
-        // Diagnostics are reported by `validate`; resolving is best-effort.
-        let (common, mut config) = Common::parse(&block, "", &mut Diagnostics::default());
-        if id.slider {
-            config.entry("slider").or_insert(Value::Boolean(true));
-        }
-        let mut classes: Vec<String> = id.instance.iter().cloned().collect();
-        classes.extend(common.class.iter().cloned());
-        let inst = ModuleInstance {
-            css_id: id.css_id(),
-            id: id.clone(),
-            classes,
-            common,
-            config,
-            children: Vec::new(),
+        let p = match m {
+            ModuleRef::Inline(_, _, p) => p.clone(),
+            ModuleRef::Named(id) => match self.parsed.get(id) {
+                Some(p) => p.clone(),
+                None => Arc::new(Parsed::new(id, &self.module_block(m))),
+            },
         };
-        (inst, sized)
+        (p.instance.clone(), p.sized)
     }
 
     fn instantiate(
@@ -369,6 +441,46 @@ mod tests {
             .iter()
             .map(|z| z.modules.iter().map(|m| m.id.to_string()).collect())
             .collect()
+    }
+
+    /// Every module a layout shows was parsed when the config loaded: named ones (zones, group
+    /// members, an inline group's members) are in `parsed`, inline ones carry theirs.
+    #[test]
+    fn everything_shown_is_parsed_at_load() {
+        let c = config(
+            r#"
+            [[layouts.default.zones]]
+            name = "main"
+            modules = ["clock", "group/g", { type = "group/inline", modules = ["battery"] }, { type = "custom", format = "x" }]
+            [modules."group/g"]
+            modules = ["key/F1", "group/nested"]
+            [modules."group/nested"]
+            modules = ["audio/slider"]
+            "#,
+        );
+        fn walk(ms: &[ModuleInstance], c: &Config, inline: &[String]) {
+            for m in ms {
+                let id = m.id.to_string();
+                assert!(c.parsed.contains_key(&m.id) || inline.contains(&id), "{id}");
+                walk(&m.children, c, inline);
+            }
+        }
+        for name in c.layouts.keys() {
+            let inline: Vec<String> = c.layouts[name]
+                .zones
+                .iter()
+                .flat_map(|z| &z.modules)
+                .filter(|m| matches!(m, ModuleRef::Inline(..)))
+                .map(|m| m.id().to_string())
+                .collect();
+            let r = c.resolve_as("base", name, &Context::new()).unwrap();
+            for z in &r.zones {
+                walk(&z.modules, &c, &inline);
+            }
+        }
+        let g = ModuleId::parse("group/nested").unwrap();
+        assert!(c.parsed.contains_key(&g));
+        assert!(c.parsed.contains_key(&ModuleId::parse("battery").unwrap()));
     }
 
     #[test]

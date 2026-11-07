@@ -146,11 +146,11 @@ pub(super) fn button_menu(
 ) -> Vec<MenuItem> {
     menu.iter()
         .map(|e| MenuItem {
-            label: match sliver_config::Template::parse(&e.label) {
+            label: match e.label.template() {
                 Ok(t) if e.label.contains('{') => {
                     sliver_render::markup::parse(&t.render(values)).plain()
                 }
-                _ => e.label.clone(),
+                _ => e.label.to_string(),
             },
             icon: e.icon.clone(),
             on_tap: Do::bind(&e.on_tap, kind, verbs),

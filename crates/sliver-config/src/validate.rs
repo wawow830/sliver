@@ -205,7 +205,7 @@ impl Config {
             .iter()
             .map(|(k, v)| (k.as_str(), Some(v)));
         for (key, f) in formats.into_iter().chain(variants) {
-            if let Some(Err(e)) = f.map(|f| crate::format::Template::parse(f)) {
+            if let Some(Err(e)) = f.map(crate::format::Format::template) {
                 let key = if common.format_variants.contains_key(key) {
                     format!("format-{key}")
                 } else {
