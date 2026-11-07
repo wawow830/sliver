@@ -21,7 +21,7 @@ use smithay::{
             buffer::Buffer as _,
             control::{Device, connector, dumbbuffer::DumbBuffer, framebuffer},
         },
-        input::{self, Libinput, LibinputInterface, event::DeviceEvent},
+        input::{Libinput, LibinputInterface},
         udev,
     },
     utils::{Buffer, DeviceFd, Logical, Physical, Rectangle, Transform},
@@ -152,12 +152,6 @@ impl Panel {
             .first()
             .ok_or_else(|| io::Error::other("panel has no mode"))?;
         let panel = panel::<Logical>();
-        if mode.size() != (panel.w as u16, panel.h as u16) {
-            return Err(io::Error::other(format!(
-                "panel mode is {:?}, not {panel:?}",
-                mode.size()
-            )));
-        }
         let crtc = connector
             .encoders()
             .iter()
@@ -255,10 +249,6 @@ fn libinput(
     context
         .udev_assign_seat(seat)
         .map_err(|()| io::Error::other(format!("libinput: no {seat}")))?;
-    context.dispatch()?;
-    if !context.any(|e| matches!(e, input::Event::Device(DeviceEvent::Added(_)))) {
-        return Err(io::Error::other(format!("libinput: nothing on {seat}")));
-    }
     lh.insert_source(LibinputInputBackend::new(context), move |event, _, s| {
         handle(s, event)
     })
@@ -276,7 +266,6 @@ fn touch(s: &mut Sliver, event: InputEvent<LibinputInputBackend>) {
         InputEvent::TouchUp { event } => Touch::Up(id(&event)),
         InputEvent::TouchFrame { .. } => Touch::Frame,
         InputEvent::TouchCancel { .. } => Touch::Cancel,
-        InputEvent::DeviceRemoved { .. } => fail("touch", "the Touch Bar is gone"),
         _ => return,
     });
 }
@@ -286,7 +275,6 @@ fn laptop(s: &mut Sliver, event: InputEvent<LibinputInputBackend>) {
         InputEvent::Keyboard { event } if event.key_code().raw() == KEY_FN + 8 => {
             s.fn_key(event.state() == KeyState::Pressed)
         }
-        InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. } => {}
         _ => s.activity(),
     }
 }
