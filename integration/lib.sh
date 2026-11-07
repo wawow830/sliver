@@ -1,6 +1,6 @@
-# Sourced by the integration tests and scripts/settings-headless: one private runtime directory,
-# every process started through `spawn` stopped on exit, a private D-Bus, and waits on the JSON
-# states a backend example prints, one per line, into $work/states.jsonl. The environment that
+# Sourced by the integration tests: one private runtime directory, every process started through
+# `spawn` stopped on exit, a private D-Bus, and waits on the JSON states a backend example prints,
+# one per line, into $work/states.jsonl. The environment that
 # would reach the live session is cleared (`$clean`).
 #
 #   . "$(dirname "$0")/../lib.sh"

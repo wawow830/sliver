@@ -21,12 +21,8 @@ Source1:        %{name}-%{version}-vendor.tar.xz
 ExclusiveArch:  aarch64 x86_64
 
 BuildRequires:  cargo-rpm-macros >= 26
-BuildRequires:  pkgconfig(gtk4) >= 4.22
-BuildRequires:  pkgconfig(libadwaita-1) >= 1.8
 BuildRequires:  pkgconfig(xkbcommon)
 BuildRequires:  systemd-rpm-macros
-BuildRequires:  desktop-file-utils
-BuildRequires:  appstream
 %if %{with check}
 BuildRequires:  dbus-daemon
 %endif
@@ -34,7 +30,6 @@ BuildRequires:  dbus-daemon
 Requires:       sliverd = %{version}-%{release}
 Requires:       sliver-agent = %{version}-%{release}
 Requires:       sliverctl = %{version}-%{release}
-Recommends:     sliver-settings = %{version}-%{release}
 
 %description
 Sliver turns the Touch Bar on Linux Macs into a first-class part of the Linux desktop: layouts,
@@ -62,6 +57,8 @@ systemd hands the bar back to tiny-dfr.
 Summary:        Sliver Touch Bar session agent
 License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliver-agent@
 Requires:       sliverd = %{version}-%{release}
+# sliver-settings was retired; this removes it on upgrade (it requires the old sliver-agent).
+Obsoletes:      sliver-settings < %{version}-%{release}
 # The `cava` module's spectrum; nothing else needs it.
 Suggests:       cava
 
@@ -76,14 +73,6 @@ License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliverctl@
 %description -n sliverctl
 sliverctl switches layers and profiles, edits and checks the config, publishes items from
 scripts, and imports tiny-dfr and waybar configs.
-
-%package -n sliver-settings
-Summary:        Sliver Touch Bar settings app
-License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliver-settings@
-Requires:       sliver-agent = %{version}-%{release}
-
-%description -n sliver-settings
-GTK4/libadwaita settings app with a live WYSIWYG editor for Touch Bar layouts.
 
 # Desktop integrations: tell the agent the focused window and workspaces on GNOME and KDE.
 # Installed alongside the desktop (Supplements:) but never enabled: each user turns them on.
@@ -147,7 +136,6 @@ out=${CARGO_TARGET_DIR:-target}/rpm
 install -Dpm0755 $out/sliverd %{buildroot}%{_libexecdir}/sliverd
 install -Dpm0755 $out/sliver-agent %{buildroot}%{_bindir}/sliver-agent
 install -Dpm0755 $out/sliverctl %{buildroot}%{_bindir}/sliverctl
-install -Dpm0755 $out/sliver-settings %{buildroot}%{_bindir}/sliver-settings
 # Browser integration: host, per-browser native-messaging manifests, and ready-to-load
 # extension folders (what integration/browser/install.sh builds for a checkout).
 install -Dpm0755 integration/browser/host/sliver-browser-host %{buildroot}%{_libexecdir}/sliver-browser-host
@@ -191,19 +179,8 @@ install -Dpm0644 man/sliver-agent.1 %{buildroot}%{_mandir}/man1/sliver-agent.1
 install -Dpm0644 man/sliverd.8 %{buildroot}%{_mandir}/man8/sliverd.8
 install -Dpm0644 man/sliver-config.5 %{buildroot}%{_mandir}/man5/sliver-config.5
 install -Dpm0644 man/sliver-stylesheet.5 %{buildroot}%{_mandir}/man5/sliver-stylesheet.5
-install -Dpm0644 man/sliver-settings.1 %{buildroot}%{_mandir}/man1/sliver-settings.1
-
-install -Dpm0644 packaging/desktop/io.github.wawow830.Sliver.Settings.desktop \
-    %{buildroot}%{_datadir}/applications/io.github.wawow830.Sliver.Settings.desktop
-install -Dpm0644 packaging/desktop/io.github.wawow830.Sliver.Settings.metainfo.xml \
-    %{buildroot}%{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
-install -Dpm0644 packaging/mime/io.github.wawow830.Sliver.xml \
-    %{buildroot}%{_datadir}/mime/packages/io.github.wawow830.Sliver.xml
-sed -i 's|@LICENSE@|%{sliver_license}|' %{buildroot}%{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
 
 %check
-desktop-file-validate %{buildroot}%{_datadir}/applications/*.desktop
-appstreamcli validate --no-net --explain %{buildroot}%{_metainfodir}/*.metainfo.xml
 %if %{with check}
 # Hardware-free crates only. The D-Bus suites need a session bus, which mock doesn't provide reliably.
 %cargo_test -- -p sliverd -p sliver-ipc -p sliver-render -p sliver-config
@@ -285,15 +262,6 @@ fi
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
 %{_bindir}/sliverctl
 %{_mandir}/man1/sliverctl.1*
-
-%files -n sliver-settings
-%license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
-%{_bindir}/sliver-settings
-%{_mandir}/man1/sliver-settings.1*
-%{_datadir}/applications/io.github.wawow830.Sliver.Settings.desktop
-%{_metainfodir}/io.github.wawow830.Sliver.Settings.metainfo.xml
-# Opens .sliver presets (shared-mime-info's file trigger updates the MIME cache).
-%{_datadir}/mime/packages/io.github.wawow830.Sliver.xml
 
 %files -n gnome-shell-extension-sliver
 %license LICENSE-MIT LICENSE-APACHE

@@ -47,14 +47,6 @@ fi
 if has rpmspec; then
   packaging/rpm/spec.py > target/check-sliver.spec && rpmspec -P target/check-sliver.spec >/dev/null
 fi
-if has desktop-file-validate; then desktop-file-validate packaging/desktop/*.desktop; fi
-if has appstreamcli; then  # as %install fills it: Cargo's license for @LICENSE@
-  lic=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["license"])')
-  m=target/check-metainfo && rm -rf "$m" && mkdir -p "$m"
-  for f in packaging/desktop/*.metainfo.xml; do sed "s|@LICENSE@|$lic|" "$f" > "$m/${f##*/}"; done
-  appstreamcli validate --no-net "$m"/*.metainfo.xml
-fi
-if has xmllint; then xmllint --noout packaging/mime/*.xml; fi
 if has node; then
   for f in integration/kwin/sliver-focus/contents/code/main.js integration/gnome-shell/*/extension.js integration/browser/extension/background.js; do
     tmp=$(mktemp --suffix=.mjs); cp "$f" "$tmp"; node --check "$tmp"; rm -f "$tmp"

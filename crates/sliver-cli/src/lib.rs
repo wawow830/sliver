@@ -1,7 +1,7 @@
-//! The command line of sliver's programs (sliverd, sliver-agent, sliver-settings). Each declares
-//! a [`Cli`]: how it's run, and its options, each an [`Opt`] with its spellings and whether it
-//! takes a value. [`Cli::args`] parses by it, `--help` prints it, any other option is refused, and
-//! the man page tests check the pages against it.
+//! The command line of sliver's programs (sliverd, sliver-agent). Each declares a [`Cli`]: how
+//! it's run, and its options, each an [`Opt`] with its spellings and whether it takes a value.
+//! [`Cli::args`] parses by it, `--help` prints it, any other option is refused, and the man page
+//! tests check the pages against it.
 //!
 //! ```
 //! use sliver_cli::{Cli, Opt};

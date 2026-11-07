@@ -1,7 +1,7 @@
 //! The man pages in `man/` must cover what the code knows about:
 //! every `sliverctl` command and option in `sliverctl help`, every option of `sliverd` and
 //! `sliver-agent` (their `sliver_cli::Cli`), and every module type and key, common module
-//! key, context key and bar gesture in `sliver-config` (sliver-settings checks its own page).
+//! key, context key and bar gesture in `sliver-config`.
 //! Also lints the pages with groff if it's installed.
 
 use std::path::{Path, PathBuf};
@@ -183,7 +183,6 @@ fn pages_are_lint_clean() {
         "sliverd.8",
         "sliver-config.5",
         "sliver-stylesheet.5",
-        "sliver-settings.1",
     ] {
         assert!(
             pages.iter().any(|p| p.ends_with(want)),

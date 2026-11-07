@@ -136,8 +136,6 @@ class Spec(unittest.TestCase):
         out = subprocess.run([sys.executable, str(ROOT / "packaging/rpm/spec.py")],
                              capture_output=True, text=True, check=True).stdout
         self.assertNotRegex(out, r"@CARGO_[A-Z]+@|@BUNDLED_LICENSES[^@]*@")
-        # The metainfo's own placeholder is filled in %install, not here.
-        self.assertIn("s|@LICENSE@|%{sliver_license}|", out)
         self.assertRegex(out, r"(?m)^%global bundled_licenses .*\bOFL-1\.1\b")
 
 

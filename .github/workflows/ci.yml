@@ -15,7 +15,7 @@ env:
 
 jobs:
   check:
-    # The settings app needs GTK 4.22 and libadwaita 1.8, which Fedora 44 ships and Ubuntu doesn't.
+    # Fedora: the packaging is an RPM, and the gate checks its spec with rpmspec.
     runs-on: ubuntu-24.04-arm
     container:
       image: fedora:44
@@ -26,8 +26,8 @@ jobs:
       - name: System packages and the ci user
         run: |
           dnf install -y --setopt=install_weak_deps=False \
-            git gcc pkgconf-pkg-config gtk4-devel libadwaita-devel libxkbcommon-devel \
-            dbus-daemon groff systemd systemd-udev rpm-build desktop-file-utils libxml2 appstream \
+            git gcc pkgconf-pkg-config libxkbcommon-devel \
+            dbus-daemon groff systemd systemd-udev rpm-build \
             nodejs python3 python3-gobject procps-ng fontconfig dejavu-sans-fonts util-linux rustup
           useradd -m ci
       - uses: actions/checkout@v4

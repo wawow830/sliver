@@ -22,13 +22,6 @@ and
 are used instead when present, following the desktop's color scheme.
 Changes apply when the file is saved, imports included.
 .PP
-The settings app's Appearance page keeps its choices in a managed block at the top of the file,
-between
-.B /* sliver\-settings: begin */
-and
-.BR "/* sliver\-settings: end */" ;
-the rest of the file is yours, and rules below the block win over it.
-.PP
 To see a stylesheet without the bar,
 .B sliverctl render \-o
 .I out.png
