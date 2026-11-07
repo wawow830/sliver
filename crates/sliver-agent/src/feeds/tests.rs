@@ -212,6 +212,39 @@ fn feeds_deliver_and_wake() {
 }
 
 #[test]
+fn album_art_resolves_to_the_newest_url() {
+    let d = std::env::temp_dir().join(format!("sliver-feed-art-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let jpg = include_bytes!("../../../sliver-session/tests/art-48x32.jpg");
+    let states: Vec<_> = (0..5)
+        .map(|i| {
+            let file = d.join(format!("{i}.jpg"));
+            std::fs::write(&file, jpg).unwrap();
+            let mut s = session();
+            s.media.as_mut().unwrap().art_url = Some(format!("file://{}", file.display()));
+            s
+        })
+        .collect();
+    let mut f = Feeds::new().unwrap();
+    f.art_cache = Some(d.join("cache"));
+    f.spawn_session(ScriptedSession::new(states));
+    let mut a = Aggregate::new(None);
+    let newest = d.join("4.jpg");
+    for _ in 0..100 {
+        if a.media_art() == Some(newest.as_path()) {
+            break;
+        }
+        assert!(wait_readable(&f));
+        for x in f.drain() {
+            a.apply(x);
+        }
+    }
+    assert_eq!(a.media_art(), Some(newest.as_path()));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn modules_flow_through_the_same_channel() {
     let mut f = Feeds::new().unwrap();
     f.start_modules(vec![Spec::new("custom/hi", "echo hello")]);

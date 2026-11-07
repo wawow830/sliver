@@ -1,16 +1,20 @@
 //! Album art: turn an MPRIS `mpris:artUrl` into a local image file the renderer can load.
 //!
 //! `file://` URLs are used as they are (copied into the cache when the file has no usable
-//! extension); `http(s)://` URLs are fetched once with `curl` (8 s, 2 MiB cap) into the cache.
-//! Only PNG and JPEG are accepted, sniffed by their magic bytes. Anything else is `None`.
+//! extension); `http(s)://` URLs are fetched once with `curl` (8 s) into the cache, which keeps
+//! the newest [`KEEP`] images. Images are at most 2 MiB, PNG or JPEG, sniffed by their magic
+//! bytes. Anything else is `None`.
 //! Call it off the main thread: a download can take seconds.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Images the cache keeps; older ones are deleted when a new one is stored.
+pub const KEEP: usize = 32;
 
 /// The image type of `data`, as a file extension.
 pub fn sniff(data: &[u8]) -> Option<&'static str> {
@@ -52,9 +56,7 @@ pub fn resolve(url: &str, cache_dir: &Path) -> Option<PathBuf> {
         use std::os::unix::ffi::OsStrExt;
         let path = sliver_bus::percent_decode(path.trim_start_matches("localhost"))?;
         let p = PathBuf::from(std::ffi::OsStr::from_bytes(&path));
-        let data = std::fs::read(&p)
-            .ok()
-            .filter(|d| d.len() as u64 <= MAX_BYTES)?;
+        let data = read_image(&p)?;
         let ext = sniff(&data)?;
         // The renderer picks the decoder by extension: keep a correctly named file as it is.
         if p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
@@ -78,6 +80,21 @@ pub fn resolve(url: &str, cache_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// A regular file's whole contents, if at most [`MAX_BYTES`]. Opened non-blocking: opening a
+/// FIFO for reading blocks until a writer appears.
+fn read_image(p: &Path) -> Option<Vec<u8>> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(p)
+        .ok()?;
+    f.metadata().ok().filter(|m| m.is_file())?;
+    let mut data = Vec::new();
+    f.take(MAX_BYTES + 1).read_to_end(&mut data).ok()?;
+    (data.len() as u64 <= MAX_BYTES).then_some(data)
+}
+
 fn store(dir: &Path, url: &str, ext: &str, data: &[u8]) -> Option<PathBuf> {
     std::fs::create_dir_all(dir).ok()?;
     let final_path = dir.join(format!("{}.{ext}", cache_name(url)));
@@ -86,7 +103,26 @@ fn store(dir: &Path, url: &str, ext: &str, data: &[u8]) -> Option<PathBuf> {
         .and_then(|mut f| f.write_all(data))
         .ok()?;
     std::fs::rename(&tmp, &final_path).ok()?;
+    prune(dir);
     Some(final_path)
+}
+
+/// Deletes all but the [`KEEP`] newest files in `dir`.
+fn prune(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<_> = entries
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let m = e.metadata().ok().filter(std::fs::Metadata::is_file)?;
+            Some((m.modified().ok()?, e.path()))
+        })
+        .collect();
+    files.sort_unstable_by_key(|f| std::cmp::Reverse(f.0));
+    for (_, p) in files.into_iter().skip(KEEP) {
+        let _ = std::fs::remove_file(p);
+    }
 }
 
 /// Download with `curl`, killed after 10 s.
@@ -148,6 +184,25 @@ mod tests {
         );
         assert_eq!(resolve("file:///nonexistent.png", &cache), None);
         assert_eq!(resolve("file:///tmp/%aé.png", &cache), None);
+        let fifo = d.join("fifo.jpg");
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .unwrap();
+        assert_eq!(resolve(&format!("file://{}", fifo.display()), &cache), None);
+        let big = d.join("big.jpg");
+        let mut data = JPG.to_vec();
+        data.resize(MAX_BYTES as usize + 1, 0);
+        std::fs::write(&big, data).unwrap();
+        assert_eq!(resolve(&format!("file://{}", big.display()), &cache), None);
+        // the cache keeps the newest KEEP files
+        for i in 0..KEEP + 3 {
+            std::fs::write(d.join(format!("t{i}.tmp")), JPG).unwrap();
+            resolve(&format!("file://{}/t{i}.tmp", d.display()), &cache).unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), KEEP);
         assert_eq!(resolve("data:image/png;base64,AAAA", &cache), None);
         let _ = std::fs::remove_dir_all(&d);
     }

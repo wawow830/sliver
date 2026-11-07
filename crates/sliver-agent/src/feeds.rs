@@ -202,6 +202,8 @@ pub struct Feeds {
     spectrum: Option<(String, Option<sliver_proc::ChildGuard>)>,
     /// The spectrum program: `cava`, or a stand-in in tests.
     pub cava: String,
+    /// Where album art is cached (`None`: no art).
+    pub art_cache: Option<std::path::PathBuf>,
 }
 
 impl Feeds {
@@ -226,6 +228,7 @@ impl Feeds {
             input_method: None,
             spectrum: None,
             cava: "cava".into(),
+            art_cache: sliver_session::art::default_cache_dir(|k| std::env::var(k).ok()),
         })
     }
 
@@ -289,22 +292,17 @@ impl Feeds {
     /// Forward a session source (the live one, or a scripted fake in tests).
     pub fn spawn_session(&self, mut src: impl SessionSource + Send + 'static) {
         let out = self.out.clone();
-        let cache = sliver_session::art::default_cache_dir(|k| std::env::var(k).ok());
+        let art = self.art_worker();
         std::thread::Builder::new()
             .name("feed session".into())
             .spawn(move || {
                 let mut last_art: Option<String> = None;
                 while let Ok(Some(s)) = src.next_change() {
-                    // New album art: fetch it off the loop (it can be a download).
-                    let art = s.media.as_ref().and_then(|m| m.art_url.clone());
-                    if art != last_art {
-                        last_art = art.clone();
-                        if let (Some(url), Some(dir)) = (art, cache.clone()) {
-                            let o = out.clone();
-                            std::thread::spawn(move || {
-                                let path = sliver_session::art::resolve(&url, &dir);
-                                o.send(Feed::Art { url, path });
-                            });
+                    let url = s.media.as_ref().and_then(|m| m.art_url.clone());
+                    if url != last_art {
+                        last_art = url.clone();
+                        if let (Some(url), Some(art)) = (url, &art) {
+                            let _ = art.send(url);
                         }
                     }
                     if !out.send(Feed::Session(s)) {
@@ -313,6 +311,27 @@ impl Feeds {
                 }
             })
             .expect("spawn thread");
+    }
+
+    /// A thread resolving album art URLs off the session feed (a download can take seconds);
+    /// of the URLs queued while it works, only the newest is resolved.
+    fn art_worker(&self) -> Option<std::sync::mpsc::Sender<String>> {
+        let dir = self.art_cache.clone()?;
+        let out = self.out.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::Builder::new()
+            .name("feed art".into())
+            .spawn(move || {
+                while let Ok(url) = rx.recv() {
+                    let url = rx.try_iter().last().unwrap_or(url);
+                    let path = sliver_session::art::resolve(&url, &dir);
+                    if !out.send(Feed::Art { url, path }) {
+                        return;
+                    }
+                }
+            })
+            .ok()?;
+        Some(tx)
     }
 
     /// Start the live session sources on the real buses: logind, UPower, MPRIS, audio,
