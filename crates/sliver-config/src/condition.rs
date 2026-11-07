@@ -67,8 +67,14 @@ impl Context {
         self
     }
 
+    /// `key` is canonical: [`Context::set`] and condition parsing normalise spellings.
     pub fn get(&self, key: &str) -> Option<&CtxValue> {
-        self.values.get(&canonical_key(key))
+        debug_assert_eq!(
+            key,
+            canonical_key(key),
+            "context keys are looked up canonical"
+        );
+        self.values.get(key)
     }
 
     pub fn flag(&self, key: &str) -> bool {
@@ -190,10 +196,14 @@ impl Condition {
 
     /// Whether this only matches when context flag `key` is true (`{ locked = true, … }`).
     pub fn requires_flag(&self, key: &str) -> bool {
-        let key = canonical_key(key);
+        debug_assert_eq!(
+            key,
+            canonical_key(key),
+            "context keys are looked up canonical"
+        );
         self.all
             .iter()
-            .any(|(k, m)| *k == key && matches!(m, Matcher::Is(CtxValue::Bool(true))))
+            .any(|(k, m)| k == key && matches!(m, Matcher::Is(CtxValue::Bool(true))))
     }
 
     pub fn parse(v: &Value, path: &str, d: &mut Diagnostics) -> Option<Condition> {
