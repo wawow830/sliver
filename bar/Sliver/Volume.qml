@@ -3,12 +3,21 @@ import Quickshell.Services.Pipewire
 
 Level {
     readonly property PwNode sink: Pipewire.defaultAudioSink
+    readonly property bool muted: sink?.audio.muted ?? false
 
-    icon: sink?.audio.muted ? "volume_off" : "volume_up"
+    icon: muted ? "volume_off" : value < 0.34 ? "volume_mute" : value < 0.67 ? "volume_down" : "volume_up"
+    fill: muted ? Theme.colors.error : Theme.colors.surface_container_high
+    ink: muted ? Theme.colors.surface_container : Theme.colors.on_surface
     value: sink?.audio.volume ?? 0
     onMoved: v => {
-        if (sink)
+        if (sink) {
+            sink.audio.muted = false
             sink.audio.volume = v
+        }
+    }
+    onTapped: {
+        if (sink)
+            sink.audio.muted = !muted
     }
 
     PwObjectTracker { objects: [sink] }

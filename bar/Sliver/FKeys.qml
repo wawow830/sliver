@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 
 RowLayout {
-    spacing: 14
+    spacing: 10
 
     Repeater {
         model: [[59, 60, 61, 62], [63, 64, 65, 66], [67, 68, 87, 88]]

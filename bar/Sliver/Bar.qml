@@ -6,6 +6,7 @@ import Quickshell.Services.Mpris
 FloatingWindow {
     id: bar
     property list<string> pinned: []
+    property int slots: 5
     property list<string> terminals: ["kitty", "foot", "Alacritty", "org.wezfurlong.wezterm", "com.mitchellh.ghostty"]
     property list<string> browsers: ["zen", "firefox", "chromium", "google-chrome"]
 
@@ -24,9 +25,9 @@ FloatingWindow {
         anchors.rightMargin: 8
         spacing: 30
 
-        Brightness { Layout.fillHeight: true; Layout.preferredWidth: 300 }
+        Brightness { Layout.fillHeight: true }
 
-        Taskbar { Layout.fillHeight: true; pinned: bar.pinned; named: bar.context == null }
+        Taskbar { Layout.fillHeight: true; pinned: bar.pinned; slots: bar.slots }
 
         Loader {
             Layout.fillWidth: true
@@ -38,7 +39,7 @@ FloatingWindow {
             Layout.fillHeight: true
             spacing: 8
             Mic { Layout.fillHeight: true }
-            Volume { Layout.fillHeight: true; Layout.preferredWidth: 300 }
+            Volume { Layout.fillHeight: true; opensLeft: true }
         }
     }
 

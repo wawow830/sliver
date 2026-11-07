@@ -9,7 +9,7 @@ Rectangle {
     property string image
     property color fill: Theme.colors.surface_container_high
     property color ink: Theme.colors.on_surface
-    readonly property bool pressed: tap.pressed
+    property bool pressed: tap.pressed
     readonly property real content: row.implicitWidth
     signal tapped
     signal longPressed
@@ -17,7 +17,7 @@ Rectangle {
     implicitWidth: Math.max(96, row.implicitWidth + 36)
     implicitHeight: 54
     radius: pressed ? 12 : height / 2
-    color: pressed ? Theme.colors.surface_bright : fill
+    color: pressed ? Qt.tint(fill.a > 0 ? fill : Theme.colors.surface_container_high, Qt.alpha(ink, 0.2)) : fill
     opacity: enabled ? 1 : 0.4
     Behavior on radius { NumberAnimation { duration: 150 } }
     Behavior on color { ColorAnimation { duration: 150 } }

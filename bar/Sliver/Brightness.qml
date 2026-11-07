@@ -34,6 +34,9 @@ Level {
             command = ["brightnessctl", "-q", "-d", brightness.device, "set", String(sent)]
             running = true
         }
-        onExited: send()
+        onExited: {
+            now.reload()
+            send()
+        }
     }
 }
