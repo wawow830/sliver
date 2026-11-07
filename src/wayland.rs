@@ -17,7 +17,7 @@ use smithay::{
             zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1},
         },
         wayland_server::{
-            Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
+            Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New,
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{wl_buffer::WlBuffer, wl_seat::WlSeat, wl_surface::WlSurface},
         },
@@ -106,10 +106,6 @@ impl Wl {
             .find(|t| t.wl_surface() == surface)
             .cloned()
     }
-}
-
-pub fn client_of(window: &Window) -> Option<ClientId> {
-    window.toplevel()?.wl_surface().client().map(|c| c.id())
 }
 
 #[derive(Default)]

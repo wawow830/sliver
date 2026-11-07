@@ -33,14 +33,12 @@ use smithay::{
             timer::{TimeoutAction, Timer},
         },
         pixman::Image,
-        wayland_server::{
-            Display, ListeningSocket, Resource, backend::ClientId, protocol::wl_surface::WlSurface,
-        },
+        wayland_server::{Display, ListeningSocket, Resource, protocol::wl_surface::WlSurface},
     },
     utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Scale, Size, Transform},
 };
 
-use wayland::{Wl, client_of};
+use wayland::Wl;
 
 pub const W: i32 = 2008;
 pub const H: i32 = 60;
@@ -74,7 +72,6 @@ pub enum Touch {
 pub struct Sliver {
     pub wl: Wl,
     bar: Box<dyn Bar>,
-    fkeys: ClientId,
     renderer: PixmanRenderer,
     frame: Image<'static, 'static>,
     damage: OutputDamageTracker,
@@ -104,7 +101,7 @@ impl Sliver {
         )
         .map_err(io::Error::other)?;
         let (ours, theirs) = UnixStream::pair()?;
-        let fkeys = wl.connect(ours)?.id();
+        wl.connect(ours)?;
         std::thread::spawn(|| fkeys::run(theirs));
         let mut renderer = PixmanRenderer::new().map_err(io::Error::other)?;
         let size = panel::<Physical>();
@@ -115,7 +112,6 @@ impl Sliver {
         let mut sliver = Sliver {
             wl,
             bar,
-            fkeys,
             renderer,
             frame,
             damage,
@@ -154,12 +150,11 @@ impl Sliver {
 
     fn update(&mut self) {
         let windows = &self.wl.windows;
-        let preferred = |w: &&Window| (client_of(w) == Some(self.fkeys.clone())) == self.fn_held;
-        let shown = self
-            .on
-            .then(|| windows.iter().rev().find(preferred).or(windows.last()))
-            .flatten()
-            .cloned();
+        let shown = match (self.on, self.fn_held) {
+            (false, _) => None,
+            (true, true) => windows.first().cloned(),
+            (true, false) => windows.last().cloned(),
+        };
         if shown != self.shown {
             if let Some(w) = &self.shown {
                 w.output_leave(&self.wl.output);

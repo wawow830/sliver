@@ -106,6 +106,10 @@ pub fn run() -> io::Result<()> {
     let mut lp = EventLoop::<Sliver>::try_new()?;
     let panel = Panel::open(&lp.handle())?;
     let mut sliver = Sliver::new(lp.handle(), Box::new(panel))?;
+    while sliver.wl.windows.is_empty() {
+        lp.dispatch(None, &mut sliver)?;
+        sliver.refresh();
+    }
     sliver.listen(Path::new("/run/sliver"))?;
     libinput(&lp.handle(), SEAT, touch)?;
     libinput(&lp.handle(), "seat0", laptop)?;
