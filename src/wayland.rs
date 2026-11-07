@@ -7,9 +7,7 @@ use std::{
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
-    desktop::{
-        PopupKind, PopupManager, Window, find_popup_root_surface, get_popup_toplevel_coords,
-    },
+    desktop::Window,
     input::{Seat, SeatHandler, SeatState},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
@@ -24,7 +22,7 @@ use smithay::{
             protocol::{wl_buffer::WlBuffer, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
-    utils::{Rectangle, Serial},
+    utils::Serial,
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState, get_parent},
@@ -46,7 +44,6 @@ pub struct Wl {
     seats: SeatState<Sliver>,
     pub seat: Seat<Sliver>,
     pub output: Output,
-    pub popups: PopupManager,
     pub windows: Vec<Window>,
 }
 
@@ -84,7 +81,6 @@ impl Wl {
             seats,
             seat,
             output,
-            popups: PopupManager::default(),
             windows: Vec::new(),
             dh,
         }
@@ -95,10 +91,7 @@ impl Wl {
         while let Some(parent) = get_parent(&root) {
             root = parent;
         }
-        match self.popups.find_popup(&root) {
-            Some(popup) => find_popup_root_surface(&popup).unwrap_or(root),
-            None => root,
-        }
+        root
     }
 
     pub fn connect(&mut self, stream: UnixStream) -> io::Result<Client> {
@@ -138,12 +131,6 @@ impl CompositorHandler for Sliver {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
-        self.wl.popups.commit(surface);
-        if let Some(PopupKind::Xdg(popup)) = self.wl.popups.find_popup(surface)
-            && !popup.is_initial_configure_sent()
-        {
-            let _ = popup.send_configure();
-        }
         let root = self.wl.root(surface);
         if let Some(toplevel) = self.wl.toplevel(&root) {
             if !toplevel.is_initial_configure_sent() {
@@ -185,31 +172,13 @@ impl XdgShellHandler for Sliver {
         self.update();
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
-        place(&surface, positioner);
-        let _ = self.wl.popups.track_popup(PopupKind::Xdg(surface));
+    fn new_popup(&mut self, surface: PopupSurface, _: PositionerState) {
+        surface.send_popup_done();
     }
 
-    fn reposition_request(
-        &mut self,
-        surface: PopupSurface,
-        positioner: PositionerState,
-        token: u32,
-    ) {
-        place(&surface, positioner);
-        surface.send_repositioned(token);
-    }
+    fn reposition_request(&mut self, _: PopupSurface, _: PositionerState, _: u32) {}
 
     fn grab(&mut self, _: PopupSurface, _: WlSeat, _: Serial) {}
-}
-
-fn place(popup: &PopupSurface, positioner: PositionerState) {
-    let mut bar = Rectangle::from_size((W, H).into());
-    bar.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));
-    popup.with_pending_state(|s| {
-        s.geometry = positioner.get_unconstrained_geometry(bar);
-        s.positioner = positioner;
-    });
 }
 
 impl SeatHandler for Sliver {

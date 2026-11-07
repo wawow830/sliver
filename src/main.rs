@@ -180,7 +180,6 @@ impl Sliver {
     fn draw(&mut self) {
         self.dirty = false;
         self.presenting = true;
-        self.wl.popups.cleanup();
         let elements: Vec<WaylandSurfaceRenderElement<PixmanRenderer>> = match &self.shown {
             Some(w) => {
                 let at = w.geometry().loc;
