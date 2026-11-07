@@ -6,7 +6,7 @@ description = "The Touch Bar's display server: a keyboard with a screen"
 license = "MIT"
 
 [dependencies]
-smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "renderer_pixman", "desktop"] }
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "renderer_pixman", "desktop", "backend_drm", "backend_libinput", "backend_udev"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }

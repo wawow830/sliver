@@ -1,0 +1,2 @@
+# Sorts after 99-touchbar-tiny-dfr.rules, so the bar wants sliverd instead; tiny-dfr is its OnFailure.
+SUBSYSTEM=="input", ATTR{name}=="Mac14,7 Touch Bar", TAG+="systemd", ENV{SYSTEMD_WANTS}="sliverd.service"

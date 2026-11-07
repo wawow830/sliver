@@ -1,6 +1,37 @@
-use std::{fs::File, io, os::fd::AsRawFd};
+use std::{
+    fs::{self, File},
+    io,
+    os::{
+        fd::{AsRawFd, OwnedFd},
+        unix::fs::OpenOptionsExt,
+    },
+    path::{Path, PathBuf},
+};
 
-use crate::Keyboard;
+use smithay::{
+    backend::{
+        allocator::Fourcc,
+        drm::{DrmDevice, DrmDeviceFd, DrmEvent, DrmSurface, PlaneConfig, PlaneState},
+        input::{AbsolutePositionEvent, InputEvent, KeyState, KeyboardKeyEvent, TouchEvent},
+        libinput::LibinputInputBackend,
+    },
+    reexports::{
+        calloop::{EventLoop, LoopHandle},
+        drm::{
+            buffer::Buffer as _,
+            control::{Device, connector, dumbbuffer::DumbBuffer, framebuffer},
+        },
+        input::{Libinput, LibinputInterface},
+        udev,
+    },
+    utils::{DeviceFd, Logical, Rectangle, Size, Transform},
+};
+
+use crate::{Bar, H, Keyboard, Sliver, TRANSFORM, Touch, W};
+
+const SEAT: &str = "seat-touchbar";
+const BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0";
+const KEY_FN: u32 = 0x1d0;
 
 // From linux/uinput.h and linux/input.h.
 const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
@@ -22,7 +53,7 @@ struct UinputSetup {
 }
 
 #[repr(C)]
-struct InputEvent {
+struct UinputEvent {
     time: libc::timeval,
     kind: u16,
     code: u16,
@@ -58,7 +89,7 @@ pub fn uinput_keyboard() -> io::Result<Keyboard> {
     ioctl(UI_DEV_SETUP, &setup as *const _ as libc::c_ulong)?;
     ioctl(UI_DEV_CREATE, 0)?;
     Ok(Box::new(move |code, pressed| {
-        let event = |kind, code, value| InputEvent {
+        let event = |kind, code, value| UinputEvent {
             time: libc::timeval {
                 tv_sec: 0,
                 tv_usec: 0,
@@ -71,7 +102,7 @@ pub fn uinput_keyboard() -> io::Result<Keyboard> {
             event(EV_KEY, code as u16, pressed.into()),
             event(EV_SYN, 0, 0),
         ];
-        // SAFETY: InputEvent is plain old data.
+        // SAFETY: UinputEvent is plain old data.
         let bytes = unsafe {
             std::slice::from_raw_parts(events.as_ptr().cast::<u8>(), size_of_val(&events))
         };
@@ -82,5 +113,215 @@ pub fn uinput_keyboard() -> io::Result<Keyboard> {
 }
 
 pub fn run() -> io::Result<()> {
-    todo!()
+    let mut lp = EventLoop::<Sliver>::try_new()?;
+    let screen = Screen::open(&lp.handle())?;
+    let max = fs::read_to_string(Path::new(BACKLIGHT).join("max_brightness"))?;
+    let hw = Hw {
+        screen,
+        brightness: Path::new(BACKLIGHT).join("brightness"),
+        max: max.trim().into(),
+    };
+    let mut sliver = Sliver::new(lp.handle(), Box::new(hw))?;
+    sliver.listen(Path::new("/run/sliver"))?;
+    libinput(&lp.handle(), SEAT, touch)?;
+    libinput(&lp.handle(), "seat0", laptop)?;
+    lp.run(None, &mut sliver, |s| {
+        let _ = s.wl.dh.flush_clients();
+    })
+    .map_err(io::Error::other)
+}
+
+struct Hw {
+    screen: Screen,
+    brightness: PathBuf,
+    max: String,
+}
+
+impl Bar for Hw {
+    fn show(&mut self, frame: &[u32]) -> io::Result<()> {
+        self.screen.show(frame)
+    }
+
+    fn power(&mut self, on: bool) {
+        if let Err(e) = fs::write(&self.brightness, if on { &self.max } else { "0" }) {
+            eprintln!("sliverd: backlight: {e}");
+        }
+    }
+
+    fn keyboard(&mut self) -> io::Result<Keyboard> {
+        uinput_keyboard()
+    }
+}
+
+struct Screen {
+    fd: DrmDeviceFd,
+    _device: DrmDevice,
+    surface: DrmSurface,
+    buffers: [(DumbBuffer, framebuffer::Handle); 2],
+    back: usize,
+    started: bool,
+}
+
+impl Screen {
+    fn open(lh: &LoopHandle<'static, Sliver>) -> io::Result<Screen> {
+        let node = udev_devices("drm")?
+            .find(|d| d.sysname().to_string_lossy().starts_with("card"))
+            .and_then(|d| d.devnode().map(Path::to_path_buf))
+            .ok_or_else(|| io::Error::other(format!("no display on {SEAT}")))?;
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open(&node)?;
+        let fd = DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(file)));
+        let (mut device, notifier) = DrmDevice::new(fd.clone(), true).map_err(io::Error::other)?;
+        let resources = fd.resource_handles()?;
+        let connector = resources
+            .connectors()
+            .iter()
+            .filter_map(|&c| fd.get_connector(c, false).ok())
+            .find(|c| c.state() == connector::State::Connected)
+            .ok_or_else(|| io::Error::other("no connected panel"))?;
+        let mode = *connector
+            .modes()
+            .first()
+            .ok_or_else(|| io::Error::other("panel has no mode"))?;
+        let panel = TRANSFORM.transform_size(Size::<i32, Logical>::from((W, H)));
+        if mode.size() != (panel.w as u16, panel.h as u16) {
+            return Err(io::Error::other(format!(
+                "panel mode is {:?}, not {panel:?}",
+                mode.size()
+            )));
+        }
+        let crtc = connector
+            .encoders()
+            .iter()
+            .filter_map(|&e| fd.get_encoder(e).ok())
+            .flat_map(|e| resources.filter_crtcs(e.possible_crtcs()))
+            .next()
+            .ok_or_else(|| io::Error::other("no crtc for the panel"))?;
+        let surface = device
+            .create_surface(crtc, mode, &[connector.handle()])
+            .map_err(io::Error::other)?;
+        let buffer = || -> io::Result<_> {
+            let buffer =
+                fd.create_dumb_buffer((panel.w as u32, panel.h as u32), Fourcc::Xrgb8888, 32)?;
+            let fb = fd.add_framebuffer(&buffer, 24, 32)?;
+            Ok((buffer, fb))
+        };
+        let buffers = [buffer()?, buffer()?];
+        lh.insert_source(notifier, |event, _, s| match event {
+            DrmEvent::VBlank(_) => s.presented(),
+            DrmEvent::Error(e) => eprintln!("sliverd: drm: {e}"),
+        })
+        .map_err(|e| io::Error::other(e.error))?;
+        Ok(Screen {
+            fd,
+            _device: device,
+            surface,
+            buffers,
+            back: 0,
+            started: false,
+        })
+    }
+
+    fn show(&mut self, frame: &[u32]) -> io::Result<()> {
+        let (buffer, fb) = &mut self.buffers[self.back];
+        let (w, h) = buffer.size();
+        let pitch = buffer.pitch() as usize;
+        let mut map = self.fd.map_dumb_buffer(buffer)?;
+        for (row, pixels) in map
+            .chunks_exact_mut(pitch)
+            .zip(frame.chunks_exact(w as usize))
+        {
+            for (dst, px) in row.chunks_exact_mut(4).zip(pixels) {
+                dst.copy_from_slice(&px.to_ne_bytes());
+            }
+        }
+        let plane = PlaneState {
+            handle: self.surface.plane(),
+            config: Some(PlaneConfig {
+                src: Rectangle::from_size((w as f64, h as f64).into()),
+                dst: Rectangle::from_size((w as i32, h as i32).into()),
+                transform: Transform::Normal,
+                alpha: 1.0,
+                damage_clips: None,
+                fb: *fb,
+                fence: None,
+            }),
+        };
+        let flip = match self.started {
+            true => self.surface.page_flip([plane], true),
+            false => self.surface.commit([plane], true),
+        };
+        flip.map_err(io::Error::other)?;
+        self.started = true;
+        self.back ^= 1;
+        Ok(())
+    }
+}
+
+fn udev_devices(subsystem: &str) -> io::Result<impl Iterator<Item = udev::Device>> {
+    let mut devices = udev::Enumerator::new()?;
+    devices.match_subsystem(subsystem)?;
+    devices.match_property("ID_SEAT", SEAT)?;
+    Ok(devices.scan_devices()?.collect::<Vec<_>>().into_iter())
+}
+
+fn libinput(
+    lh: &LoopHandle<'static, Sliver>,
+    seat: &str,
+    handle: fn(&mut Sliver, InputEvent<LibinputInputBackend>),
+) -> io::Result<()> {
+    let mut context = Libinput::new_with_udev(Open);
+    context
+        .udev_assign_seat(seat)
+        .map_err(|()| io::Error::other(format!("libinput: no {seat}")))?;
+    lh.insert_source(LibinputInputBackend::new(context), move |event, _, s| {
+        handle(s, event)
+    })
+    .map_err(|e| io::Error::other(e.error))?;
+    Ok(())
+}
+
+fn touch(s: &mut Sliver, event: InputEvent<LibinputInputBackend>) {
+    let panel = TRANSFORM.transform_size(Size::<i32, Logical>::from((W, H)));
+    let at = |e: &dyn AbsolutePositionEvent<LibinputInputBackend>| {
+        TRANSFORM.transform_point_in(e.position_transformed(panel), &panel.to_f64())
+    };
+    let id = |e: &dyn TouchEvent<LibinputInputBackend>| i32::from(e.slot()) as u32;
+    s.touch(match event {
+        InputEvent::TouchDown { event } => Touch::Down(id(&event), at(&event)),
+        InputEvent::TouchMotion { event } => Touch::Motion(id(&event), at(&event)),
+        InputEvent::TouchUp { event } => Touch::Up(id(&event)),
+        InputEvent::TouchFrame { .. } => Touch::Frame,
+        InputEvent::TouchCancel { .. } => Touch::Cancel,
+        _ => return,
+    });
+}
+
+fn laptop(s: &mut Sliver, event: InputEvent<LibinputInputBackend>) {
+    match event {
+        InputEvent::Keyboard { event } if event.key_code().raw() == KEY_FN + 8 => {
+            s.fn_key(event.state() == KeyState::Pressed)
+        }
+        InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. } => {}
+        _ => s.activity(),
+    }
+}
+
+struct Open;
+
+impl LibinputInterface for Open {
+    fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
+        File::options()
+            .read(true)
+            .write(flags & libc::O_ACCMODE != libc::O_RDONLY)
+            .custom_flags(flags & !libc::O_ACCMODE)
+            .open(path)
+            .map(OwnedFd::from)
+            .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))
+    }
+
+    fn close_restricted(&mut self, _: OwnedFd) {}
 }

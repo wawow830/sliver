@@ -54,7 +54,7 @@ pub type Keyboard = Box<dyn FnMut(u32, bool) + Send>;
 
 pub trait Bar {
     /// Puts the frame (panel-native, XRGB8888) on the panel; `Sliver::presented` follows.
-    fn show(&mut self, frame: &[u32]);
+    fn show(&mut self, frame: &[u32]) -> io::Result<()>;
     fn power(&mut self, on: bool);
     fn keyboard(&mut self) -> io::Result<Keyboard>;
 }
@@ -216,8 +216,13 @@ impl Sliver {
         drop(fb);
         self.age = 1;
         if damaged {
-            self.flipping = true;
-            self.bar.show(pixels(&self.frame));
+            match self.bar.show(pixels(&self.frame)) {
+                Ok(()) => self.flipping = true,
+                Err(e) => {
+                    eprintln!("sliverd: show: {e}");
+                    self.send_frames();
+                }
+            }
         } else {
             self.send_frames();
         }

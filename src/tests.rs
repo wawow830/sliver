@@ -64,10 +64,11 @@ impl Drop for FakeKeyboard {
 }
 
 impl Bar for FakeBar {
-    fn show(&mut self, frame: &[u32]) {
+    fn show(&mut self, frame: &[u32]) -> io::Result<()> {
         let mut log = self.0.lock().unwrap();
         log.frame = frame.to_vec();
         log.shows += 1;
+        Ok(())
     }
 
     fn power(&mut self, on: bool) {
@@ -589,7 +590,7 @@ fn quickshell_draws_and_types() {
         .spawn()
         .unwrap();
     b.until("Quickshell's window", |b| {
-        b.s.wl.windows.len() == 2 && b.picture().iter().any(|&px| px == 0x2a2a2a)
+        b.s.wl.windows.len() == 2 && b.picture().contains(&0x2a2a2a)
     });
     b.settle();
     b.png("quickshell");

@@ -1,0 +1,15 @@
+[Unit]
+Description=The Touch Bar's display server
+Conflicts=tiny-dfr.service
+After=tiny-dfr.service
+OnFailure=tiny-dfr.service
+StartLimitIntervalSec=30
+StartLimitBurst=3
+
+[Service]
+ExecStart=/usr/bin/sliverd
+# The socket, /run/sliver, comes out root:input 0660.
+Group=input
+UMask=0117
+Restart=on-failure
+RestartSec=1
