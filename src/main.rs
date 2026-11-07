@@ -19,12 +19,12 @@ use smithay::{
         input::TouchSlot,
         renderer::{
             Bind, Offscreen,
-            damage::OutputDamageTracker,
+            damage::{self, OutputDamageTracker},
             element::{AsRenderElements, surface::WaylandSurfaceRenderElement},
             pixman::PixmanRenderer,
         },
     },
-    desktop::{Window, WindowSurfaceType},
+    desktop::{Window, WindowSurfaceType, space::SpaceElement},
     input::touch::{DownEvent, MotionEvent, TouchTarget, UpEvent},
     reexports::{
         calloop::{
@@ -37,7 +37,7 @@ use smithay::{
             Display, ListeningSocket, Resource, backend::ClientId, protocol::wl_surface::WlSurface,
         },
     },
-    utils::{Logical, Physical, Point, SERIAL_COUNTER, Scale, Size, Transform},
+    utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Scale, Size, Transform},
 };
 
 use wayland::{Wl, client_of};
@@ -46,6 +46,7 @@ pub const W: i32 = 2008;
 pub const H: i32 = 60;
 const TRANSFORM: Transform = Transform::_90;
 const IDLE: Duration = Duration::from_secs(60);
+const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 pub fn panel<Kind>() -> Size<i32, Kind> {
     TRANSFORM.transform_size((W, H).into())
@@ -54,9 +55,9 @@ pub fn panel<Kind>() -> Size<i32, Kind> {
 pub type Keyboard = Box<dyn FnMut(u32, bool) + Send>;
 
 pub trait Bar {
-    fn show(&mut self, frame: &[u8]) -> io::Result<()>;
+    fn show(&mut self, frame: &[u8]);
     fn power(&mut self, on: bool);
-    fn keyboard(&mut self) -> io::Result<Keyboard>;
+    fn keyboard(&mut self) -> Keyboard;
 }
 
 type Target = (WlSurface, Point<f64, Logical>);
@@ -154,17 +155,20 @@ impl Sliver {
     }
 
     fn update(&mut self) {
-        let shown = match (self.on, self.fn_held) {
-            (false, _) => None,
-            (true, true) => self
-                .wl
-                .windows
-                .iter()
-                .find(|w| client_of(w) == Some(self.fkeys.clone())),
-            (true, false) => self.wl.windows.last(),
-        }
-        .cloned();
+        let windows = &self.wl.windows;
+        let preferred = |w: &&Window| (client_of(w) == Some(self.fkeys.clone())) == self.fn_held;
+        let shown = self
+            .on
+            .then(|| windows.iter().rev().find(preferred).or(windows.last()))
+            .flatten()
+            .cloned();
         if shown != self.shown {
+            if let Some(w) = &self.shown {
+                w.output_leave(&self.wl.output);
+            }
+            if let Some(w) = &shown {
+                w.output_enter(&self.wl.output, Rectangle::from_size((W, H).into()));
+            }
             self.shown = shown;
             self.cancel_touches();
             self.render();
@@ -183,6 +187,7 @@ impl Sliver {
         if !self.on {
             return;
         }
+        self.wl.popups.cleanup();
         let elements: Vec<WaylandSurfaceRenderElement<PixmanRenderer>> = match &self.shown {
             Some(w) => w.render_elements(
                 &mut self.renderer,
@@ -192,32 +197,21 @@ impl Sliver {
             ),
             None => Vec::new(),
         };
-        let Ok(mut fb) = self.renderer.bind(&mut self.frame) else {
-            return;
-        };
-        let damaged = match self.damage.render_output(
-            &mut self.renderer,
-            &mut fb,
-            self.age,
-            &elements,
-            [0.0, 0.0, 0.0, 1.0],
-        ) {
-            Ok(r) => r.damage.is_some_and(|d| !d.is_empty()),
-            Err(e) => {
-                eprintln!("sliverd: render: {e:?}");
-                false
-            }
-        };
-        drop(fb);
+        let damaged = self
+            .renderer
+            .bind(&mut self.frame)
+            .map_err(damage::Error::Rendering)
+            .and_then(|mut fb| {
+                self.damage
+                    .render_output(&mut self.renderer, &mut fb, self.age, &elements, BLACK)
+                    .map(|r| r.damage.is_some_and(|d| !d.is_empty()))
+            })
+            .inspect_err(|e| eprintln!("sliverd: render: {e}"))
+            .unwrap_or(false);
         self.age = 1;
         if damaged {
-            match self.bar.show(pixels(&self.frame)) {
-                Ok(()) => self.flipping = true,
-                Err(e) => {
-                    eprintln!("sliverd: show: {e}");
-                    self.send_frames();
-                }
-            }
+            self.bar.show(pixels(&self.frame));
+            self.flipping = true;
         } else {
             self.send_frames();
         }
@@ -226,14 +220,17 @@ impl Sliver {
     pub fn presented(&mut self) {
         self.flipping = false;
         self.send_frames();
-        if self.dirty {
-            self.draw();
+        if std::mem::take(&mut self.dirty) {
+            self.render();
         }
     }
 
     fn send_frames(&self) {
         if let Some(w) = &self.shown {
-            w.send_frame(&self.wl.output, self.start.elapsed(), None, |_, _| None);
+            let output = &self.wl.output;
+            w.send_frame(output, self.start.elapsed(), None, |_, _| {
+                Some(output.clone())
+            });
         }
     }
 

@@ -9,6 +9,7 @@ use smithay::{
     delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
     desktop::{
         PopupKind, PopupManager, Window, find_popup_root_surface, get_popup_toplevel_coords,
+        space::SpaceElement,
     },
     input::{Seat, SeatHandler, SeatState},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
@@ -46,7 +47,7 @@ pub struct Wl {
     seats: SeatState<Sliver>,
     pub seat: Seat<Sliver>,
     pub output: Output,
-    popups: PopupManager,
+    pub popups: PopupManager,
     pub windows: Vec<Window>,
 }
 
@@ -152,25 +153,28 @@ impl CompositorHandler for Sliver {
             let mapped =
                 with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
             let windows = &mut self.wl.windows;
-            match (
-                mapped,
-                windows.iter().position(|w| w.toplevel() == Some(&toplevel)),
-            ) {
-                (true, None) => windows.push(Window::new_wayland_window(toplevel)),
-                (true, Some(i)) => windows[i].on_commit(),
-                (false, Some(i)) => drop(windows.remove(i)),
-                (false, None) => {}
+            let known = windows.iter().position(|w| w.toplevel() == Some(&toplevel));
+            if mapped {
+                let i = known.unwrap_or_else(|| {
+                    windows.push(Window::new_wayland_window(toplevel));
+                    windows.len() - 1
+                });
+                windows[i].on_commit();
+            } else if let Some(i) = known {
+                windows.remove(i);
             }
             self.update();
         }
-        if self
-            .shown
-            .as_ref()
-            .and_then(|w| w.toplevel())
-            .is_some_and(|t| *t.wl_surface() == root)
+        if let Some(w) = &self.shown
+            && w.toplevel().is_some_and(|t| *t.wl_surface() == root)
         {
+            w.refresh();
             self.render();
         }
+    }
+
+    fn destroyed(&mut self, _: &WlSurface) {
+        self.render();
     }
 }
 
@@ -249,7 +253,7 @@ delegate_seat!(Sliver);
 delegate_shm!(Sliver);
 delegate_output!(Sliver);
 
-type Device = Mutex<Option<Keyboard>>;
+type Device = Mutex<Keyboard>;
 
 impl GlobalDispatch<ZwpVirtualKeyboardManagerV1, ()> for Sliver {
     fn bind(
@@ -276,12 +280,7 @@ impl Dispatch<ZwpVirtualKeyboardManagerV1, ()> for Sliver {
     ) {
         if let zwp_virtual_keyboard_manager_v1::Request::CreateVirtualKeyboard { id, .. } = request
         {
-            let device = state
-                .bar
-                .keyboard()
-                .inspect_err(|e| eprintln!("sliverd: uinput: {e}"))
-                .ok();
-            init.init(id, Mutex::new(device));
+            init.init(id, Mutex::new(state.bar.keyboard()));
         }
     }
 }
@@ -296,14 +295,8 @@ impl Dispatch<ZwpVirtualKeyboardV1, Device> for Sliver {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        if let zwp_virtual_keyboard_v1::Request::Key { key, state, .. } = request
-            && let Some(device) = device.lock().unwrap().as_mut()
-        {
-            device(key, state == 1);
+        if let zwp_virtual_keyboard_v1::Request::Key { key, state, .. } = request {
+            device.lock().unwrap()(key, state == 1);
         }
-    }
-
-    fn destroyed(_: &mut Self, _: ClientId, _: &ZwpVirtualKeyboardV1, device: &Device) {
-        device.lock().unwrap().take();
     }
 }

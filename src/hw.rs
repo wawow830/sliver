@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     fs::{self, File},
     io,
     os::{
@@ -99,9 +100,7 @@ fn uinput_keyboard() -> io::Result<Keyboard> {
         let bytes = unsafe {
             std::slice::from_raw_parts(events.as_ptr().cast::<u8>(), size_of_val(&events))
         };
-        if let Err(e) = io::Write::write_all(&mut &file, bytes) {
-            eprintln!("sliverd: uinput: {e}");
-        }
+        io::Write::write_all(&mut &file, bytes).unwrap_or_else(|e| fail("uinput", e));
     }))
 }
 
@@ -183,7 +182,7 @@ impl Panel {
         let buffers = [buffer()?, buffer()?];
         lh.insert_source(notifier, |event, _, s| match event {
             DrmEvent::VBlank(_) => s.presented(),
-            DrmEvent::Error(e) => eprintln!("sliverd: drm: {e}"),
+            DrmEvent::Error(e) => fail("drm", e),
         })
         .map_err(|e| io::Error::other(e.error))?;
         let max = fs::read_to_string(Path::new(BACKLIGHT).join("max_brightness"))?;
@@ -198,10 +197,8 @@ impl Panel {
             max: max.trim().into(),
         })
     }
-}
 
-impl Bar for Panel {
-    fn show(&mut self, frame: &[u8]) -> io::Result<()> {
+    fn present(&mut self, frame: &[u8]) -> io::Result<()> {
         let (buffer, fb) = &mut self.buffers[self.back];
         let (w, h) = buffer.size();
         let pitch = buffer.pitch() as usize;
@@ -233,16 +230,26 @@ impl Bar for Panel {
         self.back ^= 1;
         Ok(())
     }
+}
+
+impl Bar for Panel {
+    fn show(&mut self, frame: &[u8]) {
+        self.present(frame).unwrap_or_else(|e| fail("panel", e));
+    }
 
     fn power(&mut self, on: bool) {
-        if let Err(e) = fs::write(&self.brightness, if on { &self.max } else { "0" }) {
-            eprintln!("sliverd: backlight: {e}");
-        }
+        fs::write(&self.brightness, if on { &self.max } else { "0" })
+            .unwrap_or_else(|e| fail("backlight", e));
     }
 
-    fn keyboard(&mut self) -> io::Result<Keyboard> {
-        uinput_keyboard()
+    fn keyboard(&mut self) -> Keyboard {
+        uinput_keyboard().unwrap_or_else(|e| fail("uinput", e))
     }
+}
+
+fn fail(what: &str, e: impl Display) -> ! {
+    eprintln!("sliverd: {what}: {e}");
+    std::process::exit(1)
 }
 
 fn libinput(

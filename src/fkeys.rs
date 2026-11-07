@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    os::unix::net::UnixStream,
+};
 
 use wayland_client::protocol::wl_touch;
 
@@ -74,28 +77,26 @@ fn glyph(c: u8) -> [u8; 7] {
     }
 }
 
-pub fn run(stream: std::os::unix::net::UnixStream) {
+pub fn run(stream: UnixStream) {
     let serve = || {
         let client = Client::connect(stream)?;
         let keyboard = client.keyboard()?;
         let mut held = HashMap::new();
-        client.show(&draw(), move |event| match event {
-            wl_touch::Event::Down { id, x, .. } => {
-                let key = key_at(x);
-                held.insert(id, key);
+        client.show(&draw(), move |event| {
+            let before: HashSet<u32> = held.values().copied().collect();
+            match event {
+                wl_touch::Event::Down { id, x, .. } => drop(held.insert(id, key_at(x))),
+                wl_touch::Event::Up { id, .. } => drop(held.remove(&id)),
+                wl_touch::Event::Cancel => held.clear(),
+                _ => return,
+            }
+            let after: HashSet<u32> = held.values().copied().collect();
+            for &key in after.difference(&before) {
                 keyboard.key(0, key, 1);
             }
-            wl_touch::Event::Up { id, .. } => {
-                if let Some(key) = held.remove(&id) {
-                    keyboard.key(0, key, 0);
-                }
+            for &key in before.difference(&after) {
+                keyboard.key(0, key, 0);
             }
-            wl_touch::Event::Cancel => {
-                for (_, key) in held.drain() {
-                    keyboard.key(0, key, 0);
-                }
-            }
-            _ => {}
         })
     };
     if let Err(e) = serve() {

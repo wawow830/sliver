@@ -40,34 +40,33 @@ impl Drop for FakeKeyboard {
 }
 
 impl Bar for FakeBar {
-    fn show(&mut self, frame: &[u8]) -> io::Result<()> {
+    fn show(&mut self, frame: &[u8]) {
         let mut log = self.0.lock().unwrap();
         log.frame = frame
             .chunks_exact(4)
             .map(|px| u32::from_ne_bytes(px.try_into().unwrap()))
             .collect();
         log.shows += 1;
-        Ok(())
     }
 
     fn power(&mut self, on: bool) {
         self.0.lock().unwrap().on = on;
     }
 
-    fn keyboard(&mut self) -> io::Result<Keyboard> {
+    fn keyboard(&mut self) -> Keyboard {
         let mut log = self.0.lock().unwrap();
         let id = log.keyboards;
         log.keyboards += 1;
         log.keys.push(Device::Created(id));
         let device = FakeKeyboard(id, self.0.clone());
-        Ok(Box::new(move |code, pressed| {
+        Box::new(move |code, pressed| {
             device
                 .1
                 .lock()
                 .unwrap()
                 .keys
                 .push(Device::Key(device.0, code, pressed))
-        }))
+        })
     }
 }
 
@@ -266,6 +265,37 @@ fn fkeys_type() {
 }
 
 #[test]
+fn fn_prefers_fkeys_over_newer_windows() {
+    let mut b = Bench::new();
+    b.s.fn_key(true);
+    let _red = App::spawn(&mut b, RED);
+    b.settle();
+    assert!(b.shows_fkeys());
+    b.s.fn_key(false);
+    b.until("red", |b| b.shows(RED));
+}
+
+#[test]
+fn a_key_is_down_while_any_finger_holds_it() {
+    let mut b = Bench::new();
+    let f5 = (key_x(5), 30.0).into();
+    b.touch([Touch::Down(0, f5), Touch::Down(1, f5)]);
+    b.touch([Touch::Up(0)]);
+    b.touch([Touch::Up(1)]);
+    b.until("F5 up", |b| {
+        b.log().keys.contains(&Device::Key(0, 63, false))
+    });
+    assert_eq!(
+        b.log().keys,
+        [
+            Device::Created(0),
+            Device::Key(0, 63, true),
+            Device::Key(0, 63, false)
+        ]
+    );
+}
+
+#[test]
 fn virtual_keyboard_is_its_own_device() {
     let mut b = Bench::new();
     let stream = b.connect();
@@ -449,6 +479,7 @@ fn quickshell_draws_and_types() {
     }
     assert_eq!(b.log().shows, shows, "an idle bar redraws");
     b.touch([Touch::Down(0, (100.0, 30.0).into())]);
+    b.until("the key pressed", |b| b.picture().contains(&0x555555));
     b.touch([Touch::Up(0)]);
     b.until("Esc", |b| b.log().keys.contains(&Device::Key(1, 1, false)));
     qs.kill().unwrap();
