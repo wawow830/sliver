@@ -7,13 +7,14 @@ struct wl_display;
 struct wl_event_queue;
 struct zwp_virtual_keyboard_v1;
 
-class VirtualKeyboard : public QObject {
+class Keyboard : public QObject {
     Q_OBJECT
     QML_ELEMENT
+    QML_SINGLETON
 
 public:
-    explicit VirtualKeyboard(QObject *parent = nullptr);
-    ~VirtualKeyboard() override;
+    explicit Keyboard(QObject *parent = nullptr);
+    ~Keyboard() override;
 
     Q_INVOKABLE void key(int code, bool pressed);
 

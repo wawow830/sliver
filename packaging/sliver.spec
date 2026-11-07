@@ -19,10 +19,12 @@ BuildRequires:  pixman-devel
 BuildRequires:  libxkbcommon-devel
 BuildRequires:  systemd-rpm-macros
 Requires:       tiny-dfr
+Requires:       brightnessctl
 
 %description
-sliverd makes the Touch Bar an ordinary Wayland screen. The bar program (Quickshell
-by default) draws it, gets its touches and types keys through a virtual keyboard.
+sliverd makes the Touch Bar an ordinary Wayland screen. The bar is a Quickshell
+config: the Sliver QML module gives it pills, keys, levels, the taskbar, media and
+F-keys, and ~/.config/quickshell/sliver/shell.qml replaces the default one.
 Esc and F1-F12 show when nothing is open or while Fn is held.
 
 %prep
@@ -40,7 +42,7 @@ install -Dm755 target/release/sliverd %{buildroot}%{_bindir}/sliverd
 pushd bar/Sliver
 %cmake_install
 popd
-install -Dm644 bar/shell.qml %{buildroot}%{_datadir}/sliver/bar/shell.qml
+install -Dm644 bar/shell.qml %{buildroot}%{_sysconfdir}/xdg/quickshell/sliver/shell.qml
 install -Dm644 packaging/sliverd.service %{buildroot}%{_unitdir}/sliverd.service
 install -Dm644 packaging/sliver-bar.service %{buildroot}%{_userunitdir}/sliver-bar.service
 install -Dm644 packaging/99-z-sliverd.rules %{buildroot}%{_udevrulesdir}/99-z-sliverd.rules
@@ -60,7 +62,8 @@ install -Dm644 packaging/99-z-sliverd.rules %{buildroot}%{_udevrulesdir}/99-z-sl
 %files
 %{_bindir}/sliverd
 %{_libdir}/qt6/qml/Sliver/
-%{_datadir}/sliver/
+%dir %{_sysconfdir}/xdg/quickshell/sliver
+%config(noreplace) %{_sysconfdir}/xdg/quickshell/sliver/shell.qml
 %{_unitdir}/sliverd.service
 %{_userunitdir}/sliver-bar.service
 %{_udevrulesdir}/99-z-sliverd.rules

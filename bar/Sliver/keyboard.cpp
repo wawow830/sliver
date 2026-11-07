@@ -1,4 +1,4 @@
-#include "virtualkeyboard.h"
+#include "keyboard.h"
 
 #include <chrono>
 #include <cstring>
@@ -27,10 +27,10 @@ const wl_registry_listener listener{global, globalRemove};
 
 }
 
-VirtualKeyboard::VirtualKeyboard(QObject *parent) : QObject(parent) {
+Keyboard::Keyboard(QObject *parent) : QObject(parent) {
     auto *wayland = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
     if (!wayland || !wayland->seat()) {
-        qWarning("Sliver.VirtualKeyboard: needs a Wayland seat");
+        qWarning("Sliver.Keyboard: needs a Wayland seat");
         return;
     }
     display = wayland->display();
@@ -44,7 +44,7 @@ VirtualKeyboard::VirtualKeyboard(QObject *parent) : QObject(parent) {
     wl_registry_destroy(registry);
     wl_proxy_wrapper_destroy(wrapper);
     if (!manager) {
-        qWarning("Sliver.VirtualKeyboard: the compositor has no zwp_virtual_keyboard_manager_v1");
+        qWarning("Sliver.Keyboard: the compositor has no zwp_virtual_keyboard_manager_v1");
         return;
     }
     keyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(manager, wayland->seat());
@@ -57,7 +57,7 @@ VirtualKeyboard::VirtualKeyboard(QObject *parent) : QObject(parent) {
     wl_display_flush(display);
 }
 
-VirtualKeyboard::~VirtualKeyboard() {
+Keyboard::~Keyboard() {
     if (keyboard) {
         zwp_virtual_keyboard_v1_destroy(keyboard);
         wl_display_flush(display);
@@ -66,7 +66,7 @@ VirtualKeyboard::~VirtualKeyboard() {
         wl_event_queue_destroy(queue);
 }
 
-void VirtualKeyboard::key(int code, bool pressed) {
+void Keyboard::key(int code, bool pressed) {
     if (!keyboard)
         return;
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch());

@@ -443,15 +443,23 @@ fn quickshell_draws_and_types() {
     let socket = build.join("wayland");
     let _ = std::fs::remove_file(&socket);
     b.s.listen(&socket).unwrap();
+    let shell = build.join("fixture");
+    std::fs::create_dir_all(&shell).unwrap();
+    std::fs::write(
+        shell.join("shell.qml"),
+        "import Quickshell\nimport Sliver\nFloatingWindow { color: \"black\"; Key { anchors.fill: parent; keys: [1] } }\n",
+    )
+    .unwrap();
     let mut qs = std::process::Command::new("qs")
-        .args(["-p", root.join("bar").to_str().unwrap()])
+        .args(["-p", shell.to_str().unwrap()])
+        .env("XDG_CONFIG_HOME", &shell)
         .env("WAYLAND_DISPLAY", &socket)
         .env("QT_QPA_PLATFORM", "wayland")
         .env("QML_IMPORT_PATH", build.join("qml"))
         .spawn()
         .unwrap();
     b.until("Quickshell's window", |b| {
-        b.s.wl.windows.len() == 2 && b.picture().contains(&0x2a2a2a)
+        b.s.wl.windows.len() == 2 && b.picture().contains(&0x2a292f)
     });
     b.settle();
     let shows = b.log().shows;
@@ -460,7 +468,7 @@ fn quickshell_draws_and_types() {
     }
     assert_eq!(b.log().shows, shows, "an idle bar redraws");
     b.touch([Touch::Down(0, (100.0, 30.0).into())]);
-    b.until("the key pressed", |b| b.picture().contains(&0x555555));
+    b.until("the key pressed", |b| b.picture().contains(&0x39383f));
     b.touch([Touch::Up(0)]);
     b.until("Esc", |b| b.log().keys.contains(&Device::Key(1, 1, false)));
     qs.kill().unwrap();
@@ -474,3 +482,4 @@ fn quickshell_draws_and_types() {
         ]
     );
 }
+

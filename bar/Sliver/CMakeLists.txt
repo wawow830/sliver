@@ -14,10 +14,14 @@ add_custom_command(
     COMMAND wayland-scanner private-code ${XML} virtual-keyboard.c
     DEPENDS ${XML})
 
+set_source_files_properties(Theme.qml Desktop.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+
 qt_add_qml_module(sliver
     URI Sliver
     PLUGIN_TARGET sliver
-    SOURCES virtualkeyboard.h virtualkeyboard.cpp virtual-keyboard.h virtual-keyboard.c)
+    SOURCES keyboard.h keyboard.cpp virtual-keyboard.h virtual-keyboard.c
+    QML_FILES Theme.qml Desktop.qml Pill.qml Key.qml Level.qml Brightness.qml Volume.qml Mic.qml
+              Taskbar.qml PlayPause.qml Media.qml FKeys.qml Bar.qml)
 target_include_directories(sliver PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(sliver PRIVATE Qt6::Gui PkgConfig::WAYLAND)
 
