@@ -32,7 +32,6 @@ fn type_alias(t: &str) -> Option<&'static str> {
         "idle_inhibitor" => "idle-inhibitor",
         "power-profiles-daemon" => "power-profiles",
         "upower" => "battery",
-        "tray" => "status-items",
         "wlr/taskbar" => "taskbar",
         "custom-graph" => "graph",
         _ => return None,

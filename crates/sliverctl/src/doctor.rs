@@ -450,7 +450,7 @@ fn config_dir(sys: &dyn Sys) -> PathBuf {
 /// What each optional source feeds, so a missing one says what stays empty.
 fn sources(sys: &dyn Sys) -> Vec<Check> {
     // (id, system bus?, bus name, what it feeds, what to do)
-    const BUSES: [(&str, bool, &str, &str, &str); 6] = [
+    const BUSES: [(&str, bool, &str, &str, &str); 5] = [
         (
             "network",
             true,
@@ -480,13 +480,6 @@ fn sources(sys: &dyn Sys) -> Vec<Check> {
             "run a notification daemon (mako, swaync, dunst, or your desktop's)",
         ),
         (
-            "tray",
-            false,
-            "org.kde.StatusNotifierWatcher",
-            "the `tray` / `status-items` modules",
-            "run a bar or tray host that provides a StatusNotifierWatcher (waybar, quickshell, KDE, GNOME's AppIndicator extension)",
-        ),
-        (
             "portal",
             false,
             "org.freedesktop.portal.Desktop",
@@ -501,7 +494,6 @@ fn sources(sys: &dyn Sys) -> Vec<Check> {
             "power" => "UPower",
             "logind" => "systemd-logind",
             "notifications" => "a notification daemon",
-            "tray" => "a tray host (StatusNotifierWatcher)",
             _ => "xdg-desktop-portal",
         };
         let c = match sys.bus_name(system, name) {

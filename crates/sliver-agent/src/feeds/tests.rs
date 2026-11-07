@@ -274,7 +274,7 @@ fn desktop_backend_unavailable_leaves_a_note() {
 #[test]
 fn hermetic_session_options_start_nothing_real() {
     let h = SessionOptions::hermetic();
-    assert!(h.audio.is_none() && h.sysfs.is_none() && !h.notifications && !h.tray);
+    assert!(h.audio.is_none() && h.sysfs.is_none() && !h.notifications);
     let d = SessionOptions::default();
     assert!(d.audio.is_some(), "the default is the real desktop");
 }

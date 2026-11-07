@@ -52,7 +52,6 @@ impl Fake {
         }
         for n in [
             "org.freedesktop.Notifications",
-            "org.kde.StatusNotifierWatcher",
             "org.freedesktop.portal.Desktop",
         ] {
             f.session_names.insert(n.into());
@@ -307,19 +306,11 @@ fn config_errors_fail_and_warnings_warn() {
 fn missing_sources_say_what_goes_empty() {
     let mut f = Fake::healthy();
     f.system_names.remove("org.freedesktop.NetworkManager");
-    f.session_names.remove("org.kde.StatusNotifierWatcher");
     f.files.clear();
     let c = run_checks(&f);
     let n = find(&c, "source/network");
     assert_eq!(n.level, Level::Warn);
     assert!(n.summary.contains("`network` module"), "{n:?}");
-    assert!(
-        find(&c, "source/tray")
-            .fix
-            .as_deref()
-            .unwrap()
-            .contains("StatusNotifierWatcher")
-    );
     assert!(
         find(&c, "source/audio")
             .summary
@@ -337,7 +328,7 @@ fn no_session_bus_is_one_clear_warning_per_source_not_a_crash() {
     f.agent = Some(Err("no session bus".into()));
     let c = run_checks(&f);
     assert!(
-        find(&c, "source/tray")
+        find(&c, "source/notifications")
             .summary
             .contains("session bus isn't reachable")
     );

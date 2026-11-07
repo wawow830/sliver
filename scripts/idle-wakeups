@@ -11,10 +11,9 @@ thread of both and of every helper process the agent starts:
 in two scenarios:
 
   default: the default config, with no services at all
-  full:    every event-driven module placed (systemd-failed-units, notifications, tray,
-           network, bluetooth, graph) with quiet stand-ins for their services
-           (scripts/idle-mocks: systemd, NetworkManager, BlueZ, a tray watcher, a notification
-           server). It fails if a source never called its
+  full:    every event-driven module placed (systemd-failed-units, notifications, network,
+           bluetooth, graph) with quiet stand-ins for their services (scripts/idle-mocks: systemd,
+           NetworkManager, BlueZ, a notification server). It fails if a source never called its
            service.
 
 It fails if any phase is over budget. ~80 s per scenario; not part of scripts/check (too slow).
@@ -48,14 +47,13 @@ FULL_LAYOUT = """
 [[layouts.default.zones]]
 name = "main"
 width = "fill"
-modules = ["systemd-failed-units", "notifications", "status-items", "network", "bluetooth",
-           "graph#cpu"]
+modules = ["systemd-failed-units", "notifications", "network", "bluetooth", "graph#cpu"]
 
 [modules.systemd-failed-units]
 hide-on-ok = false
 """
 # Services that must have been called in "full", by scripts/idle-mocks' names.
-FULL_SOURCES = {"systemd-system", "systemd-user", "network", "bluetooth", "tray", "notifications"}
+FULL_SOURCES = {"systemd-system", "systemd-user", "network", "bluetooth", "notifications"}
 SETTLE_S = 5
 # Display timeouts in the sandbox config: "on" is measured before dim, "off" after off.
 DIM_AFTER_S = 40

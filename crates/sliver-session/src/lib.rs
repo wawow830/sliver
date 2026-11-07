@@ -23,14 +23,12 @@ pub mod brightness;
 pub mod failed;
 pub mod fake;
 pub mod logind;
-pub mod menu;
 pub mod mpris;
 pub mod network;
 pub mod notifications;
 pub mod power;
 pub(crate) mod props;
 pub mod screensaver;
-pub mod tray;
 
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -130,8 +128,6 @@ pub struct SessionState {
     pub audio: audio::Audio,
     pub notifications: notifications::Notifications,
     pub appearance: appearance::Appearance,
-    /// StatusNotifierItem tray, in registration order (empty until `Handle::start_tray`).
-    pub tray: Vec<tray::TrayItem>,
     pub brightness: brightness::Levels,
     pub power: Power,
     pub network: network::Network,

@@ -27,7 +27,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, Weak};
 
 /// What [`Feeds::start_session_on`] starts. The default is the real desktop: real audio tools,
-/// real sysfs, notifications and tray on.
+/// real sysfs, notifications on.
 #[derive(Debug, Clone)]
 pub struct SessionOptions {
     /// `None` = no audio source (and no `wpctl`/`pactl` process ever).
@@ -35,7 +35,6 @@ pub struct SessionOptions {
     /// Where backlight levels are read; `None` = skip.
     pub sysfs: Option<sliver_session::brightness::Sysfs>,
     pub notifications: bool,
-    pub tray: bool,
     /// Accent colour and colour scheme from the settings portal (and `kdeglobals`).
     pub appearance: bool,
     /// The desktop's lock-screen state (`ActiveChanged`).
@@ -48,7 +47,6 @@ impl Default for SessionOptions {
             audio: Some(sliver_session::audio::Tools::default()),
             sysfs: Some(sliver_session::brightness::Sysfs::default()),
             notifications: true,
-            tray: true,
             appearance: true,
             screensaver: true,
         }
@@ -62,7 +60,6 @@ impl SessionOptions {
             audio: None,
             sysfs: None,
             notifications: false,
-            tray: false,
             appearance: false,
             screensaver: false,
         }
@@ -310,7 +307,7 @@ impl Feeds {
     }
 
     /// Start the live session sources on the real buses: logind, UPower, MPRIS, audio,
-    /// brightness, notifications and the tray. Each optional part that cannot start leaves a
+    /// brightness and notifications. Each optional part that cannot start leaves a
     /// [`Feed::Note`] and its keys stay unknown.
     pub fn start_session(&mut self) {
         // sliver-bus: connections that don't start zbus's idle `blocking` pool thread.
@@ -373,11 +370,6 @@ impl Feeds {
                         "notifications: no second session connection".into(),
                     ));
                 }
-            }
-        }
-        if opts.tray {
-            if let Ok(c) = session() {
-                handle.start_tray(c);
             }
         }
         if opts.screensaver {
@@ -551,7 +543,7 @@ impl Aggregate {
             Feed::Session(s) => {
                 let before = self.context();
                 self.session = s;
-                // Tray, notification counts and slider positions change often without
+                // Notification counts and slider positions change often without
                 // touching any rule key; modules still want a redraw for them.
                 if self.context() != before {
                     Changed::Context

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Quiet stand-ins for the services event-driven modules follow, for scripts/idle-wakeups' "full"
-phase: systemd (system and user managers), NetworkManager, BlueZ, a tray watcher and a
-notification server.
+phase: systemd (system and user managers), NetworkManager, BlueZ and a notification
+server.
 
 They answer what the sources ask at startup, then stay silent. Each source that calls in is
 appended to SEEN, one line per name.
@@ -95,26 +95,6 @@ class Bluez(dbus.service.Object):
         }}}
 
 
-SNW = "org.kde.StatusNotifierWatcher"
-
-
-class Watcher(Props):
-    def __init__(self, conn):
-        super().__init__(conn, "/StatusNotifierWatcher", {SNW: {
-            "RegisteredStatusNotifierItems": dbus.Array([], signature="s"),
-            "IsStatusNotifierHostRegistered": dbus.Boolean(True),
-            "ProtocolVersion": dbus.Int32(0),
-        }}, "tray")
-
-    @dbus.service.method(SNW, in_signature="s", out_signature="")
-    def RegisterStatusNotifierHost(self, name):
-        seen("tray")
-
-    @dbus.service.method(SNW, in_signature="s", out_signature="")
-    def RegisterStatusNotifierItem(self, name):
-        pass
-
-
 NOTIF = "org.freedesktop.Notifications"
 
 
@@ -150,11 +130,11 @@ def main():
     session = dbus.bus.BusConnection(a.session)
     keep = []
     for conn, names in ((system, ["org.freedesktop.systemd1", NM, "org.bluez"]),
-                        (session, ["org.freedesktop.systemd1", SNW, NOTIF])):
+                        (session, ["org.freedesktop.systemd1", NOTIF])):
         keep += [dbus.service.BusName(n, conn) for n in names]
     keep += [Systemd(system, "systemd-system"), Systemd(session, "systemd-user")]
     network(system)
-    keep += [Bluez(system, "/"), Watcher(session),
+    keep += [Bluez(system, "/"),
              Notifications(session, "/org/freedesktop/Notifications")]
     print("ready", flush=True)
     GLib.MainLoop().run()
