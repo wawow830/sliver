@@ -1182,7 +1182,6 @@ dependencies = [
  "sliver-cli",
  "sliver-config",
  "sliver-desktop",
- "sliver-emoji",
  "sliver-icons",
  "sliver-ipc",
  "sliver-proc",
@@ -1256,10 +1255,6 @@ dependencies = [
  "wayland-protocols-wlr",
  "wayland-server",
 ]
-
-[[package]]
-name = "sliver-emoji"
-version = "0.1.0"
 
 [[package]]
 name = "sliver-hw"

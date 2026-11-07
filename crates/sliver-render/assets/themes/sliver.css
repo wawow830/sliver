@@ -64,11 +64,5 @@ module:active slider { background-color: #e0e0e0; }
 #battery.charging { color: #57e389; }
 .error { color: #ff7b63; }
 
-/* Emoji picker strip (the `emoji` module in strip mode) */
-module.emoji { font-size: 32px; padding: 0; }
-module.emoji-tab { font-size: 26px; padding: 0; background-color: transparent; }
-module.emoji-tab:checked { background-color: @accent; }
-module.emoji-close { font-size: 24px; padding: 0; }
-
 /* Indeterminate progress (published items) is a full track: muted, so it doesn't read as 100%. */
 module.indeterminate highlight { background-color: alpha(@accent, 0.35); }

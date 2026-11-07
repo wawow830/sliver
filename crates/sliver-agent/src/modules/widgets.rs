@@ -1,4 +1,4 @@
-//! Specs for self-contained widgets: user module output, graphs, images, the clock, emoji, timers.
+//! Specs for self-contained widgets: user module output, graphs, images, the clock, timers.
 
 use super::*;
 
@@ -97,15 +97,6 @@ pub(super) fn clock(at: &At) -> Option<Spec> {
         );
     }
     Some(sp)
-}
-
-/// The picker's entry button: opens the `emoji` layer (the strip lives there).
-pub(super) fn emoji() -> Option<Spec> {
-    let open = Action::Layer {
-        name: "emoji".into(),
-        mode: sliver_config::LayerMode::Toggle,
-    };
-    Some(Spec::new(ValueMap::new(), "😀").does(Gesture::Tap, "open", Do::Run(open)))
 }
 
 pub(super) fn timer(at: &At) -> Option<Spec> {

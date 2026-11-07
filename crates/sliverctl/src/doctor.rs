@@ -151,7 +151,6 @@ pub fn run_checks(sys: &dyn Sys) -> Vec<Check> {
     out.push(config(sys));
     out.push(desktop(sys));
     out.extend(sources(sys));
-    out.extend(helpers(sys));
     out
 }
 
@@ -560,29 +559,6 @@ fn sources(sys: &dyn Sys) -> Vec<Check> {
             Some("systemctl --user enable --now pipewire pipewire-pulse wireplumber"),
         ),
     });
-    out
-}
-
-fn helpers(sys: &dyn Sys) -> Vec<Check> {
-    let mut out = Vec::new();
-    let wayland = sys.env("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty());
-    if wayland {
-        out.push(if sys.command("wtype") {
-            check(
-                "helper/wtype",
-                Level::Ok,
-                "wtype is installed (the emoji picker types into the focused app)",
-                None,
-            )
-        } else {
-            check(
-                "helper/wtype",
-                Level::Warn,
-                "wtype isn't installed: the emoji picker falls back to the clipboard",
-                Some("sudo dnf install wtype"),
-            )
-        });
-    }
     out
 }
 

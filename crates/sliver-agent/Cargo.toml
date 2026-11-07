@@ -18,7 +18,6 @@ sliver-api.workspace = true
 sliver-config.workspace = true
 toml.workspace = true
 sliver-desktop.workspace = true
-sliver-emoji.workspace = true
 sliver-proc.workspace = true
 sliver-session.workspace = true
 sliver-icons.workspace = true

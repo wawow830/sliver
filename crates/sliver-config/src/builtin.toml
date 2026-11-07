@@ -5,7 +5,6 @@ version = 1
 base = "default"
 fn = "fkeys"
 media = "media"
-emoji = "emoji"           # opened with { layer = "emoji", mode = "toggle" }
 
 [[layouts.default.zones]]
 name = "esc"
@@ -63,15 +62,6 @@ modules = ["key/PreviousSong", "key/PlayPause", "key/NextSong"]
 name = "controls"
 modules = ["backlight/slider#locked", "audio/slider#locked", "key/Mute"]
 
-[[layouts.emoji.zones]]
-name = "esc"
-modules = ["key/Esc#auto"]
-
-[[layouts.emoji.zones]]
-name = "main"
-width = "fill"
-modules = ["emoji#strip"]
-
 # Esc only where the Mac has no physical Esc key (2170 px bars), as tiny-dfr does. An unknown
 # physical-esc shows Esc.
 # Not `physical-esc = false`: when it is unknown, Esc shows.
@@ -103,9 +93,6 @@ collapsed = true
 format = "{status_icon} {title}"
 max-length = 24
 hide-empty-text = true
-
-[modules."emoji#strip"]
-mode = "strip"
 
 # Sparklines, ready to place.
 [modules."graph#cpu"]

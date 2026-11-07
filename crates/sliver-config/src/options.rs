@@ -133,14 +133,6 @@ pub const MODULE_TYPES: &[(&str, &[Keys])] = &[
         &[&[("all-workspaces", Kind::Flag), ("pinned", Kind::Texts)]],
     ),
     ("notifications", &[]),
-    (
-        "emoji",
-        &[&[
-            ("mode", Kind::OneOf(&["button", "strip"])),
-            ("columns", Kind::Clamped(4, 40)),
-            ("insert", Kind::OneOf(&["auto", "wtype", "paste", "copy"])),
-        ]],
-    ),
     ("timer", &[&[("duration", Kind::Duration(1000))]]),
     ("image", &[&[("path", Kind::Text)], SCRIPT]),
     (

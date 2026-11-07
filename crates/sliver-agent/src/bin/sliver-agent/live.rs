@@ -25,8 +25,6 @@ pub(super) struct Live {
     pub(super) wants: sliver_agent::stats::Wants,
     /// Installed applications (taskbar icons).
     pub(super) apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
-    /// Emoji recents, shared with the agent.
-    pub(super) emoji: sliver_agent::modules::EmojiHandle,
 }
 
 impl Live {
@@ -75,7 +73,6 @@ impl Live {
             own_desktop: false,
             stats: Default::default(),
             wants: Default::default(),
-            emoji: sliver_agent::modules::EmojiHandle::persistent(),
             apps: std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::from_paths(
                 &sliver_icons::SearchPaths::from_env(|k| std::env::var(k).ok()),
             )),
@@ -179,7 +176,6 @@ impl Live {
             published: self.published.clone(),
             stats: self.stats.readings(wants, now.instant),
             apps: self.apps.clone(),
-            emoji: self.emoji.clone(),
             media_art: self.agg.media_art().map(std::path::Path::to_path_buf),
         }
     }

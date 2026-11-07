@@ -152,9 +152,6 @@ fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut V
             "app-controls" | "status-items" => placeholder_cells(m, &key, prefix, b, out),
             // A published item (or a whole context) placed by the layout: `app/<provider>#<item>`.
             "app" => pinned_app(m, b, out),
-            "emoji" if m.text("mode") == Some("strip") => {
-                emoji_strip(m, &key, b.world, &(b.ui)(&key).emoji, out)
-            }
             // Any other module is a cell, or one per item it lists (workspaces, windows, who's
             // recording).
             _ => {
@@ -193,7 +190,6 @@ pub(crate) const IMAGE_MAX_HEIGHT: u32 = 120;
 mod apps;
 mod clock;
 mod desktop;
-mod emoji;
 mod graph;
 mod groups;
 mod media;
@@ -207,7 +203,6 @@ mod world;
 use apps::*;
 use clock::*;
 use desktop::*;
-use emoji::*;
 pub use graph::*;
 pub use groups::*;
 pub use menus::*;

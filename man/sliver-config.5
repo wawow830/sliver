@@ -1073,35 +1073,6 @@ Tap invokes the default action (with
 .BR makoctl ),
 or dismisses; swipes dismiss.
 .TP
-.B emoji
-As a button it opens the built\-in
-.B emoji
-layer
-.RB ( "mode = \(dqbutton\(dq" ,
-the default); with
-.B mode = \(dqstrip\(dq
-it is that layer: group tabs (recents first), one page of
-.B columns
-emoji (default 14), swipe to page.
-Tapping types the emoji:
-.B insert
-is
-.B auto
-(wtype if installed, else the clipboard),
-.BR wtype ,
-.B paste
-(replaces the clipboard) or
-.BR copy .
-Holding an emoji with skin tones offers them, and group pages then use the tone last picked.
-The search tab spells a query on the bar with a letter row; every word of the query is a prefix of
-the name.
-Recents are kept in
-.IR $XDG_STATE_HOME/sliver/emoji\-recents .
-Classes
-.B .emoji\-tone
-and
-.BR .emoji\-back .
-.TP
 .B timer
 A countdown:
 .B duration
@@ -1435,7 +1406,7 @@ output,
 notification text, media titles and art, window titles
 .RB ( window ,
 .BR taskbar )
-and emoji recents are never shown on the lock screen.
+are never shown on the lock screen.
 By default notification text also stays off the bar while the screen is shared (the built\-in
 .B when
 of

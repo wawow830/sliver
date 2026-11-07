@@ -1,15 +1,10 @@
-//! What actions do inside the agent: layouts and layers, module actions, menus, published
-//! items, and the emoji picker.
+//! What actions do inside the agent: layouts and layers, module actions, menus and published
+//! items.
 
 use super::*;
-use crate::act::{Act, EmojiOp, Insert, UiChange};
+use crate::act::{Act, UiChange};
 
 impl Agent {
-    /// Share the emoji picker's recents with the worlds this agent draws (main does this once).
-    pub fn set_emoji(&mut self, handle: modules::EmojiHandle) {
-        self.emoji = handle;
-    }
-
     /// Relative icon paths in the config resolve against this (the config file's directory).
     pub fn set_config_dir(&mut self, dir: Option<&std::path::Path>) {
         self.icons.set_base_dir(dir);
@@ -349,88 +344,7 @@ impl Agent {
                         .push((due, Scheduled::TimerDone { key, generation }));
                 }
             }
-            UiChange::Emoji(op) => return self.emoji(key, op, now, fx),
         }
         fx.push(Effect::Redraw);
     }
-}
-
-impl Agent {
-    /// The emoji strip `strip`'s controls.
-    fn emoji(&mut self, strip: &str, op: &EmojiOp, now: u64, fx: &mut Vec<Effect>) {
-        let ui = &mut self.ui(strip).emoji;
-        match op {
-            EmojiOp::Pick { insert, text } => {
-                ui.tones = None;
-                self.emoji.push(text);
-                self.type_text(*insert, text, now, fx);
-            }
-            EmojiOp::Tones(e) => ui.tones = e.clone(),
-            EmojiOp::Search => {
-                ui.search = Some(String::new());
-                ui.offset = 0;
-                ui.tones = None;
-            }
-            EmojiOp::Type(c) => {
-                let q = ui.search.get_or_insert_with(String::new);
-                // Letters and single spaces only; the query stays short enough to mean something.
-                let c = *c;
-                if (c.is_ascii_lowercase() || (c == ' ' && !q.is_empty() && !q.ends_with(' ')))
-                    && q.len() < 24
-                {
-                    q.push(c);
-                }
-                ui.offset = 0;
-            }
-            EmojiOp::Erase { all } => {
-                if let Some(q) = ui.search.as_mut() {
-                    if *all {
-                        q.clear();
-                    } else {
-                        q.pop();
-                    }
-                }
-                ui.offset = 0;
-            }
-            EmojiOp::EndSearch => {
-                ui.search = None;
-                ui.offset = 0;
-            }
-            EmojiOp::Tab(t) => {
-                ui.tab = *t;
-                ui.offset = 0;
-                ui.tones = None;
-            }
-            EmojiOp::Page(d) => ui.offset = (ui.offset as i64 + d).max(0) as usize,
-        }
-        fx.push(Effect::Redraw);
-    }
-
-    /// Type `text` into the focused app. `auto` = wtype if installed, else copy to the clipboard;
-    /// `wtype` types directly (virtual keyboard); `paste` copies and presses Ctrl+V through
-    /// sliverd (works anywhere on Wayland, replaces the clipboard); `copy` only copies.
-    fn type_text(&mut self, insert: Insert, text: &str, now: u64, fx: &mut Vec<Effect>) {
-        let wtype = match insert {
-            Insert::Auto => tool_exists("wtype"),
-            i => i == Insert::Wtype,
-        };
-        let spawn = |argv: [&str; 3]| Effect::Spawn(argv.map(String::from).into());
-        if wtype {
-            fx.push(spawn(["wtype", "--", text]));
-            return;
-        }
-        fx.push(spawn(["wl-copy", "--", text]));
-        if insert == Insert::Paste
-            && let (Some(ctrl), Some(v)) = (Key::from_name("LeftCtrl"), Key::from_name("V"))
-        {
-            // Give wl-copy a moment to own the selection before pasting.
-            let paste = Do::Run(Action::Keys(vec![ctrl, v]));
-            self.scheduled.push((now + 120_000, Scheduled::Do(paste)));
-        }
-    }
-}
-
-pub(super) fn tool_exists(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
 }

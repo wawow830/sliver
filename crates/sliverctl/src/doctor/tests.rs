@@ -47,7 +47,7 @@ impl Fake {
         );
         f.files
             .insert("/run/user/1/pipewire-0".into(), String::new());
-        for c in ["wpctl", "pactl", "wtype"] {
+        for c in ["wpctl", "pactl"] {
             f.commands.insert(c.into());
         }
         for n in [
@@ -388,12 +388,6 @@ fn the_desktop_helpers_are_checked_where_they_are_needed() {
     x.env.remove("WAYLAND_DISPLAY");
     x.env.insert("DISPLAY".into(), ":0".into());
     assert!(find(&run_checks(&x), "desktop").summary.contains("X11"));
-    // wtype only matters on Wayland
-    let mut w = Fake::healthy();
-    w.commands.remove("wtype");
-    assert_eq!(find(&run_checks(&w), "helper/wtype").level, Level::Warn);
-    w.env.remove("WAYLAND_DISPLAY");
-    assert!(run_checks(&w).iter().all(|c| c.id != "helper/wtype"));
 }
 
 #[test]

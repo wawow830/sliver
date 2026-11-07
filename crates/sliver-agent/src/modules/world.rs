@@ -3,45 +3,6 @@
 
 use super::*;
 
-/// The emoji picker's recents, shared by the world (drawing) and the agent (picking).
-#[derive(Clone, Default)]
-pub struct EmojiHandle(std::sync::Arc<std::sync::Mutex<sliver_emoji::Recents>>);
-
-impl std::fmt::Debug for EmojiHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("EmojiHandle")
-    }
-}
-
-impl EmojiHandle {
-    /// Recents saved under `$XDG_STATE_HOME/sliver/emoji-recents`.
-    pub fn persistent() -> EmojiHandle {
-        let path = sliver_emoji::Recents::default_path(|k| std::env::var(k).ok());
-        let r = path.map_or_else(sliver_emoji::Recents::new, sliver_emoji::Recents::at);
-        EmojiHandle(std::sync::Arc::new(std::sync::Mutex::new(r)))
-    }
-
-    pub fn items(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .items()
-            .to_vec()
-    }
-
-    pub fn push(&self, text: &str) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(text);
-    }
-
-    /// `e` in the skin tone last picked for it (or plain).
-    pub fn preferred(&self, e: &sliver_emoji::Emoji) -> String {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .preferred(e)
-    }
-}
-
 /// Everything modules and rules can read.
 #[derive(Debug, Clone)]
 pub struct World {
@@ -57,8 +18,6 @@ pub struct World {
     pub published: crate::published::Published,
     /// cpu, memory, load, temperature, disk and network throughput, as read for this frame.
     pub stats: crate::stats::Readings,
-    /// Recently used emoji (the picker's first tab).
-    pub emoji: EmojiHandle,
     /// Local file of the current player's album art (fetched by the feeds).
     pub media_art: Option<std::path::PathBuf>,
     /// Installed applications, for taskbar icons.
@@ -77,7 +36,6 @@ impl World {
             published: Default::default(),
             stats: Default::default(),
             apps: Default::default(),
-            emoji: Default::default(),
             media_art: None,
         }
     }
@@ -128,8 +86,6 @@ pub struct UiState {
     pub expanded: bool,
     /// `timer` modules: the countdown.
     pub timer: Option<TimerState>,
-    /// `emoji` strips: which tab and how far scrolled.
-    pub emoji: EmojiUi,
     /// `mpris`: the player the user picked (hold), instead of the most recently active one.
     pub player: Option<String>,
     /// `graph`: the samples to draw, oldest first, 0..=1 (the agent keeps them, see
@@ -137,17 +93,6 @@ pub struct UiState {
     pub graph: Option<(Vec<f32>, usize)>,
     /// `clock` with `timezones`: how far the user swiped through the list (wraps around).
     pub tz: i32,
-}
-
-/// Where an emoji strip is: tab 0 = recents, 1..=9 = the Unicode groups.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EmojiUi {
-    pub tab: usize,
-    pub offset: usize,
-    /// Choosing a skin tone for this emoji (its plain text): the page shows its variants.
-    pub tones: Option<String>,
-    /// Searching: the letters typed so far (`Some("")` = search is open and empty).
-    pub search: Option<String>,
 }
 
 /// A countdown that survives re-resolution (it lives in [`UiState`], keyed by the cell).

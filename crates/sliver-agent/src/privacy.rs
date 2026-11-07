@@ -7,8 +7,7 @@
 //! 2. [`allowed`]: cells of kinds that exist to show private things are dropped: `custom/*`
 //!    (arbitrary script output, and running commands from a locked bar), `image` and `graph` (a
 //!    picture or a history a script picked), app-published items and
-//!    their App controls / Status items slots, `window`, `taskbar`, and the emoji picker (its
-//!    recents are a history).
+//!    their App controls / Status items slots, `window` and `taskbar`.
 //!
 //! What stays: keys (Esc, F-keys, media keys), sliders, toggles, clock, battery, workspaces,
 //! keyboard layout, the notification *count*, media play/pause without the title.
@@ -29,7 +28,6 @@ const HIDDEN_KINDS: &[&str] = &[
     "status",
     "window",
     "taskbar",
-    "emoji",
 ];
 
 /// The world as a locked screen may see it.

@@ -5,9 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Local};
-use sliver_config::{
-    Action, Config, Context, CtxValue, Gesture as CGesture, Key, LayerMode, Resolved,
-};
+use sliver_config::{Action, Config, Context, CtxValue, Gesture as CGesture, LayerMode, Resolved};
 use sliver_ipc::proto::{DisplayState, KeyMode, Layer, TouchPhase};
 use sliver_render::{Renderer, Stylesheet};
 
@@ -152,8 +150,6 @@ pub struct Agent {
     /// `graph` modules' samples, by module id. Sampled in [`Agent::render`] while the bar is
     /// drawn.
     graphs: HashMap<String, Samples>,
-    /// The emoji picker's recents (shared with the worlds it draws).
-    emoji: modules::EmojiHandle,
     /// A menu, drawer sub-bar or popover covering the bar.
     overlay: Option<overlay::Overlay>,
     /// Sliders under a finger, by cell key: the value there, and when it was let go. They show
@@ -296,7 +292,6 @@ impl Agent {
             pushed: HashMap::new(),
             errors: Vec::new(),
             graphs: HashMap::new(),
-            emoji: Default::default(),
             overlay: None,
             under_finger: HashMap::new(),
         }

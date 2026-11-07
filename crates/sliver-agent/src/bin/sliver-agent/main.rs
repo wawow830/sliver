@@ -177,7 +177,6 @@ fn main() {
                 }
                 let size = (link.panel.width, link.panel.height);
                 let mut agent = new_agent(reloader.applied(), size);
-                agent.set_emoji(live.emoji.clone());
                 agent.set_reduce_motion(reduce_motion(&live));
                 eprintln!(
                     "sliver-agent: connected to sliverd ({}, {}x{}, {:?})",

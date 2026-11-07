@@ -261,7 +261,6 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
     ("graph", |at| widgets::graph(at.m, at.world, at.ui)),
     ("image", widgets::image),
     ("clock", widgets::clock),
-    ("emoji", |_| widgets::emoji()),
     ("timer", widgets::timer),
     ("battery", |at| system::battery(at.world)),
     ("backlight", |at| system::backlight(at.m, at.world)),

@@ -83,55 +83,6 @@ pub enum UiChange {
         total: Duration,
     },
     TimerReset,
-    Emoji(EmojiOp),
-}
-
-/// The emoji strip's own controls.
-#[derive(Debug, Clone, PartialEq)]
-pub enum EmojiOp {
-    /// Type this emoji.
-    Pick {
-        insert: Insert,
-        text: String,
-    },
-    /// Show this emoji's skin tones in place of the page, or stop.
-    Tones(Option<String>),
-    Search,
-    /// Add a letter or space to the query.
-    Type(char),
-    /// Erase the last letter, or the whole query.
-    Erase {
-        all: bool,
-    },
-    /// Back to the groups.
-    EndSearch,
-    Tab(usize),
-    Page(i64),
-}
-
-/// How a picked emoji gets into the focused app (`insert`).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Insert {
-    /// `wtype` when installed, else copy.
-    Auto,
-    /// Type it through a virtual keyboard.
-    Wtype,
-    /// Copy it and press Ctrl+V through sliverd (works anywhere, replaces the clipboard).
-    Paste,
-    /// Only copy it.
-    Copy,
-}
-
-impl Insert {
-    pub fn parse(s: &str) -> Option<Insert> {
-        Some(match s {
-            "auto" => Insert::Auto,
-            "wtype" => Insert::Wtype,
-            "paste" => Insert::Paste,
-            "copy" => Insert::Copy,
-            _ => return None,
-        })
-    }
 }
 
 /// One entry of a sub-bar.
