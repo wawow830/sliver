@@ -1,6 +1,6 @@
 //! Everything the agent learns from outside, in one place.
 //!
-//! Three kinds of input run on their own threads and arrive on one channel:
+//! Three kinds of input run on their own threads and arrive in one mailbox:
 //!
 //! * the **desktop** (focused window, workspace, layout, outputs: `sliver-desktop`),
 //! * the **session** (lock, power, media, audio, brightness, notifications, tray:
@@ -11,6 +11,11 @@
 //! readable it calls [`Feeds::drain`], folds each [`Feed`] into an [`Aggregate`], and uses
 //! [`Aggregate::context`] for rule matching and [`Aggregate::module_output`] for modules.
 //! Nothing here polls on a timer: every thread sleeps in a blocking read.
+//!
+//! Almost every feed is a state (the desktop, the session, a module's output): only the latest
+//! counts, so a newer one replaces an undrained older one of the same kind ([`Feed::slot`]). A
+//! slow loop catches up in one drain, and what waits for it is bounded by the number of kinds,
+//! not by how much happened. Notes are events: they're kept, the newest [`MAX_NOTES`].
 //!
 //! Every source degrades to "unknown" (a missing key in the context) instead of failing, and
 //! reports problems as [`Feed::Note`] for the status page.
@@ -30,8 +35,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
-use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex, Weak};
 
 /// What [`Feeds::start_session_on`] starts. The default is the real desktop: real audio tools,
 /// real sysfs, notifications and tray on.
@@ -112,25 +116,83 @@ impl Waker {
     }
 }
 
+/// Undrained notes kept (the oldest go first).
+pub const MAX_NOTES: usize = 32;
+
+/// What a [`Feed`] is the latest state of. `None`: an event.
+#[derive(Debug, PartialEq)]
+pub enum Slot<'a> {
+    Desktop,
+    Session,
+    Module(&'a str),
+    Art,
+    Spectrum,
+}
+
+impl Feed {
+    pub fn slot(&self) -> Option<Slot<'_>> {
+        Some(match self {
+            Feed::Desktop(_) => Slot::Desktop,
+            Feed::Session(_) => Slot::Session,
+            Feed::Module(u) => Slot::Module(&u.module),
+            Feed::Art { .. } => Slot::Art,
+            Feed::Spectrum(_) => Slot::Spectrum,
+            Feed::Note(_) => return None,
+        })
+    }
+}
+
+/// The feeds that arrived since the last drain, in arrival order of their kinds.
+#[derive(Debug, Default)]
+pub struct Mailbox(Vec<Feed>);
+
+impl Mailbox {
+    /// A state replaces the undrained one of its kind; a note is added (dropping the oldest
+    /// note beyond [`MAX_NOTES`]).
+    pub fn put(&mut self, f: Feed) {
+        let v = &mut self.0;
+        match f.slot() {
+            Some(slot) => match v.iter().position(|x| x.slot().as_ref() == Some(&slot)) {
+                Some(i) => v[i] = f,
+                None => v.push(f),
+            },
+            None => {
+                let notes: Vec<usize> = (0..v.len()).filter(|&i| v[i].slot().is_none()).collect();
+                if notes.len() >= MAX_NOTES {
+                    v.remove(notes[0]);
+                }
+                v.push(f);
+            }
+        }
+    }
+
+    pub fn take(&mut self) -> Vec<Feed> {
+        std::mem::take(&mut self.0)
+    }
+}
+
 #[derive(Clone)]
 struct Out {
-    tx: Sender<Feed>,
+    mailbox: Weak<Mutex<Mailbox>>,
     waker: Waker,
 }
 
 impl Out {
-    /// `false` = the receiver is gone, stop.
+    /// `false` = the [`Feeds`] are gone, stop.
     fn send(&self, f: Feed) -> bool {
-        let ok = self.tx.send(f).is_ok();
+        let Some(m) = self.mailbox.upgrade() else {
+            return false;
+        };
+        m.lock().unwrap_or_else(|e| e.into_inner()).put(f);
         self.waker.wake();
-        ok
+        true
     }
 }
 
 /// The merged inputs. Dropping it stops the module runtime; source threads end the next time
 /// they would send.
 pub struct Feeds {
-    rx: Receiver<Feed>,
+    mailbox: Arc<Mutex<Mailbox>>,
     out: Out,
     wake_rx: UnixStream,
     /// Session actions (caffeine, brightness refresh) once [`Feeds::start_session`] ran.
@@ -155,16 +217,16 @@ pub struct Feeds {
 
 impl Feeds {
     pub fn new() -> std::io::Result<Feeds> {
-        let (tx, rx) = channel();
+        let mailbox = Arc::new(Mutex::new(Mailbox::default()));
         let (wake_rx, wake_tx) = UnixStream::pair()?;
         wake_rx.set_nonblocking(true)?;
         wake_tx.set_nonblocking(true)?;
         Ok(Feeds {
-            rx,
             out: Out {
-                tx,
+                mailbox: Arc::downgrade(&mailbox),
                 waker: Waker(Arc::new(wake_tx)),
             },
+            mailbox,
             wake_rx,
             session: None,
             modules: None,
@@ -187,7 +249,10 @@ impl Feeds {
     pub fn drain(&mut self) -> Vec<Feed> {
         let mut buf = [0u8; 256];
         while matches!((&self.wake_rx).read(&mut buf), Ok(n) if n == buf.len()) {}
-        self.rx.try_iter().collect()
+        self.mailbox
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
 
     /// Run a desktop source: its current state first, then every change; a final

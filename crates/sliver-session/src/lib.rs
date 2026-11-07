@@ -40,8 +40,7 @@ pub mod tray;
 
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -162,48 +161,95 @@ pub trait SessionSource {
     fn next_change(&mut self) -> io::Result<Option<SessionState>>;
 }
 
-/// Shared state that the source threads update; only real changes are forwarded.
+/// Shared state that the source threads update. Only real changes count, and a reader gets the
+/// latest state, not every step to it: a slow reader catches up in one read, and nothing queues
+/// up behind it.
 #[derive(Clone)]
-pub(crate) struct Hub {
-    state: Arc<Mutex<SessionState>>,
-    tx: Sender<SessionState>,
+pub(crate) struct Hub(Arc<(Mutex<Shared>, Condvar)>);
+
+struct Shared {
+    state: SessionState,
+    /// Bumped on every real change.
+    version: u64,
+    /// The reader ([`Latest`]) is gone: sources stop.
+    closed: bool,
+}
+
+/// The reading end of a [`Hub`]. Dropping it tells the sources to stop.
+pub(crate) struct Latest {
+    hub: Hub,
+    seen: u64,
 }
 
 impl Hub {
-    pub(crate) fn new(initial: SessionState) -> (Self, Receiver<SessionState>) {
-        let (tx, rx) = channel();
-        (
-            Self {
-                state: Arc::new(Mutex::new(initial)),
-                tx,
-            },
-            rx,
-        )
+    pub(crate) fn new(initial: SessionState) -> (Self, Latest) {
+        let shared = Shared {
+            state: initial,
+            version: 0,
+            closed: false,
+        };
+        let hub = Hub(Arc::new((Mutex::new(shared), Condvar::new())));
+        (hub.clone(), Latest { hub, seen: 0 })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.0.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub(crate) fn snapshot(&self) -> SessionState {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.lock().state.clone()
     }
 
-    /// Apply `f`; if the state changed, publish it. `false` = the receiver is gone, stop.
+    /// Apply `f`; if the state changed, the reader wakes. `false` = the reader is gone, stop.
     pub(crate) fn update(&self, f: impl FnOnce(&mut SessionState)) -> bool {
-        let new = {
-            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            let before = s.clone();
-            f(&mut s);
-            (*s != before).then(|| s.clone())
-        };
-        match new {
-            Some(s) => self.tx.send(s).is_ok(),
-            None => true,
+        let mut s = self.lock();
+        if s.closed {
+            return false;
         }
+        let before = s.state.clone();
+        f(&mut s.state);
+        if s.state != before {
+            s.version += 1;
+            self.0.1.notify_all();
+        }
+        true
+    }
+}
+
+impl Latest {
+    /// The state, once it's newer than the last one returned. `None`: the hub was closed.
+    fn wait(&mut self) -> Option<SessionState> {
+        let mut s = self.hub.lock();
+        while s.version == self.seen && !s.closed {
+            s = self.hub.0.1.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+        (!s.closed).then(|| {
+            self.seen = s.version;
+            s.state.clone()
+        })
+    }
+
+    /// The state if it's newer than the last one returned, without waiting.
+    #[cfg(test)]
+    fn try_take(&mut self) -> Option<SessionState> {
+        let s = self.hub.lock();
+        (s.version != self.seen).then(|| {
+            self.seen = s.version;
+            s.state.clone()
+        })
+    }
+}
+
+impl Drop for Latest {
+    fn drop(&mut self) {
+        self.hub.lock().closed = true;
     }
 }
 
 /// The live session: logind + UPower + power-profiles on the system bus, MPRIS on the session bus.
 pub struct Session {
     first: Option<SessionState>,
-    rx: Receiver<SessionState>,
+    latest: Latest,
     handle: Handle,
 }
 
@@ -320,7 +366,7 @@ impl Session {
         network::read_into(&system, &mut initial.network);
         bluetooth::read_into(&system, &mut initial.bluetooth);
         let mpris_watch = mpris::Tracker::new(&session, &mut initial);
-        let (hub, rx) = Hub::new(initial.clone());
+        let (hub, latest) = Hub::new(initial.clone());
         let handle = Handle {
             hub: hub.clone(),
             system: system.clone(),
@@ -345,7 +391,7 @@ impl Session {
             .expect("spawn thread");
         Self {
             first: Some(initial),
-            rx,
+            latest,
             handle,
         }
     }
@@ -360,7 +406,7 @@ impl SessionSource for Session {
         if let Some(s) = self.first.take() {
             return Ok(Some(s));
         }
-        Ok(self.rx.recv().ok())
+        Ok(self.latest.wait())
     }
 }
 
@@ -438,13 +484,27 @@ mod tests {
 
     #[test]
     fn hub_forwards_only_changes() {
-        let (hub, rx) = Hub::new(SessionState::default());
+        let (hub, mut latest) = Hub::new(SessionState::default());
         assert!(hub.update(|s| s.idle = false), "no-op is fine");
-        assert!(rx.try_recv().is_err(), "no-op is not published");
+        assert!(latest.try_take().is_none(), "no-op is not published");
         assert!(hub.update(|s| s.idle = true));
-        assert!(rx.try_recv().unwrap().idle);
-        drop(rx);
-        assert!(!hub.update(|s| s.locked = true), "receiver gone -> stop");
+        assert!(latest.try_take().unwrap().idle);
+        assert!(latest.try_take().is_none(), "each state is read once");
+        drop(latest);
+        assert!(!hub.update(|s| s.locked = true), "reader gone -> stop");
+    }
+
+    /// Changes the reader hasn't read yet don't queue: it reads the latest state, once.
+    #[test]
+    fn hub_coalesces() {
+        let (hub, mut latest) = Hub::new(SessionState::default());
+        for _ in 0..1000 {
+            hub.update(|s| s.idle = !s.idle);
+        }
+        hub.update(|s| s.locked = true);
+        let s = latest.wait().unwrap();
+        assert!(s.locked && !s.idle);
+        assert!(latest.try_take().is_none());
     }
 
     #[test]

@@ -7,11 +7,15 @@ use sliver_session::{Media, Power};
 use std::time::Duration;
 
 fn wait_readable(f: &Feeds) -> bool {
+    readable_within(f, 5)
+}
+
+fn readable_within(f: &Feeds, secs: i64) -> bool {
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
     let fd = f.as_fd();
     let mut fds = [PollFd::new(&fd, PollFlags::IN)];
     let timeout = Timespec {
-        tv_sec: 5,
+        tv_sec: secs,
         tv_nsec: 0,
     };
     matches!(poll(&mut fds, Some(&timeout)), Ok(n) if n > 0)
@@ -169,32 +173,42 @@ fn feeds_deliver_and_wake() {
     assert!(f.drain().is_empty());
     f.spawn_desktop(ScriptedSource::new([desktop()]));
     f.spawn_session(ScriptedSession::new([session()]));
-    let mut got = Vec::new();
-    let have = |g: &[Feed]| {
-        g.iter().any(|x| matches!(x, Feed::Session(_)))
-            && g.iter()
-                .any(|x| matches!(x, Feed::Desktop(d) if d.connected))
-    };
-    while !have(&got) {
-        assert!(wait_readable(&f), "the wake fd became readable");
-        got.extend(f.drain());
+    // The scripted session sends its one state; the scripted desktop its initial (empty) state,
+    // the change, then "disconnected" when its script ends. Whenever it's drained, each kind is
+    // only its latest state: fold drains until they come back empty.
+    assert!(wait_readable(&f), "the wake fd becomes readable");
+    let (mut desktop, mut session) = (None, None);
+    let mut drains = 0;
+    loop {
+        assert!(drains < 100, "the sources went quiet");
+        drains += 1;
+        std::thread::sleep(Duration::from_millis(50));
+        let got = f.drain();
+        let kinds: Vec<_> = got.iter().filter_map(Feed::slot).collect();
+        assert!(
+            kinds
+                .iter()
+                .all(|k| kinds.iter().filter(|x| *x == k).count() == 1)
+        );
+        if got.is_empty() && session.is_some() {
+            break;
+        }
+        for x in got {
+            match x {
+                Feed::Desktop(d) => desktop = Some(d),
+                Feed::Session(s) => session = Some(s),
+                _ => {}
+            }
+        }
     }
-    assert!(
-        got.iter()
-            .any(|x| matches!(x, Feed::Session(s) if s.power.battery_pct == Some(37)))
+    assert_eq!(session.unwrap().power.battery_pct, Some(37));
+    assert_eq!(
+        desktop,
+        Some(DesktopState::default()),
+        "latest: disconnected"
     );
-    // a scripted desktop source ends after its script: initial (empty) state, change, disconnect
-    assert!(
-        got.iter()
-            .any(|x| matches!(x, Feed::Desktop(d) if d.connected && d.window.is_some()))
-    );
-    // initial (empty) state, the change, then "disconnected": three desktop feeds in all
-    while got.iter().filter(|x| matches!(x, Feed::Desktop(_))).count() < 3 {
-        assert!(wait_readable(&f));
-        got.extend(f.drain());
-    }
-    std::thread::sleep(Duration::from_millis(50));
-    assert!(f.drain().is_empty(), "drain empties the channel and the fd");
+    assert!(!readable_within(&f, 0), "drain empties the fd");
+    assert!(f.drain().is_empty(), "drain empties the mailbox and the fd");
 }
 
 #[test]
@@ -240,7 +254,7 @@ fn a_spectrum_frame_is_levels_from_0_to_1() {
 }
 
 #[test]
-fn cava_runs_while_asked_and_repeats_are_dropped() {
+fn cava_runs_while_asked() {
     // A stand-in that checks it got the config on stdin, then sends two equal frames and one
     // new one, and stays up.
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -258,15 +272,15 @@ fn cava_runs_while_asked_and_repeats_are_dropped() {
     let mut f = Feeds::new().unwrap();
     f.cava = fake.to_string_lossy().into_owned();
     f.run_spectrum(Some("[general]\nbars = 3\n"));
-    let mut frames = Vec::new();
-    while frames.len() < 2 {
+    let mut latest = Vec::new();
+    while latest != [0.1, 0.9, 0.0] {
         assert!(wait_readable(&f), "cava's frames arrive");
-        frames.extend(f.drain().into_iter().filter_map(|x| match x {
-            Feed::Spectrum(l) => Some(l),
-            _ => None,
-        }));
+        for x in f.drain() {
+            if let Feed::Spectrum(l) = x {
+                latest = l;
+            }
+        }
     }
-    assert_eq!(frames, [vec![0.0; 3], vec![0.1, 0.9, 0.0]]);
     // The same config again leaves it running; none stops it, and an empty spectrum follows.
     f.run_spectrum(Some("[general]\nbars = 3\n"));
     f.run_spectrum(None);
@@ -305,4 +319,34 @@ fn a_new_spectrum_frame_redraws_the_cava_module() {
     );
     assert_eq!(a.apply(Feed::Spectrum(vec![0.5])), Changed::Nothing);
     assert_eq!(a.spectrum, [0.5]);
+}
+
+/// States replace the undrained state of their kind; notes are kept, the newest MAX_NOTES.
+#[test]
+fn the_mailbox_keeps_the_latest_state_and_the_newest_notes() {
+    let mut m = Mailbox::default();
+    let module = |k: &str, text: &str| {
+        Feed::Module(Update {
+            module: k.into(),
+            output: Output {
+                text: text.into(),
+                ..Default::default()
+            },
+        })
+    };
+    for i in 0..1000 {
+        m.put(Feed::Spectrum(vec![i as f32]));
+        m.put(module("custom/a", &i.to_string()));
+    }
+    m.put(module("custom/b", "b"));
+    for i in 0..(MAX_NOTES + 5) {
+        m.put(Feed::Note(i.to_string()));
+    }
+    let got = m.take();
+    assert_eq!(got.len(), 3 + MAX_NOTES);
+    assert_eq!(got[0], Feed::Spectrum(vec![999.0]));
+    assert_eq!(got[1], module("custom/a", "999"));
+    assert_eq!(got[2], module("custom/b", "b"));
+    assert_eq!(got[3], Feed::Note("5".into()), "the oldest notes went");
+    assert!(m.take().is_empty());
 }

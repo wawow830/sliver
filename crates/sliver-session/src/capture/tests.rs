@@ -429,7 +429,7 @@ fn v4l2_holders_join_the_camera_list() {
     assert_eq!(seen.expect("the camera shows").camera, ["zoom"]);
     // The merge itself: PipeWire says Zoom too, and OBS: one entry each, sorted.
     let gate = Gate::new();
-    let (hub, rx2) = crate::Hub::new(crate::SessionState::default());
+    let (hub, mut latest) = crate::Hub::new(crate::SessionState::default());
     gate.set_v4l2(&hub, vec!["zoom".into()]);
     gate.set_pipewire(
         &hub,
@@ -439,7 +439,7 @@ fn v4l2_holders_join_the_camera_list() {
             ..Capture::default()
         },
     );
-    let last = rx2.try_iter().last().unwrap().capture;
+    let last = latest.try_take().unwrap().capture;
     assert_eq!(last.camera, ["obs", "zoom"]);
     assert_eq!(last.mic, ["zoom"]);
     let _ = std::fs::remove_dir_all(&dir);
