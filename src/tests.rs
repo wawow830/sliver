@@ -23,6 +23,7 @@ enum Device {
 #[derive(Default)]
 struct Log {
     frame: Vec<u32>,
+    flipping: bool,
     shows: usize,
     on: bool,
     keyboards: usize,
@@ -47,6 +48,7 @@ impl Bar for FakeBar {
             .map(|px| u32::from_ne_bytes(px.try_into().unwrap()))
             .collect();
         log.shows += 1;
+        log.flipping = true;
     }
 
     fn power(&mut self, on: bool) {
@@ -91,7 +93,7 @@ impl Bench {
             .dispatch(Some(Duration::from_millis(1)), &mut self.s)
             .unwrap();
         self.s.wl.dh.flush_clients().unwrap();
-        if self.s.flipping {
+        if std::mem::take(&mut self.log().flipping) {
             self.s.presented();
         }
     }

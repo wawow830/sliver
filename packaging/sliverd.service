@@ -11,4 +11,5 @@ ExecStart=/usr/bin/sliverd
 Group=input
 UMask=0117
 Restart=on-failure
+RestartMode=direct
 RestartSec=1

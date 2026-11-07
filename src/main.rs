@@ -46,6 +46,7 @@ pub const W: i32 = 2008;
 pub const H: i32 = 60;
 const TRANSFORM: Transform = Transform::_90;
 const IDLE: Duration = Duration::from_secs(60);
+const HZ: i32 = 60;
 const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 pub fn panel<Kind>() -> Size<i32, Kind> {
@@ -78,7 +79,7 @@ pub struct Sliver {
     frame: Image<'static, 'static>,
     damage: OutputDamageTracker,
     age: usize,
-    flipping: bool,
+    presenting: bool,
     dirty: bool,
     shown: Option<Window>,
     touches: HashMap<u32, Option<Target>>,
@@ -99,6 +100,7 @@ impl Sliver {
             Generic::new(display, Interest::READ, Mode::Level),
             |_, display, s| {
                 unsafe { display.get_mut().dispatch_clients(s)? };
+                s.render();
                 Ok(PostAction::Continue)
             },
         )
@@ -120,7 +122,7 @@ impl Sliver {
             frame,
             damage,
             age: 0,
-            flipping: false,
+            presenting: false,
             dirty: false,
             shown: None,
             touches: HashMap::new(),
@@ -166,9 +168,6 @@ impl Sliver {
             if let Some(w) = &self.shown {
                 w.output_leave(&self.wl.output);
             }
-            if let Some(w) = &shown {
-                w.output_enter(&self.wl.output, Rectangle::from_size((W, H).into()));
-            }
             self.shown = shown;
             self.cancel_touches();
             self.render();
@@ -176,7 +175,7 @@ impl Sliver {
     }
 
     fn render(&mut self) {
-        if !self.dirty && !self.flipping {
+        if !self.dirty && !self.presenting {
             self.lh.insert_idle(Sliver::draw);
         }
         self.dirty = true;
@@ -189,12 +188,17 @@ impl Sliver {
         }
         self.wl.popups.cleanup();
         let elements: Vec<WaylandSurfaceRenderElement<PixmanRenderer>> = match &self.shown {
-            Some(w) => w.render_elements(
-                &mut self.renderer,
-                w.geometry().loc.upscale(-1).to_physical(1),
-                Scale::from(1.0),
-                1.0,
-            ),
+            Some(w) => {
+                w.on_commit();
+                let origin = w.geometry().loc;
+                w.output_enter(&self.wl.output, Rectangle::new(origin, (W, H).into()));
+                w.render_elements(
+                    &mut self.renderer,
+                    origin.upscale(-1).to_physical(1),
+                    Scale::from(1.0),
+                    1.0,
+                )
+            }
             None => Vec::new(),
         };
         let damaged = self
@@ -209,16 +213,20 @@ impl Sliver {
             .inspect_err(|e| eprintln!("sliverd: render: {e}"))
             .unwrap_or(false);
         self.age = 1;
+        self.presenting = true;
         if damaged {
             self.bar.show(pixels(&self.frame));
-            self.flipping = true;
         } else {
-            self.send_frames();
+            let refresh = Timer::from_duration(Duration::from_secs(1) / HZ as u32);
+            let _ = self.lh.insert_source(refresh, |_, _, s| {
+                s.presented();
+                TimeoutAction::Drop
+            });
         }
     }
 
     pub fn presented(&mut self) {
-        self.flipping = false;
+        self.presenting = false;
         self.send_frames();
         if std::mem::take(&mut self.dirty) {
             self.render();

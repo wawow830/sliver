@@ -9,7 +9,6 @@ use smithay::{
     delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
     desktop::{
         PopupKind, PopupManager, Window, find_popup_root_surface, get_popup_toplevel_coords,
-        space::SpaceElement,
     },
     input::{Seat, SeatHandler, SeatState},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
@@ -37,7 +36,7 @@ use smithay::{
     },
 };
 
-use crate::{H, Keyboard, Sliver, TRANSFORM, W, panel};
+use crate::{H, HZ, Keyboard, Sliver, TRANSFORM, W, panel};
 
 pub struct Wl {
     pub dh: DisplayHandle,
@@ -67,7 +66,7 @@ impl Wl {
         );
         let mode = Mode {
             size: panel(),
-            refresh: 60_000,
+            refresh: HZ * 1000,
         };
         output.change_current_state(
             Some(mode),
@@ -153,28 +152,16 @@ impl CompositorHandler for Sliver {
             let mapped =
                 with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
             let windows = &mut self.wl.windows;
-            let known = windows.iter().position(|w| w.toplevel() == Some(&toplevel));
-            if mapped {
-                let i = known.unwrap_or_else(|| {
-                    windows.push(Window::new_wayland_window(toplevel));
-                    windows.len() - 1
-                });
-                windows[i].on_commit();
-            } else if let Some(i) = known {
-                windows.remove(i);
+            match (
+                mapped,
+                windows.iter().position(|w| w.toplevel() == Some(&toplevel)),
+            ) {
+                (true, None) => windows.push(Window::new_wayland_window(toplevel)),
+                (false, Some(i)) => drop(windows.remove(i)),
+                _ => {}
             }
             self.update();
         }
-        if let Some(w) = &self.shown
-            && w.toplevel().is_some_and(|t| *t.wl_surface() == root)
-        {
-            w.refresh();
-            self.render();
-        }
-    }
-
-    fn destroyed(&mut self, _: &WlSurface) {
-        self.render();
     }
 }
 

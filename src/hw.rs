@@ -22,7 +22,7 @@ use smithay::{
             buffer::Buffer as _,
             control::{Device, connector, dumbbuffer::DumbBuffer, framebuffer},
         },
-        input::{Libinput, LibinputInterface},
+        input::{self, Libinput, LibinputInterface, event::DeviceEvent},
         udev,
     },
     utils::{DeviceFd, Logical, Rectangle, Transform},
@@ -261,6 +261,10 @@ fn libinput(
     context
         .udev_assign_seat(seat)
         .map_err(|()| io::Error::other(format!("libinput: no {seat}")))?;
+    context.dispatch()?;
+    if !context.any(|e| matches!(e, input::Event::Device(DeviceEvent::Added(_)))) {
+        return Err(io::Error::other(format!("libinput: nothing on {seat}")));
+    }
     lh.insert_source(LibinputInputBackend::new(context), move |event, _, s| {
         handle(s, event)
     })
@@ -280,6 +284,7 @@ fn touch(s: &mut Sliver, event: InputEvent<LibinputInputBackend>) {
         InputEvent::TouchUp { event } => Touch::Up(id(&event)),
         InputEvent::TouchFrame { .. } => Touch::Frame,
         InputEvent::TouchCancel { .. } => Touch::Cancel,
+        InputEvent::DeviceRemoved { .. } => fail("touch", "the Touch Bar is gone"),
         _ => return,
     });
 }
