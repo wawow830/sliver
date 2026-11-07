@@ -2,7 +2,7 @@
 name = "sliverd"
 version = "0.1.0"
 edition = "2024"
-description = "The Touch Bar's display server: a keyboard with a screen"
+description = "The Touch Bar's display server"
 license = "MIT"
 
 [dependencies]
@@ -11,6 +11,3 @@ wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client"] }
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 libc = "0.2"
-
-[dev-dependencies]
-png = "0.18"

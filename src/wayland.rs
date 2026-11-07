@@ -152,13 +152,15 @@ impl CompositorHandler for Sliver {
             let mapped =
                 with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
             let windows = &mut self.wl.windows;
-            match (
-                mapped,
-                windows.iter().position(|w| w.toplevel() == Some(&toplevel)),
-            ) {
-                (true, None) => windows.push(Window::new_wayland_window(toplevel)),
-                (false, Some(i)) => drop(windows.remove(i)),
-                _ => {}
+            match windows.iter().position(|w| w.toplevel() == Some(&toplevel)) {
+                Some(i) if !mapped => drop(windows.remove(i)),
+                Some(i) => windows[i].on_commit(),
+                None if mapped => {
+                    let window = Window::new_wayland_window(toplevel);
+                    window.on_commit();
+                    windows.push(window);
+                }
+                None => {}
             }
             self.update();
         }
@@ -184,8 +186,7 @@ impl XdgShellHandler for Sliver {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
-        surface.with_pending_state(|s| s.geometry = positioner.get_geometry());
-        unconstrain(&surface);
+        place(&surface, positioner);
         let _ = self.wl.popups.track_popup(PopupKind::Xdg(surface));
     }
 
@@ -195,21 +196,20 @@ impl XdgShellHandler for Sliver {
         positioner: PositionerState,
         token: u32,
     ) {
-        surface.with_pending_state(|s| {
-            s.geometry = positioner.get_geometry();
-            s.positioner = positioner;
-        });
-        unconstrain(&surface);
+        place(&surface, positioner);
         surface.send_repositioned(token);
     }
 
     fn grab(&mut self, _: PopupSurface, _: WlSeat, _: Serial) {}
 }
 
-fn unconstrain(popup: &PopupSurface) {
+fn place(popup: &PopupSurface, positioner: PositionerState) {
     let mut bar = Rectangle::from_size((W, H).into());
     bar.loc -= get_popup_toplevel_coords(&PopupKind::Xdg(popup.clone()));
-    popup.with_pending_state(|s| s.geometry = s.positioner.get_unconstrained_geometry(bar));
+    popup.with_pending_state(|s| {
+        s.geometry = positioner.get_unconstrained_geometry(bar);
+        s.positioner = positioner;
+    });
 }
 
 impl SeatHandler for Sliver {

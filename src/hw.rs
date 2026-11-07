@@ -109,10 +109,8 @@ pub fn run() -> io::Result<()> {
     sliver.listen(Path::new("/run/sliver"))?;
     libinput(&lp.handle(), SEAT, touch)?;
     libinput(&lp.handle(), "seat0", laptop)?;
-    lp.run(None, &mut sliver, |s| {
-        let _ = s.wl.dh.flush_clients();
-    })
-    .map_err(io::Error::other)
+    lp.run(None, &mut sliver, Sliver::refresh)
+        .map_err(io::Error::other)
 }
 
 struct Panel {

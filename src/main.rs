@@ -28,7 +28,7 @@ use smithay::{
     input::touch::{DownEvent, MotionEvent, TouchTarget, UpEvent},
     reexports::{
         calloop::{
-            Interest, LoopHandle, Mode, PostAction, RegistrationToken,
+            Interest, LoopHandle, Mode, PostAction,
             generic::Generic,
             timer::{TimeoutAction, Timer},
         },
@@ -78,16 +78,14 @@ pub struct Sliver {
     renderer: PixmanRenderer,
     frame: Image<'static, 'static>,
     damage: OutputDamageTracker,
-    age: usize,
-    presenting: bool,
     dirty: bool,
+    presenting: bool,
     shown: Option<Window>,
     touches: HashMap<u32, Option<Target>>,
     unframed: Option<WlSurface>,
     on: bool,
     fn_held: bool,
-    idle_at: Option<Instant>,
-    timer: Option<RegistrationToken>,
+    last: Instant,
     start: Instant,
     lh: LoopHandle<'static, Sliver>,
 }
@@ -100,7 +98,7 @@ impl Sliver {
             Generic::new(display, Interest::READ, Mode::Level),
             |_, display, s| {
                 unsafe { display.get_mut().dispatch_clients(s)? };
-                s.render();
+                s.dirty = true;
                 Ok(PostAction::Continue)
             },
         )
@@ -121,16 +119,14 @@ impl Sliver {
             renderer,
             frame,
             damage,
-            age: 0,
-            presenting: false,
             dirty: false,
+            presenting: false,
             shown: None,
             touches: HashMap::new(),
             unframed: None,
             on: false,
             fn_held: false,
-            idle_at: None,
-            timer: None,
+            last: Instant::now(),
             start: Instant::now(),
             lh,
         };
@@ -170,68 +166,48 @@ impl Sliver {
             }
             self.shown = shown;
             self.cancel_touches();
-            self.render();
+            self.dirty = true;
         }
     }
 
-    fn render(&mut self) {
-        if !self.dirty && !self.presenting {
-            self.lh.insert_idle(Sliver::draw);
+    pub fn refresh(&mut self) {
+        if self.dirty && self.on && !self.presenting {
+            self.draw();
         }
-        self.dirty = true;
+        let _ = self.wl.dh.flush_clients();
     }
 
     fn draw(&mut self) {
         self.dirty = false;
-        if !self.on {
-            return;
-        }
+        self.presenting = true;
         self.wl.popups.cleanup();
         let elements: Vec<WaylandSurfaceRenderElement<PixmanRenderer>> = match &self.shown {
             Some(w) => {
-                w.on_commit();
-                w.output_enter(&self.wl.output, everywhere());
+                let at = w.geometry().loc;
+                w.output_enter(&self.wl.output, Rectangle::new(at, (W, H).into()));
                 w.render_elements(
                     &mut self.renderer,
-                    w.geometry().loc.upscale(-1).to_physical(1),
+                    at.upscale(-1).to_physical(1),
                     Scale::from(1.0),
                     1.0,
                 )
             }
             None => Vec::new(),
         };
-        let damaged = self
-            .renderer
+        self.renderer
             .bind(&mut self.frame)
             .map_err(damage::Error::Rendering)
             .and_then(|mut fb| {
                 self.damage
-                    .render_output(&mut self.renderer, &mut fb, self.age, &elements, BLACK)
-                    .map(|r| r.damage.is_some_and(|d| !d.is_empty()))
+                    .render_output(&mut self.renderer, &mut fb, 1, &elements, BLACK)
+                    .map(drop)
             })
             .unwrap_or_else(|e| fail("render", e));
-        self.age = 1;
-        self.presenting = true;
-        if damaged {
-            self.bar.show(pixels(&self.frame));
-        } else {
-            let refresh = Timer::from_duration(Duration::from_secs(1) / HZ as u32);
-            let _ = self.lh.insert_source(refresh, |_, _, s| {
-                s.presented();
-                TimeoutAction::Drop
-            });
-        }
+        self.bar.show(pixels(&self.frame));
     }
 
     pub fn presented(&mut self) {
         self.presenting = false;
-        self.send_frames();
-        if std::mem::take(&mut self.dirty) {
-            self.render();
-        }
-    }
-
-    fn send_frames(&self) {
         if let Some(w) = &self.shown {
             let output = &self.wl.output;
             w.send_frame(output, self.start.elapsed(), None, |_, _| {
@@ -324,45 +300,33 @@ impl Sliver {
     }
 
     pub fn activity(&mut self) {
+        self.last = Instant::now();
         if !self.on {
-            self.on = true;
-            self.age = 0;
-            self.bar.power(true);
-            self.update();
-        }
-        self.idle_at = (self.touches.is_empty() && !self.fn_held).then(|| Instant::now() + IDLE);
-        if let (Some(at), None) = (self.idle_at, self.timer) {
-            let timer = self.lh.insert_source(Timer::from_deadline(at), |_, _, s| {
-                let action = s.tick(Instant::now());
-                if let TimeoutAction::Drop = action {
-                    s.timer = None;
-                }
-                action
-            });
-            self.timer = timer.ok();
+            self.power(true);
+            let idle = Timer::from_duration(IDLE);
+            let _ = self
+                .lh
+                .insert_source(idle, |_, _, s| s.tick(Instant::now()));
         }
     }
 
     pub fn tick(&mut self, now: Instant) -> TimeoutAction {
-        match self.idle_at {
-            Some(at) if now >= at => {
-                self.idle_at = None;
-                self.on = false;
-                self.bar.power(false);
-                self.update();
-                TimeoutAction::Drop
-            }
-            Some(at) => TimeoutAction::ToInstant(at),
-            None => TimeoutAction::Drop,
+        let due = self.last + IDLE;
+        if !self.touches.is_empty() || self.fn_held {
+            TimeoutAction::ToDuration(IDLE)
+        } else if now < due {
+            TimeoutAction::ToInstant(due)
+        } else {
+            self.power(false);
+            TimeoutAction::Drop
         }
     }
-}
 
-fn everywhere() -> Rectangle<i32, Logical> {
-    Rectangle::new(
-        (i32::MIN / 2, i32::MIN / 2).into(),
-        (i32::MAX, i32::MAX).into(),
-    )
+    fn power(&mut self, on: bool) {
+        self.on = on;
+        self.bar.power(on);
+        self.update();
+    }
 }
 
 fn slot(id: u32) -> TouchSlot {

@@ -1,5 +1,4 @@
 use std::{
-    fs::File,
     path::Path,
     sync::{Arc, Mutex, MutexGuard},
     thread,
@@ -92,7 +91,7 @@ impl Bench {
         self.lp
             .dispatch(Some(Duration::from_millis(1)), &mut self.s)
             .unwrap();
-        self.s.wl.dh.flush_clients().unwrap();
+        self.s.refresh();
         if std::mem::take(&mut self.log().flipping) {
             self.s.presented();
         }
@@ -157,19 +156,6 @@ impl Bench {
         self.picture().iter().all(|&px| px == color)
     }
 
-    fn png(&self, name: &str) {
-        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/target"));
-        let file = File::create(dir.join(format!("{name}.png"))).unwrap();
-        let mut png = png::Encoder::new(file, W as u32, H as u32);
-        png.set_color(png::ColorType::Rgb);
-        let rgb: Vec<u8> = self
-            .picture()
-            .iter()
-            .flat_map(|px| [(px >> 16) as u8, (px >> 8) as u8, *px as u8])
-            .collect();
-        png.write_header().unwrap().write_image_data(&rgb).unwrap();
-    }
-
     fn log(&self) -> MutexGuard<'_, Log> {
         self.log.lock().unwrap()
     }
@@ -221,12 +207,6 @@ fn center() -> Point<f64, Logical> {
 
 fn key_x(i: usize) -> f64 {
     (i as f64 + 0.5) * W as f64 / fkeys::KEYS.len() as f64
-}
-
-#[test]
-fn nothing_open_shows_fkeys() {
-    let b = Bench::new();
-    b.png("fkeys");
 }
 
 #[test]
@@ -474,7 +454,6 @@ fn quickshell_draws_and_types() {
         b.s.wl.windows.len() == 2 && b.picture().contains(&0x2a2a2a)
     });
     b.settle();
-    b.png("quickshell");
     let shows = b.log().shows;
     for _ in 0..500 {
         b.pump();
