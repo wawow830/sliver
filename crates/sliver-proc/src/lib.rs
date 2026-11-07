@@ -8,14 +8,17 @@
 //!   on one spawner thread that lives as long as the process, and children spawned from short-lived
 //!   threads (a `#[test]`, a worker) still only die with the process. A race check catches a
 //!   parent that died between fork and prctl.
-//! - [`ChildGuard`] kills (SIGTERM to its process group if it has one, then SIGKILL) and reaps
-//!   on drop, for children that should end with their owner object.
+//! - [`ChildGuard`] kills (SIGKILL) and reaps on drop, for children that should end with their
+//!   owner object.
+//! - [`kill_group`] SIGKILLs a child's whole process group, for children started with
+//!   `Command::process_group(0)` that may have started their own (`sh -c 'a | b'`).
 //!
 //! PDEATHSIG covers the direct child only, and it survives `exec` of a non-setuid program. The
 //! kernel clears it whenever the child changes credentials: setuid/setcap exec, or a daemon that
 //! drops privileges, like `dbus-daemon` (`sliver-testbus` uses a pipe to
 //! `dbus-run-session` instead).
-//! Grandchildren (`sh -c 'a | b'`) need the child's process group killed ([`ChildGuard::group`]).
+//! Grandchildren need their process group killed ([`kill_group`]): SIGKILL, because a group
+//! member that ignores SIGTERM would otherwise outlive it.
 //! In production, systemd's cgroup does the rest when a unit stops.
 
 use std::io;
@@ -73,28 +76,24 @@ pub fn spawn_tied(mut cmd: Command) -> io::Result<Child> {
         .map_err(|_| io::Error::other("sliver-proc spawner thread is gone"))?
 }
 
+/// SIGKILLs the process group `leader` leads: a child the caller started with
+/// `Command::process_group(0)`, and everything it started. `0` (no process) and a group that's
+/// already gone are no-ops.
+pub fn kill_group(leader: u32) {
+    if let Some(pid) = Pid::from_raw(leader as i32) {
+        let _ = rustix::process::kill_process_group(pid, Signal::KILL);
+    }
+}
+
 /// A child that is killed and reaped when the guard is dropped.
 #[derive(Debug)]
 pub struct ChildGuard {
     child: Option<Child>,
-    group: bool,
 }
 
 impl ChildGuard {
     pub fn new(child: Child) -> ChildGuard {
-        ChildGuard {
-            child: Some(child),
-            group: false,
-        }
-    }
-
-    /// The child leads its own process group (`Command::process_group(0)`): on drop the whole
-    /// group gets SIGTERM first, so grandchildren go too.
-    pub fn group(child: Child) -> ChildGuard {
-        ChildGuard {
-            child: Some(child),
-            group: true,
-        }
+        ChildGuard { child: Some(child) }
     }
 
     /// Gives up ownership: the child is no longer killed on drop.
@@ -102,16 +101,11 @@ impl ChildGuard {
         self.child.take().expect("present until drop")
     }
 
-    /// Kills (group first, if any) and reaps now. Idempotent.
+    /// Kills and reaps now. Idempotent.
     pub fn kill(&mut self) {
         let Some(mut child) = self.child.take() else {
             return;
         };
-        if self.group {
-            if let Some(pid) = Pid::from_raw(child.id() as i32) {
-                let _ = rustix::process::kill_process_group(pid, Signal::TERM);
-            }
-        }
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -171,13 +165,14 @@ mod tests {
         assert!(!alive(pid), "killed and reaped on drop");
     }
 
+    /// Even a group member that ignores SIGTERM goes.
     #[test]
-    fn group_guard_kills_grandchildren() {
+    fn kill_group_kills_grandchildren() {
         let mut c = Command::new("sh");
-        c.args(["-c", "sleep 60 & echo $!; wait"])
+        c.args(["-c", "trap '' TERM; sleep 60 & echo $!; wait"])
             .stdout(Stdio::piped())
             .process_group(0);
-        let mut g = ChildGuard::group(spawn_tied(c).unwrap());
+        let mut g = ChildGuard::new(spawn_tied(c).unwrap());
         let mut line = String::new();
         std::io::BufRead::read_line(
             &mut std::io::BufReader::new(g.stdout.take().unwrap()),
@@ -186,6 +181,7 @@ mod tests {
         .unwrap();
         let grandchild: u32 = line.trim().parse().unwrap();
         assert!(alive(grandchild));
+        kill_group(g.id());
         drop(g);
         assert!(wait_dead(grandchild), "grandchild {grandchild} survived");
     }

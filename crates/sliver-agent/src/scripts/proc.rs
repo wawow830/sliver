@@ -53,17 +53,6 @@ pub(crate) fn spawn_stream(spec: &Spec, ctx: &Context, script: &str) -> io::Resu
     sliver_proc::spawn_tied(command(spec, ctx, script, false))
 }
 
-/// SIGKILL the command and everything it started (its process group).
-pub(crate) fn kill_group(pid: u32) {
-    if pid > 0 {
-        // SAFETY: kill(2) with a negative pid targets the process group `pid`; we created that
-        // group with process_group(0) so it is ours. Failure (already gone) is fine.
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct RunResult {
     pub code: Option<i32>,
@@ -119,7 +108,7 @@ pub(crate) fn run_once(spec: &Spec, ctx: &Context, script: &str) -> io::Result<R
     let (status, timed_out) = match rx.recv_timeout(spec.timeout) {
         Ok(s) => (s?, false),
         Err(_) => {
-            kill_group(pid);
+            sliver_proc::kill_group(pid);
             (
                 rx.recv()
                     .map_err(|_| io::Error::other("wait thread died"))??,
@@ -128,7 +117,7 @@ pub(crate) fn run_once(spec: &Spec, ctx: &Context, script: &str) -> io::Result<R
         }
     };
     // Whatever the script left running in its group goes with it.
-    kill_group(pid);
+    sliver_proc::kill_group(pid);
     Ok(RunResult {
         code: status.code(),
         stdout: out.finish(),

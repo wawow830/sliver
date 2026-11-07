@@ -37,7 +37,7 @@ impl Drop for Inner {
         for m in self.modules.values() {
             m.stopped.store(true, Ordering::SeqCst);
             let _ = m.tx.send(Cmd::Stop);
-            proc::kill_group(m.pid.load(Ordering::SeqCst));
+            sliver_proc::kill_group(m.pid.load(Ordering::SeqCst));
         }
     }
 }
@@ -94,7 +94,7 @@ impl Runtime {
         let _ = m.tx.send(Cmd::Trigger);
         if m.spec.mode == Mode::Continuous {
             // The only way to "run it again" is to restart the process.
-            proc::kill_group(m.pid.load(Ordering::SeqCst));
+            sliver_proc::kill_group(m.pid.load(Ordering::SeqCst));
         }
         true
     }
@@ -301,12 +301,12 @@ fn continuous(
                         to_output(spec, line.trim_end())
                     };
                     if !em.emit(o) {
-                        proc::kill_group(child.id());
+                        sliver_proc::kill_group(child.id());
                         return;
                     }
                 }
                 let status = child.wait();
-                proc::kill_group(pid.swap(0, Ordering::SeqCst));
+                sliver_proc::kill_group(pid.swap(0, Ordering::SeqCst));
                 if stopped.load(Ordering::SeqCst) {
                     return;
                 }
