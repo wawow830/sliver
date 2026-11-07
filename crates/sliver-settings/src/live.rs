@@ -83,29 +83,28 @@ fn query() -> Agent {
     }
 }
 
-/// Queries in the background and calls `done` on the GTK main loop (within ~3 s).
-pub fn agent_status(done: impl Fn(Agent) + 'static) {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(query());
-    });
-    let mut waited = Duration::ZERO;
-    gtk::glib::timeout_add_local(Duration::from_millis(50), move || {
-        waited += Duration::from_millis(50);
-        match rx.try_recv() {
-            Ok(a) => {
-                done(a);
-                gtk::glib::ControlFlow::Break
-            }
-            Err(mpsc::TryRecvError::Empty) if waited < Duration::from_secs(3) => {
-                gtk::glib::ControlFlow::Continue
-            }
-            Err(_) => {
-                done(Agent::Absent("no answer within 3 s".into()));
-                gtk::glib::ControlFlow::Break
-            }
+/// Runs `work` off the main loop and gives its result to `done` on it; with no answer within
+/// 3 s (a stuck bus), `done` gets `late()` instead. Nothing polls: the loop wakes for the answer.
+fn in_background<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    late: impl FnOnce() -> T + 'static,
+    done: impl FnOnce(T) + 'static,
+) {
+    use gtk::glib;
+    glib::MainContext::default().spawn_local(async move {
+        let answer = gtk::gio::spawn_blocking(work);
+        match glib::future_with_timeout(Duration::from_secs(3), answer).await {
+            Ok(Ok(t)) => done(t),
+            _ => done(late()),
         }
     });
+}
+
+const LATE: &str = "no answer within 3 s";
+
+/// Queries in the background and calls `done` on the GTK main loop (within ~3 s).
+pub fn agent_status(done: impl FnOnce(Agent) + 'static) {
+    in_background(query, || Agent::Absent(LATE.into()), done);
 }
 
 /// The session-bus connection Mirror holds for the window's lifetime: `HoldLayout` lasts as long
@@ -138,24 +137,68 @@ fn hold(conn: &Connection, layout: &str, select_only: bool) {
     }
 }
 
+/// One Mirror command: hold `layout` (`""`: release), and say when it's sent.
+struct Hold {
+    layout: String,
+    select_only: bool,
+    sent: Option<mpsc::Sender<()>>,
+}
+
+/// Mirror's commands go out in order, from one thread, and a newer one replaces any still
+/// waiting: each says what the bar should show, so only the last one asked for matters.
+fn mirror() -> &'static mpsc::Sender<Hold> {
+    static TX: std::sync::OnceLock<mpsc::Sender<Hold>> = std::sync::OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Hold>();
+        std::thread::spawn(move || {
+            while let Ok(h) = rx.recv() {
+                let (h, sent) = latest(h, &rx);
+                if let Some(c) = mirror_conn() {
+                    hold(&c, &h.layout, h.select_only);
+                    listen_held(&c);
+                }
+                for s in sent {
+                    let _ = s.send(());
+                }
+            }
+        });
+        tx
+    })
+}
+
+/// `h`, or the newest command queued behind it, and everyone waiting for any of them.
+fn latest(mut h: Hold, rx: &mpsc::Receiver<Hold>) -> (Hold, Vec<mpsc::Sender<()>>) {
+    let mut sent: Vec<_> = h.sent.take().into_iter().collect();
+    while let Ok(mut newer) = rx.try_recv() {
+        sent.extend(newer.sent.take());
+        h = newer;
+    }
+    (h, sent)
+}
+
 /// Mirror to Touch Bar: show `layout` on the real bar while we hold it
 /// (`Control1.HoldLayoutWith`); `select_only` makes touches only select. `""` releases it back to
 /// the rules. Off the main thread; an absent agent is fine. The first hold also starts listening
 /// for touches on the held layout (`HeldPressed`, sent only to the holder).
 pub fn set_layout(layout: &str, select_only: bool) {
-    let layout = layout.to_owned();
-    std::thread::spawn(move || {
-        if let Some(c) = mirror_conn() {
-            hold(&c, &layout, select_only);
-            listen_held(&c);
-        }
+    let _ = mirror().send(Hold {
+        layout: layout.to_owned(),
+        select_only,
+        sent: None,
     });
 }
 
-/// Blocking release for the window closing (process exit would also drop the hold).
+/// [`set_layout`], waiting (up to 2 s) until it's sent: for the window closing, after whatever
+/// is queued (process exit would also drop the hold).
 pub fn set_layout_now(layout: &str) {
-    if let Some(c) = mirror_conn() {
-        hold(&c, layout, false);
+    let (tx, rx) = mpsc::channel();
+    let hold = Hold {
+        layout: layout.to_owned(),
+        select_only: false,
+        sent: Some(tx),
+    };
+    if mirror().send(hold).is_ok() {
+        let _ = rx.recv_timeout(Duration::from_secs(2));
     }
 }
 
@@ -237,28 +280,8 @@ fn read_active() -> Result<Active, String> {
 
 /// Reads the active layout in the background; `done` runs on the main loop (`Err` = no agent
 /// or an older one without these properties).
-pub fn active(done: impl Fn(Result<Active, String>) + 'static) {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(read_active());
-    });
-    let mut waited = Duration::ZERO;
-    gtk::glib::timeout_add_local(Duration::from_millis(50), move || {
-        waited += Duration::from_millis(50);
-        match rx.try_recv() {
-            Ok(r) => {
-                done(r);
-                gtk::glib::ControlFlow::Break
-            }
-            Err(mpsc::TryRecvError::Empty) if waited < Duration::from_secs(3) => {
-                gtk::glib::ControlFlow::Continue
-            }
-            Err(_) => {
-                done(Err("no answer within 3 s".into()));
-                gtk::glib::ControlFlow::Break
-            }
-        }
-    });
+pub fn active(done: impl FnOnce(Result<Active, String>) + 'static) {
+    in_background(read_active, || Err(LATE.into()), done);
 }
 
 /// One published context, as `Control1.ListContexts` reports it.
@@ -332,33 +355,32 @@ fn list_contexts() -> Result<Vec<ContextInfo>, String> {
 }
 
 /// Lists the agent's published contexts in the background; `done` runs on the main loop.
-pub fn contexts(done: impl Fn(Result<Vec<ContextInfo>, String>) + 'static) {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(list_contexts());
-    });
-    let mut waited = Duration::ZERO;
-    gtk::glib::timeout_add_local(Duration::from_millis(50), move || {
-        waited += Duration::from_millis(50);
-        match rx.try_recv() {
-            Ok(r) => {
-                done(r);
-                gtk::glib::ControlFlow::Break
-            }
-            Err(mpsc::TryRecvError::Empty) if waited < Duration::from_secs(3) => {
-                gtk::glib::ControlFlow::Continue
-            }
-            Err(_) => {
-                done(Err("no answer within 3 s".into()));
-                gtk::glib::ControlFlow::Break
-            }
-        }
-    });
+pub fn contexts(done: impl FnOnce(Result<Vec<ContextInfo>, String>) + 'static) {
+    in_background(list_contexts, || Err(LATE.into()), done);
 }
 
 #[cfg(test)]
 mod active_tests {
     use super::*;
+
+    /// Queued Mirror commands: the newest wins, and whoever waits on any of them hears back.
+    #[test]
+    fn the_newest_mirror_command_wins() {
+        let (tx, rx) = mpsc::channel();
+        let hold = |l: &str, sent| Hold {
+            layout: l.into(),
+            select_only: false,
+            sent,
+        };
+        let (ack, acked) = mpsc::channel();
+        tx.send(hold("b", Some(ack))).unwrap();
+        tx.send(hold("", None)).unwrap();
+        let (h, sent) = latest(hold("a", None), &rx);
+        assert_eq!(h.layout, "", "the release, sent last");
+        assert_eq!(sent.len(), 1);
+        sent.into_iter().for_each(|s| s.send(()).unwrap());
+        assert!(acked.try_recv().is_ok());
+    }
 
     fn a(source: &str, rule: i32, name: &str) -> Active {
         Active {
