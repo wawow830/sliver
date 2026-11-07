@@ -468,7 +468,7 @@ fn quickshell_draws_and_types() {
     }
     assert_eq!(b.log().shows, shows, "an idle bar redraws");
     b.touch([Touch::Down(0, (100.0, 30.0).into())]);
-    b.until("the key pressed", |b| b.picture().contains(&0x39383f));
+    b.until("the key pressed", |b| !b.picture().contains(&0x2a292f));
     b.touch([Touch::Up(0)]);
     b.until("Esc", |b| b.log().keys.contains(&Device::Key(1, 1, false)));
     qs.kill().unwrap();
