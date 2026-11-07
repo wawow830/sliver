@@ -10,7 +10,7 @@ Pill {
     signal moved(real value)
 
     pressed: finger.active
-    z: pressed ? 1 : 0
+    z: pressed || panel.visible ? 1 : 0
 
     PointHandler {
         id: finger
@@ -30,18 +30,33 @@ Pill {
     }
 
     Rectangle {
-        visible: level.pressed
-        x: level.opensLeft ? -width - 8 : level.width + 8
-        width: 640
+        id: panel
+        visible: opacity > 0
+        opacity: level.pressed ? 1 : 0
+        x: level.opensLeft ? level.width - width : 0
+        width: level.pressed ? 720 : level.width
         height: level.height
         radius: height / 2
         color: Theme.colors.surface_container_high
+        Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
+        Behavior on opacity { NumberAnimation { duration: 160 } }
+
+        Text {
+            id: glyph
+            anchors.verticalCenter: parent.verticalCenter
+            x: level.opensLeft ? parent.width - width - 24 : 24
+            text: level.icon
+            color: Theme.colors.on_surface
+            font.family: Theme.icons
+            font.pixelSize: 32
+        }
 
         Item {
             id: track
-            anchors.fill: parent
-            anchors.leftMargin: 22
-            anchors.rightMargin: 22
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            x: level.opensLeft ? 22 : glyph.x + glyph.width + 16
+            width: parent.width - glyph.width - 22 - 24 - 16
 
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter

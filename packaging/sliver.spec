@@ -20,6 +20,7 @@ BuildRequires:  libxkbcommon-devel
 BuildRequires:  systemd-rpm-macros
 Requires:       tiny-dfr
 Requires:       brightnessctl
+Recommends:     cava
 
 %description
 sliverd makes the Touch Bar an ordinary Wayland screen. The bar is a Quickshell

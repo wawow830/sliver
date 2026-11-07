@@ -27,6 +27,8 @@ Item {
         readonly property string name: entry?.name || app.app.split(".").pop()
         readonly property string art: Desktop.icon(app.app)
         property bool closing
+        property bool launching
+        property real pulse: 1
 
         anchors.verticalCenter: parent.verticalCenter
         implicitWidth: 104
@@ -37,7 +39,8 @@ Item {
         ink: closing ? Theme.colors.surface_container : Theme.colors.on_surface
         border.width: closing ? 0 : focused ? 3 : windows.length ? 0 : 2
         border.color: focused ? Theme.colors.primary : Theme.colors.outline
-        opacity: windows.length || closing ? 1 : 0.55
+        opacity: (windows.length || closing ? 1 : 0.55) * pulse
+        onWindowsChanged: launching = false
 
         onTapped: {
             if (closing) {
@@ -45,6 +48,7 @@ Item {
                 for (const w of windows)
                     Desktop.close(w)
             } else if (!windows.length) {
+                launching = entry != null
                 entry?.execute()
             } else {
                 const next = windows.findIndex(w => w.activated) + 1
@@ -57,6 +61,20 @@ Item {
             running: app.closing
             interval: 3000
             onTriggered: app.closing = false
+        }
+
+        Timer {
+            running: app.launching
+            interval: 10000
+            onTriggered: app.launching = false
+        }
+
+        SequentialAnimation on pulse {
+            running: app.launching
+            loops: Animation.Infinite
+            onStopped: app.pulse = 1
+            NumberAnimation { to: 1.8; duration: 450; easing.type: Easing.InOutSine }
+            NumberAnimation { to: 1; duration: 450; easing.type: Easing.InOutSine }
         }
     }
 

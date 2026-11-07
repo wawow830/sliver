@@ -17,6 +17,18 @@ FloatingWindow {
 
     color: "black"
 
+    component Context: Loader {
+        property Component component
+        readonly property bool current: bar.context == component
+        anchors.fill: parent
+        sourceComponent: component
+        enabled: current
+        visible: opacity > 0
+        opacity: current ? 1 : 0
+        transform: Translate { x: current ? 0 : 24; Behavior on x { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } } }
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+    }
+
     RowLayout {
         anchors.fill: parent
         anchors.topMargin: 3
@@ -29,10 +41,13 @@ FloatingWindow {
 
         Taskbar { Layout.fillHeight: true; pinned: bar.pinned; slots: bar.slots }
 
-        Loader {
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            sourceComponent: bar.context
+
+            Context { component: fkeys }
+            Context { component: browser }
+            Context { component: media }
         }
 
         RowLayout {

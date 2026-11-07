@@ -19,6 +19,9 @@ Rectangle {
     radius: pressed ? 12 : height / 2
     color: pressed ? Qt.tint(fill.a > 0 ? fill : Theme.colors.surface_container_high, Qt.alpha(ink, 0.2)) : fill
     opacity: enabled ? 1 : 0.4
+    scale: pressed ? 0.95 : 1
+    Behavior on scale { SpringAnimation { spring: 6; damping: 0.35 } }
+    Behavior on border.color { ColorAnimation { duration: 200 } }
     Behavior on radius { NumberAnimation { duration: 150 } }
     Behavior on color { ColorAnimation { duration: 150 } }
 
