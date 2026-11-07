@@ -1,4 +1,4 @@
-//! Painting: boxes, labels, icons, sliders, graphs and bars into the pixmap.
+//! Painting: boxes, labels, icons, sliders and graphs into the pixmap.
 
 use super::*;
 
@@ -9,16 +9,12 @@ impl Renderer {
         rect: Rect,
         s: &Style,
         opacity: f32,
-        spectrum: Option<Bars>,
         pixmap: &mut Pixmap,
     ) {
         if matches!(item.content, Content::Spacer) || opacity <= 0.0 {
             return;
         }
         draw_box(pixmap, rect, s, item.background, opacity);
-        if let Some(b) = spectrum {
-            draw_bars_split(pixmap, b.area, &item.spectrum, b.color, b.played);
-        }
         let fg = fade(item.foreground.unwrap_or(s.color), opacity);
         let content = rect.inset(s.padding.map(|p| p + s.border_width));
         let avail = content.w.max(1.0);
@@ -71,7 +67,6 @@ impl Renderer {
                     fg,
                 );
             }
-            Content::Bars(levels) => draw_bars(pixmap, content, levels, fg),
             Content::Image(icon) => {
                 let (x, y) = (content.x.round(), content.y.round());
                 let (w, h) = (content.w.floor(), content.h.floor());
@@ -318,79 +313,6 @@ pub(super) fn draw_graph(
         ..Stroke::default()
     };
     pixmap.stroke_path(&line, &paint, &stroke, Transform::identity(), None);
-}
-
-/// Natural spacing of `Bars`, per level.
-pub(super) const BAR_PITCH: f32 = 12.0;
-
-/// Where and how an item's spectrum is drawn: in `color`, except bars left of `played`'s x,
-/// which take its colour (a slider's part up to its value).
-#[derive(Clone, Copy)]
-pub(super) struct Bars {
-    pub(super) area: Rect,
-    pub(super) color: Color,
-    pub(super) played: Option<(f32, Color)>,
-}
-
-/// One bar per level across `r`, each half its slot wide with round ends, centred on the middle
-/// line and at least as tall as it is wide.
-pub(super) fn draw_bars(pixmap: &mut Pixmap, r: Rect, levels: &[f32], color: Color) {
-    draw_bars_split(pixmap, r, levels, color, None);
-}
-
-pub(super) fn draw_bars_split(
-    pixmap: &mut Pixmap,
-    r: Rect,
-    levels: &[f32],
-    color: Color,
-    played: Option<(f32, Color)>,
-) {
-    if levels.is_empty() || r.w < 1.0 || r.h < 1.0 {
-        return;
-    }
-    let pitch = r.w / levels.len() as f32;
-    let w = (pitch / 2.0).min(r.h).max(1.0);
-    let (mut rest, mut before) = (PathBuilder::new(), PathBuilder::new());
-    for (i, v) in levels.iter().enumerate() {
-        let h = w + v.clamp(0.0, 1.0) * (r.h - w);
-        let cx = r.x + (i as f32 + 0.5) * pitch;
-        let y = r.y + (r.h - h) / 2.0;
-        let pb = match played {
-            Some((x, _)) if cx < x => &mut before,
-            _ => &mut rest,
-        };
-        if let Some(path) = rounded_rect(
-            Rect {
-                x: cx - w / 2.0,
-                y,
-                w,
-                h,
-            },
-            w / 2.0,
-        ) {
-            pb.push_path(&path);
-        }
-    }
-    let played_color = played.map_or(color, |(_, c)| c);
-    for (pb, c) in [(rest, color), (before, played_color)] {
-        if c.a == 0 {
-            continue;
-        }
-        let mut paint = Paint {
-            anti_alias: true,
-            ..Paint::default()
-        };
-        paint.set_color(c.to_skia());
-        if let Some(path) = pb.finish() {
-            pixmap.fill_path(
-                &path,
-                &paint,
-                FillRule::Winding,
-                Transform::identity(),
-                None,
-            );
-        }
-    }
 }
 
 /// Background and border of a bar, zone or module.

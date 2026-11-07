@@ -100,8 +100,6 @@ struct Styles {
     items: Vec<Arc<Style>>,
     /// For sliders: trough, highlight, knob.
     parts: Vec<Option<[Arc<Style>; 3]>>,
-    /// For items with a spectrum: its `spectrum` child node.
-    spectra: Vec<Option<Arc<Style>>>,
 }
 
 /// Draws scenes. Holds font, glyph, label and style caches, so keep one around.
@@ -198,8 +196,7 @@ impl Renderer {
             .zip(&layout.items)
             .zip(&st.items)
             .zip(&st.parts)
-            .zip(&layout.tracks)
-            .zip(&st.spectra);
+            .zip(&layout.tracks);
         for ((zone, zs), zrect) in scene.zones.iter().zip(&st.zones).zip(&layout.zones) {
             let zone_name = zone.name.as_deref().unwrap_or("");
             let zone_opacity = bar_opacity * zs.opacity;
@@ -215,8 +212,7 @@ impl Renderer {
             // element keeps its own transition state.
             let mut seen_ids: HashMap<String, usize> = HashMap::new();
             for (ii, zone_item) in zone.items.iter().enumerate() {
-                let (((((item, rect), s), parts), track), spectrum) =
-                    items.next().expect("one rect per item");
+                let ((((item, rect), s), parts), track) = items.next().expect("one rect per item");
                 let id = zone_item.id.clone().unwrap_or_else(|| ii.to_string());
                 let n = seen_ids.entry(id.clone()).or_insert(0);
                 *n += 1;
@@ -233,34 +229,7 @@ impl Renderer {
                     w: (t.w + drawn.w - rect.w).max(0.0),
                     ..t
                 });
-                let spectrum = spectrum.as_ref().map(|ss| {
-                    // Across the content height: along a slider's rail, else the content box.
-                    let content = drawn.inset(s.padding.map(|p| p + s.border_width));
-                    let area = match track {
-                        Some(t) => Rect {
-                            y: content.y,
-                            h: content.h,
-                            ..t
-                        },
-                        None => content,
-                    };
-                    // On a slider, the bars up to its value take the highlight's colour, so the
-                    // spectrum can be the rail itself (with a trough of no height).
-                    let played = match (&item.content, parts, track) {
-                        (Content::Slider { value, .. }, Some([t, hl, _]), Some(tr)) => Some((
-                            tr.x + tr.w * value.clamp(0.0, 1.0),
-                            fade(hl.background, opacity * t.opacity * hl.opacity),
-                        )),
-                        _ => None,
-                    };
-                    // Its own padding narrows it: a band under a button's icon, say.
-                    Bars {
-                        area: area.inset(ss.padding),
-                        color: fade(ss.color, opacity * ss.opacity),
-                        played,
-                    }
-                });
-                self.draw_item(item, drawn, s, opacity, spectrum, pixmap);
+                self.draw_item(item, drawn, s, opacity, pixmap);
                 if let (Content::Slider { value, .. }, Some(parts), Some(track)) =
                     (&item.content, parts, track)
                 {

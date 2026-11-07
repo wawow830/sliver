@@ -61,8 +61,6 @@ pub struct World {
     pub emoji: EmojiHandle,
     /// Local file of the current player's album art (fetched by the feeds).
     pub media_art: Option<std::path::PathBuf>,
-    /// The latest spectrum from `cava` (0..=1 per bar), empty while it isn't running.
-    pub spectrum: Vec<f32>,
     /// Installed applications, for taskbar icons.
     pub apps: std::sync::Arc<sliver_icons::desktop::DesktopEntries>,
 }
@@ -81,7 +79,6 @@ impl World {
             apps: Default::default(),
             emoji: Default::default(),
             media_art: None,
-            spectrum: Vec::new(),
         }
     }
 

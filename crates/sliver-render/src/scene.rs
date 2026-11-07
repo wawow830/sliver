@@ -18,10 +18,6 @@ pub enum Content {
     /// the right edge; `capacity` samples span the width, so a short history starts mid-way.
     /// Drawn in the item's `color`: a line over an area filled at a quarter of its alpha.
     Graph { values: Vec<f32>, capacity: usize },
-    /// Levels side by side (the `cava` module's spectrum), each in `0.0..=1.0`: one rounded bar
-    /// per level, spread across the content box and growing out from its middle line, drawn in
-    /// the item's `color`. A level of 0 is a dot, so a silent spectrum still shows its shape.
-    Bars(Vec<f32>),
     /// A horizontal slider, `value` in `0.0..=1.0`, with an optional icon on its left. Styled
     /// with child nodes like GTK/waybar: `module > trough > highlight` (the filled part) and
     /// `trough > slider` (the knob).
@@ -82,10 +78,6 @@ pub struct Item {
     pub background: Option<Color>,
     /// Inline override of the computed `color` (labels and symbolic icons).
     pub foreground: Option<Color>,
-    /// A live spectrum (levels as in [`Content::Bars`]) drawn over the item's background and
-    /// under its content, across its content height: along a slider's rail, else across the
-    /// content box. Styled by a `spectrum` child node's `color`. Empty: none.
-    pub spectrum: Vec<f32>,
 }
 
 impl Item {
@@ -101,7 +93,6 @@ impl Item {
             checked: false,
             background: None,
             foreground: None,
-            spectrum: Vec::new(),
         }
     }
 

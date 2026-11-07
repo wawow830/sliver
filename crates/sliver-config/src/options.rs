@@ -39,8 +39,6 @@ pub enum Kind {
     Drawer,
     /// Environment variables: string (or integer) values.
     Env,
-    /// A bool, number or one-line string, written into cava's config as it is.
-    Cava,
 }
 
 /// Highest `signal` offset (glibc has 30 real-time signals available to applications).
@@ -63,29 +61,8 @@ const SCRIPT: Keys = &[
 ];
 /// A module with a value drawn as a slider.
 const SLIDER: Keys = &[("slider", Kind::Flag), ("collapsed", Kind::Flag)];
-/// Keys every module takes besides [`crate::COMMON_KEYS`]: `spectrum = true` draws cava under any
-/// module, configured by waybar's `cava` keys.
-pub const CAVA: Keys = &[
-    ("spectrum", Kind::Flag),
-    ("bars", Kind::Clamped(1, 128)),
-    ("framerate", Kind::Clamped(1, 60)),
-    ("sleep_timer", Kind::Int(0, 3600)),
-    ("stereo", Kind::Flag),
-    ("autosens", Kind::Cava),
-    ("sensitivity", Kind::Cava),
-    ("lower_cutoff_freq", Kind::Cava),
-    ("higher_cutoff_freq", Kind::Cava),
-    ("method", Kind::Cava),
-    ("source", Kind::Cava),
-    ("reverse", Kind::Cava),
-    ("monstercat", Kind::Cava),
-    ("waves", Kind::Cava),
-    ("noise_reduction", Kind::Cava),
-];
-
-/// Every built-in module type (sliver-config(5)) and the keys it takes besides [`crate::COMMON_KEYS`]
-/// and [`CAVA`]'s; a type's own key wins over a cava key of the same name (`graph`'s `source`).
-/// Other keys are warned about and dropped. Unknown types are a warning, because a newer agent
+/// Every built-in module type (sliver-config(5)) and the keys it takes besides
+/// [`crate::COMMON_KEYS`]. Other keys are warned about and dropped. Unknown types are a warning, because a newer agent
 /// may know them.
 pub const MODULE_TYPES: &[(&str, &[Keys])] = &[
     ("key", &[]),
@@ -166,7 +143,6 @@ pub const MODULE_TYPES: &[(&str, &[Keys])] = &[
         ]],
     ),
     ("timer", &[&[("duration", Kind::Duration(1000))]]),
-    ("cava", &[]),
     ("image", &[&[("path", Kind::Text)], SCRIPT]),
     (
         "group",
@@ -204,11 +180,7 @@ pub fn key_kind(kind: &str, key: &str) -> Option<Option<Kind>> {
 
 fn declared(kind: &str, key: &str) -> Option<Option<(&'static str, Kind)>> {
     MODULE_TYPES.iter().find(|(t, _)| *t == kind)?;
-    Some(
-        own(kind)
-            .chain(CAVA.iter().copied())
-            .find(|(k, _)| *k == key),
-    )
+    Some(own(kind).find(|(k, _)| *k == key))
 }
 
 /// Does a module of type `kind` take `key` (besides the common keys)? `None`: an unknown type.
@@ -233,8 +205,6 @@ pub enum Opt {
     Rewrite(Rewrite),
     Drawer(Drawer),
     Env(Vec<(String, String)>),
-    /// As cava's config writes it (`true` is `1`).
-    Cava(String),
 }
 
 /// A group's `drawer` (sliver-config(5)).
@@ -374,14 +344,6 @@ fn read(kind: Kind, v: &Value, p: &str, d: &mut Diagnostics) -> Option<Opt> {
             }
             Opt::Env(env)
         }
-        Kind::Cava => Opt::Cava(match v {
-            Value::Boolean(b) => u8::from(*b).to_string(),
-            Value::Integer(i) => i.to_string(),
-            Value::Float(f) => f.to_string(),
-            // These would end cava's line or section.
-            Value::String(s) if !s.contains(['\n', '\r', '[', ';', '#']) => s.clone(),
-            _ => return fail(d, "expected a bool, a number or a one-line string"),
-        }),
     })
 }
 
@@ -456,9 +418,10 @@ mod tests {
                 ..Drawer::default()
             })
         );
-        let (o, _) = parse_block("clock", "timezones = \"UTC\"\nbars = 1000\nstereo = true");
+        let (o, _) = parse_block("clock", "timezones = \"UTC\"");
         assert_eq!(o["timezones"], Opt::Texts(vec!["UTC".into()]));
-        assert_eq!(o["bars"], Opt::Int(128));
+        let (o, _) = parse_block("graph/g", "samples = 1000");
+        assert_eq!(o["samples"], Opt::Int(600));
     }
 
     #[test]
@@ -495,10 +458,7 @@ mod tests {
             ["env", "restart-interval"]
         );
         assert_eq!(o["restart-interval"], Opt::Duration(Duration::from_secs(1)));
-        // A type's own key wins over cava's of the same name; unknown types aren't read.
-        let (o, d) = parse_block("graph/g", "source = \"cpu\"");
-        assert!(d.ok(), "{d:?}");
-        assert_eq!(o["source"], Opt::Module(ModuleId::parse("cpu").unwrap()));
+        // Unknown types aren't read.
         let (o, d) = parse_block("from-the-future", "anything = 1");
         assert!(o.is_empty() && d.ok() && d.warnings.is_empty());
     }

@@ -3,7 +3,7 @@
 //! The driver decides when [`Agent`] draws: a touch or a layer change at once, content changes
 //! (feeds, published items) at most [`CONTENT_FPS`](crate::pace::CONTENT_FPS) times a second, a
 //! running transition on its next frame and a clock on its next tick. It also keeps what sliverd
-//! has been told (the display policy) and whether cava should run for a spectrum on the lit bar.
+//! has been told (the display policy).
 //! It does no I/O: `main` turns file descriptors into inputs, carries out the outputs and sleeps
 //! until [`Driver::next_deadline`].
 
@@ -57,8 +57,6 @@ pub enum Output {
     Present(Layer),
     /// Send sliverd this display policy.
     Policy(DisplayPolicy),
-    /// Run cava with this config, or stop it.
-    Spectrum(Option<String>),
     /// Anything else the agent asks for: keys, processes, session changes, logs.
     Effect(Effect),
 }
@@ -73,7 +71,6 @@ pub struct Driver {
     press_dirty: bool,
     pacer: Pacer,
     sent_policy: Option<DisplayPolicy>,
-    sent_spectrum: Option<Option<String>>,
 }
 
 impl Driver {
@@ -86,7 +83,6 @@ impl Driver {
             press_dirty: false,
             pacer: Pacer::default(),
             sent_policy: None,
-            sent_spectrum: None,
         }
     }
 
@@ -172,7 +168,7 @@ impl Driver {
         out
     }
 
-    /// Brings sliverd and cava up to date and draws what's due. `world` is only built when a
+    /// Brings sliverd up to date and draws what's due. `world` is only built when a
     /// full frame is drawn, and is built at `now`.
     pub fn draw(&mut self, now: &Now, world: impl FnOnce() -> World) -> Vec<Output> {
         let mut out = Vec::new();
@@ -205,13 +201,6 @@ impl Driver {
         }
         self.dirty = false;
         self.press_dirty = false;
-        // A spectrum on the lit bar runs cava; anything else stops it (the bar going dark,
-        // another layout, Fn held).
-        let spectrum = self.agent.spectrum_config();
-        if self.sent_spectrum.as_ref() != Some(&spectrum) {
-            self.sent_spectrum = Some(spectrum.clone());
-            out.push(Output::Spectrum(spectrum));
-        }
         out
     }
 

@@ -54,20 +54,6 @@ pub(super) fn graph(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
     Some(sp)
 }
 
-/// waybar's `cava`: the spectrum the agent's `cava` process reports. Until its first frame every
-/// bar rests at 0, so the module keeps its size.
-pub(super) fn cava(m: &ModuleInstance, world: &World) -> Option<Spec> {
-    let n = super::cava_bars(m);
-    let levels = if world.spectrum.len() == n {
-        world.spectrum.clone()
-    } else {
-        vec![0.0; n]
-    };
-    let mut sp = Spec::new(ValueMap::new(), "");
-    sp.face = Face::Bars(levels);
-    Some(sp)
-}
-
 /// waybar's `image`: `exec` prints the path (first line), else `path`. Hidden without
 /// one, like waybar.
 pub(super) fn image(at: &At) -> Option<Spec> {

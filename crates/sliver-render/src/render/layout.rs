@@ -174,7 +174,6 @@ impl Renderer {
             },
             // Wide enough to read a trend; `width`/`min-width` make it wider.
             Content::Graph { .. } => GRAPH_WIDTH,
-            Content::Bars(levels) => levels.len() as f32 * BAR_PITCH,
             // As tall as the item's content box, as wide as its aspect ratio makes it.
             Content::Image(icon) => match icon.size() {
                 (w, h) if w > 0.0 && h > 0.0 => (content_h.max(0.0) * w / h).ceil(),

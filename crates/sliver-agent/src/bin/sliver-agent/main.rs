@@ -409,7 +409,6 @@ fn perform(
                 presented = true;
             }
             Output::Policy(p) => link.send(&AgentMsg::DisplayPolicy(p))?,
-            Output::Spectrum(config) => live.feeds.run_spectrum(config.as_deref()),
             Output::Effect(e) => apply(e, link, children, live)?,
         }
     }

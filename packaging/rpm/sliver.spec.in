@@ -59,8 +59,6 @@ License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliver-agent@
 Requires:       sliverd = %{version}-%{release}
 # sliver-settings was retired; this removes it on upgrade (it requires the old sliver-agent).
 Obsoletes:      sliver-settings < %{version}-%{release}
-# The `cava` module's spectrum; nothing else needs it.
-Suggests:       cava
 
 %description -n sliver-agent
 The per-user agent: reads ~/.config/sliver, follows the focused app, workspace and system state,

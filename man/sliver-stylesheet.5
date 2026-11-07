@@ -43,7 +43,6 @@ bar      classes: layer\-<name>, layout\-<name>, <bar name>, locked, dimmed
 +\- zone   .zone\-<name> (.zone\-esc, .zone\-main, .zone\-controls by default),
    |       plus the zone's configured class
    +\- module  #<type>, .module, .<instance>, state classes, script and config classes
-      +\- spectrum     modules with spectrum = true: the colour of its bars
       +\- trough       sliders only
          +\- highlight   the filled part, up to the value
          +\- slider      the knob (drawn only when it has a min\-width)
@@ -357,28 +356,6 @@ of its height free above and below.
 or
 .B min\-width
 make it wider than its natural 60 pixels.
-.PP
-A
-.B cava
-spectrum draws its bars in
-.B color
-across the content box, each half its slot wide.
-A module with
-.B spectrum = true
-draws them under its content, over its content height (along a slider's track), in the
-.B color
-of its
-.B spectrum
-node, which inherits the module's; the node's
-.B padding
-narrows that area.
-On a slider the bars up to its value take the
-.B highlight
-background, so with
-.B trough { min\-height: 0; }
-the spectrum is the track itself.
-Something faint, or a band clear of the icon, keeps the content readable:
-.BR "#mpris spectrum { color: alpha(@on_primary, 0.4); padding: 38px 0 0 0; }" .
 .SH AT\-RULES
 .TP
 .BI "@define\-color " "name value" ;

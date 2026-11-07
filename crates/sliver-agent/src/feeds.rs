@@ -11,7 +11,6 @@
 //! A source that fails leaves its context keys missing and reports a [`Feed::Note`].
 
 mod context;
-mod spectrum;
 
 pub use context::{add_desktop, add_session};
 
@@ -89,8 +88,6 @@ pub enum Feed {
         url: String,
         path: Option<std::path::PathBuf>,
     },
-    /// A frame from `cava` (0..=1 per bar); empty when it stopped.
-    Spectrum(Vec<f32>),
     /// A source could not start or stopped. For logs and the status page.
     Note(String),
 }
@@ -115,7 +112,6 @@ pub enum Slot<'a> {
     Session,
     Module(&'a str),
     Art,
-    Spectrum,
 }
 
 impl Feed {
@@ -125,7 +121,6 @@ impl Feed {
             Feed::Session(_) => Slot::Session,
             Feed::Module(u) => Slot::Module(&u.module),
             Feed::Art { .. } => Slot::Art,
-            Feed::Spectrum(_) => Slot::Spectrum,
             Feed::Note(_) => return None,
         })
     }
@@ -198,10 +193,6 @@ pub struct Feeds {
     capture: Option<Box<dyn Fn() + Send>>,
     /// Starts the fcitx5 follower ([`Feeds::watch_input_method`]).
     input_method: Option<Box<dyn Fn() + Send>>,
-    /// The `cava` config asked for last, and the process running it (`None`: it didn't start).
-    spectrum: Option<(String, Option<sliver_proc::ChildGuard>)>,
-    /// The spectrum program: `cava`, or a stand-in in tests.
-    pub cava: String,
     /// Where album art is cached (`None`: no art).
     pub art_cache: Option<std::path::PathBuf>,
 }
@@ -226,8 +217,6 @@ impl Feeds {
             failed_units: None,
             capture: None,
             input_method: None,
-            spectrum: None,
-            cava: "cava".into(),
             art_cache: sliver_session::art::default_cache_dir(|k| std::env::var(k).ok()),
         })
     }
@@ -467,30 +456,6 @@ impl Feeds {
         }
     }
 
-    /// Runs `cava` with this config while it's `Some` (a spectrum is on the lit bar), and stops it
-    /// on `None`. Asking again for the same config does nothing, so a cava that couldn't start
-    /// isn't retried until the config or the bar changes.
-    pub fn run_spectrum(&mut self, config: Option<&str>) {
-        if self.spectrum.as_ref().map(|(c, _)| c.as_str()) == config {
-            return;
-        }
-        // Dropping the old guard stops that cava.
-        self.spectrum = config.map(|c| {
-            let child = spectrum::start(&self.cava, c, self.out.clone())
-                .map_err(|e| {
-                    self.out.send(Feed::Note(format!(
-                        "cava: couldn't start {}: {e}",
-                        self.cava
-                    )))
-                })
-                .ok();
-            (c.to_owned(), child)
-        });
-        if self.spectrum.is_none() {
-            self.out.send(Feed::Spectrum(Vec::new()));
-        }
-    }
-
     /// Read fcitx5's state now: the focused window changed, or we switched it.
     pub fn refresh_input_method(&self) {
         if let Some(h) = &self.session {
@@ -587,8 +552,6 @@ pub struct Aggregate {
     apps: Option<DesktopEntries>,
     /// The last album art resolved: (url, local file).
     art: Option<(String, std::path::PathBuf)>,
-    /// The latest `cava` frame.
-    pub spectrum: Vec<f32>,
 }
 
 impl Aggregate {
@@ -600,7 +563,6 @@ impl Aggregate {
             modules: HashMap::new(),
             apps,
             art: None,
-            spectrum: Vec::new(),
         }
     }
 
@@ -670,13 +632,6 @@ impl Aggregate {
             Feed::Art { url, path } => {
                 self.art = path.map(|p| (url, p));
                 Changed::Module("mpris".into())
-            }
-            Feed::Spectrum(levels) => {
-                if levels == self.spectrum {
-                    return Changed::Nothing;
-                }
-                self.spectrum = levels;
-                Changed::Module("cava".into())
             }
             Feed::Note(_) => Changed::Nothing,
         }

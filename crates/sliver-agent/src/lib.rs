@@ -10,7 +10,7 @@
 //! ```
 //!
 //! [`agent::Agent`] is the sans-IO core; [`driver::Driver`] decides when to draw and what sliverd
-//! and cava must be told; the binary polls and carries out.
+//! must be told; the binary polls and carries out.
 //!
 //! - sliverd's `base` slot shows the top custom layer (or `base`) and its `fn` slot the config's
 //!   `fn` layer; sliverd swaps them on Fn itself.

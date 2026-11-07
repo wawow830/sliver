@@ -124,15 +124,6 @@ impl ModuleInstance {
         }
     }
 
-    /// A [`crate::CAVA`] key passed to cava; `None` also where the type's own key of that name
-    /// shadows it (`graph`'s `source`).
-    pub fn cava(&self, key: &str) -> Option<&str> {
-        match self.options.get(key)? {
-            Opt::Cava(s) => Some(s),
-            _ => None,
-        }
-    }
-
     /// A group's `modules`; none for other types.
     pub fn members(&self) -> &[ModuleId] {
         if self.id.kind != "group" {

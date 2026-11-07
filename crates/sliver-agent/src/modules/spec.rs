@@ -76,8 +76,6 @@ pub(super) enum Face {
     Image(String),
     /// Samples, oldest first, 0..=1, and how many fit.
     Graph { values: Vec<f32>, capacity: usize },
-    /// A spectrum's levels, 0..=1.
-    Bars(Vec<f32>),
     /// Nothing but room.
     Spacer,
 }
@@ -270,7 +268,6 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
         }
     }),
     ("graph", |at| widgets::graph(at.m, at.world, at.ui)),
-    ("cava", |at| widgets::cava(at.m, at.world)),
     ("image", widgets::image),
     ("clock", widgets::clock),
     ("emoji", |_| widgets::emoji()),
@@ -346,7 +343,7 @@ pub(crate) fn present(
 }
 
 pub(super) fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
-    let (m, world, ui) = (at.m, at.world, at.ui);
+    let (m, ui) = (at.m, at.ui);
     let c = &m.common;
     let mut sp = spec(&at)?;
     let key = at.key.to_owned();
@@ -361,7 +358,6 @@ pub(super) fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
     let open_slider = matches!(sp.face, Face::Slider(_));
     let content = match std::mem::replace(&mut sp.face, Face::Spacer) {
         Face::Spacer => Content::Spacer,
-        Face::Bars(levels) => Content::Bars(levels),
         // A missing or unreadable picture hides the module (it may not exist yet).
         Face::Image(name) => Content::Image(icons.image(&name, IMAGE_MAX_HEIGHT)?),
         Face::Graph { values, capacity } => {
@@ -439,7 +435,6 @@ pub(super) fn cell(at: At, icons: &mut Icons, icon_size: u32) -> Option<Cell> {
     cell.on = on;
     cell.next_change = sp.next_change;
     cell.look.checked = sp.checked;
-    cell.look.spectrum = spectrum(m, world);
     // A collapsed slider opens like a drawer handle and closes on its own.
     cell.drawer = collapsed.then(|| Drawer {
         group: key,

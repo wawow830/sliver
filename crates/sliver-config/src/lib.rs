@@ -51,7 +51,7 @@ pub use model::{
 };
 pub use module::{COMMON_KEYS, Common, Gesture, MenuEntry, ModuleId};
 pub use options::{
-    CAVA, Drawer, Keys, Kind, MAX_SIGNAL, MODULE_TYPES, Opt, key_kind, own_keys, takes_key,
+    Drawer, Keys, Kind, MAX_SIGNAL, MODULE_TYPES, Opt, key_kind, own_keys, takes_key,
 };
 pub use resolve::{
     HIDDEN_WHILE_LOCKED, MAX_DEPTH, ModuleInstance, ResolveError, Resolved, ResolvedZone,

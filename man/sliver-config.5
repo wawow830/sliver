@@ -662,14 +662,6 @@ gets it as
 .B collapsed = true
 shows just the icon until touched: it opens on press, sliding without lifting moves the value from
 where it was, and it closes 5\ s after the last touch.
-.TP
-.B spectrum
-.B true
-draws the live audio spectrum under the module's content (along a slider's track), with
-.BR cava 's
-keys, in the colour of the stylesheet's
-.B spectrum
-node: a play/pause button that moves with the music, say.
 .SS Format strings
 The format used is the first that exists of
 .B format\-alt
@@ -1034,37 +1026,6 @@ and
 .B states
 apply to the latest value.
 Hidden until the first sample, and while locked.
-.TP
-.B cava
-A live audio spectrum from the
-.BR cava (1)
-program: one bar per band, growing out from the middle line, in the module's
-.BR color .
-cava runs only while the module (or one with
-.BR "spectrum = true" )
-is on the shown layer of a lit bar, and sleeps after
-.B sleep_timer
-seconds of silence (default 1).
-waybar's keys:
-.B bars
-(default 20, at most 128),
-.B framerate
-(default and at most 60; 30 halves the cost),
-.BR autosens ,
-.BR sensitivity ,
-.BR lower_cutoff_freq ,
-.BR higher_cutoff_freq ,
-.BR sleep_timer ,
-.BR method ,
-.BR source ,
-.BR stereo ,
-.BR reverse ,
-.BR monstercat ,
-.BR waves ,
-.BR noise_reduction .
-Its natural width is 12 pixels per bar.
-It has no gestures of its own; bind any.
-Without cava installed it stays flat.
 .TP
 .B privacy
 One icon per kind of capture in use (screen share, camera, microphone), nothing while idle;

@@ -105,7 +105,7 @@ impl Live {
                     }
                 }
                 Feed::Note(n) => eprintln!("sliver-agent: {n}"),
-                Feed::Art { .. } | Feed::Spectrum(_) => {}
+                Feed::Art { .. } => {}
             }
             self.agg.apply(f);
         }
@@ -191,7 +191,6 @@ impl Live {
             apps: self.apps.clone(),
             emoji: self.emoji.clone(),
             media_art: self.agg.media_art().map(std::path::Path::to_path_buf),
-            spectrum: self.agg.spectrum.clone(),
         }
     }
 

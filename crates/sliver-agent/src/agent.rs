@@ -359,19 +359,6 @@ impl Agent {
         Some((g.values.iter().copied().collect(), g.cap))
     }
 
-    /// The config `cava` should run with: while a spectrum (a `cava` module, a slider with
-    /// `spectrum = true`) is on the layer being shown and the bar is lit. `None` stops it.
-    pub fn spectrum_config(&self) -> Option<String> {
-        if self.display == DisplayState::Off {
-            return None;
-        }
-        let shown = self.frame(if self.fn_held { Layer::Fn } else { Layer::Base })?;
-        let cell = shown.cells.iter().find(|c| modules::shows_spectrum(c))?;
-        let id = sliver_config::ModuleId::parse(&cell.id).ok()?;
-        let m = self.config.module(&sliver_config::ModuleRef::Named(id));
-        Some(crate::modules::cava_config(&m))
-    }
-
     pub fn ui(&mut self, key: &str) -> &mut UiState {
         self.ui.entry(key.to_owned()).or_default()
     }

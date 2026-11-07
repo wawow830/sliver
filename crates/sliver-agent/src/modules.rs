@@ -40,7 +40,7 @@ pub struct Cell {
     /// The module type (`clock`, `audio`, …).
     pub kind: String,
     /// What it draws: content, `#id` and classes, width, states (`:active`, `:checked`,
-    /// `:disabled`), inline colours and the spectrum under it.
+    /// `:disabled`) and inline colours.
     pub look: sliver_render::Item,
     pub touch: Touch,
     pub on: Vec<(Gesture, Do)>,
@@ -194,12 +194,12 @@ mod apps;
 mod clock;
 mod desktop;
 mod emoji;
+mod graph;
 mod groups;
 mod media;
 mod menus;
 mod placed;
 mod spec;
-mod spectrum;
 mod system;
 mod widgets;
 mod world;
@@ -208,11 +208,11 @@ use apps::*;
 use clock::*;
 use desktop::*;
 use emoji::*;
+pub use graph::*;
 pub use groups::*;
 pub use menus::*;
 pub use placed::*;
 use spec::*;
-pub use spectrum::*;
 use system::*;
 pub use world::*;
 

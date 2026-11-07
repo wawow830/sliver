@@ -23,7 +23,6 @@ impl Renderer {
         let mut zones = Vec::new();
         let mut items = Vec::new();
         let mut parts = Vec::new();
-        let mut spectra = Vec::new();
         let nz = scene.zones.len();
         for (zi, zone) in scene.zones.iter().enumerate() {
             // A zone's name is a class (`.zone-main`, like waybar's `.modules-left`), so `#id`
@@ -107,26 +106,6 @@ impl Renderer {
                 } else {
                     None
                 });
-                spectra.push(if item.spectrum.is_empty() {
-                    None
-                } else {
-                    let child = Element {
-                        tag: "spectrum",
-                        id: None,
-                        classes: &[],
-                        active: item.pressed,
-                        disabled: item.disabled,
-                        checked: item.checked,
-                        first: true,
-                        last: true,
-                    };
-                    Some(self.cached(
-                        &format!("{key}>spectrum"),
-                        sheet,
-                        &[bar_el, zone_el, el, child],
-                        Some(&ms),
-                    ))
-                });
                 items.push(ms);
             }
             zones.push(zs);
@@ -137,7 +116,6 @@ impl Renderer {
             zones,
             items,
             parts,
-            spectra,
         }
     }
 

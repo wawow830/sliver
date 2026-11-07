@@ -2403,55 +2403,6 @@ fn graph_module() {
     assert!(graphs(&a).is_empty(), "graphs are private while locked");
 }
 
-#[test]
-fn a_spectrum_runs_cava_only_while_it_is_shown() {
-    use sliver_ipc::proto::DisplayState;
-    let mut a = agent(
-        r#"
-[[layouts.default.zones]]
-name = "main"
-modules = ["cava"]
-[[layouts.fkeys.zones]]
-name = "main"
-modules = ["key/F1"]
-[modules.cava]
-bars = 4
-framerate = 120
-stereo = true
-source = "evil\n[output]"
-noise_reduction = 0.5
-"#,
-    );
-    let bars = |a: &Agent| match &a.frame(Layer::Base).unwrap().cells[0].look.content {
-        Content::Bars(l) => l.clone(),
-        other => panic!("{other:?}"),
-    };
-    let mut w = world(9, 41);
-    a.render(&w);
-    // Before cava's first frame the bars rest at 0, so the module already has its size.
-    assert_eq!(bars(&a), [0.0; 4]);
-    let conf = a.spectrum_config().expect("on the lit bar");
-    for line in [
-        "bars = 4",
-        "framerate = 60",
-        "method = raw",
-        "channels = stereo",
-        "noise_reduction = 0.5",
-    ] {
-        assert!(conf.lines().any(|l| l == line), "{line} in {conf}");
-    }
-    assert!(!conf.contains("evil"), "{conf}");
-    w.spectrum = vec![0.25, 0.5, 0.75, 1.0];
-    a.render(&w);
-    assert_eq!(bars(&a), [0.25, 0.5, 0.75, 1.0]);
-    // Fn shows the F-keys: no spectrum on screen, so no cava.
-    a.set_fn_held(true);
-    assert_eq!(a.spectrum_config(), None);
-    a.set_fn_held(false);
-    a.set_display(DisplayState::Off);
-    assert_eq!(a.spectrum_config(), None);
-}
-
 /// A key bound to a tap fires on press, unless the module also has a swipe: then a swipe must
 /// be able to start, so the tap waits for the release.
 #[test]
@@ -2502,48 +2453,4 @@ on-tap = { keys = ["PlayPause"] }
     let (id, x) = region(&a, "custom/tap");
     let fx = a.touch(id, 0, TouchPhase::Down, x, 3_000_000);
     assert_eq!(keys(&fx), [vec![164]], "a plain key tap fires on press");
-}
-
-/// `spectrum = true` puts the live spectrum under any module (along a slider's rail), and runs
-/// cava like a `cava` module does.
-#[test]
-fn any_module_can_show_the_spectrum() {
-    let mut a = agent(
-        r#"
-[[layouts.default.zones]]
-name = "main"
-modules = ["audio/slider"]
-[modules."audio/slider"]
-collapsed = false
-spectrum = true
-bars = 3
-"#,
-    );
-    let levels = |a: &Agent| {
-        let c = &a.frame(Layer::Base).unwrap().cells[0];
-        assert!(
-            matches!(c.look.content, Content::Slider { .. }),
-            "{:?}",
-            c.look.content
-        );
-        c.look.spectrum.clone()
-    };
-    let mut w = session_world();
-    a.render(&w);
-    assert_eq!(levels(&a), [0.0; 3], "at rest until cava's first frame");
-    assert!(
-        a.spectrum_config()
-            .is_some_and(|c| c.lines().any(|l| l == "bars = 3"))
-    );
-    w.spectrum = vec![0.2, 0.4, 0.6];
-    a.render(&w);
-    assert_eq!(levels(&a), [0.2, 0.4, 0.6]);
-
-    let mut a = agent(
-        "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"custom/play\"]\n[modules.\"custom/play\"]\nformat = \"P\"\nspectrum = true\nbars = 3\n",
-    );
-    a.render(&w);
-    let c = &a.frame(Layer::Base).unwrap().cells[0];
-    assert_eq!(c.look.spectrum, [0.2, 0.4, 0.6], "under a button's label");
-    assert!(a.spectrum_config().is_some());
 }

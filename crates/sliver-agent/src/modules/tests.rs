@@ -902,7 +902,6 @@ fn every_module_type_reads_its_keys_as_declared() {
                 .unwrap()["d"]
                 .clone(),
             Kind::Env => "e = { A = \"1\" }".parse::<toml::Table>().unwrap()["e"].clone(),
-            Kind::Cava => Value::Integer(1),
         }
     };
     // Data for the modules that read their keys only once they have something to show.
@@ -929,8 +928,7 @@ fn every_module_type_reads_its_keys_as_declared() {
             t => t.to_owned(),
         };
         let mut block = toml::Table::new();
-        let cava = sliver_config::CAVA.iter().map(|(k, _)| *k);
-        for key in sliver_config::own_keys(ty).chain(cava) {
+        for key in sliver_config::own_keys(ty) {
             let kind = sliver_config::key_kind(ty, key).flatten().unwrap();
             block.entry(key).or_insert_with(|| sample(kind));
         }
@@ -974,10 +972,9 @@ fn every_module_type_reads_its_keys_as_declared() {
         let _ = user_module_specs(config);
         let _ = groups::start_expanded_drawers(&r.zones);
         for m in &r.zones[0].modules {
-            let _ = spectrum::cava_config(m);
             if m.id.kind == "graph" {
-                let _ = spectrum::graph_params(m);
-                let _ = spectrum::graph_sample(config, m, &w);
+                let _ = graph::graph_params(m);
+                let _ = graph::graph_sample(config, m, &w);
             }
         }
     }
