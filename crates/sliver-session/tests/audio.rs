@@ -91,16 +91,16 @@ esac"#
     );
 
     // writes shell out to wpctl with the right arguments
-    audio::set_volume(&tools, 42).unwrap();
-    audio::change_volume(&tools, -5).unwrap();
-    audio::set_mic_mute(&tools, audio::Mute::Toggle).unwrap();
+    audio::set_volume(&tools, false, 42).unwrap();
+    audio::set_volume(&tools, true, 80).unwrap();
+    audio::set_mute(&tools, true, audio::Mute::Toggle).unwrap();
     let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
     assert!(
         calls.contains("set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 0.42"),
         "{calls}"
     );
     assert!(
-        calls.contains("set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-"),
+        calls.contains("set-volume -l 1.5 @DEFAULT_AUDIO_SOURCE@ 0.80"),
         "{calls}"
     );
     assert!(
@@ -121,7 +121,7 @@ fn missing_tools_give_unknown_not_errors() {
         pactl: "/nonexistent/pactl".into(),
     };
     assert_eq!(audio::read(&tools), audio::Audio::default());
-    assert!(audio::set_volume(&tools, 10).is_err());
+    assert!(audio::set_volume(&tools, false, 10).is_err());
 }
 
 /// A wpctl that never answers must not block the caller (the agent's startup), and is killed

@@ -194,17 +194,11 @@ impl Ctx {
                 }
                 None => Err("no such backlight".into()),
             },
-            Op::Volume { mic: false, pct } => {
-                audio::set_volume(tools, pct).map_err(|e| e.to_string())
+            Op::Volume { mic, pct } => {
+                audio::set_volume(tools, mic, pct).map_err(|e| e.to_string())
             }
-            Op::Volume { mic: true, .. } => Err("mic volume isn't supported yet".into()),
             Op::Mute { mic } => {
-                let f = if mic {
-                    audio::set_mic_mute
-                } else {
-                    audio::set_mute
-                };
-                f(tools, audio::Mute::Toggle).map_err(|e| e.to_string())
+                audio::set_mute(tools, mic, audio::Mute::Toggle).map_err(|e| e.to_string())
             }
             Op::Media { player, cmd } => {
                 sliver_session::mpris::control(ses, &player, cmd).map_err(|e| e.to_string())

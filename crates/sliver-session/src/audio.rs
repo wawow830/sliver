@@ -1,4 +1,4 @@
-//! Audio: default output volume/mute and default input (mic) mute through PipeWire.
+//! Audio: volume and mute of the default output and input (mic) through PipeWire.
 //!
 //! Reads and writes use `wpctl` (WirePlumber), the stable CLI for "the default sink/source".
 //! Change events come from `pactl subscribe` (pipewire-pulse), a long-lived child that prints one
@@ -112,28 +112,18 @@ impl Mute {
     }
 }
 
-/// Set the output volume, capped at 150% (`wpctl -l`).
-pub fn set_volume(tools: &Tools, pct: u8) -> io::Result<()> {
+fn node(mic: bool) -> &'static str {
+    if mic { SOURCE } else { SINK }
+}
+
+/// Set the output (or, with `mic`, input) volume, capped at 150% (`wpctl -l`).
+pub fn set_volume(tools: &Tools, mic: bool, pct: u8) -> io::Result<()> {
     let v = format!("{:.2}", f64::from(pct.min(150)) / 100.0);
-    run(tools, &["set-volume", "-l", "1.5", SINK, &v])
+    run(tools, &["set-volume", "-l", "1.5", node(mic), &v])
 }
 
-/// Relative change, clamped to 0..=100% (a slider shouldn't push past unity by accident).
-pub fn change_volume(tools: &Tools, delta_pct: i8) -> io::Result<()> {
-    let d = format!(
-        "{}%{}",
-        delta_pct.unsigned_abs(),
-        if delta_pct < 0 { "-" } else { "+" }
-    );
-    run(tools, &["set-volume", "-l", "1.0", SINK, &d])
-}
-
-pub fn set_mute(tools: &Tools, m: Mute) -> io::Result<()> {
-    run(tools, &["set-mute", SINK, m.arg()])
-}
-
-pub fn set_mic_mute(tools: &Tools, m: Mute) -> io::Result<()> {
-    run(tools, &["set-mute", SOURCE, m.arg()])
+pub fn set_mute(tools: &Tools, mic: bool, m: Mute) -> io::Result<()> {
+    run(tools, &["set-mute", node(mic), m.arg()])
 }
 
 impl Handle {
