@@ -1,5 +1,4 @@
 use std::{
-    fmt::Display,
     fs::{self, File},
     io,
     os::{
@@ -28,10 +27,9 @@ use smithay::{
     utils::{DeviceFd, Logical, Rectangle, Transform},
 };
 
-use crate::{Bar, Keyboard, Sliver, TRANSFORM, Touch, panel};
+use crate::{Bar, Keyboard, Sliver, TRANSFORM, Touch, fail, panel};
 
 const SEAT: &str = "seat-touchbar";
-const BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0";
 const KEY_FN: u32 = 0x1d0;
 
 const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
@@ -130,14 +128,13 @@ struct Panel {
 
 impl Panel {
     fn open(lh: &LoopHandle<'static, Sliver>) -> io::Result<Panel> {
-        let mut devices = udev::Enumerator::new()?;
-        devices.match_subsystem("drm")?;
-        devices.match_property("ID_SEAT", SEAT)?;
-        let node = devices
-            .scan_devices()?
-            .find(|d| d.sysname().to_string_lossy().starts_with("card"))
-            .and_then(|d| d.devnode().map(Path::to_path_buf))
+        let node = on_seat("drm")?
+            .find_map(|d| d.devnode().map(Path::to_path_buf))
             .ok_or_else(|| io::Error::other(format!("no display on {SEAT}")))?;
+        let backlight = on_seat("backlight")?
+            .next()
+            .map(|d| d.syspath().to_path_buf())
+            .ok_or_else(|| io::Error::other(format!("no backlight on {SEAT}")))?;
         let file = File::options()
             .read(true)
             .write(true)
@@ -185,7 +182,7 @@ impl Panel {
             DrmEvent::Error(e) => fail("drm", e),
         })
         .map_err(|e| io::Error::other(e.error))?;
-        let max = fs::read_to_string(Path::new(BACKLIGHT).join("max_brightness"))?;
+        let max = fs::read_to_string(backlight.join("max_brightness"))?;
         Ok(Panel {
             fd,
             _device: device,
@@ -193,7 +190,7 @@ impl Panel {
             buffers,
             back: 0,
             started: false,
-            brightness: Path::new(BACKLIGHT).join("brightness"),
+            brightness: backlight.join("brightness"),
             max: max.trim().into(),
         })
     }
@@ -247,9 +244,11 @@ impl Bar for Panel {
     }
 }
 
-fn fail(what: &str, e: impl Display) -> ! {
-    eprintln!("sliverd: {what}: {e}");
-    std::process::exit(1)
+fn on_seat(subsystem: &str) -> io::Result<impl Iterator<Item = udev::Device>> {
+    let mut devices = udev::Enumerator::new()?;
+    devices.match_subsystem(subsystem)?;
+    devices.match_property("ID_SEAT", SEAT)?;
+    Ok(devices.scan_devices()?.collect::<Vec<_>>().into_iter())
 }
 
 fn libinput(

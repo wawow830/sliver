@@ -7,7 +7,7 @@ mod wayland;
 
 use std::{
     collections::HashMap,
-    io,
+    fmt, io,
     os::unix::net::UnixStream,
     path::Path,
     time::{Duration, Instant},
@@ -190,11 +190,10 @@ impl Sliver {
         let elements: Vec<WaylandSurfaceRenderElement<PixmanRenderer>> = match &self.shown {
             Some(w) => {
                 w.on_commit();
-                let origin = w.geometry().loc;
-                w.output_enter(&self.wl.output, Rectangle::new(origin, (W, H).into()));
+                w.output_enter(&self.wl.output, everywhere());
                 w.render_elements(
                     &mut self.renderer,
-                    origin.upscale(-1).to_physical(1),
+                    w.geometry().loc.upscale(-1).to_physical(1),
                     Scale::from(1.0),
                     1.0,
                 )
@@ -210,8 +209,7 @@ impl Sliver {
                     .render_output(&mut self.renderer, &mut fb, self.age, &elements, BLACK)
                     .map(|r| r.damage.is_some_and(|d| !d.is_empty()))
             })
-            .inspect_err(|e| eprintln!("sliverd: render: {e}"))
-            .unwrap_or(false);
+            .unwrap_or_else(|e| fail("render", e));
         self.age = 1;
         self.presenting = true;
         if damaged {
@@ -360,12 +358,24 @@ impl Sliver {
     }
 }
 
+fn everywhere() -> Rectangle<i32, Logical> {
+    Rectangle::new(
+        (i32::MIN / 2, i32::MIN / 2).into(),
+        (i32::MAX, i32::MAX).into(),
+    )
+}
+
 fn slot(id: u32) -> TouchSlot {
     Some(id).into()
 }
 
 fn pixels<'a>(image: &'a Image<'static, 'static>) -> &'a [u8] {
     unsafe { std::slice::from_raw_parts(image.data().cast(), image.stride() * image.height()) }
+}
+
+pub fn fail(what: &str, e: impl fmt::Display) -> ! {
+    eprintln!("sliverd: {what}: {e}");
+    std::process::exit(1)
 }
 
 fn main() -> io::Result<()> {

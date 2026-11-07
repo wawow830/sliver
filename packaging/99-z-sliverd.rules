@@ -1,1 +1,2 @@
-SUBSYSTEM=="input", ATTR{name}=="Mac14,7 Touch Bar", TAG+="systemd", ENV{SYSTEMD_WANTS}="sliverd.service"
+SUBSYSTEM=="backlight", DRIVERS=="panel-summit", ENV{ID_SEAT}="seat-touchbar"
+SUBSYSTEM=="input", KERNEL=="input*", ENV{ID_SEAT}=="seat-touchbar", TAG+="systemd", ENV{SYSTEMD_WANTS}="sliverd.service"
