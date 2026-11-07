@@ -1,4 +1,0 @@
-# Pinned for scripts/check and CI, so a new clippy release's lints arrive only with a bump.
-[toolchain]
-channel = "1.96"
-components = ["rustfmt", "clippy"]
