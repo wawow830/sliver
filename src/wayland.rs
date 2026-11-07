@@ -18,7 +18,7 @@ use smithay::{
         },
         wayland_server::{
             Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New,
-            backend::{ClientData, ClientId, DisconnectReason},
+            backend::ClientData,
             protocol::{wl_buffer::WlBuffer, wl_seat::WlSeat, wl_surface::WlSurface},
         },
     },
@@ -86,14 +86,6 @@ impl Wl {
         }
     }
 
-    fn root(&self, surface: &WlSurface) -> WlSurface {
-        let mut root = surface.clone();
-        while let Some(parent) = get_parent(&root) {
-            root = parent;
-        }
-        root
-    }
-
     pub fn connect(&mut self, stream: UnixStream) -> io::Result<Client> {
         self.dh
             .insert_client(stream, Arc::new(ClientState::default()))
@@ -108,13 +100,18 @@ impl Wl {
     }
 }
 
+fn root(surface: &WlSurface) -> WlSurface {
+    let mut root = surface.clone();
+    while let Some(parent) = get_parent(&root) {
+        root = parent;
+    }
+    root
+}
+
 #[derive(Default)]
 struct ClientState(CompositorClientState);
 
-impl ClientData for ClientState {
-    fn initialized(&self, _: ClientId) {}
-    fn disconnected(&self, _: ClientId, _: DisconnectReason) {}
-}
+impl ClientData for ClientState {}
 
 impl CompositorHandler for Sliver {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -127,7 +124,7 @@ impl CompositorHandler for Sliver {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
-        let root = self.wl.root(surface);
+        let root = root(surface);
         if let Some(toplevel) = self.wl.toplevel(&root) {
             if !toplevel.is_initial_configure_sent() {
                 toplevel.send_configure();

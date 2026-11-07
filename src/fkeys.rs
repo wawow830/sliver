@@ -99,7 +99,6 @@ pub fn run(stream: UnixStream) {
             }
         })
     };
-    if let Err(e) = serve() {
-        eprintln!("sliverd: fkeys: {e}");
-    }
+    let Err(e) = serve();
+    eprintln!("sliverd: fkeys: {e}");
 }

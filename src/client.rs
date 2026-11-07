@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     error::Error,
     fs::File,
     io::{self, Write},
@@ -74,7 +75,7 @@ impl Client {
         mut self,
         pixels: &[u32],
         touch: impl FnMut(wl_touch::Event) + 'static,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<Infallible, Box<dyn Error>> {
         let qh = self.queue.handle();
         let compositor: WlCompositor = self.globals.bind(&qh, 4..=4, ())?;
         let shm: WlShm = self.globals.bind(&qh, 1..=1, ())?;
