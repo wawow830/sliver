@@ -500,10 +500,6 @@ waybar's names are accepted as aliases:
 .RB ( on\-swipe\-right ),
 .B on\-scroll\-down
 .RB ( on\-swipe\-left ),
-.B tooltip
-.RB ( detail ),
-.B tooltip\-format
-.RB ( detail\-format ),
 .B smooth\-scrolling\-threshold
 .RB ( swipe\-threshold ).
 .TP
@@ -581,13 +577,6 @@ The module is shown only while it holds, for example the battery only on battery
 .TP
 .B hide\-empty\-text
 Hide the module when its text is empty.
-.TP
-.BR detail ", " detail\-format
-There is no hover on a touch strip.
-The detail is the accessible description, the settings preview's, and the hold\-to\-peek overlay
-when
-.B on\-hold
-is unbound.
 .TP
 .B fire\-on
 .B press
@@ -1323,13 +1312,15 @@ action (default true).
 .TP
 .B return\-type
 .B \(dq\(dq
-(lines: text, detail, class) or
+(lines: text, tooltip, class) or
 .B \(dqjson\(dq
 (one object per line with waybar's
 .BR text ,
 .BR alt ,
 .B tooltip
-(the detail),
+(shown by a
+.B {tooltip}
+placeholder),
 .B class
 (a string or an array) and
 .BR percentage ,
@@ -1357,7 +1348,7 @@ A failed or timed\-out run shows
 .B !
 with the
 .B error
-class, and the last line of stderr as the detail.
+class, and the last line of stderr as its tooltip.
 Updates are drawn only when the output changed, and at most 30 times a second.
 .SH ACTIONS
 An
@@ -1550,9 +1541,15 @@ and
 toggles.
 .TP
 Hover, tooltips and mouse buttons
-A touch strip has none: use
-.BR detail ,
-tap, double tap, hold, swipes and drag.
+A touch strip has none:
+.B tooltip
+and
+.B tooltip\-format
+are warned about and ignored.
+Use tap, double tap, hold, swipes and drag; a script's tooltip can be put in
+.B format
+as
+.BR {tooltip} .
 .TP
 .B rotate
 The bar is 60 pixels tall.

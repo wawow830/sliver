@@ -12,7 +12,7 @@ Shows the event that's on now, else the next one in the coming 12 hours (else hi
   "now: Standup"        class now
   "in 12 min: Standup"  class soon (15 minutes or less) or upcoming (an hour or less)
   "14:30 Standup"       class later
-The detail lists the next few events. All-day events are skipped.
+The tooltip lists the next few events. All-day events are skipped.
 
 Recurrence: DAILY, WEEKLY (with BYDAY), MONTHLY (same day of month) and YEARLY rules with
 INTERVAL, COUNT and UNTIL, plus EXDATE and moved instances (RECURRENCE-ID). Rules beyond that

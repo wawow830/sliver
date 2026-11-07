@@ -195,6 +195,9 @@ impl Gesture {
     }
 }
 
+/// waybar's hover keys: a touch strip has no hover (warned about).
+const HOVER: &[&str] = &["tooltip", "tooltip-format"];
+
 /// waybar gestures with no touch equivalent (warned about).
 const NO_TOUCH_EQUIVALENT: &[&str] = &[
     "on-click-middle",
@@ -247,8 +250,6 @@ pub struct Common {
     pub class: Vec<String>,
     pub when: Option<Condition>,
     pub hide_empty_text: bool,
-    pub detail: bool,
-    pub detail_format: Option<Format>,
     pub fire_on: Option<FireOn>,
     pub repeat: Option<bool>,
     pub on: BTreeMap<Gesture, Action>,
@@ -280,14 +281,6 @@ impl Common {
             justify: r.string("justify", d),
             class: r.strings("class", d),
             hide_empty_text: r.bool("hide-empty-text", d).unwrap_or(false),
-            detail_format: r
-                .string("detail-format", d)
-                .or_else(|| r.string("tooltip-format", d))
-                .map(Format::new),
-            detail: r
-                .bool("detail", d)
-                .or_else(|| r.bool("tooltip", d))
-                .unwrap_or(true),
             repeat: r.bool("repeat", d),
             swipe_threshold: r
                 .uint("swipe-threshold", 2008, d)
@@ -378,6 +371,14 @@ impl Common {
                 );
             }
         }
+        for key in HOVER {
+            if r.get(key).is_some() {
+                d.warn(
+                    r.path(key),
+                    "a touch strip has no hover; a script's tooltip is the {tooltip} placeholder",
+                );
+            }
+        }
         // `format-<x>` variants. Must run last so only unread `format-*` keys are collected.
         let mut rest = Table::new();
         for (k, v) in t {
@@ -398,6 +399,7 @@ impl Common {
             if !COMMON_KEYS.contains(&k.as_str())
                 && !k.starts_with("format-")
                 && !NO_TOUCH_EQUIVALENT.contains(&k.as_str())
+                && !HOVER.contains(&k.as_str())
             {
                 rest.insert(k.clone(), v.clone());
             }
@@ -405,7 +407,6 @@ impl Common {
         let formats = [
             ("format", c.format.as_ref()),
             ("format-alt", c.format_alt.as_ref()),
-            ("detail-format", c.detail_format.as_ref()),
         ];
         let variants = c.format_variants.iter().map(|(k, f)| (k.as_str(), Some(f)));
         for (key, f) in formats.into_iter().chain(variants) {
@@ -448,10 +449,6 @@ pub const COMMON_KEYS: &[&str] = &[
     "class",
     "when",
     "hide-empty-text",
-    "detail",
-    "detail-format",
-    "tooltip",
-    "tooltip-format",
     "fire-on",
     "repeat",
     "swipe-threshold",
@@ -609,6 +606,7 @@ mod tests {
             on-click = "pavucontrol"
             on-scroll-up = { key = "VolumeUp" }
             on-click-middle = "x"
+            tooltip-format = "{time}"
             expand = true
             bat = "BAT1"
         "#
@@ -619,8 +617,8 @@ mod tests {
         assert!(d.ok(), "{d:?}");
         assert_eq!(
             d.warnings.len(),
-            1,
-            "middle click has no touch equivalent: {d:?}"
+            2,
+            "middle click has no touch equivalent, a tooltip no hover: {d:?}"
         );
         assert_eq!(c.width, Width::Fill(1));
         assert_eq!(

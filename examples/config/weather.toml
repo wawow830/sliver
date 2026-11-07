@@ -1,4 +1,4 @@
-# Weather from wttr.in: "☁️ 24°C", with the condition, humidity and wind as the detail.
+# Weather from wttr.in: "☁️ 24°C"; the tooltip ({tooltip} in format) has the condition, humidity and wind.
 #
 # Install the script:  install -m755 examples/shell/sliver-weather ~/.local/bin/
 #   (packaged: /usr/share/doc/sliver/examples/shell/sliver-weather)
