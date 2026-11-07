@@ -12,6 +12,7 @@
 //!   owner object.
 //! - [`kill_group`] SIGKILLs a child's whole process group, for children started with
 //!   `Command::process_group(0)` that may have started their own (`sh -c 'a | b'`).
+//! - [`output`] runs a short-lived tool to completion within a deadline.
 //!
 //! PDEATHSIG covers the direct child only, and it survives `exec` of a non-setuid program. The
 //! kernel clears it whenever the child changes credentials: setuid/setcap exec, or a daemon that
@@ -21,14 +22,16 @@
 //! member that ignores SIGTERM would otherwise outlive it.
 //! In production, systemd's cgroup does the rest when a unit stops.
 
-use std::io;
+use std::io::{self, Read};
 use std::ops::{Deref, DerefMut};
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use rustix::process::{Pid, Signal};
+use rustix::event::{PollFd, PollFlags, Timespec};
+use rustix::process::{Pid, PidfdFlags, Signal};
 
 type Job = (Command, Sender<io::Result<Child>>);
 
@@ -83,6 +86,71 @@ pub fn kill_group(leader: u32) {
     if let Some(pid) = Pid::from_raw(leader as i32) {
         let _ = rustix::process::kill_process_group(pid, Signal::KILL);
     }
+}
+
+/// Runs `cmd` like [`spawn_tied`], in its own process group, with stdin and stderr null, and
+/// collects its stdout. Once the child exits, the rest of its group is SIGKILLed; at `deadline`
+/// the whole group is, and the result is [`io::ErrorKind::TimedOut`].
+pub fn output(mut cmd: Command, deadline: Duration) -> io::Result<Output> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut child = ChildGuard::new(spawn_tied(cmd)?);
+    let pid = child.id();
+    // A pidfd turns readable when the child exits, before it is reaped: until `wait` below, its
+    // pid and process group cannot be reused, so `kill_group` cannot hit a stranger.
+    let pidfd = rustix::process::pidfd_open(Pid::from_child(&child), PidfdFlags::empty())?;
+    let mut stdout = child.stdout.take().expect("piped");
+    let end = Instant::now() + deadline;
+    let (mut out, mut buf) = (Vec::new(), [0u8; 16 * 1024]);
+    let (mut open, mut exited, mut timed_out) = (true, false, false);
+    while open || !exited {
+        let left = end.saturating_duration_since(Instant::now());
+        let timeout = (!timed_out).then(|| Timespec::try_from(left).unwrap_or_default());
+        let mut fds = Vec::with_capacity(2);
+        if open {
+            fds.push(PollFd::new(&stdout, PollFlags::IN));
+        }
+        if !exited {
+            fds.push(PollFd::new(&pidfd, PollFlags::IN));
+        }
+        match rustix::event::poll(&mut fds, timeout.as_ref()) {
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(e) => return Err(e.into()),
+            Ok(0) => {
+                kill_group(pid);
+                timed_out = true;
+                // A process that left the group may still hold the pipe: stop reading it.
+                open = false;
+                continue;
+            }
+            Ok(_) => {}
+        }
+        let pipe = open.then(|| fds[0].revents());
+        let proc = (!exited).then(|| fds[usize::from(open)].revents());
+        if pipe.is_some_and(|r| !r.is_empty()) {
+            match stdout.read(&mut buf) {
+                Ok(0) => open = false,
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if proc.is_some_and(|r| !r.is_empty()) {
+            exited = true;
+            kill_group(pid);
+        }
+    }
+    let status = child.wait()?;
+    if timed_out {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
+    Ok(Output {
+        status,
+        stdout: out,
+        stderr: Vec::new(),
+    })
 }
 
 /// A child that is killed and reaped when the guard is dropped.
@@ -184,6 +252,34 @@ mod tests {
         kill_group(g.id());
         drop(g);
         assert!(wait_dead(grandchild), "grandchild {grandchild} survived");
+    }
+
+    #[test]
+    fn output_collects_stdout_and_status() {
+        let mut c = Command::new("sh");
+        c.args(["-c", "head -c 100000 /dev/zero; exit 3"]);
+        let o = output(c, Duration::from_secs(5)).unwrap();
+        assert_eq!((o.stdout.len(), o.status.code()), (100_000, Some(3)));
+    }
+
+    /// The child's leftovers are killed when it exits, so their copy of stdout can't hold the
+    /// call open; at the deadline the child itself is.
+    #[test]
+    fn output_kills_leftovers_and_stops_at_the_deadline() {
+        let mut c = Command::new("sh");
+        c.args(["-c", "sleep 60 & echo $!"]);
+        let t = Instant::now();
+        let o = output(c, Duration::from_secs(30)).unwrap();
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+        let left: u32 = String::from_utf8(o.stdout).unwrap().trim().parse().unwrap();
+        assert!(wait_dead(left), "leftover {left} survived");
+
+        let mut c = Command::new("sh");
+        c.args(["-c", "trap '' TERM; sleep 60"]);
+        let t = Instant::now();
+        let e = output(c, Duration::from_millis(200)).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::TimedOut);
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     }
 
     /// A child spawned from a short-lived thread survives that thread, and dies only with the

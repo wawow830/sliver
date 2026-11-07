@@ -60,42 +60,13 @@ pub fn is_device_event(line: &str) -> bool {
     matches!(kind, "sink" | "source" | "server" | "card")
 }
 
-/// A `wpctl` that does not answer (WirePlumber stuck or absent) must not wedge the audio thread
-/// or startup: give it this long, then kill it.
-const TOOL_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// `cmd.output()` with a deadline. Returns `None` on spawn failure or timeout (the child is
-/// killed).
-pub(crate) fn output_with_timeout(
-    mut cmd: Command,
-    limit: Duration,
-) -> Option<std::process::Output> {
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    // Tied to this process: a stuck tool never outlives the agent.
-    let child = sliver_proc::spawn_tied(cmd).ok()?;
-    let pid = child.id();
-    let (tx, rx) = channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
-    });
-    match rx.recv_timeout(limit) {
-        Ok(r) => r.ok(),
-        Err(_) => {
-            // Stuck: kill it so the waiting thread (and its pipe) end too.
-            if let Some(pid) = rustix::process::Pid::from_raw(pid as i32) {
-                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
-            }
-            None
-        }
-    }
-}
+/// A `wpctl` that does not answer (WirePlumber stuck or absent) is killed after this long.
+pub(crate) const TOOL_TIMEOUT: Duration = Duration::from_secs(3);
 
 fn get(tools: &Tools, target: &str) -> Option<(u8, bool)> {
     let mut cmd = Command::new(&tools.wpctl);
     cmd.args(["get-volume", target]);
-    let out = output_with_timeout(cmd, TOOL_TIMEOUT)?;
+    let out = sliver_proc::output(cmd, TOOL_TIMEOUT).ok()?;
     out.status
         .success()
         .then(|| parse_volume(&String::from_utf8_lossy(&out.stdout)))?
@@ -114,12 +85,11 @@ pub fn read(tools: &Tools) -> Audio {
 }
 
 fn run(tools: &Tools, args: &[&str]) -> io::Result<()> {
-    let st = Command::new(&tools.wpctl)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    st.success()
+    let mut cmd = Command::new(&tools.wpctl);
+    cmd.args(args);
+    let out = sliver_proc::output(cmd, TOOL_TIMEOUT)?;
+    out.status
+        .success()
         .then_some(())
         .ok_or_else(|| io::Error::other(format!("wpctl {args:?} failed")))
 }

@@ -155,7 +155,7 @@ pub fn set_dark(dark: bool) -> Result<(), String> {
     for (prog, args) in dark_commands(&desktop, dark) {
         let mut cmd = std::process::Command::new(prog);
         cmd.args(args);
-        if let Some(o) = crate::audio::output_with_timeout(cmd, std::time::Duration::from_secs(3)) {
+        if let Ok(o) = sliver_proc::output(cmd, crate::audio::TOOL_TIMEOUT) {
             if o.status.success() {
                 return Ok(());
             }

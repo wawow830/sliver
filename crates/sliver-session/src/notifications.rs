@@ -193,7 +193,7 @@ fn cli_read(cli: Cli) -> Option<bool> {
     let (prog, args) = cli.get_args();
     let mut cmd = std::process::Command::new(prog);
     cmd.args(args);
-    let out = crate::audio::output_with_timeout(cmd, std::time::Duration::from_secs(2))?;
+    let out = sliver_proc::output(cmd, std::time::Duration::from_secs(2)).ok()?;
     out.status
         .success()
         .then(|| cli.parse(&String::from_utf8_lossy(&out.stdout)))?
@@ -222,12 +222,10 @@ fn set_dnd_cli(conn: &Connection, on: bool) -> Option<Result<(), String>> {
     let (prog, args) = cli.set_args(on);
     let mut cmd = std::process::Command::new(prog);
     cmd.args(args);
-    Some(
-        match crate::audio::output_with_timeout(cmd, std::time::Duration::from_secs(3)) {
-            Some(o) if o.status.success() => Ok(()),
-            _ => Err(format!("{prog} failed or is not installed")),
-        },
-    )
+    Some(match sliver_proc::output(cmd, crate::audio::TOOL_TIMEOUT) {
+        Ok(o) if o.status.success() => Ok(()),
+        _ => Err(format!("{prog} failed or is not installed")),
+    })
 }
 
 /// Turn Do Not Disturb on or off. dunst has a property; mako and swaync have a tool; KDE is

@@ -7,7 +7,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -89,7 +89,7 @@ fn store(dir: &Path, url: &str, ext: &str, data: &[u8]) -> Option<PathBuf> {
     Some(final_path)
 }
 
-/// Download with `curl`, tied to this process and killed after a deadline.
+/// Download with `curl`, killed after 10 s.
 fn fetch(url: &str) -> Option<Vec<u8>> {
     let mut cmd = Command::new("curl");
     cmd.args([
@@ -101,28 +101,9 @@ fn fetch(url: &str) -> Option<Vec<u8>> {
         "-o",
         "-",
         url,
-    ])
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null());
-    let child = sliver_proc::spawn_tied(cmd).ok()?;
-    let pid = child.id();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
-    });
-    match rx.recv_timeout(Duration::from_secs(10)) {
-        Ok(Ok(out)) if out.status.success() && out.stdout.len() as u64 <= MAX_BYTES => {
-            Some(out.stdout)
-        }
-        Ok(_) => None,
-        Err(_) => {
-            if let Some(p) = rustix::process::Pid::from_raw(pid as i32) {
-                let _ = rustix::process::kill_process(p, rustix::process::Signal::KILL);
-            }
-            None
-        }
-    }
+    ]);
+    let out = sliver_proc::output(cmd, Duration::from_secs(10)).ok()?;
+    (out.status.success() && out.stdout.len() as u64 <= MAX_BYTES).then_some(out.stdout)
 }
 
 #[cfg(test)]
