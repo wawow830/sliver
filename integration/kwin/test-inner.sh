@@ -49,7 +49,6 @@ grep -q '"app-id"' "$log" && grep -q 'sliver-test-app' "$log" || { echo "FAIL: n
 grep -q '"method": "SetWorkspacesV"' "$log" || { echo "FAIL: no SetWorkspacesV"; exit 1; }
 echo "ok: kwin script reported the focused window and the desktops"
 
-# The window list for the taskbar: SetWindowsV with our test window, focused, on a desktop.
 grep -q '"method": "SetWindowsV"' "$log" || { echo "FAIL: no SetWindowsV"; exit 1; }
 last_windows() { grep '"method": "SetWindowsV"' "$log" | tail -1; }
 last_windows | grep -q 'sliver-test-app' || { echo "FAIL: the window list lacks the test window"; last_windows; exit 1; }

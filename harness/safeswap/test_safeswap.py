@@ -89,8 +89,7 @@ class Props(unittest.TestCase):
             ss.unit_state = orig
 
     def test_stop_restores_the_recorded_owner(self):
-        # `stop` and a manual `restore` give the bar back to whoever had it before the run, not
-        # tiny-dfr by default (that raced the run's own ExecStopPost restoring sliverd).
+        # `stop` and a manual `restore` give the bar back to whoever had it before the run.
         with tempfile.TemporaryDirectory(dir=scratch()) as d:
             m = ss.Mode(user=False, target="sliverd.service")
             m.state_dir = Path(d)

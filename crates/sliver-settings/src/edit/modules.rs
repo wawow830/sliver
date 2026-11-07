@@ -123,8 +123,6 @@ pub fn move_module_to(
     Ok(format!("Moved {label} to {to_zone}"))
 }
 
-// --- groups (sliver-config(5)) -------------------------------------------
-
 fn group_path(group: &str) -> String {
     format!("modules.{}.modules", key(group))
 }
@@ -258,9 +256,6 @@ fn describe(v: &Value) -> String {
     }
 }
 
-/// Sets (or with `None`, clears) one key of the module at `index`. A named module
-/// (`"battery#bat2"`) is configured in its `[modules."battery#bat2"]` block. An inline module
-/// (`{ type = … }`) is edited in place.
 /// Sets (or with `None` clears) key `k` of the named module `id` (`[modules."id"]`): for a
 /// module inside a group, which has no zone slot of its own.
 pub fn set_named_module_key(
@@ -295,6 +290,9 @@ pub fn block_changes(old: &Table, new: &Table) -> Vec<(String, Option<Value>)> {
         .collect()
 }
 
+/// Sets (or with `None`, clears) one key of the module at `index`. A named module
+/// (`"battery#bat2"`) is configured in its `[modules."battery#bat2"]` block. An inline module
+/// (`{ type = … }`) is edited in place.
 pub fn set_module_key(
     ed: &mut Editor,
     merged: &Table,

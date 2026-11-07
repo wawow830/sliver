@@ -1,9 +1,8 @@
-//! Frame pacing for content that changes on its own (invariant 3): published items, script
-//! output and other feeds may change hundreds of times a second (an app calling `Update` in a
-//! loop, a script printing as fast as it can). Each change only marks the bar stale; it's
+//! Frame pacing for content that changes on its own: published items, script output and other
+//! feeds may change hundreds of times a second. Each change only marks the bar stale; it's
 //! redrawn at most [`CONTENT_FPS`] times a second, and the last change always gets drawn.
 //!
-//! Touches, layer switches and animations don't go through this: they draw at once.
+//! Touches, layer switches and animations draw at once.
 
 use std::time::{Duration, Instant};
 
@@ -53,8 +52,7 @@ impl Pacer {
         self.pending = false;
     }
 
-    /// How long until a pending change is due (`None` when nothing is pending): the main loop's
-    /// poll timeout, so a held-back change is never lost and nothing wakes otherwise.
+    /// How long until a pending change is due (`None` when nothing is pending).
     pub fn wait(&self, now: Instant) -> Option<Duration> {
         if !self.pending {
             return None;

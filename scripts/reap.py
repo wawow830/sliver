@@ -21,7 +21,7 @@ GRACE = 2.0
 
 
 def children():
-    """Our live children: whatever outlived its parent is one of them now."""
+    """Includes CMD's orphans: the subreaper inherits them."""
     me, out = os.getpid(), []
     for d in os.listdir("/proc"):
         if not d.isdigit():
@@ -37,7 +37,6 @@ def children():
 
 
 def reap():
-    """Reap every child that has exited, without waiting."""
     while True:
         try:
             pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -56,7 +55,6 @@ def cmdline(pid):
 
 
 def settle(seconds):
-    """Wait up to `seconds` for our children to exit; return those still running."""
     end = time.monotonic() + seconds
     while True:
         reap()

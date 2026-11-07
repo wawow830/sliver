@@ -1,5 +1,5 @@
 //! Pure decoder: Linux multitouch protocol B (evdev `EV_ABS`/`EV_SYN` stream) into contact phases
-//! in logical bar pixels. No I/O, so it's unit-tested on recorded sequences. The Mac14,7 bar
+//! in logical bar pixels, no I/O. The Mac14,7 bar
 //! reports X 0..23044 along the bar and Y 0..639 (100 units/mm), ~60 Hz SYN_REPORTs, three
 //! reliable contacts, and no pressure or hover.
 

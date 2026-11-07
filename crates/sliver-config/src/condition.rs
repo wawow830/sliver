@@ -177,7 +177,6 @@ pub struct Condition {
 const OPS: &[&str] = &["regex", "contains", "below", "above", "between", "is"];
 
 impl Condition {
-    /// The always-true condition.
     pub fn always() -> Self {
         Self::default()
     }

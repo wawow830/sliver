@@ -1,5 +1,5 @@
 //! Lock-screen privacy: while the screen is locked, nothing private reaches the bar,
-//! whatever the layout says. Two layers, so a new module or a clever format string can't leak:
+//! whatever the layout says. Two layers, so a new module or a format string can't leak:
 //!
 //! 1. [`sanitize`]: modules are built from a copy of the world with the private data removed:
 //!    media title/artist/album/art, the latest notification's text, window titles and the

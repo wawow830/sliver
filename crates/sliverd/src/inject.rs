@@ -1,6 +1,5 @@
 //! `sliverd --fake-hardware --touch-socket PATH`: inject hardware input into a fake-hardware
-//! sliverd, so headless runs can test real touches end to end (regions, the key fast path, the
-//! hatch, agent touch events) without a bar.
+//! sliverd, for headless end-to-end runs without a bar.
 //!
 //! PATH is a Unix **datagram** socket. Each datagram holds one or more lines:
 //!

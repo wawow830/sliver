@@ -1,6 +1,5 @@
 //! The Bar page preview: the agent's own pipeline (`sliver_agent::Agent`) rendering the user's
-//! config for a simulated context. It's the same code path that draws the real bar, so the
-//! preview is WYSIWYG.
+//! config for a simulated context.
 
 use std::path::Path;
 
@@ -12,8 +11,7 @@ use sliver_config::{Config, Context};
 use sliver_ipc::proto::Layer;
 use sliver_render::{Fonts, Pixmap, Renderer, Stylesheet};
 
-/// The bar's size in pixels: 2008x60 on Macs with a physical Esc key, 2170x60 on those without
-///. The preview renders at the real size, so it shows what the bar will.
+/// The bar's size in pixels: 2008x60 on Macs with a physical Esc key, 2170x60 on those without.
 pub fn bar_size(hw: sliver_config::Hardware) -> (u32, u32) {
     if hw.physical_esc {
         (2008, 60)
@@ -289,8 +287,7 @@ impl Feedback {
             ));
         }
         // Under COMFORT_PX only gets the amber mark on the preview and the inspector's note: the
-        // stock bar has 76-79 px keys (the theme's min-width), and nagging about those in text
-        // would make the line meaningless. Words are for what's really hard to hit.
+        // stock bar has 76-79 px keys (the theme's min-width).
         let strong: Vec<&(String, (f32, f32), bool)> = self.narrow.iter().filter(|n| n.2).collect();
         if !strong.is_empty() {
             // `group/fkeys/key/F1` reads as `key/F1`; at most three names.
@@ -368,8 +365,7 @@ mod tests {
         p
     }
 
-    /// Clicking the second of two identical modules selects the second (it used to pick the
-    /// first: their cell keys are the same).
+    /// Clicking the second of two identical modules (same cell keys) selects the second.
     #[test]
     fn repeated_modules_hit_their_own_index() {
         let p = preview(
@@ -447,8 +443,7 @@ mod tests {
 
     #[test]
     fn overflowing_zone() {
-        // 12 x 200 px fixed: squeezed to ~140 px each. (Fixed widths used to be counted by their
-        // content only, so this wasn't reported.)
+        // 12 x 200 px fixed: squeezed to ~140 px each.
         let mods: Vec<String> = (0..12).map(|i| format!("\"custom/m{i}\"")).collect();
         let blocks: String = (0..12)
             .map(|i| format!("[modules.\"custom/m{i}\"]\nformat = \"item {i}\"\nwidth = 200\non-tap = \"true\"\n"))

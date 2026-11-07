@@ -86,7 +86,7 @@ fn expect(rx: &std::sync::mpsc::Receiver<Vec<String>>, want: &[&str]) {
 }
 
 /// Real inotify on a real directory: opening and closing the node (what a camera app does)
-/// changes the report; nothing polls, so the fake process table is only read after an event.
+/// changes the report; the fake process table is only read after an event.
 #[test]
 fn follows_opens_and_closes_of_the_node() {
     let f = Fake::new("watch");

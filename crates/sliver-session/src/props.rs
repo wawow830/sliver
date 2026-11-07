@@ -8,9 +8,8 @@ pub(crate) type Props = HashMap<String, OwnedValue>;
 
 /// `GetAll(iface)` on `dest`/`path`; `None` if the service or object is absent.
 ///
-/// Sent with `NoAutoStart`: reading state must never *start* a service (a notification daemon,
-/// say). Without it, on a bus where the service is activatable but not running, the call
-/// blocks on the activation, which stalled agent startup on fresh buses.
+/// Sent with `NoAutoStart`, so reading never starts a service. Without it, on a bus where the
+/// service is activatable but not running, the call blocks on the activation.
 pub(crate) fn get_all(conn: &Connection, dest: &str, path: &str, iface: &str) -> Option<Props> {
     call_no_autostart(
         conn,

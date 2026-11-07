@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The niri backend against a real niri 25.11+: niri runs nested (winit backend) inside a headless
 # sway, so no display or GPU session is needed. Window list, focus and workspaces follow two real
-# clients, and the actions (focus, switch workspace, close) really act. Private runtime dir; the
-# live session is never touched.
+# clients, and the actions (focus, switch workspace, close) really act. Private runtime dir.
 #
 # Needs niri, sway, foot. Without root see integration/sway/test.sh (dnf download --resolve,
 # rpm2cpio into a prefix, SLIVER_TEST_ROOT). Skips (exit 0) when one is missing.
@@ -11,7 +10,6 @@ need niri sway foot
 setup niri sliver-desktop
 on_fail() { tail -5 "$work/niri.log"; }
 
-# niri runs nested in a headless sway.
 mkdir -p "$work/cfg/niri"
 printf 'output HEADLESS-1 resolution 1280x720\n' >"$work/sway.cfg"
 echo 'prefer-no-csd' >"$work/cfg/niri/config.kdl"

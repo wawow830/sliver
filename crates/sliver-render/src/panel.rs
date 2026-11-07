@@ -1,7 +1,7 @@
 //! Getting frames onto a real panel: change detection and rotation into the framebuffer layout.
 //!
 //! The renderer always works in landscape bar coordinates (x along the bar). Panels report a
-//! portrait mode (Apple Silicon: 60x2008), so frames are rotated on the way out, exactly like
+//! portrait mode (Apple Silicon: 60x2008), so frames are rotated on the way out, as by
 //! tiny-dfr's `translate(height, 0); rotate(90°)`.
 
 use tiny_skia::Pixmap;

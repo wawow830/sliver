@@ -4,7 +4,7 @@ use super::*;
 
 /// The `systemd-run` prefix that puts a command in its own transient scope, so it outlives
 /// the agent: under `sliver-agent.service` (KillMode=control-group) children in our cgroup die
-/// with every agent restart. Desktop launchers do the same.
+/// with every agent restart.
 pub(super) fn scope_prefix(argv: &[String], seq: u64) -> Vec<String> {
     let name: String = argv
         .first()
@@ -59,7 +59,6 @@ pub(super) fn spawn_detached(argv: &[String]) -> std::io::Result<Child> {
     plain(argv)
 }
 
-/// Carries out one of the agent's effects.
 pub(super) fn apply(
     e: Effect,
     link: &Link,

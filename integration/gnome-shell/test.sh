@@ -2,7 +2,7 @@
 # The GNOME extension against a real gnome-shell/mutter running headless (--headless
 # --virtual-monitor) on a private session bus: focus, workspaces and the window list reach a
 # mock Desktop1 agent, and the extension's Shell1 methods (FocusWindow, FocusWorkspace,
-# CloseWindow) really act. Never touches the live session.
+# CloseWindow) really act.
 #
 # Needs gnome-shell, mutter, gjs and a Wayland client (kitty or foot). Without root:
 #     dnf download --resolve --destdir /tmp/g gnome-shell mutter gjs gsettings-desktop-schemas

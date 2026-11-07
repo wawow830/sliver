@@ -1,5 +1,5 @@
 //! sliverd's built-in layers, drawn with sliver-render's embedded font and icons. They depend on
-//! no config, no system fonts and no agent, so Esc/F-keys always render (invariant 1).
+//! no config, system fonts or agent.
 //!
 //! - **F-keys**: F1–F12 (`keys::safe_keys_for_panel`). The safe layer's base, what the safe hatch
 //!   (Fn double-press + hold) shows, and the `fn` layer while the agent has none of its own.

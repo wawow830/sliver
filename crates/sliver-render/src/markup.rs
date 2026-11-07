@@ -1,7 +1,7 @@
 //! A Pango-markup subset for format strings (sliver-config(5)).
 //!
-//! Waybar labels are Pango markup. The renderer isn't Pango, so this parses the part
-//! that matters on a status bar into styled text runs that `cosmic-text` can shape:
+//! Waybar labels are Pango markup. This parses a subset into styled text runs that `cosmic-text`
+//! can shape:
 //!
 //! * tags `<b> <i> <u> <s> <big> <small> <sub> <sup> <tt> <span …>` (and `<strong>`/`<em>`
 //!   spellings are *not* Pango, so they warn like any unknown tag);
@@ -11,9 +11,8 @@
 //! * the entities `&amp; &lt; &gt; &quot; &apos; &#N; &#xN;`.
 //!
 //! Parsing never fails: bad markup keeps its text, loses its styling where it can't be
-//! understood, and reports a warning, so a broken script can't blank a module. Cases Pango
-//! supports that we don't (background colours, baseline shift, font descriptions) warn and are
-//! ignored; `<sub>`/`<sup>` only shrink the text.
+//! understood, and reports a warning. Cases Pango supports that this doesn't (background colours,
+//! baseline shift, font descriptions) warn and are ignored; `<sub>`/`<sup>` only shrink the text.
 
 use std::fmt::Write;
 
@@ -96,8 +95,7 @@ impl Markup {
         }
     }
 
-    /// Back to markup text (explicit `<span>` attributes only), so a truncated label can go
-    /// through the same shaping path and cache as the original.
+    /// Back to markup text (explicit `<span>` attributes only).
     pub fn to_markup(&self) -> String {
         let mut out = String::new();
         for s in &self.spans {

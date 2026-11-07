@@ -186,5 +186,3 @@ pub(super) fn strip_value(v: &mut toml_edit::Value) -> usize {
         _ => 0,
     }
 }
-
-// ---- export ----

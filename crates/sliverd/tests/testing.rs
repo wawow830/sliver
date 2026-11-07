@@ -1,6 +1,4 @@
-//! The `sliver_ipc::fake::FakeDaemon` test suite, run unchanged (modulo the mechanical
-//! substitutions noted inline) against `sliverd::testing::TestDaemon`: the drop-in replacement
-//! built on the real daemon core behaves the same.
+//! The agent-facing behaviour of `sliverd::testing::TestDaemon`.
 
 use sliver_ipc::AgentMsg;
 use sliver_ipc::keys::*;
@@ -78,7 +76,7 @@ fn present_copies_and_acks() {
     assert_eq!(recv(&a), DaemonMsg::Presented { serial: 5 });
     let f = d.base.as_ref().unwrap();
     assert_eq!(f.pixels.len(), 2008 * 60 * 4);
-    // (Substitution: B, G, R only. sliverd copies into a pixmap, so the X padding byte isn't kept.)
+    // B, G, R only: sliverd copies into a pixmap, so the X padding byte isn't kept.
     let bgr = |px: &[u8]| px.chunks(4).all(|p| p[..3] == [0x11; 3]);
     assert!(bgr(&f.pixels));
     // The agent may reuse the buffer after `presented` without affecting the shown frame.
@@ -354,8 +352,6 @@ fn ping_policy_wake_emit() {
     );
     assert_eq!(d.wakes, 1);
 }
-
-// ---- beyond FakeDaemon: the real daemon's extras -------------------------------------------
 
 #[test]
 fn liveness_when_auto_pong_is_off() {

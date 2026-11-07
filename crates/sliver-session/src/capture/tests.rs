@@ -303,8 +303,8 @@ fn fake_pipewire(path: &Path) -> std::sync::mpsc::Receiver<()> {
     rx
 }
 
-/// The bar turning off cuts the PipeWire connection (nothing wakes us for registry churn), and
-/// turning it on connects again and learns the current state afresh (invariant 3).
+/// The bar turning off cuts the PipeWire connection, and turning it on connects again and learns
+/// the current state afresh.
 #[test]
 fn a_dark_bar_hangs_up_and_wake_reconnects() {
     let Some(tb) = sliver_testbus::TestBus::start() else {

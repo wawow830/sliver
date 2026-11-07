@@ -4,8 +4,8 @@
 //! command per connection (`j/activewindow` for JSON) and replies until EOF. Everything here is
 //! read-only: we never send dispatch/keyword commands.
 //!
-//! Parsing and state folding ([`parse_event`], [`apply`]) are pure and unit-tested; the socket
-//! plumbing is tested against a fake compositor on a temp Unix socket.
+//! [`parse_event`] and [`apply`] are unit-tested; the socket plumbing is tested against a fake
+//! compositor on a temp Unix socket.
 
 use crate::{Backend, DesktopSource, DesktopState, Window, Workspace};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -94,7 +94,7 @@ pub enum Event {
     Urgent {
         address: String,
     },
-    /// Config reloaded: a good moment to resync from the command socket.
+    /// Config reloaded: resync from the command socket.
     ConfigReloaded,
     /// Anything we don't track.
     Other,
@@ -109,8 +109,8 @@ fn non_empty(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_string())
 }
 
-/// Parse one event line (without the trailing newline). Never fails: unknown or malformed
-/// events become [`Event::Other`] so a newer Hyprland can't break the agent.
+/// Parse one event line (without the trailing newline). Unknown or malformed events become
+/// [`Event::Other`].
 pub fn parse_event(line: &str) -> Event {
     let Some((name, data)) = line.split_once(">>") else {
         return Event::Other;
@@ -689,7 +689,7 @@ impl DesktopSource for Watcher {
 }
 
 /// [`crate::watch`] for Hyprland: connect, deliver the initial state and every change, retry
-/// with backoff. This is the loop the agent runs on its own thread.
+/// with backoff.
 pub fn watch(paths: &Paths, on_change: impl FnMut(&DesktopState) -> ControlFlow<()>) {
     crate::watch(|| Watcher::connect(paths), on_change);
 }

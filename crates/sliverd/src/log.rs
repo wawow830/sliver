@@ -1,10 +1,5 @@
-//! Debug logging for harness runs (`SLIVER_LOG=debug` or `-v`), so a real-hardware run
-//! verifies itself from its log: touches, keys, Fn/lid, layer switches, flushes, backlight writes,
-//! agent connects and messages. Lines go to stderr (the harness's `sliverd.log`, the journal in
-//! production). Off by default: no cost beyond one branch.
-//!
-//! Implemented as decorators around the backends plus hooks in the event loop, so the core stays
-//! free of logging.
+//! Debug logging for harness runs (`SLIVER_LOG=debug` or `-v`). Lines go to stderr (the
+//! harness's `sliverd.log`, the journal in production). Off by default.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -26,7 +21,6 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// Whether `SLIVER_LOG` asks for debug output.
 pub fn from_env() -> bool {
     std::env::var("SLIVER_LOG").is_ok_and(|v| matches!(v.as_str(), "debug" | "trace" | "1"))
 }
@@ -84,7 +78,6 @@ impl Keys for LogKeys {
     }
 }
 
-/// Wraps the backends in logging decorators.
 pub fn wrap(b: Backends) -> Backends {
     Backends {
         display: Box::new(LogDisplay(b.display)),

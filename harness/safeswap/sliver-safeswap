@@ -1,16 +1,15 @@
 #!/usr/bin/python3
 """sliver-safeswap: run a sliver build on the real Touch Bar for a bounded time.
 
-Privileged helper (root via pkexec). The bar's previous owner is ALWAYS restored: the
-installed sliverd if it was driving the bar, else tiny-dfr. This is the only sanctioned way to
-touch the real bar. Install: `sudo harness/safeswap/install.sh`. Below, "the owner" is that
-unit.
+Privileged helper (root via pkexec), installed by `sudo harness/safeswap/install.sh`. After a run
+the bar's previous owner ("the owner") is started again: the installed sliverd if it was driving
+the bar, else tiny-dfr.
 
     sliver-safeswap run BINARY [--seconds N] [--wait] [-- ARGS...]
     sliver-safeswap stop | restore | status
     sliver-safeswap snap > bar.png        # screenshot of whatever is on the bar now
 
-How restoration is guaranteed (all of it is systemd's job, not this script's):
+Restoration is done by systemd:
   * The payload runs in the transient system unit sliver-swap.service, which conflicts with
     every bar owner (tiny-dfr, sliverd and its socket): starting it stops the owner, and
     starting an owner (for any reason, e.g. a udev event) stops it.
@@ -21,9 +20,9 @@ How restoration is guaranteed (all of it is systemd's job, not this script's):
     through its normal udev activation.
   * In --wait mode, the death of the calling process (PDEATHSIG) or a signal ends the run early.
 
-The payload runs as the INVOKING USER (never root), with groups video+input, which
-that user already has. So the only privileges this helper hands out are "stop the bar's
-owner for at most N seconds" and an fd to the bar's backlight.
+The payload runs as the invoking user (never root), with groups video+input, which that user
+already has. The helper hands out only "stop the bar's owner for at most N seconds" and an fd to
+the bar's backlight.
 """
 
 from __future__ import annotations
@@ -61,13 +60,10 @@ class Mode:
 
     user: bool  # True: talk to the *user* systemd manager (tests). Never touches hardware.
     target: str = "tiny-dfr.service"  # the daemon to restore (picked at run time from owners)
-    # Every unit that can own the bar. A run conflicts with all of them and restores whichever
-    # was active when it started (tiny-dfr if none). Restore targets are validated against this.
+    # Every unit that can own the bar. Restore targets are validated against this.
     owners: list[str] = field(default_factory=lambda: ["tiny-dfr.service", "sliverd.service"])
-    # Units that can start an owner behind our back. sliverd is socket-activated: during a run the
-    # user's sliver-agent reconnects to /run/sliver/sliverd.sock, which would start sliverd.service,
-    # whose Conflicts= with the run would end it. So a run conflicts with these too, and restoring
-    # an owner brings its activators back.
+    # Units that can start an owner: during a run the user's sliver-agent reconnects to
+    # /run/sliver/sliverd.sock, which would start sliverd.service, whose Conflicts= would end the run.
     activators: dict[str, list[str]] = field(default_factory=lambda: {"sliverd.service": ["sliverd.socket"]})
     run_unit: str = "sliver-swap.service"
     timer_name: str = "sliver-swap-restore"
@@ -76,7 +72,6 @@ class Mode:
     allow_script: bool = False  # user mode only: payload may be a #! script
 
     def blockers(self) -> list[str]:
-        """Everything a run must stop and keep stopped: the owners and their activators."""
         return [*self.owners, *(a for o in self.owners for a in self.activators.get(o, []))]
 
     def systemctl(self) -> list[str]:
@@ -102,9 +97,6 @@ def log(msg: str) -> None:
 
 def sh(cmd: list[str], check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=check, text=True, capture_output=capture)
-
-
-# --------------------------------------------------------------------------- discovery
 
 
 def find_bar_backlight(sysfs: Path = Path("/sys/class/backlight")) -> Path:
@@ -135,9 +127,6 @@ def invoking_uid(mode: Mode, env: dict[str, str] | None = None) -> int:
                 raise SwapError("refusing to run the payload as root; invoke as your user via pkexec")
             return uid
     raise SwapError("can't tell who invoked me (no PKEXEC_UID/SUDO_UID); use pkexec")
-
-
-# --------------------------------------------------------------------------- validation
 
 
 def validate_seconds(seconds: int) -> int:
@@ -171,9 +160,6 @@ def validate_args(args: list[str]) -> list[str]:
     return args
 
 
-# --------------------------------------------------------------------------- unit building
-
-
 def run_unit_props(
     mode: Mode,
     seconds: int,
@@ -182,13 +168,11 @@ def run_unit_props(
     card: Path | None,
     backlight: Path | None,
 ) -> list[str]:
-    """systemd-run -p properties for the payload unit. Pure, so it's unit-tested."""
     log_file = out_dir / "sliverd.log"
     p = [
         "Type=exec",
         f"Description=sliver safe-swap run ({seconds}s, restores {mode.target})",
-        # Conflicts with every bar owner; After= so the owner fully stops (releasing DRM master)
-        # before we start.
+        # After= so the owner has released DRM master before the payload starts.
         *[f"Conflicts={u}" for u in mode.blockers()],
         *[f"After={u}" for u in mode.owners],
         f"RuntimeMaxSec={seconds}",
@@ -256,9 +240,6 @@ def restore_timer_cmd(mode: Mode, seconds: int) -> list[str]:
     ]
 
 
-# --------------------------------------------------------------------------- unit state
-
-
 def unit_state(mode: Mode, unit: str) -> dict[str, str]:
     r = sh(
         mode.systemctl() + ["show", unit, "-p", "LoadState,ActiveState,SubState,Result,ExecMainStatus"],
@@ -276,11 +257,8 @@ def is_live(state: dict[str, str]) -> bool:
     return state.get("ActiveState") in ("active", "activating", "deactivating", "reloading")
 
 
-# --------------------------------------------------------------------------- commands
-
-
 def cmd_restore(mode: Mode, reason: str) -> int:
-    """Idempotent: end any run, cancel the timer, bring the target back."""
+    """Idempotent."""
     log(f"restore ({reason}): bringing back {mode.target}")
     sc = mode.systemctl()
     if reason != "stop-post":
@@ -298,9 +276,9 @@ def cmd_restore(mode: Mode, reason: str) -> int:
 
 
 def record_target(mode: Mode) -> None:
-    """Remember who owned the bar, for `stop` and a manual `restore` (the unit's own ExecStopPost
-    and the timer pass --restore-to). Without this they defaulted to tiny-dfr and raced the
-    ExecStopPost restoring sliverd: tiny-dfr won (its ExecStartPre stops sliverd)."""
+    """Read by `stop` and a manual `restore`; ExecStopPost and the timer pass --restore-to. Restoring
+    tiny-dfr by default would race an ExecStopPost restoring sliverd, and tiny-dfr's ExecStartPre
+    stops sliverd."""
     (mode.state_dir / "target").write_text(mode.target + "\n")
 
 
@@ -313,13 +291,12 @@ def recorded_target(mode: Mode) -> str | None:
 
 
 def restore_units(mode: Mode) -> list[str]:
-    """The target plus its activators (sliverd.service -> also sliverd.socket)."""
     return [mode.target, *mode.activators.get(mode.target, [])]
 
 
 def stop_refusal(mode: Mode, by: int | None) -> str | None:
-    """Why `stop` must not end this run: someone else started it and is still there (another
-    session's stop must not end a guided check). `bar` passes the caller's pid; --any overrides."""
+    """Why `stop` must not end this run: another process that is still alive started it (e.g. a
+    guided check). `bar` passes the caller's pid."""
     try:
         starter = int((mode.state_dir / "started-by").read_text())
     except (OSError, ValueError):
@@ -341,8 +318,7 @@ def cmd_stop(mode: Mode) -> int:
 
 
 def pick_owner(mode: Mode) -> str:
-    """The bar owner to restore after a run: whichever is active now (a live activator counts,
-    e.g. sliverd.socket waiting for its first agent), else the first (tiny-dfr)."""
+    """A live activator counts, e.g. sliverd.socket waiting for its first agent."""
     for u in mode.owners:
         if any(is_live(unit_state(mode, x)) for x in (u, *mode.activators.get(u, []))):
             return u
@@ -447,9 +423,9 @@ def cmd_run(mode: Mode, binary: str, seconds: int, wait: bool, extra: list[str],
         backlight = find_bar_backlight()
     staged = stage_binary(mode, src, bin_dir)
 
-    # 1. Dead-man timer FIRST, so there's no window where a run exists without it.
+    # The restore timer starts first, so no run exists without it.
     sh(restore_timer_cmd(mode, seconds), capture=True)
-    # 2. The payload. Conflicts= stops tiny-dfr in the same transaction.
+    # Conflicts= stops the owner in the same transaction.
     props = run_unit_props(mode, seconds, uid, out_dir, card, backlight)
     cmd = mode.systemd_run() + ["--quiet", f"--unit={mode.run_unit}"]
     for prop in props:
@@ -465,9 +441,6 @@ def cmd_run(mode: Mode, binary: str, seconds: int, wait: bool, extra: list[str],
     if wait:
         return wait_for_end(mode, out_dir)
     return 0
-
-
-# --------------------------------------------------------------------------- snap (DRM screenshot)
 
 
 def _iowr(nr: int, size: int) -> int:
@@ -494,7 +467,7 @@ def portrait_to_landscape(buf: bytes, pitch: int, vis_w: int, h: int) -> list[by
     """XRGB8888 portrait scanout (vis_w x h) -> RGB rows of the landscape bar (h x vis_w).
 
     tiny-dfr draws with translate(vis_w, 0) + rotate(90deg): landscape (lx, ly) lands at
-    fb (x = vis_w - 1 - ly, y = lx). We invert that.
+    fb (x = vis_w - 1 - ly, y = lx).
     """
     rows = []
     for ly in range(vis_w):
@@ -520,8 +493,8 @@ def png_rgb(rows: list[bytes], width: int) -> bytes:
 def cmd_snap(mode: Mode) -> int:
     """Read the bar's current scanout buffer (needs root: GETFB2 handles need CAP_SYS_ADMIN).
 
-    Never modesets. Opening a card with no master would make us master, so refuse when
-    neither tiny-dfr nor a run is active, and drop master immediately just in case.
+    Never modesets. Opening a card with no master makes the opener master, so it refuses when no
+    owner or run is active, and drops master at once.
     """
     if mode.user:
         raise SwapError("snap needs the real card; not available in --user-mode")
@@ -583,9 +556,6 @@ def cmd_snap(mode: Mode) -> int:
     return 0
 
 
-# --------------------------------------------------------------------------- main
-
-
 def build_mode(ns: argparse.Namespace) -> Mode:
     if not ns.user_mode:
         if ns.target or ns.alt_target or ns.state_dir or ns.allow_script:
@@ -626,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("snap", help="PNG of the bar's current contents to stdout")
     argv = list(sys.argv[1:] if argv is None else argv)
     extra: list[str] = []
-    if "--" in argv:  # everything after -- goes to the payload untouched
+    if "--" in argv:
         i = argv.index("--")
         argv, extra = argv[:i], argv[i + 1 :]
     ns = ap.parse_args(argv)
@@ -637,7 +607,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise SwapError(f"--restore-to must be one of {mode.owners}")
             mode.target = ns.restore_to
         elif ns.cmd in ("stop", "restore"):
-            # Give the bar back to whoever had it before the last run.
             mode.target = recorded_target(mode) or mode.target
         if ns.cmd == "run":
             return cmd_run(mode, ns.binary, ns.seconds, ns.wait, extra, ns.by)

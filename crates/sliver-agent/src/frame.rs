@@ -29,21 +29,19 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// The cell index for a region id of this frame.
     pub fn cell_index(&self, id: u32) -> Option<usize> {
         let i = id.checked_sub(self.id_base + 1)? as usize;
         (i < self.cells.len()).then_some(i)
     }
 
-    /// Is `id` one of the [`Frame::background`] regions?
     pub fn is_background(&self, id: u32) -> bool {
         let first = self.id_base + self.cells.len() as u32 + 1;
         (first..first + self.background).contains(&id)
     }
 
     /// Gives the empty stretches between the cells' regions agent regions of their own, so bar
-    /// gestures work over empty space too. Regions may not overlap, so these fill the gaps
-    /// rather than lying under everything. Skipped if they'd pass sliverd's region limit.
+    /// gestures work over empty space too. sliverd regions may not overlap. Skipped if they'd
+    /// pass sliverd's region limit.
     pub fn fill_gaps(&mut self) {
         let (w, h) = (self.image.width(), self.image.height());
         let mut spans: Vec<(u32, u32)> = self

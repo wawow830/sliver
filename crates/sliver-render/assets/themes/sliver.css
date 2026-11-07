@@ -1,5 +1,4 @@
-/* sliver: the default theme. The macOS Touch Bar look, with your desktop's accent color on
-   active toggles and sliders. The agent sets @accent from the desktop; override it with
+/* sliver: the default theme. The agent sets @accent from the desktop; override it with
    @define-color accent …; in your own style.css. */
 
 bar {
@@ -28,8 +27,7 @@ module {
 }
 
 module:active { background-color: #636366; }
-/* Like macOS: the press shows at once, the release fades (frames only while it fades), and
-   boxes glide when the layout changes (a collapsed slider opening). */
+/* The press shows at once and the release fades; widths animate when the layout changes. */
 module { transition: background-color 150ms ease-out, width 180ms ease-out; }
 module:active { transition: width 180ms ease-out; }
 module:disabled { opacity: 0.4; }

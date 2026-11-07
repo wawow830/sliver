@@ -1,4 +1,4 @@
-//! Bisecting idle wakeups (invariant 3): starts the chosen session sources on the buses named by
+//! Bisecting idle wakeups: starts the chosen session sources on the buses named by
 //! DBUS_SESSION_BUS_ADDRESS / DBUS_SYSTEM_BUS_ADDRESS, sleeps, and prints each thread's voluntary
 //! context switches (sleeps after a wakeup) per second. Not run by tests.
 //!

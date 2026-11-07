@@ -7,22 +7,20 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Every validator runs here: one that's skipped for a missing tool fails the gate.
+  # A validator skipped for a missing tool fails the gate.
   SLIVER_CHECK_ALL: "1"
-  # The gate runs as an ordinary user, like on a developer's machine: user modules refuse to run
-  # as root, and so would their tests.
+  # Runs as an ordinary user: user modules refuse to run as root, and so do their tests.
   CARGO_HOME: /home/ci/.cargo
   RUSTUP_HOME: /home/ci/.rustup
 
 jobs:
   check:
-    # Native aarch64 on the distro sliver targets: the settings app needs GTK 4.22 and
-    # libadwaita 1.8, which Fedora 44 ships and Ubuntu doesn't.
+    # The settings app needs GTK 4.22 and libadwaita 1.8, which Fedora 44 ships and Ubuntu doesn't.
     runs-on: ubuntu-24.04-arm
     container:
       image: fedora:44
-      # An init that reaps orphans, as on a real system: tests check that killed process trees are
-      # gone, and an unreaped zombie still counts as there.
+      # An init that reaps orphans: tests check that killed process trees are gone, and an
+      # unreaped zombie still counts as present.
       options: --init
     steps:
       - name: System packages and the ci user

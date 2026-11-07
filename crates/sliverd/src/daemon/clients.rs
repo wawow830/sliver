@@ -25,8 +25,6 @@ impl Daemon {
         self.send(c, DaemonMsg::Ping { nonce });
     }
 
-    // ---- connections --------------------------------------------------------------------------
-
     pub(super) fn connected(&mut self, client: ClientId, uid: u32) {
         if self.clients.len() >= MAX_CLIENTS {
             self.out.push(Out::Close(client));

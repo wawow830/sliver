@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # The sway backend against a real, headless sway (WLR_BACKENDS=headless): the window list and
 # focus follow two real clients, and the taskbar/workspace actions (control.rs) really move
-# focus, switch workspace and close a window. A private runtime dir and no outputs of its own:
-# the live session is never touched.
+# focus, switch workspace and close a window. A private runtime dir and no outputs of its own.
 #
-# Needs sway + foot. Not installed on the dev machine? Without root:
+# Needs sway + foot. Without root:
 #     dnf download --resolve --destdir /tmp/rpms sway foot
 #     for f in /tmp/rpms/{sway-1,wlroots0,foot-1,libliftoff}*.rpm; do rpm2cpio $f | (cd /tmp/root && cpio -idm); done
 #     SLIVER_TEST_ROOT=/tmp/root integration/sway/test.sh

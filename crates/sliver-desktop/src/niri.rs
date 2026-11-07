@@ -5,8 +5,8 @@
 //! `KeyboardLayoutsChanged`, ...), so no separate snapshot is needed. Every event is folded
 //! into a [`Model`] and the [`DesktopState`] is derived from it.
 //!
-//! Written from the `niri-ipc` documentation and tested against a fake server; not yet run
-//! against a real niri (none installed on the dev machine). Unknown events are ignored.
+//! Written from the `niri-ipc` documentation and tested against a fake server, not against a real
+//! niri. Unknown events are ignored.
 //! Niri has no per-window fullscreen flag in the event stream, so `fullscreen` stays false.
 
 use crate::{Backend, DesktopSource, DesktopState, Window, Workspace};

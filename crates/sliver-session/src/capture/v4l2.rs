@@ -2,10 +2,10 @@
 //! FaceTime camera isn't behind PipeWire): PipeWire never sees it, so we ask who holds a
 //! `/dev/video*` node open.
 //!
-//! Event-driven: inotify `IN_OPEN`/`IN_CLOSE` on each node, and on `/dev` itself for nodes that
-//! come and go. After an event (and a short settle, so a udev probe opening and closing the node
-//! in a few milliseconds is not a camera in use) `/proc/*/fd` is scanned for links to the nodes.
-//! Nothing runs between events. Our own scan only reads symlinks, which never opens the device.
+//! inotify `IN_OPEN`/`IN_CLOSE` on each node, and on `/dev` itself for nodes that come and go.
+//! After an event and a short settle (a udev probe opens and closes the node within a few
+//! milliseconds), `/proc/*/fd` is scanned for links to the nodes. Reading those symlinks never
+//! opens the device.
 //!
 //! What is excluded: PipeWire and WirePlumber (they hold nodes while enumerating and while
 //! streaming; real PipeWire camera use is counted through its stream nodes), and udev's probes.

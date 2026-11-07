@@ -83,11 +83,8 @@ impl Fonts {
     /// Unload every font cosmic-text has loaded, keeping the database (so font ids, and the
     /// shaped labels that refer to them, stay valid).
     ///
-    /// cosmic-text keeps each font it ever touched, mapped and with its shaping data, for the
-    /// life of the `FontSystem`. That's normally a handful. But a glyph that's in none of the
-    /// fallback fonts makes it try every font on the system, which is hundreds on a desktop, and
-    /// they all stay loaded: tens of MB of heap, and the pages they touched, for one odd
-    /// character in a song title. Drawing loads back only the fonts that are actually used.
+    /// cosmic-text keeps each font it touched loaded, with its shaping data, for the life of the
+    /// `FontSystem`, and a glyph in none of the fallback fonts makes it try every system font.
     pub(crate) fn trim_loaded_fonts(&mut self) {
         let empty = FontSystem::new_with_locale_and_db(String::new(), fontdb::Database::new());
         let (locale, db) = std::mem::replace(&mut self.system, empty).into_locale_and_db();

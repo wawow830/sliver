@@ -9,7 +9,7 @@
 //!   and icon.
 //!
 //! It only locates files (path, kind, nominal size); rasterising SVG/PNG is the renderer's job.
-//! Everything takes injectable search paths, so tests use fixture directories.
+//! Search paths are injectable.
 
 pub mod desktop;
 mod ini;

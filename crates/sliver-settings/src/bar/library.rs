@@ -2,9 +2,8 @@
 
 use super::*;
 
-/// The Library as a palette under the preview, like macOS's Touch Bar customization: drag an item
-/// onto the bar (the page's drag gesture), or click to add it at the end of the main zone (or the
-/// last zone).
+/// A palette under the preview: drag an item onto the bar (the page's drag gesture), or click to
+/// add it at the end of the main zone (or the last zone).
 pub(super) fn palette(ui: &Rc<Ui>, shown_layout: &Rc<RefCell<String>>) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row.set_margin_bottom(10);

@@ -4,9 +4,8 @@
     python3 examples/python/pomodoro.py
 
 It publishes a `status` context (it shows up in the user's "Status items"), updates its label
-every second, and reacts to taps. If sliver-agent restarts, it publishes again, like every good
-client should. Customize it like any module:
-`app/org.example.Pomodoro#timer` in your config and stylesheet.
+every second, and reacts to taps. If sliver-agent restarts, it publishes again. Customize it like
+any module: `app/org.example.Pomodoro#timer` in your config and stylesheet.
 """
 
 import gi

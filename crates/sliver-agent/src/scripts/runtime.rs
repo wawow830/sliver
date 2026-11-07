@@ -1,6 +1,6 @@
 //! The scheduler: one thread per module that has a command, each asleep on a channel until its
-//! deadline, a trigger or a signal. Nothing polls; an inactive runtime (display off, screen
-//! locked) has no timers armed at all.
+//! deadline, a trigger or a signal. An inactive runtime (display off, screen locked) has no
+//! timers armed.
 
 use super::output::{Output, parse_json, parse_text};
 use super::proc::{self, RunResult};

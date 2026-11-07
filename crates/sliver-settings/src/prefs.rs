@@ -1,5 +1,5 @@
-//! Simple settings pages: Display & Power, Appearance, Gestures. Every control writes
-//! one config key through `apply` (validated, instant, undoable).
+//! Settings pages: Display & Power, Appearance, Gestures. Each control writes one config key
+//! through `apply`.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -241,7 +241,7 @@ const THEMES: &[(&str, &str, &str)] = &[
 ];
 
 /// One theme choice: its name, and the user's own base layer drawn in it (with their stylesheet
-/// on top), so the choice is seen rather than guessed.
+/// on top).
 fn theme_row(ui: &Rc<Ui>, id: &'static str, name: &str, what: &str, current: &str) -> gtk::Widget {
     let state = ui.state();
     let text = gtk::Box::new(gtk::Orientation::Vertical, 2);

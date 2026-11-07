@@ -1,9 +1,8 @@
 //! The module runtime: turns resolved [`ModuleInstance`]s into drawable [`Cell`]s
 //! (sliver-config(5)).
 //!
-//! Every module goes through the same path: gather values → `format_module` (waybar's
-//! format/format-icons/states engine) → content + classes. Built-ins differ only in where their
-//! values come from, so user modules get the same powers.
+//! Every module's values go through `format_module` (waybar's format/format-icons/states engine)
+//! into content and classes.
 
 use chrono::format::{Item as FmtItem, StrftimeItems};
 use chrono::{DateTime, Local, Timelike};
@@ -24,7 +23,6 @@ use crate::icons::Icons;
 /// What a touch on a cell does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Touch {
-    /// Not touchable.
     None,
     /// sliverd handles it alone: press/release these keys (key modules with only a key on tap).
     Keys(Vec<u16>),
@@ -32,8 +30,7 @@ pub enum Touch {
     Agent,
 }
 
-/// One drawable module: what it looks like (the renderer's [`sliver_render::Item`]), what touching
-/// it does, and where it came from.
+/// One drawable module.
 #[derive(Debug, Clone)]
 pub struct Cell {
     /// Stable identity across frames: the module id plus its position in groups.
@@ -46,7 +43,6 @@ pub struct Cell {
     /// `:disabled`), inline colours and the spectrum under it.
     pub look: sliver_render::Item,
     pub touch: Touch,
-    /// Gesture bindings, for the agent's recognizer.
     pub on: Vec<(Gesture, Do)>,
     /// This cell is the handle of a drawer group: tapping it opens/closes the group.
     pub drawer: Option<Drawer>,
@@ -82,12 +78,10 @@ impl Cell {
         }
     }
 
-    /// The binding for gesture `g`, if any.
     pub fn binding(&self, g: Gesture) -> Option<&Do> {
         self.on.iter().find(|(x, _)| *x == g).map(|(_, d)| d)
     }
 
-    /// A tap here does `d` (handled by the agent).
     pub(crate) fn tapped(mut self, d: impl Into<Do>) -> Cell {
         self.on = vec![(Gesture::Tap, d.into())];
         self.touch = Touch::Agent;
@@ -115,8 +109,7 @@ pub enum Opens {
     Slider,
 }
 
-/// What building cells takes besides the modules: the world they show, where icons come from
-/// and the size they're looked up at, and each cell's agent-side state (by key).
+/// `ui` gives each cell's agent-side state, by cell key.
 pub struct Build<'a> {
     pub world: &'a World,
     pub icons: &'a mut Icons,
@@ -136,7 +129,6 @@ fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut V
             "group" => group_cells(m, &key, b, out),
             "app-controls" | "status-items" => placeholder_cells(m, &key, prefix, b, out),
             // A published item (or a whole context) placed by the layout: `app/<provider>#<item>`.
-            // It's styled, bound and formatted like any module.
             "app" => pinned_app(m, &key, b, out),
             "emoji" if m.get("mode").and_then(|v| v.as_str()) == Some("strip") => {
                 emoji_strip(m, &key, b.world, &(b.ui)(&key).emoji, out)

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Guided hardware checks: the human starts one when convenient and is walked through it.
+"""Guided hardware checks: walks the human through each step.
 
     harness/checks/hwcheck                 # list the checks
     harness/checks/hwcheck NAME [NAME...]  # run them; results go to target/hw/checks/
 
-A check (harness/checks/NAME.toml) can build release binaries, do a bounded safe-swap run with
-an agent, and then go step by step: tell the human what to do at the moment it matters, check
-the daemon log by itself, save bar snapshots, and ask short questions. Results go to
-target/hw/checks/<stamp>/result.txt.
+A check (harness/checks/NAME.toml) can build release binaries and do a bounded safe-swap run with
+an agent; its steps tell the human what to do, match the daemon log, save bar snapshots and ask
+questions. Results go to target/hw/checks/<stamp>/result.txt.
 
 Step fields, run in this order: say, confirm, shell, resume, wait, expect, snap, ask, collect.
 """
@@ -67,7 +66,6 @@ def enter(text="Enter when ready"):
     prompt(text)
 
 
-# ---- the bounded run -------------------------------------------------------------------------
 
 class Run:
     def __init__(self, spec, dest):
@@ -155,7 +153,6 @@ def clock_gap():
     return time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)
 
 
-# ---- steps -----------------------------------------------------------------------------------
 
 def run_step(st, run, dest, results):
     if "say" in st:
@@ -236,7 +233,6 @@ def run_check(name, dest):
 
 
 def check_path(name):
-    """A name in harness/checks/, or a path to a .toml (tests, drafts)."""
     return Path(name) if name.endswith(".toml") else HERE / f"{name}.toml"
 
 

@@ -323,8 +323,6 @@ pub(super) fn draw_graph(
 /// Natural spacing of `Bars`, per level.
 pub(super) const BAR_PITCH: f32 = 12.0;
 
-/// One bar per level across `r`, each half its slot wide with round ends, centred on the middle
-/// line and at least as tall as it is wide.
 /// Where and how an item's spectrum is drawn: in `color`, except bars left of `played`'s x,
 /// which take its colour (a slider's part up to its value).
 #[derive(Clone, Copy)]
@@ -334,6 +332,8 @@ pub(super) struct Bars {
     pub(super) played: Option<(f32, Color)>,
 }
 
+/// One bar per level across `r`, each half its slot wide with round ends, centred on the middle
+/// line and at least as tall as it is wide.
 pub(super) fn draw_bars(pixmap: &mut Pixmap, r: Rect, levels: &[f32], color: Color) {
     draw_bars_split(pixmap, r, levels, color, None);
 }
@@ -548,7 +548,6 @@ pub(super) fn draw_icon_in(
     );
 }
 
-/// Source-over blends a glyph image into the premultiplied RGBA pixmap.
 /// Source-over a premultiplied colour bitmap at `origin` (+ its own offset), scaled by `alpha`.
 pub(super) fn blit_color(
     pixmap: &mut Pixmap,
@@ -643,6 +642,7 @@ pub(super) fn draw_decorations(
     }
 }
 
+/// Source-over blends a glyph image into the premultiplied RGBA pixmap.
 pub(super) fn blend_glyph(
     pixmap: &mut Pixmap,
     origin: (i32, i32),

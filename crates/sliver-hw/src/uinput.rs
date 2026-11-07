@@ -2,8 +2,7 @@
 //! it refuses outside the harness ([`crate::require_harness`]).
 //!
 //! Every emittable key is registered up front (KEY_ESC..KEY_MAX minus the BTN_* ranges, so udev
-//! doesn't classify us as a mouse/joystick), so config changes never need a new device (tiny-dfr
-//! 0.3.7 had that bug).
+//! doesn't classify us as a mouse/joystick), so config changes never need a new device.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};

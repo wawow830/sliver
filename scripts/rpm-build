@@ -24,15 +24,14 @@ done
 
 name=sliver
 version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-# date.commitcount.githash: the count keeps same-day builds increasing for `dnf upgrade` (the hash
-# alone compares alphabetically).
+# date.commitcount.githash: the count keeps same-day builds increasing for `dnf upgrade`.
 snapshot="$(date -u +%Y%m%d).$(git rev-list --count HEAD).git$(git rev-parse --short HEAD)"
 top="$PWD/target/rpmbuild"
 mkdir -p "$top"/{SOURCES,SPECS,SRPMS,RPMS,BUILD}
 
 echo "== source tarball ($name-$version, $snapshot)"
-# Tracked + untracked-but-not-ignored files, as they are on disk (uncommitted work included), with
-# their own mtimes so a local rebuild's cargo sees what changed.
+# Files as on disk (uncommitted work included), with their mtimes so a local rebuild's cargo sees
+# what changed.
 git ls-files -co --exclude-standard | while IFS= read -r f; do [[ -e "$f" ]] && printf '%s\0' "$f"; done \
   | tar --null -T - --sort=name --owner=0 --group=0 --numeric-owner \
         --transform "s,^,$name-$version/," -czf "$top/SOURCES/$name-$version.tar.gz"
@@ -44,9 +43,8 @@ cargo vendor --locked --quiet "$vdir/vendor" >/dev/null
 tar -C "$vdir" -cJf "$top/SOURCES/$name-$version-vendor.tar.xz" vendor
 
 packaging/rpm/spec.py > "$top/SPECS/sliver.spec"
-# Cap the jobs: rpmbuild otherwise passes -j$(nproc) to cargo (%cargo_build/%cargo_test use
-# RPM_BUILD_NCPUS), which ignores the peers' cargo jobs cap and swapped this 7.3 GB machine hard.
-# Local builds only: the SRPM carries no such define, so COPR/mock builds are unaffected.
+# rpmbuild otherwise passes -j$(nproc) to cargo (%cargo_build/%cargo_test use RPM_BUILD_NCPUS).
+# The SRPM carries no such define, so COPR/mock builds are unaffected.
 jobs=${SLIVER_RPM_JOBS:-3}
 common=(--define "_topdir $top" --define "snapshot $snapshot" --define "_smp_build_ncpus $jobs")
 
@@ -55,9 +53,8 @@ rpmbuild "${common[@]}" -bs "$top/SPECS/sliver.spec"
 
 if (( binary )); then
   echo "== rpms"
-  # Local builds keep cargo's output between runs: the vendored crates unpack to the same path
-  # each time and cargo knows them by version, so they compile once, and sliver's own sources
-  # keep their mtimes, so only what changed rebuilds. The spec installs from $CARGO_TARGET_DIR.
+  # Reused between local builds: vendored crates unpack to the same path and sources keep their
+  # mtimes, so only what changed rebuilds. The spec installs from $CARGO_TARGET_DIR.
   export CARGO_TARGET_DIR="$PWD/target/rpm-cache"
   rpmbuild "${common[@]}" "${rpmargs[@]}" -bb "$top/SPECS/sliver.spec"
   ls -1 "$top"/RPMS/*/*.rpm

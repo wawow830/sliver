@@ -2,8 +2,8 @@
 //! touch phases with sliverd's timestamps (µs, monotonic) and call [`Recognizer::tick`] at
 //! [`Recognizer::next_deadline`].
 //!
-//! Only the gestures a module actually binds are recognized, so an unbound gesture never delays
-//! another: no hold binding → no hold timer; no double-tap binding → taps fire at once.
+//! Only bound gestures are recognized: no hold binding means no hold timer, and without a
+//! double-tap binding taps fire at once.
 
 use std::collections::HashMap;
 
@@ -49,8 +49,7 @@ impl BarGesture {
     ];
 }
 
-/// Which bar gestures are bound, and the bar's width (for the edges). Unbound ones cost
-/// nothing: single-finger gestures behave exactly as without them.
+/// Which bar gestures are bound, and the bar's width (for the edges).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct BarBindings {
     pub two_finger: bool,

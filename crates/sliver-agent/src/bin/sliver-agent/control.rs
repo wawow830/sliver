@@ -2,9 +2,8 @@
 
 use super::*;
 
-/// A `Control1` request from D-Bus (sliverctl and friends). The agent answers what's its own
-/// ([`Driver::control`]); what needs the config files or the module processes is answered here.
-/// Changes reach the agent as `inputs`.
+/// Answers what [`Driver::control`] can't: requests that need the config files or the module
+/// processes. Changes reach the agent as `inputs`.
 pub(super) fn control(
     driver: &mut Driver,
     live: &mut Live,
@@ -18,7 +17,7 @@ pub(super) fn control(
         Ok(reply) => return reply,
         Err(req) => req,
     };
-    // Reloads now; the agent gets what loaded, the caller what didn't.
+    // The agent gets what loaded, the caller what didn't.
     fn reload(reloader: &mut Reloader, live: &mut Live, inputs: &mut Vec<Input>) -> Vec<String> {
         let (applied, errors) = reloader.reload(live);
         inputs.extend(applied.map(Input::Config));
@@ -54,7 +53,6 @@ pub(super) fn control(
             if errors.is_empty() {
                 Ok(ControlReply::Done)
             } else {
-                // Keep the profile that works, and say why the new one didn't.
                 let _ = sliver_config::profile::set_active(&before);
                 reload(reloader, live, inputs);
                 Err(format!(
@@ -68,9 +66,8 @@ pub(super) fn control(
     }
 }
 
-/// The `Control1` properties while connected to sliverd. `Healthy`: connected and
-/// driving the bar (sliverd's active agent, not standby for another seat user); problems with
-/// the config, stylesheet or modules are `Errors`.
+/// The `Control1` properties while connected to sliverd. `Healthy` means sliverd's active agent,
+/// not standby for another seat user; config, stylesheet and module problems are `Errors`.
 pub(super) fn control_state(agent: &Agent, reloader: &Reloader, role: Role) -> ControlState {
     let (active_layout, rule, active_rule_name, source) = agent.active_layout().unwrap_or_default();
     ControlState {

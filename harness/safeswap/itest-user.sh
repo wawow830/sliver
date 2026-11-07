@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Integration test of sliver-safeswap's restore guarantees against the *user* systemd
 # manager, with a fake "tiny-dfr" (sleep infinity). No root, no hardware. ~40 s.
-# Not part of scripts/check (needs a systemd user session). Run it after changing the helper:
+# Not part of scripts/check (needs a systemd user session):
 #   harness/safeswap/itest-user.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -146,8 +146,7 @@ ss stop 2>/dev/null
 wait_restored 8 || fail "stop after double-run check"
 ok "concurrent runs refused"
 
-# 10. sliverd owns the bar (installed packaging): the run must stop it and bring IT back,
-#     not tiny-dfr.
+# 10. sliverd owns the bar (installed packaging): the run stops it and brings it back.
 sc start "$ALT" # Conflicts= stops the fake tiny-dfr
 sleep 0.3
 active "$TARGET" && fail "fake sliverd didn't displace fake tiny-dfr"

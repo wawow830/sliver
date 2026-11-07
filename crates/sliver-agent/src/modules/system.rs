@@ -131,7 +131,7 @@ pub(super) fn network(m: &ModuleInstance, world: &World) -> Option<Spec> {
     };
     let essid = n.ssid.clone().unwrap_or_else(|| n.name.clone());
     // Throughput is only sampled when the module has an explicit `interval`, so a
-    // plain network cell still never wakes the bar.
+    // plain network cell never wakes the bar.
     let polled = matches!(m.common.interval, Some(sliver_config::Interval::Every(_)));
     let (rates, hist) = if polled {
         let s = &world.stats;

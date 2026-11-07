@@ -376,7 +376,6 @@ fn export_preset(ui: &Rc<Ui>) {
     });
 }
 
-/// Shows everything the preset would run and installs it only after a choice.
 /// A free profile name from a preset's name: `My desk` → `my-desk`, then `my-desk-2`, ….
 fn profile_name_for(preset_name: &str) -> String {
     let mut base: String = preset_name
@@ -414,7 +413,7 @@ fn profile_name_for(preset_name: &str) -> String {
 }
 
 /// Shows everything the preset would run and installs it only after a choice. By
-/// default it becomes a new profile, so trying one never overwrites your setup.
+/// default it becomes a new profile.
 fn review_preset(ui: &Rc<Ui>, b: Bundle) {
     let runs = b.runs();
     let name = b.name.clone().unwrap_or_else(|| "this preset".into());

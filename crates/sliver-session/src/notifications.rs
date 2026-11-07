@@ -1,10 +1,10 @@
 //! Notifications: how many are on screen, and whether Do Not Disturb is on.
 //!
-//! The spec (`org.freedesktop.Notifications`) has neither a list nor DND, and we must not
-//! become the notification server. So the count comes from **bus monitoring**
-//! (`BecomeMonitor`, allowed for a user on their own session bus): `Notify` calls, the server's
-//! replies (which carry the id) and `NotificationClosed` signals feed a [`Counter`]. Only the
-//! `replaces_id` argument of `Notify` is read; summaries and bodies are dropped unread.
+//! The spec (`org.freedesktop.Notifications`) has neither a list nor DND, and sliver must not
+//! become the notification server, so the count comes from bus monitoring (`BecomeMonitor`,
+//! allowed for a user on their own session bus): `Notify` calls, the server's replies (which
+//! carry the id) and `NotificationClosed` signals feed a [`Counter`]. Of `Notify` only
+//! `replaces_id`, the app name and the summary are kept; the body is dropped unread.
 //!
 //! "Count" means notifications the server currently has open, not unread history.
 //!
@@ -41,7 +41,7 @@ pub struct Latest {
 /// Summaries are cut to this many characters: a long one is no use on a 60 px bar.
 const MAX_SUMMARY: usize = 120;
 
-/// Pure bookkeeping, separate from D-Bus so it is exhaustively testable.
+/// Notification bookkeeping, without D-Bus.
 #[derive(Debug, Default)]
 pub struct Counter {
     /// `Notify` calls awaiting their reply, keyed by (caller unique name, call serial).
@@ -56,7 +56,6 @@ impl Counter {
         self.open.len() as u32
     }
 
-    /// The newest open notification.
     pub fn latest(&self) -> Option<Latest> {
         let id = *self.order.last()?;
         let (app, summary) = self.open.get(&id)?;
@@ -309,8 +308,6 @@ impl Handle {
         r
     }
 
-    /// Start tracking notifications.
-    ///
     /// `monitor` must be a **fresh** connection to the session bus: it is turned into a
     /// monitor (receive-only) and consumed. `query` is an ordinary session connection used to
     /// read DND.

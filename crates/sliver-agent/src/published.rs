@@ -164,7 +164,7 @@ const SPACER_LARGE: f32 = 64.0;
 
 /// Which published item (zone index, context, unit) gives way next: in an overflowing zone, the
 /// lowest-priority published item, if its priority is below another cell's there (built-in
-/// modules count as 0). All-equal priorities never drop anything; they squeeze as before.
+/// modules count as 0). All-equal priorities never drop anything; the cells squeeze instead.
 pub fn overflow_victim(
     zones: &[Vec<Cell>],
     overflow: &[bool],
@@ -334,8 +334,8 @@ fn push(
     if !item.visible {
         return;
     }
-    // `icon-data` is PNG, JPEG or SVG bytes. An `image` item's picture is kept at
-    // most 120 px tall; it fills the cell instead of sitting at icon size.
+    // `icon-data` is PNG, JPEG or SVG bytes. An `image` item's picture fills the cell instead
+    // of sitting at icon size.
     let picture = match (&item.kind, &item.icon_data, &item.icon) {
         (ItemKind::Image, Some(data), _) => icons.from_bytes(data, Some(IMAGE_MAX_HEIGHT)),
         (ItemKind::Image, None, Some(name)) => icons.image(name, IMAGE_MAX_HEIGHT),
@@ -458,7 +458,7 @@ fn push(
             value,
             indeterminate,
         } => {
-            // No idle animations (power invariant): indeterminate is a full track with the
+            // Indeterminate progress doesn't animate: it's a full track with the
             // `indeterminate` class, which themes draw muted.
             let mut c = base(
                 Content::Slider {

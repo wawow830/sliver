@@ -1,9 +1,8 @@
-//! The public D-Bus API (`sliver_api`) inside the agent: serving it, and the
-//! [`Host`] side that lets D-Bus handlers reach the single-threaded agent core.
+//! Serving the public D-Bus API (`sliver_api`), and the [`Host`] through which its handlers reach
+//! the agent core.
 //!
-//! zbus runs the handlers on its own executor thread. `Host::changed` only sets a flag and pokes
-//! a wake socket the main loop polls. `Host::control` hands the request to the main loop and
-//! waits (bounded) for its answer, so the core stays single-threaded.
+//! zbus runs the handlers on its own executor thread; they reach the main loop through a wake
+//! socket it polls and a request channel.
 
 use std::collections::HashSet;
 use std::io::{Read, Write};
@@ -18,7 +17,6 @@ use sliver_api::identity::RealProc;
 use sliver_api::registry::{AppPolicy, AppSource, ContextId, Focus, Policy};
 use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};
 
-/// How long a D-Bus `Control1` call waits for the agent core.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub type Reply = Result<ControlReply, String>;
@@ -28,7 +26,7 @@ struct AgentHost {
     changed: AtomicBool,
     requests: Mutex<Sender<(Control, Sender<Reply>)>>,
     state: Arc<Mutex<ControlState>>,
-    /// We own the bus name (false while a `--replace` agent has it).
+    /// False while a `--replace` agent has the bus name.
     owned: AtomicBool,
 }
 
@@ -70,7 +68,6 @@ impl Host for AgentHost {
     }
 }
 
-/// The served API, from the main loop's side.
 pub struct ApiLink {
     pub api: Api,
     host: Arc<AgentHost>,
@@ -84,7 +81,7 @@ impl ApiLink {
     /// Serves the API on the session bus as `io.github.wawow830.Sliver`. `NameTaken` if another
     /// agent owns it, unless `replace` (`--replace`).
     pub fn start(replace: bool) -> zbus::Result<ApiLink> {
-        // sliver-bus: no zbus `blocking` pool thread waking twice a second.
+        // zbus's `blocking` API runs a pool thread that wakes twice a second.
         let conn = zbus::block_on(sliver_bus::session_async())?;
         ApiLink::serve_claiming(conn, true, replace)
     }
@@ -129,8 +126,8 @@ impl ApiLink {
         self.wake_rx.as_fd()
     }
 
-    /// We own the bus name. False while another agent took it with `--replace`: then this one
-    /// stays off sliverd until the name comes back (two agents would revoke each other).
+    /// False while another agent took the name with `--replace`; this one stays off sliverd until
+    /// the name comes back, since two agents would revoke each other.
     pub fn owns_name(&self) -> bool {
         self.host.owned.load(Ordering::SeqCst)
     }
@@ -145,7 +142,6 @@ impl ApiLink {
         )
     }
 
-    /// The `Control1` properties (active layer, layers, health).
     pub fn set_control_state(&self, s: ControlState) {
         let mut cur = self.host.state.lock().unwrap_or_else(|e| e.into_inner());
         if *cur != s {
@@ -155,7 +151,7 @@ impl ApiLink {
         }
     }
 
-    /// Lost sliverd: `Healthy` goes false (the rest stays as it was) until the next state.
+    /// `Healthy` goes false, the rest stays as it was.
     pub fn set_disconnected(&self) {
         let mut s = self
             .host
@@ -169,7 +165,7 @@ impl ApiLink {
         }
     }
 
-    /// Which contexts the last frame drew (`OnScreen`). Sent only when it changes.
+    /// Which contexts the last frame drew (`OnScreen`).
     pub fn set_on_screen(&mut self, drawn: HashSet<ContextId>) {
         if drawn != self.on_screen {
             let _ = zbus::block_on(self.api.set_on_screen(&drawn));
@@ -184,8 +180,7 @@ impl ApiLink {
         }
     }
 
-    /// The user's preferences for published items (`[apps]`, `[providers]`, `[api]`). Call it at
-    /// startup and on every config reload.
+    /// The user's preferences for published items (`[apps]`, `[providers]`, `[api]`).
     pub fn set_policy(&self, policy: Policy) {
         self.api.state().policy = policy;
         self.host.changed();
@@ -196,7 +191,7 @@ impl ApiLink {
         self.api.set_focus(focus);
     }
 
-    /// Mirror: tell the holder of the layout which module the user touched.
+    /// Tells the holder of a mirrored layout which module the user touched.
     pub fn held_pressed(&self, module: &str, zone: &str, index: u32) {
         if let Err(e) = zbus::block_on(self.api.held_pressed(module, zone, index)) {
             eprintln!("sliver-agent: HeldPressed: {e}");
@@ -237,7 +232,7 @@ pub fn policy_from_config(config: &sliver_config::Config) -> Policy {
             )
         })
         .collect();
-    // The defaults every other app gets (`app_policy` of an unlisted id = `"*"` + built-ins).
+    // `app_policy` of an unlisted id is `"*"` plus built-ins.
     per_app.insert("*".into(), app(config.app_policy("*")));
     let mut ordered: Vec<(i64, &String)> = config
         .providers

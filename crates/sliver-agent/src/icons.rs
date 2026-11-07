@@ -2,8 +2,7 @@
 //! to drawable [`sliver_render::Icon`]s.
 //!
 //! Lookup order: a path (contains `/`), the XDG icon theme (sliver-icons), then sliver-render's
-//! built-in Material icons, by name or by an XDG alias. The built-ins mean the default layouts
-//! always have icons, even with no icon theme installed.
+//! built-in Material icons, by name or by an XDG alias.
 
 use std::collections::HashMap;
 

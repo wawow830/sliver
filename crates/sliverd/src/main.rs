@@ -153,7 +153,6 @@ fn main() {
     }
 }
 
-/// With `-v`/`SLIVER_LOG=debug`, every flush, key and backlight write is logged.
 fn backends(b: sliverd::backend::Backends) -> sliverd::backend::Backends {
     if sliverd::log::enabled() {
         sliverd::log::wrap(b)

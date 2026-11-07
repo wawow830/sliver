@@ -1,7 +1,4 @@
 //! The sans-IO model behind the public API: clients, contexts, items, who fills the bar, events.
-//!
-//! The zbus layer ([`crate::service`]) only translates D-Bus calls into these methods. All policy
-//! (ownership, tiers, limits, precedence, optimistic state) lives here and is unit-tested.
 
 use crate::identity::{ProcIdentity, ProcInfo};
 use crate::item::{self, Gesture, Item, ItemKind, ParseError, Prop, Props, Warnings};
@@ -135,7 +132,7 @@ impl Registry {
         self.clients.get(name)
     }
 
-    /// Register a client (idempotent). The service calls it with credentials from the bus.
+    /// Register a client (idempotent), with credentials from the bus.
     pub fn connect(&mut self, name: &str, pid: Option<u32>, identity: ProcIdentity, now: Instant) {
         self.clients
             .entry(name.to_owned())
@@ -292,7 +289,7 @@ impl Registry {
         Ok(())
     }
 
-    /// The client's connection is gone (`NameOwnerChanged`). Returns the removed contexts.
+    /// The client's connection is gone (`NameOwnerChanged`).
     pub fn client_gone(&mut self, client: &str) -> Vec<ContextId> {
         self.clients.remove(client);
         let gone: Vec<ContextId> = self

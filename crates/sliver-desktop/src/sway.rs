@@ -5,9 +5,8 @@
 //! subscribed to `window`, `workspace`, `mode`, `input`, `output`, `shutdown` events, and a
 //! fresh one per query (`GET_TREE`, `GET_WORKSPACES`, `GET_OUTPUTS`, `GET_INPUTS`).
 //!
-//! Written from the i3/sway protocol documentation and tested against a fake server; not yet
-//! run against a real sway (none installed on the dev machine). i3 itself lacks `app_id` and
-//! `pid` is only present in newer builds; the window class then comes from `window_properties`.
+//! Written from the i3/sway protocol documentation. i3 itself lacks `app_id`, and `pid` is only
+//! present in newer builds; the window class then comes from `window_properties`.
 
 use crate::{Backend, DesktopSource, DesktopState, Window, Workspace};
 use serde_json::Value;
@@ -305,8 +304,7 @@ pub fn apply_event(state: &mut DesktopState, ty: u32, body: &Value) -> (bool, Fo
                     if state.window.as_ref().is_some_and(|w| w.address == id) {
                         state.window = None; // focus moves to a sibling
                     }
-                    // Whichever window it was, it leaves the taskbar's list (found by the live
-                    // headless sway test: only the focused window's close used to refresh).
+                    // Whichever window it was, it leaves the taskbar's list.
                     follow = Followup::RefreshWindow;
                 }
                 "fullscreen_mode" | "floating" => {

@@ -5,7 +5,7 @@
     python3 tools/gen.py emoji-test.txt > data/emoji.tsv
 
 Keeps emoji up to Emoji 15.1 (MAX_VERSION): the newest additions are missing from most installed
-fonts and would draw as empty boxes. Raise it when Noto Color Emoji in the target distros catches up.
+fonts and would draw as empty boxes.
 Keeps fully-qualified emoji only, in CLDR order, without the "Component" group. Skin-tone
 variants aren't rows of their own: an emoji that has all five single-tone variants lists them in
 a fourth column (light to dark, space-separated) for the picker's tone choice. Mixed-tone

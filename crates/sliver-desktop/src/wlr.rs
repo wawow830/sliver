@@ -9,7 +9,7 @@
 //! protocols give no ids that mean anything to a second connection, so ids here are numbers this
 //! module hands out (stable while the window or workspace lives).
 //!
-//! The pure part ([`Model`]) is unit-tested; the Wayland glue is exercised by
+//! [`Model`] is unit-tested; the Wayland glue is exercised by
 //! `integration/wlroots/test.sh` against a nested, headless Hyprland.
 
 use crate::control::Action;
@@ -33,9 +33,6 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
     zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
 };
-
-// ---------------------------------------------------------------------------------------------
-// The model: plain data, no Wayland objects.
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Top {
@@ -151,9 +148,6 @@ impl Model {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Control: actions reach the watcher thread through here.
-
 type Command = Action;
 
 struct Control {
@@ -178,9 +172,6 @@ pub fn send(a: &Action) -> io::Result<()> {
         .map_err(|_| io::Error::new(io::ErrorKind::NotConnected, "the desktop watcher is gone"))?;
     (&c.wake).write_all(&[1])
 }
-
-// ---------------------------------------------------------------------------------------------
-// Wayland glue.
 
 struct App {
     model: Model,
@@ -543,7 +534,7 @@ impl DesktopSource for Watcher {
 }
 
 /// [`crate::watch`] for generic Wayland compositors. Returns `Unsupported` right away when the
-/// compositor lacks the protocol (instead of retrying forever).
+/// compositor lacks the protocol.
 pub fn watch(on_change: impl FnMut(&DesktopState) -> ControlFlow<()>) -> io::Result<()> {
     let mut first = Some(Watcher::connect()?);
     crate::watch(

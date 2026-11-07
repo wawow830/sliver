@@ -112,10 +112,8 @@ impl DrmPanel {
 
         let (w, h) = mode.size();
         // Pad the buffer width to a multiple of 64 px (tiny-dfr allocates 64x2008 for the 60 px
-        // wide panel). Found on hardware: with a 60 px (240-byte pitch) buffer the adp scanout
-        // garbled fine detail (text striped) while a CPU readback looked perfect, consistent with
-        // the hardware wanting a 64-byte-aligned stride. Only the mode width is scanned out
-        // (SRC_W/CRTC_W below).
+        // wide panel): with a 60 px (240-byte pitch) buffer the adp scanout stripes fine detail
+        // while a CPU readback is correct. Only the mode width is scanned out (SRC_W/CRTC_W below).
         let mut db =
             card.create_dumb_buffer((padded_width(w).into(), h.into()), DrmFourcc::Xrgb8888, 32)?;
         let stride = db.pitch() as usize;

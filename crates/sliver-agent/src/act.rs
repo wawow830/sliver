@@ -1,11 +1,9 @@
 //! What a gesture on a cell does, decided when the cell is built.
 //!
-//! Config bindings are [`Action`]s. A module's own behaviour is a set of named verbs (`set`,
-//! `toggle-mute`, `next`), which its default bindings, `actions = { on-hold = "…" }` and
-//! `{ module-action = "…" }` all name, so a user can rebind anything a module does. Both resolve
-//! here, once, to a [`Do`]: a config action, or an [`Act`] that carries everything it needs
-//! (which player, which window, which level). Nothing is spelled into a string and parsed back
-//! when it fires.
+//! A module's behaviour is a set of named verbs (`set`, `toggle-mute`, `next`), named by its
+//! default bindings, `actions = { on-hold = "…" }` and `{ module-action = "…" }`. Config
+//! [`Action`]s and verbs resolve to a [`Do`]: a config action, or an [`Act`] carrying what it needs
+//! (which player, which window, which level).
 
 use std::time::Duration;
 
@@ -13,10 +11,8 @@ use sliver_config::Action;
 
 use crate::agent::SessionOp;
 
-/// What a binding does.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Do {
-    /// A config action.
     Run(Action),
     /// Something only the agent can do.
     Agent(Act),
@@ -24,27 +20,36 @@ pub enum Do {
     Steps(Vec<Do>),
 }
 
-/// The agent's own operations.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Act {
-    /// Change session state.
     Session(SessionOp),
     /// Ask the compositor (focus a workspace or window, close one, switch keyboard layout).
     Desktop(sliver_desktop::control::Action),
     /// A drag sets this level to its value (0–100).
     Set(Level),
     /// A drag seeks this player (`None`: the session's) to its value (0–100 of the track).
-    Seek { player: Option<String> },
+    Seek {
+        player: Option<String>,
+    },
     /// The agent-side state of the cell `key` changes.
-    Ui { key: String, change: UiChange },
+    Ui {
+        key: String,
+        change: UiChange,
+    },
     /// Open these entries as a sub-bar, from the cell `key` (its ✕ takes that cell's place).
-    Menu { key: String, items: Vec<MenuItem> },
+    Menu {
+        key: String,
+        items: Vec<MenuItem>,
+    },
     /// A menu entry: close the menu, then do this.
     Choose(Box<Do>),
     /// Close the menu or drawer covering the bar.
     Close,
     /// Bound by a name the module doesn't have: logged when it fires.
-    Unknown { kind: String, name: String },
+    Unknown {
+        kind: String,
+        name: String,
+    },
 }
 
 /// A level a slider sets.
@@ -65,7 +70,6 @@ impl Level {
     }
 }
 
-/// Agent-side state of one cell.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiChange {
     /// Open or close (a drawer, a collapsed slider).
@@ -92,7 +96,6 @@ pub enum EmojiOp {
     },
     /// Show this emoji's skin tones in place of the page, or stop.
     Tones(Option<String>),
-    /// Start searching.
     Search,
     /// Add a letter or space to the query.
     Type(char),
@@ -163,7 +166,6 @@ impl Do {
         }
     }
 
-    /// Is this a plain config action (no module of its own needed)?
     pub fn action(&self) -> Option<&Action> {
         match self {
             Do::Run(a) => Some(a),

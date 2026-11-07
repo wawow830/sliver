@@ -1,8 +1,8 @@
 //! Bar backlight (write) + main display backlight (read, for adaptive brightness), via sysfs.
 //!
 //! The bar's `brightness` file is root-only, so in production and under the harness systemd
-//! opens it and passes the fd (`OpenFile=...:backlight`). Then sliverd
-//! never needs root. `max_brightness` and the main display's values are world-readable.
+//! opens it and passes the fd (`OpenFile=...:backlight`). `max_brightness` and the main display's
+//! values are world-readable.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;

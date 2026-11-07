@@ -1,9 +1,6 @@
-//! Sliver's config language: the waybar model translated to a touch strip.
-//!
-//! The reference is `sliver-config(5)`. This crate parses
-//! and validates config files and resolves what each layer shows for a given context. It does no
-//! rendering and no pixel layout (that's sliver-render), and it runs no modules (that's the
-//! agent's module runtime). Foreign configs are converted by `sliver-import`.
+//! Sliver's config language (`sliver-config(5)`): parses and validates config files and resolves
+//! what each layer shows for a given context. Pixel layout is sliver-render's, modules run in the
+//! agent, and foreign configs are converted by `sliver-import`.
 //!
 //! ```
 //! use sliver_config::{Context, Hardware, load_str};

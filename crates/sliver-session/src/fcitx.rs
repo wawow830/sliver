@@ -1,24 +1,21 @@
-//! fcitx5 as a second source for the `language` module: the current input
-//! method (`pinyin`, `mozc`, `keyboard-us`...) with its short label (拼, あ, en) and the others in
-//! the active group, for CJK users whose "layout" is an input method, not a keymap.
+//! fcitx5 as a second source for the `language` module: the current input method (`pinyin`,
+//! `mozc`, `keyboard-us`...) with its short label (拼, あ, en) and the others in the active group,
+//! for CJK users whose "layout" is an input method, not a keymap.
 //!
-//! Everything comes from `org.fcitx.Fcitx5` `/controller` (`org.fcitx.Fcitx.Controller1`). State
-//! reads never start fcitx5 (`NoAutoStart`); when it isn't running `SessionState::input_method` is
-//! `None` and the compositor's layout is shown as before.
+//! Everything comes from `org.fcitx.Fcitx5` `/controller` (`org.fcitx.Fcitx.Controller1`), read
+//! with `NoAutoStart`; when fcitx5 isn't running `SessionState::input_method` is `None` and the
+//! compositor's layout is shown.
 //!
-//! **No change signal exists.** `CurrentInputMethod` is a method, and fcitx5 emits nothing when the
-//! user switches with the hotkey (as of fcitx5 5.1.23, `Controller1` has only
-//! `InputMethodGroupsChanged`, and the tray item sends no `NewToolTip` without a real UI).
-//! So the state is re-read
+//! fcitx5 emits nothing when the user switches with the hotkey (as of fcitx5 5.1.23,
+//! `Controller1` has only `InputMethodGroupsChanged`, and the tray item sends no `NewToolTip`
+//! without a real UI), so the state is re-read
 //!
 //! * when fcitx5 appears or leaves the bus, and when its groups change (signals),
 //! * after our own switch ([`Handle::refresh_input_method`]) and when the focused window changes
 //!   (each window has its own input context),
 //! * on the tray item's `NewIcon`/`NewToolTip`/`NewTitle`, where a real session sends them,
 //! * and every [`POLL`] (one call, `CurrentInputMethod`) while the bar is on
-//!   ([`Handle::set_awake`]) and fcitx5 is running: that is the only way to see a hotkey switch. It
-//!   stops when the bar is off, and never starts when fcitx5 isn't running (invariant 3: wakes only
-//!   while shown).
+//!   ([`Handle::set_awake`]) and fcitx5 is running.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -42,7 +39,6 @@ pub const POLL: Duration = if cfg!(test) {
     Duration::from_millis(2000)
 };
 
-/// One input method.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Item {
     /// fcitx5's unique name: `keyboard-us`, `pinyin`, `mozc`.
@@ -201,8 +197,7 @@ fn is_fcitx(conn: &Connection, sender: &str, cache: &mut HashMap<String, bool>) 
 
 impl Handle {
     /// Follow fcitx5's current input method into `SessionState::input_method`. `conn` is a
-    /// session-bus connection dedicated to this. Cheap when fcitx5 isn't installed or running:
-    /// one signal subscription and a sleeping thread.
+    /// session-bus connection dedicated to this.
     pub fn start_input_method(&self, conn: Connection) {
         let (tx, rx) = channel();
         *self
@@ -253,7 +248,7 @@ impl Handle {
 }
 
 /// `CurrentInputMethod`: fcitx5's unique name for the current method, `""` when no window has
-/// one, `None` when fcitx5 isn't there. One cheap call: what the poll asks.
+/// one, `None` when fcitx5 isn't there.
 fn current(conn: &Connection) -> Option<String> {
     props::call_no_autostart(conn, NAME, PATH, IFACE, "CurrentInputMethod", &())
 }
@@ -268,7 +263,7 @@ fn work(conn: Connection, rx: Receiver<Msg>, hub: crate::Hub) {
         // Sleep until something happens; while fcitx5 is there and the bar is on, also wake after
         // POLL (a hotkey switch sends nothing). A message or the first round reads everything
         // (3 calls); a bare poll asks only for the current method (1 call) and reads the rest
-        // only if that changed, because every call costs the agent a handful of wake-ups.
+        // only if that changed.
         let mut full = std::mem::take(&mut first);
         let mut poll = false;
         let msg = if full {

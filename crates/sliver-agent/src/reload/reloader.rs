@@ -50,8 +50,7 @@ fn fingerprint(files: &[PathBuf]) -> u64 {
 
 /// The stylesheet a config asks for: its `theme` (the default `sliver` one with the desktop's
 /// `accent`), then `stylesheet = …` (relative to `dir`, the config's directory) or else
-/// `style.css` there, on top. That file must be readable; its own diagnostics are warnings. The
-/// agent and the settings preview both draw with this.
+/// `style.css` there, on top. That file must be readable; its own diagnostics are warnings.
 pub fn stylesheet(
     config: &Config,
     dir: Option<&Path>,
@@ -99,7 +98,7 @@ fn read(explicit: Option<&Path>) -> Read {
 }
 
 /// Whole-config errors (a layer pointing at a missing layout, a group containing itself) block
-/// applying just like parse errors. Without this they'd be applied and fail at render time.
+/// applying just like parse errors.
 fn check(loaded: &mut Loaded) {
     if loaded.diagnostics.ok() {
         let v = loaded.config.validate(sliver_config::Hardware::detect());

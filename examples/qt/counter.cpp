@@ -3,8 +3,7 @@
 //     g++ -std=c++17 -fPIC examples/qt/counter.cpp -o counter $(pkg-config --cflags --libs Qt6DBus Qt6Core)
 //     ./counter
 //
-// NOT compiled in the sliver repo (no Qt headers on the development machine): written against
-// the QtDBus documentation. If it needs a fix, please send it.
+// Not compiled in the sliver repo: written against the QtDBus documentation.
 
 #include <QCoreApplication>
 #include <QDBusArgument>

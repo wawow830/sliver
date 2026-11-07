@@ -44,7 +44,7 @@ fn main() {
             .iter()
             .find(|(m, _)| m == name)
             .map_or(0, |(_, b)| *b);
-        // Same-named threads are summed in `before`/`after` order; good enough for a probe.
+        // Same-named threads are summed in `before`/`after` order.
         if n > &b {
             println!("{name}: {}", n - b);
             total += n - b;

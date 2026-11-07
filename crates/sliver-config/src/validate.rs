@@ -166,8 +166,8 @@ impl Config {
     }
 
     fn is_builtin_block(&self, id: &ModuleId) -> bool {
-        // Blocks from builtin.toml stay valid even if the user's layouts no longer use them. Read
-        // from builtin.toml itself, so the list can't drift.
+        // Blocks from builtin.toml stay valid even if the user's layouts no longer use them; the
+        // list is read from builtin.toml.
         static NAMES: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
         NAMES
             .get_or_init(|| {
@@ -326,8 +326,8 @@ impl Config {
         keys
     }
 
-    /// Invariant 1 is guaranteed by sliverd's safe hatch, not by config. Here we only warn
-    /// when the config itself leaves F-keys or Esc off the bar (sliver-config(5)).
+    /// Warns when the config leaves F-keys or Esc off the bar (sliver-config(5)). sliverd's safe
+    /// hatch keeps them reachable whatever the config says.
     fn check_reachability(&self, hw: Hardware, d: &mut Diagnostics) {
         let candidates = |layer: &str| -> BTreeSet<&str> {
             let mut s: BTreeSet<&str> = self

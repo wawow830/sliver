@@ -8,7 +8,7 @@
 //! `sliver_config`, whose own warnings (unknown keys, unsupported gestures) join the report.
 //!
 //! The imported layout is named `waybar`, becomes the `base` layer, and keeps tiny-dfr's `esc`
-//! zone, so the user never loses Escape. The `fn` layer stays the built-in F-keys.
+//! zone. The `fn` layer stays the built-in F-keys.
 
 mod jsonc;
 

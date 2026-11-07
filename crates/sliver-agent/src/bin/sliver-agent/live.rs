@@ -3,7 +3,6 @@
 
 use super::*;
 
-/// The live world: the feeds (desktop, session, user modules) plus the ops thread.
 pub(super) struct Live {
     pub(super) feeds: Feeds,
     pub(super) agg: Aggregate,
@@ -12,7 +11,6 @@ pub(super) struct Live {
     pub(super) locked_hint: bool,
     pub(super) lock_watch: sliver_agent::context::LockWatch,
     pub(super) ops: Option<std::sync::mpsc::Sender<Op>>,
-    /// The public D-Bus API, if the session bus is there.
     pub(super) api: Option<ApiLink>,
     pub(super) published: Published,
     /// The registry changed since `published` was copied: copy it before the next frame
@@ -39,7 +37,7 @@ impl Live {
         let api = match api.map(ApiLink::start) {
             None => None,
             Some(Ok(a)) => Some(a),
-            // Another agent drives the bar. Two would revoke each other on sliverd forever.
+            // Another agent drives the bar; two would revoke each other on sliverd.
             Some(Err(zbus::Error::NameTaken)) => {
                 eprintln!(
                     "sliver-agent: another sliver-agent is running (it owns {}). Stop it \
@@ -86,7 +84,6 @@ impl Live {
         Ok(live)
     }
 
-    /// Takes in everything the feeds sent. Returns whether anything did.
     pub(super) fn pump(&mut self) -> bool {
         let feeds = self.feeds.drain();
         let any = !feeds.is_empty();
@@ -135,9 +132,8 @@ impl Live {
         }
     }
 
-    /// Without our own backend, adopt what a DE integration pushed over `Desktop1` (focus,
-    /// workspaces, windows) as the desktop, so rules, the workspaces and taskbar modules and the
-    /// `app_id` context work on GNOME/KDE too. Returns whether it changed.
+    /// Without our own backend, what a DE integration pushed over `Desktop1` (focus, workspaces,
+    /// windows) is the desktop.
     pub(super) fn sync_pushed_desktop(&mut self) -> bool {
         if self.own_desktop {
             return false;
@@ -164,15 +160,13 @@ impl Live {
         )
     }
 
-    /// The world for a frame at `now`. Copies the API registry first if it changed since the
-    /// last copy.
     pub(super) fn world(&mut self, now: Now) -> World {
         let wants = self.wants.clone();
         self.world_reading(now, &wants)
     }
 
-    /// [`Live::world`], reading the statistics `wants` asks for (a preview's config may place
-    /// modules the live one doesn't).
+    /// Reads the statistics `wants` asks for: a preview's config may place modules the live one
+    /// doesn't.
     pub(super) fn world_reading(&mut self, now: Now, wants: &sliver_agent::stats::Wants) -> World {
         if self.published_stale
             && let Some(api) = &self.api
@@ -212,8 +206,8 @@ impl Live {
         self.feeds.modules.as_ref()
     }
 
-    /// Runs what `config` needs (at start and after a reload): its user modules (unchanged
-    /// specs keep the running ones), the watchers its modules use, and the API's policy.
+    /// Runs what `config` needs: its user modules (unchanged specs keep the running ones), the
+    /// watchers its modules use, and the API's policy.
     pub(super) fn follow(&mut self, config: &Config) {
         self.wants = sliver_agent::stats::wants(config);
         if let Some(api) = &self.api {

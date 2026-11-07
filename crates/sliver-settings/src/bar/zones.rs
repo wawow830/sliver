@@ -2,7 +2,6 @@
 
 use super::*;
 
-/// One preferences group per zone, with the zone's modules as editable rows.
 pub(super) fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
     let state = ui.state();
     let config = &state.loaded.config;
@@ -162,8 +161,7 @@ pub(super) fn zone_button(
     b
 }
 
-/// A zone's settings: name, width, alignment, default module width, order, removal. Each applies
-/// on its own (instant apply + undo).
+/// Each setting applies on its own, with undo.
 /// `pos`: the zone's index and how many zones the layout shows (for the move buttons).
 pub(super) fn zone_dialog(
     ui: &Rc<Ui>,

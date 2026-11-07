@@ -3,8 +3,8 @@
 use super::*;
 
 impl Daemon {
-    /// Pixel shift on/off (agent policy). The built-in layers are laid out again so they keep
-    /// clear of the ends the picture moves towards, like the agent's.
+    /// Set by agent policy. Built-in layers are laid out again to keep clear of the ends the
+    /// picture moves towards.
     pub(super) fn set_pixel_shift(&mut self, on: bool, now: u64) {
         if !self.shift.set_enabled(on, now) {
             return;

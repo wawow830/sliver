@@ -1,6 +1,6 @@
-//! Undo and redo of the edits the window makes. Each entry is the files an edit changed, as they
-//! were on the other side of it ([`sliver_config::files::Snapshot`]), so going back and forth is
-//! exact, whatever the edit was. A step is only taken once its files are written.
+//! Undo and redo of the window's edits. Each entry is the files an edit changed, as they were on
+//! the other side of it ([`sliver_config::files::Snapshot`]). A step is only taken once its files
+//! are written.
 
 use sliver_config::files::Snapshot;
 
@@ -28,7 +28,6 @@ impl History {
         step(&mut self.undo, &mut self.redo, commit)
     }
 
-    /// Step forward again after an undo.
     pub fn redo<E>(
         &mut self,
         commit: impl FnOnce(&Snapshot) -> Result<Snapshot, E>,

@@ -1,6 +1,4 @@
-//! Preset bundles (`.sliver`): a whole setup in one file you can share.
-//!
-//! A bundle is a TOML document, so you can read it before using it:
+//! Preset bundles (`.sliver`): a whole setup in one TOML document.
 //!
 //! ```toml
 //! [preset]
@@ -15,17 +13,11 @@
 //! "assets/logo.png" = { base64 = "iVBORw0..." }
 //! ```
 //!
-//! * [`export`] collects the config, its includes, the stylesheet (and its `@import`s and `url()`s
-//!   under the config directory) and the icons and images the config points at. Files outside
-//!   the config directory move to `assets/` or `include/`, and the references are rewritten.
-//!   System files (`/usr`, `/etc`, `/opt`) are referenced but not copied. `env` tables are left
-//!   out, since they're where secrets live.
-//! * [`Bundle::runs`] lists everything the preset would run (commands, scripts, D-Bus calls,
-//!   opened files and URLs), so the user can review it before importing.
-//! * [`Bundle::without_commands`] drops all of it (the import's "scripts start disabled").
-//! * [`Bundle::check`] validates a bundle in a scratch directory. [`Bundle::install`] does the
-//!   same, then backs up the files it replaces and moves the new ones into the config directory,
-//!   writing `config.toml` last so the agent's hot reload sees a complete set.
+//! [`export`] collects the config, its includes, the stylesheet (and its `@import`s and `url()`s
+//! under the config directory) and the icons and images the config points at. Files outside the
+//! config directory move to `assets/` or `include/`, with references rewritten. System files
+//! (`/usr`, `/etc`, `/opt`) are referenced, not copied. `env` tables, where secrets live, are left
+//! out.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -37,7 +29,6 @@ use crate::load::load_file;
 
 /// The bundle format version this build writes and reads.
 pub const FORMAT: i64 = 1;
-/// The file extension of a preset bundle.
 pub const EXTENSION: &str = "sliver";
 /// The main config's name inside a bundle.
 pub const CONFIG: &str = "config.toml";
@@ -279,7 +270,7 @@ impl Bundle {
             })?;
             written.push(dest);
         }
-        // Only the config: don't leave an empty files dir behind (fails harmlessly otherwise).
+        // Removes `files_dir` only if empty, i.e. the bundle had just the config.
         let _ = std::fs::remove_dir(files_dir);
         Ok(Installed { written, backup })
     }

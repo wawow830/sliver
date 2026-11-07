@@ -1,7 +1,6 @@
-//! Who is a D-Bus client, really? Verified from `/proc`, never from what the client claims.
-//!
-//! Used for two things: binding `app` contexts to the focused window (same pid,
-//! same Flatpak instance or same systemd app unit) and the sandbox tier.
+//! D-Bus client identity, read from `/proc`, never from what the client claims. It binds `app`
+//! contexts to the focused window (same pid, Flatpak instance or systemd app unit) and sets the
+//! sandbox tier.
 
 use std::fs;
 
@@ -58,7 +57,6 @@ pub trait ProcInfo: Send + Sync {
     }
 }
 
-/// Reads `/proc`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RealProc;
 

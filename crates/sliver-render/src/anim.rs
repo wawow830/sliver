@@ -2,10 +2,8 @@
 //! `background-color`, `border-color`, `opacity`) from where they were to where they are going,
 //! as its `transition` asks.
 //!
-//! The renderer stays a function of (scene, sheet, time): [`Animator`] only remembers, per item,
-//! what each property currently shows. Frames are needed only while something is moving:
-//! [`Animator::deadline`] says when, and is `None` once everything has settled, so an idle bar
-//! costs nothing (invariant 3). Frames come at most every [`FRAME`].
+//! [`Animator`] remembers, per item, what each property currently shows. [`Animator::deadline`]
+//! is `None` once everything has settled; frames come at most every [`FRAME`].
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,8 +13,7 @@ use crate::Color;
 use crate::geometry::Rect;
 use crate::style::{Style, Timing, TransitionProp};
 
-/// Minimum time between animation frames: the panel's 60 Hz, so a glide or fade moves every
-/// refresh. Frames are drawn only while something moves.
+/// Minimum time between animation frames: the panel refreshes at 60 Hz.
 pub const FRAME: Duration = Duration::from_millis(16);
 
 trait Lerp: Copy + PartialEq {
@@ -239,7 +236,7 @@ impl Animator {
     ) -> Rect {
         let spec = spec(style, TransitionProp::Geometry).filter(|_| !self.reduce_motion);
         if spec.is_none() && !self.geo.contains_key(key) {
-            return target; // the common case: nothing to remember
+            return target;
         }
         let a = self.geo.entry(key.to_string()).or_insert_with(|| GeoAnim {
             x: Track::settled(target.x, now),
@@ -267,8 +264,8 @@ impl Animator {
         self.geo.retain(|k, a| a.seen || !in_scene(k, scene));
     }
 
-    /// Drop all state for scenes other than `keep` (scene ids): they're no longer drawn, so a
-    /// fade still pending on one must not keep asking for frames.
+    /// Drop all state for scenes other than `keep` (scene ids), so a fade pending on a scene no
+    /// longer drawn asks for no frames.
     pub fn retain_scenes(&mut self, keep: &[String]) {
         let kept = |k: &str| keep.iter().any(|s| in_scene(k, s));
         self.items.retain(|k, _| kept(k));

@@ -1,8 +1,8 @@
 //! Real hardware: [`crate::backend`] traits implemented for `sliver_hw`'s concrete types, plus
 //! the mapping from `sliver_hw` input events to [`crate::Input`].
 //!
-//! Every constructor here refuses unless `SLIVER_SAFESWAP=1` (the safe-swap harness or, later,
-//! the real sliverd unit).
+//! Every constructor here refuses unless `SLIVER_SAFESWAP=1` (the safe-swap harness or the
+//! sliverd unit).
 
 use std::io;
 use std::path::Path;
@@ -77,7 +77,6 @@ pub fn touch_event(c: Contact) -> TouchEvent {
     }
 }
 
-/// `sliver_hw` input event -> daemon input.
 pub fn input(ev: HwEvent) -> Input {
     match ev {
         HwEvent::Touch(c) => Input::Touch(touch_event(c)),
@@ -104,7 +103,6 @@ impl crate::backend::InputSource for HwInput {
     }
 }
 
-/// Everything opened for a real run.
 pub struct RealHardware {
     pub backends: Backends,
     /// Pollable (one epoll fd). Call `drain()` when readable and feed each event via [`input`].
@@ -132,9 +130,8 @@ pub fn open() -> io::Result<RealHardware> {
         input.device_names(),
         input.hotplug()
     );
-    // A backlight we can't write (udev hasn't applied 99-z-sliverd.rules yet, missing fd) means we
-    // could never dim or turn off the OLED bar (burn-in, power: invariant 3). Exit: systemd retries
-    // (udev may just be late), then falls back to tiny-dfr, which has working dim/off.
+    // Without a writable backlight (udev hasn't applied 99-z-sliverd.rules yet, missing fd) the
+    // OLED bar could never dim or turn off. Exit: systemd retries, then falls back to tiny-dfr.
     let backlight = SysfsBacklight::open().map_err(|e| {
         io::Error::other(format!(
             "bar backlight not writable ({e}); exiting so systemd can fall back to tiny-dfr"

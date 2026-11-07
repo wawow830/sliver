@@ -485,7 +485,6 @@ impl Agent {
     }
 }
 
-/// Is `name` an executable on `$PATH`?
 pub(super) fn tool_exists(name: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))

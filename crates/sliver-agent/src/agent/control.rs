@@ -1,6 +1,5 @@
-//! `Control1` requests (sliverctl and friends) and the other changes from outside: each is one
-//! transition of the agent that carries its own consequences (a redraw, cancelled touches), so
-//! no caller has to remember them.
+//! `Control1` requests (sliverctl and friends) and the other changes from outside. Each method
+//! applies its own consequences (a redraw, cancelled touches).
 
 use super::*;
 use crate::api::Reply;

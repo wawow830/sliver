@@ -10,7 +10,7 @@ use sliver_ipc::report::Reply;
 use super::{Check, Level, Sys, check};
 
 /// What sysfs shows about the bar. Nothing is opened, so it works as any user and while sliverd
-/// is down (which is when it matters most).
+/// is down.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BarSysfs {
     /// The bar's DRM device, e.g. `/dev/dri/card1` (driver adp or appletbdrm).

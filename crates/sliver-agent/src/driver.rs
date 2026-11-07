@@ -1,12 +1,11 @@
-//! The agent as one state machine: [`Input`]s in, [`Output`]s out, one deadline, one clock.
+//! The agent as one state machine: [`Input`]s in, [`Output`]s out.
 //!
-//! [`Agent`] is the pure core (a world becomes frames, a touch becomes effects). The driver decides
-//! *when*: a touch or a layer change draws at once, content changes (feeds, published items) at
-//! most [`CONTENT_FPS`](crate::pace::CONTENT_FPS) times a second, a running transition on its next
-//! frame and a clock on its next tick. It also keeps what sliverd has been told (the display
-//! policy) and whether cava should run for a spectrum on the lit bar. Like sliverd's `Daemon` it
-//! does no I/O: `main` turns file descriptors into inputs, carries out the outputs and sleeps until
-//! [`Driver::next_deadline`].
+//! The driver decides when [`Agent`] draws: a touch or a layer change at once, content changes
+//! (feeds, published items) at most [`CONTENT_FPS`](crate::pace::CONTENT_FPS) times a second, a
+//! running transition on its next frame and a clock on its next tick. It also keeps what sliverd
+//! has been told (the display policy) and whether cava should run for a spectrum on the lit bar.
+//! It does no I/O: `main` turns file descriptors into inputs, carries out the outputs and sleeps
+//! until [`Driver::next_deadline`].
 
 use std::time::Duration;
 
@@ -20,7 +19,6 @@ use crate::pace::Pacer;
 /// A deadline this close counts as due: waking a few ms early must not sleep again.
 const SLACK: Duration = Duration::from_millis(5);
 
-/// Something that happened.
 #[derive(Debug, Clone)]
 pub enum Input {
     /// Time passed: run whatever is due.
@@ -53,7 +51,6 @@ pub enum Input {
     ReduceMotion(bool),
 }
 
-/// Something for `main` to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
     /// Present this layer's frame ([`Agent::frame`]).
@@ -219,7 +216,7 @@ impl Driver {
     }
 
     /// How long until something is due, measured from `now` (`None`: nothing will be until an
-    /// input arrives; invariant 3).
+    /// input arrives).
     pub fn next_deadline(&self, now: &Now) -> Option<Duration> {
         let a = &self.agent;
         let lit = a.display() != DisplayState::Off;

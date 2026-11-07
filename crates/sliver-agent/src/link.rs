@@ -4,7 +4,7 @@
 //! Each layer (`base`, `fn`) owns two buffers: the frame and its all-pressed twin. sliverd copies
 //! them on `present` and answers `presented`; until then the buffers are busy, so a newer frame
 //! for that layer waits and replaces any older waiting one. Frames whose pixels and regions
-//! didn't change aren't sent at all (invariant 3).
+//! didn't change aren't sent at all.
 
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd};

@@ -1,11 +1,10 @@
-//! Untrusted input never panics the renderer. Script output and app-published labels arrive
-//! as markup, and users write stylesheets; a panic in the agent would crash-loop it (the bar
-//! falls back to sliverd's safe layer, but the user's bar is gone). Deterministic pseudo-random
-//! inputs (fixed seeds) so a failure reproduces; the failing input is printed.
+//! Untrusted input never panics the renderer: script output and app-published labels arrive as
+//! markup, and users write stylesheets. Inputs are pseudo-random with fixed seeds; the failing
+//! input is printed.
 
 use sliver_render::{Content, Fonts, Item, Pixmap, Renderer, Scene, Stylesheet, markup};
 
-/// xorshift64*: small, deterministic, good enough to shake parsers.
+/// xorshift64*.
 struct Rng(u64);
 
 impl Rng {

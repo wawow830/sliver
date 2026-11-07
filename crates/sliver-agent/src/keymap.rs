@@ -1,11 +1,10 @@
 //! Layout-aware key combos.
 //!
 //! Config key names are Linux keycodes, i.e. *positions* on a US keyboard (tiny-dfr's semantics).
-//! For F-keys, media keys, modifiers and navigation that's exactly right. For character keys it's
-//! a trap: on a French AZERTY keymap, `{ keys = ["LeftCtrl", "Z"] }` sends the key in the US "z"
-//! position, which types "w", so "undo" becomes Ctrl+W and closes the tab.
+//! For character keys that differs by layout: on a French AZERTY keymap,
+//! `{ keys = ["LeftCtrl", "Z"] }` sends the key in the US "z" position, which types "w".
 //!
-//! [`KeyMapper`] fixes that for character keys: it takes the symbol the key has on a US keymap
+//! [`KeyMapper`] remaps character keys: it takes the symbol the key has on a US keymap
 //! ("z") and finds the key that gives the same symbol, unshifted, in the keymap the compositor
 //! applies to sliverd's virtual keyboard (`DesktopState::bar_keymap`). A key whose symbol isn't
 //! on the target's base level keeps its position: AZERTY digits, or letters on a Greek layout,

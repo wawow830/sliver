@@ -1,6 +1,5 @@
-/* high-contrast: white outlines and bold white text on black, larger text, and states shown by
-   inverting (pressed) or solid yellow (on) rather than by a hue alone. Black keys keep it as cheap
-   on power as the default. Import it with  @import "sliver:high-contrast";  and override. */
+/* high-contrast: white outlines and bold white text on black; pressed inverts, on is solid
+   yellow. Import it with  @import "sliver:high-contrast";  and override. */
 
 bar {
   /* Going into a layer (media, a group) and back. */
@@ -28,7 +27,6 @@ module {
   gap: 10px; /* between icon and label */
 }
 
-/* No fades: a state is either shown or not. */
 module:active { background-color: #fff; color: #000; }
 module:disabled { border-color: #8e8e93; color: #8e8e93; }
 

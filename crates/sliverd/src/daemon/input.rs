@@ -40,8 +40,6 @@ impl Daemon {
         }
     }
 
-    // ---- touch --------------------------------------------------------------------------------
-
     pub(super) fn touch(&mut self, now: u64, mut ev: TouchEvent) {
         // The picture is moved by pixel shift: hit-test where the finger is on the frame.
         let (dx, dy) = self.shift.offset();
@@ -70,8 +68,6 @@ impl Daemon {
         self.route(now, routed, ev.time_us);
     }
 
-    /// Carries out the router's decisions: keys to uinput (one sync per batch), agent touches to
-    /// the agent. Redraws if keys changed (pressed feedback).
     pub(super) fn route(&mut self, now: u64, routed: Vec<Routed>, time_us: u64) {
         let mut keys = false;
         for r in routed {
@@ -108,6 +104,4 @@ impl Daemon {
             self.recompose();
         }
     }
-
-    // ---- frames -------------------------------------------------------------------------------
 }

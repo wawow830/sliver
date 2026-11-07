@@ -38,8 +38,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// Print a line to stdout. A closed pipe (`sliverctl modules | head`) ends the program quietly,
-/// like any good filter, instead of panicking the way `println!` does.
+/// Print a line to stdout. A closed pipe (`sliverctl modules | head`) ends the program quietly
+/// instead of panicking the way `println!` does.
 fn out(line: &str) {
     let mut o = std::io::stdout().lock();
     if writeln!(o, "{line}").and_then(|_| o.flush()).is_err() {
@@ -377,7 +377,7 @@ fn publish(conn: Connection, p: Publish) -> Result<ExitCode, String> {
         } else {
             format!("{} {} {data}", ev.item, ev.kind)
         };
-        // A closed pipe (`| head -1`) ends the program, like any good filter.
+        // A closed pipe (`| head -1`) ends the program.
         if writeln!(out, "{line}").and_then(|_| out.flush()).is_err() {
             break;
         }

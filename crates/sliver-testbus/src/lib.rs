@@ -6,7 +6,7 @@
 //! with a minimal config instead: **no service dirs, so nothing can be activated**, and its own
 //! directory for the socket.
 //!
-//! **It can't outlive the test, even on SIGKILL.** `PR_SET_PDEATHSIG` doesn't work for
+//! It can't outlive the test, even on SIGKILL. `PR_SET_PDEATHSIG` doesn't work for
 //! `dbus-daemon` (it changes credentials at startup, which clears the death signal). So the bus
 //! runs under `dbus-run-session`, whose program is `cat` reading a pipe from us. When the test
 //! process goes away for any reason, the pipe closes, `cat` exits, and `dbus-run-session` takes

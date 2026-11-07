@@ -68,7 +68,7 @@ fn query() -> Agent {
             .unwrap_or_default(),
         layer: s(IFACE_CONTROL, "ActiveLayer").unwrap_or_default(),
         display: s(IFACE_TOUCHBAR, "DisplayState").unwrap_or_default(),
-        // A number today (API version); a string would work too.
+        // A number (API version) or a string.
         version: get(&conn, IFACE_TOUCHBAR, "Version")
             .ok()
             .and_then(|v| {
@@ -84,7 +84,7 @@ fn query() -> Agent {
 }
 
 /// Runs `work` off the main loop and gives its result to `done` on it; with no answer within
-/// 3 s (a stuck bus), `done` gets `late()` instead. Nothing polls: the loop wakes for the answer.
+/// 3 s (a stuck bus), `done` gets `late()` instead.
 fn in_background<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
     late: impl FnOnce() -> T + 'static,

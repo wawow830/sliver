@@ -83,7 +83,6 @@ fn paths_of(p: &props::Props, k: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Re-read the whole picture.
 pub fn read_into(conn: &Connection, net: &mut Network) {
     *net = Network::default();
     let Some(m) = props::get_all(conn, NM, NM_PATH, NM) else {

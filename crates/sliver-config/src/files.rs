@@ -1,6 +1,5 @@
-//! Writing the user's files. A file is replaced atomically (a temp file beside it, then a
-//! rename), so a reader sees the old text or the new, never half. Several files change together
-//! or not at all ([`commit`]), and what a commit replaced is what undoes it.
+//! Writing the user's files: each is replaced atomically (a temp file beside it, then a rename),
+//! and [`commit`] changes several all or nothing.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -8,8 +7,8 @@ use std::path::{Path, PathBuf};
 /// Files and their whole text (`None`: the file doesn't exist).
 pub type Snapshot = Vec<(PathBuf, Option<String>)>;
 
-/// The file's text; `None` when it doesn't exist. A file that exists but can't be read is an
-/// error, never "empty": writing over it would lose it.
+/// `None` when the file doesn't exist. An unreadable file is an error, not empty, so nothing
+/// writes over it.
 pub fn read(path: &Path) -> io::Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(t) => Ok(Some(t)),
@@ -62,7 +61,6 @@ fn put(path: &Path, text: Option<&str>) -> io::Result<()> {
     }
 }
 
-/// `e`, saying which file.
 fn at(path: &Path, e: io::Error) -> io::Error {
     io::Error::new(e.kind(), format!("{}: {e}", path.display()))
 }
@@ -102,7 +100,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// One file can't be written: the others go back, and nothing is left half done.
+    /// One file can't be written: the others go back.
     #[test]
     fn a_commit_is_all_or_nothing() {
         let d = dir("atomic");

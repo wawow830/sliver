@@ -1,6 +1,5 @@
-//! The Layouts & Rules page, editable: layer defaults, and rules in priority order
-//! (first match wins) that can be added, moved, removed and edited. Layouts are listed with
-//! their inheritance. They're edited on the Bar page.
+//! The Layouts & Rules page: layer defaults and rules in priority order (first match wins).
+//! Layouts are listed with their inheritance; they're edited on the Bar page.
 
 use std::rc::Rc;
 
@@ -184,7 +183,7 @@ fn quote(k: &str) -> String {
     }
 }
 
-/// Edit one rule's fields. Each applies on its own.
+/// Each field applies on its own.
 fn rule_dialog(ui: &Rc<Ui>, index: usize, title: &str) {
     let state = ui.state();
     let raw = state
@@ -206,7 +205,6 @@ fn rule_dialog(ui: &Rc<Ui>, index: usize, title: &str) {
             "While its condition holds, the layer shows this layout. Rules are checked top to bottom; the first match wins.",
         ),
     );
-    // Name: free text.
     let name = adw::EntryRow::builder()
         .title("Name")
         .show_apply_button(true)
@@ -223,7 +221,6 @@ fn rule_dialog(ui: &Rc<Ui>, index: usize, title: &str) {
         });
     }
     g.add(&name);
-    // Layer and layout: picked from what the config has.
     let choose = |key: &'static str, title: &str, options: Vec<String>, current: &str| {
         let c = adw::ComboRow::builder()
             .title(title)
@@ -261,7 +258,6 @@ fn rule_dialog(ui: &Rc<Ui>, index: usize, title: &str) {
             .unwrap_or_default(),
     ));
     page.add(&g);
-    // When: the condition builder.
     let write: Rc<dyn Fn(Option<Value>)> = {
         let ui = ui.clone();
         Rc::new(move |v| {

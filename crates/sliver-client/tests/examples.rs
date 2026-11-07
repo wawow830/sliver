@@ -1,5 +1,5 @@
-//! Keeps `examples/python/pomodoro.py` honest: run it against the real API server on a private
-//! bus. Skipped when `dbus-daemon` or python3-gobject isn't available.
+//! Runs `examples/python/pomodoro.py` against the real API server on a private bus. Skipped
+//! when `dbus-daemon` or python3-gobject isn't available.
 
 use sliver_api::identity::RealProc;
 use sliver_api::item::Gesture;

@@ -1,6 +1,6 @@
 /* light: dark text on light keys, with your desktop's accent on active toggles and sliders.
-   The Touch Bar is an OLED panel, so lit pixels cost power: this theme draws more than the dark
-   ones, and is brighter in a dark room. Import it with  @import "sliver:light";  and override. */
+   The Touch Bar is OLED, so lit pixels cost power. Import it with  @import "sliver:light";  and
+   override. */
 
 bar {
   /* Going into a layer (media, a group) and back. */

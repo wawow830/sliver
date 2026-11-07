@@ -3,8 +3,6 @@
 //! Editors save by writing a temporary file and renaming it over the original, which replaces the
 //! inode: a watch on the file itself would go deaf after the first save. Watching the parent
 //! directory and matching names survives that, and also notices a config file being created.
-//! No polling: the fd is readable only when something in a watched directory changed, and the
-//! only timer is the debounce deadline after such an event.
 
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::fs::inotify::{self, CreateFlags, ReadFlags, WatchFlags};
@@ -115,7 +113,6 @@ impl Watcher {
         self.names = want;
     }
 
-    /// Poll this fd with the agent's others.
     pub fn as_fd(&self) -> BorrowedFd<'_> {
         self.fd.as_fd()
     }

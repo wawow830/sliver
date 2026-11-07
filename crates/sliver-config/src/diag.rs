@@ -1,6 +1,4 @@
-//! Diagnostics collected while reading a config, plus a small key-tracking table reader.
-//!
-//! Errors mean "don't apply this config". Warnings never block (sliver-config(5)).
+//! Config diagnostics (sliver-config(5)), and a table reader that reports unread keys.
 
 use std::collections::BTreeSet;
 use std::fmt;

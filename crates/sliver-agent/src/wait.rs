@@ -1,6 +1,6 @@
-//! Waiting for sliverd's socket without polling (invariant 3): while tiny-dfr drives the bar
-//! there is no `/run/sliver/sliverd.sock`, possibly for days, so the agent sleeps on inotify
-//! until the socket (or its directory) appears.
+//! Waiting for sliverd's socket: while tiny-dfr drives the bar there is no
+//! `/run/sliver/sliverd.sock`, possibly for days, so the agent sleeps on inotify until the socket
+//! (or its directory) appears.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -8,13 +8,8 @@ use std::time::{Duration, Instant};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fs::inotify;
 
-/// Returns once `path` exists, or after `max` if given (`None`: wait as long as it takes, with
-/// no wakeups at all while nothing changes).
-///
-/// It can't miss the path: the watch is on the nearest existing ancestor and is re-armed every
-/// time something changes there (a directory on the way appeared), the path is re-checked
-/// after each arming, and a watched directory being deleted or moved (`DELETE_SELF`,
-/// `MOVE_SELF`) also wakes us to re-arm on whatever exists now.
+/// Returns once `path` exists, or after `max` if given. The watch is on the nearest existing
+/// ancestor and is re-armed whenever something changes there.
 pub fn wait_for_path(path: &Path, max: Option<Duration>) {
     let deadline = max.map(|m| Instant::now() + m);
     while !path.exists() {

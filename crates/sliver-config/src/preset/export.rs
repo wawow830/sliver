@@ -303,7 +303,7 @@ pub(super) fn scan_css(
     }
 }
 
-// ---- base64 (RFC 4648, padded) ----
+// base64: RFC 4648, padded.
 
 pub(super) const B64: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

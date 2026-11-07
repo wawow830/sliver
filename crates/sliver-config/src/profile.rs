@@ -1,14 +1,9 @@
 //! Profiles (sliver-config(5)): named full configs, one active at a time.
 //!
 //! - `default` is the ordinary config (`config.toml`, found on the search path).
-//! - Any other profile is `profiles/<name>.toml` in the user's config dir. A new profile starts as
-//!   `include = ["../config.toml"]`, so it is your main config plus what you change in it.
-//! - The active name is persisted in `active-profile` in the user's config dir. The agent watches
-//!   that file, so `sliverctl profile`, the settings app, `Control1.SetProfile` and a
-//!   `{ profile = "…" }` action all switch the same way: by writing it.
-//!
-//! An active name whose file is gone falls back to `default`, so a deleted profile can't leave
-//! the bar without a config.
+//! - Any other profile is `profiles/<name>.toml` in the user's config dir.
+//! - The active name is in `active-profile` in the user's config dir. The agent watches that file;
+//!   every way of switching profiles writes it.
 
 use std::path::{Path, PathBuf};
 
@@ -28,7 +23,6 @@ pub fn user_dir() -> Option<PathBuf> {
     Some(base.join("sliver"))
 }
 
-/// Where `active-profile` lives.
 pub fn marker_path() -> Option<PathBuf> {
     user_dir().map(|d| d.join(MARKER))
 }
@@ -199,7 +193,6 @@ pub fn watch_paths() -> Vec<PathBuf> {
     marker_path().into_iter().chain(active_path()).collect()
 }
 
-/// [`crate::files::write_atomic`], its error as text.
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     crate::files::write_atomic(path, text).map_err(|e| e.to_string())
 }

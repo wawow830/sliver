@@ -1,6 +1,5 @@
-//! The agent's only clock. The core never reads time itself: the loop reads [`Now`] once per
-//! wakeup and every deadline, transition, gesture and timer is measured from it, so a test can
-//! step time instead of sleeping.
+//! The core never reads time itself: the loop reads [`Now`] once per wakeup and every deadline,
+//! transition, gesture and timer is measured from it.
 
 use std::time::{Duration, Instant};
 

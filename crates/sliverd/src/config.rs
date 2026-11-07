@@ -1,6 +1,5 @@
-//! `/etc/sliver/sliverd.toml`: the daemon's few system settings. Everything user-facing lives in
-//! the agent's config. A broken file is reported and ignored: the daemon must always start
-//! (invariant 1), unlike tiny-dfr, which panics into its crash screen.
+//! `/etc/sliver/sliverd.toml`: the daemon's system settings; user-facing ones live in the agent's
+//! config. A broken file is reported and ignored, since the daemon must always start.
 //!
 //! ```toml
 //! physical_esc = true          # override the bar-length heuristic (≥ 2170 px = no Esc)
@@ -22,7 +21,7 @@ struct File {
     media_layer_default: bool,
 }
 
-/// Parses the config text. Errors are returned as a message along with the defaults.
+/// Errors are returned as a message along with the defaults.
 pub fn parse(text: &str) -> (Config, Option<String>) {
     match toml::from_str::<File>(text) {
         Ok(f) => (
@@ -36,7 +35,7 @@ pub fn parse(text: &str) -> (Config, Option<String>) {
     }
 }
 
-/// Loads `path`. A missing file is the defaults. Anything wrong is a warning, never an error.
+/// A missing file is the defaults. Anything wrong is a warning, never an error.
 pub fn load(path: &Path) -> (Config, Option<String>) {
     match std::fs::read_to_string(path) {
         Ok(text) => {

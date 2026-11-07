@@ -54,7 +54,7 @@ impl DeviceProfile {
             .map_or(Family::Unknown, |(_, f)| *f);
         let physical_esc = physical_esc.unwrap_or(width < keys::NO_PHYSICAL_ESC_MIN_WIDTH);
         // tiny-dfr: ActiveBrightness 128 of 255, dim 1. A 3-step T2 backlight (off/dim/full) is
-        // simply full when active.
+        // full when active.
         let (active_brightness, dim_brightness) = match max_brightness {
             0 => (0, 0),
             1..=2 => (max_brightness, 1),

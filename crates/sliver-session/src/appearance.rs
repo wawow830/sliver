@@ -149,7 +149,7 @@ pub fn dark_commands(desktop: &str, dark: bool) -> Vec<(&'static str, Vec<&'stat
 }
 
 /// Switch between the dark and light colour scheme. The new value comes back through the
-/// portal's `SettingChanged` (so the toggle shows what the desktop really did).
+/// portal's `SettingChanged`.
 pub fn set_dark(dark: bool) -> Result<(), String> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     for (prog, args) in dark_commands(&desktop, dark) {

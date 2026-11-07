@@ -50,8 +50,7 @@ const LOCKERS: &[&str] = &[
 ///    (the hint stays `yes` after unlocking: a stuck privacy layout). The
 ///    hint alone is not believed.
 ///
-/// `running` lists process names (`/proc/*/comm`; injectable for tests); it is only called when
-/// the answer needs it.
+/// `running` lists process names (`/proc/*/comm`); it is only called when the answer needs it.
 pub fn plausibly_locked(
     hint: bool,
     screensaver: Option<bool>,

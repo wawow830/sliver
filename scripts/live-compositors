@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Run the checks against real compositors (sway, labwc, river-classic, niri, gnome-shell), all headless, none
-# needing root. Fetches what is missing into PREFIX (default target/test-compositors) with
-# `dnf download --resolve` + rpm2cpio, then runs integration/{sway,labwc,river,niri,gnome-shell}/test.sh.
-# About 400 MB of rpms the first time; later runs reuse them. Not part of scripts/check (slow,
-# needs network the first time).
+# Run integration/{sway,labwc,river,niri,gnome-shell}/test.sh against real compositors, headless,
+# without root. Missing packages are fetched into $SLIVER_TEST_ROOT (default target/test-compositors)
+# with `dnf download --resolve` + rpm2cpio: about 400 MB the first time. Not part of scripts/check.
 #
 #   scripts/live-compositors [--fetch-only] [sway|labwc|river|niri|gnome-shell ...]
 set -euo pipefail

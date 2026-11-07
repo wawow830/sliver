@@ -1,15 +1,12 @@
-# Sliver's built-in defaults. Always merged *underneath* the user's config, so every key here
-# can be overridden and every layout redefined (sliver-config(5)).
-# The default bar is macOS-like: Esc · app controls · control strip, Fn → F-keys.
+# Sliver's built-in defaults, merged underneath the user's config (sliver-config(5)).
 version = 1
 
 [layers]
 base = "default"
 fn = "fkeys"
 media = "media"
-emoji = "emoji"           # the emoji picker; open it with { layer = "emoji", mode = "toggle" }
+emoji = "emoji"           # opened with { layer = "emoji", mode = "toggle" }
 
-# --- default (base) ----------------------------------------------------------------------------
 [[layouts.default.zones]]
 name = "esc"
 modules = ["key/Esc#auto"]
@@ -17,15 +14,15 @@ modules = ["key/Esc#auto"]
 [[layouts.default.zones]]
 name = "main"
 width = "fill"
-# Most Linux apps publish no controls, and 2008 px Macs have no F-key row: show F1-F12 until the
-# focused app fills App controls, then give it the space.
+# 2008 px Macs have no F-key row and most Linux apps publish no controls: F1-F12 show until the
+# focused app publishes some.
 modules = ["app-controls", "group/fkeys"]
 
 [[layouts.default.zones]]
 name = "controls"
 modules = ["status-items", "mpris", "group/control-strip", "backlight/slider", "audio/slider", "key/Mute"]
 
-# --- fkeys (fn): tiny-dfr's primary layer ------------------------------------------------------
+# tiny-dfr's primary layer.
 [[layouts.fkeys.zones]]
 name = "esc"
 modules = ["key/Esc#auto"]
@@ -37,7 +34,7 @@ module-width = "fill"
 modules = ["key/F1", "key/F2", "key/F3", "key/F4", "key/F5", "key/F6",
            "key/F7", "key/F8", "key/F9", "key/F10", "key/F11", "key/F12"]
 
-# --- media: tiny-dfr's media layer --------------------------------------------------------------
+# tiny-dfr's media layer.
 [[layouts.media.zones]]
 name = "esc"
 modules = ["key/Esc#auto"]
@@ -50,11 +47,8 @@ modules = ["key/BrightnessDown", "key/BrightnessUp", "key/MicMute", "key/Search"
            "key/IllumDown", "key/IllumUp", "key/PreviousSong", "key/PlayPause",
            "key/NextSong", "key/Mute", "key/VolumeDown", "key/VolumeUp"]
 
-# --- locked: what the bar shows on the lock screen --------------------------------------
-# Like macOS: nothing that shows content (no app controls, titles, script output or notifications),
-# just media transport, brightness, volume and mute, plus Esc where the Mac has no physical one.
-# The rule below picks it; the agent also hides private content while locked whatever the layout
-# says, so a hand-written [[rules]] list that drops this rule still doesn't leak.
+# Lock screen: no module that shows content. The agent also hides private content while locked,
+# whatever the layout says.
 [[layouts.locked.zones]]
 name = "esc"
 modules = ["key/Esc#auto"]
@@ -69,7 +63,6 @@ modules = ["key/PreviousSong", "key/PlayPause", "key/NextSong"]
 name = "controls"
 modules = ["backlight/slider#locked", "audio/slider#locked", "key/Mute"]
 
-# --- emoji: the picker strip (tabs, one page of emoji, close) --------------------------------------
 [[layouts.emoji.zones]]
 name = "esc"
 modules = ["key/Esc#auto"]
@@ -79,9 +72,9 @@ name = "main"
 width = "fill"
 modules = ["emoji#strip"]
 
-# --- modules ------------------------------------------------------------------------------------
-# Esc on the bar only where the Mac has no physical Esc key (2170 px bars), as tiny-dfr does.
-# Written as "not physical" so that an unknown answer fails safe and shows Esc.
+# Esc only where the Mac has no physical Esc key (2170 px bars), as tiny-dfr does. An unknown
+# physical-esc shows Esc.
+# Not `physical-esc = false`: when it is unknown, Esc shows.
 [modules."key/Esc#auto"]
 when = { not = { physical-esc = true } }
 
@@ -94,7 +87,7 @@ drawer = { reveal = "tap", mode = "inline", collapse-after = "5s" }
 modules = ["key/F1", "key/F2", "key/F3", "key/F4", "key/F5", "key/F6",
            "key/F7", "key/F8", "key/F9", "key/F10", "key/F11", "key/F12"]
 module-width = "fill"
-# "not true" rather than "= false": with the state unknown, show the F-keys (fail safe).
+# An unknown app-controls state shows the F-keys.
 when = { not = { app-controls = true } }
 
 [modules."custom/expand"]
@@ -114,28 +107,26 @@ hide-empty-text = true
 [modules."emoji#strip"]
 mode = "strip"
 
-# Ready-made sparklines for the settings Library: CPU and memory load over the last minute.
+# Sparklines offered in the settings Library.
 [modules."graph#cpu"]
 source = "cpu"
 
 [modules."graph#memory"]
 source = "memory"
 
-# Notification text stays off the bar while the screen is shared: a camera or the person next to
-# you can see the bar. Remove it with `when = {}` in your [modules.notifications].
+# Notification text is hidden while the screen is shared; `when = {}` in [modules.notifications]
+# overrides it.
 [modules.notifications]
 when = { not = { screencast = true } }
 
-# Expanded on the lock screen: there's room, and nothing to reveal.
 [modules."backlight/slider#locked"]
 collapsed = false
 
 [modules."audio/slider#locked"]
 collapsed = false
 
-# --- rules --------------------------------------------------------------------------------------
-# First match wins, so the lock screen comes first. Settings keeps new rules below it. Your own
-# [[rules]] list replaces this one (arrays replace): keep a locked rule first if you write one.
+# First match wins; settings adds new rules below this one. A user [[rules]] list replaces this
+# one (arrays replace).
 [[rules]]
 name = "Locked screen"
 when = { locked = true }

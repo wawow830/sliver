@@ -151,7 +151,6 @@ pub struct Agent {
     #[cfg(test)]
     panic_in_build: bool,
     base_depth: usize,
-    /// The fingers on the bar, and what they're doing.
     touches: Touches,
     /// The top custom layer closes on its own: the layer, and when.
     closes: Option<(String, Closes)>,
@@ -456,11 +455,9 @@ impl Agent {
                             ..UiState::default()
                         });
                     }
-                    // A panic while building (a module bug, input nobody foresaw) must not take
-                    // the agent down: systemd would restart it into the same panic, over and
-                    // over. Keep showing this layer's last good frame and report it instead. What
-                    // a build changes besides caches (an overlay it closes, sliders it lets go)
-                    // goes back to how it was, so the agent stays the one that drew that frame.
+                    // A panic while building is caught: systemd would restart the agent into the
+                    // same panic. The layer keeps its last good frame, and what a build changes
+                    // besides caches (overlay, sliders under a finger) is restored.
                     let kept = (self.overlay.clone(), self.under_finger.clone());
                     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         self.build(&r, world, id_base)
@@ -804,7 +801,6 @@ impl Agent {
     }
 
     /// When some module's content changes on its own next (the earliest clock tick), if ever.
-    /// Nothing ticks while the display is off (invariant 3).
     pub fn next_change(&self) -> Option<DateTime<Local>> {
         if self.display == DisplayState::Off {
             return None;

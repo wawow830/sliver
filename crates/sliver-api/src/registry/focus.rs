@@ -100,7 +100,6 @@ impl Registry {
         }
         let live = |c: &&Context| c.visible && !policy.hidden_providers.contains(&c.provider);
 
-        // Status items.
         let mut status: Vec<&Context> = self
             .contexts
             .values()
@@ -130,7 +129,6 @@ impl Registry {
         });
         let status = status.into_iter().map(|c| c.id).collect();
 
-        // App controls.
         let Some(win) = &focus.window else {
             return Resolved {
                 app: None,
@@ -223,7 +221,7 @@ fn hyprland_norm(a: &str) -> String {
     a.trim_start_matches("0x").to_ascii_lowercase()
 }
 
-/// `hyprland:0xabc` → `abc`. Other handle kinds aren't resolvable yet.
+/// `hyprland:0xabc` → `abc`. Other handle kinds aren't resolvable.
 fn hyprland_address(handle: &str) -> Option<String> {
     handle.strip_prefix("hyprland:").map(hyprland_norm)
 }

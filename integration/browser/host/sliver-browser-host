@@ -9,10 +9,10 @@ and publishes an `app` context on the Touch Bar for the browser:
 
 The tabs are a `scrubber` (swipe to scroll, tap to switch). Taps go back to the extension as
 `{"cmd": "..."}` messages on stdout. The context uses `include-children`, so it shows while the
-browser (our parent process) is focused, and it is published again if sliver-agent restarts
-. It exits when the browser closes the pipe.
+browser (our parent process) is focused, and it is published again if sliver-agent restarts. It
+exits when the browser closes the pipe.
 
-Plain D-Bus through Gio, no sliver libraries (like examples/python/pomodoro.py).
+Plain D-Bus through Gio, no sliver libraries.
 """
 
 import json
@@ -61,7 +61,6 @@ class Host:
             self.on_stdin,
         )
 
-    # ---- native messaging ----
 
     def on_stdin(self, fd, cond):
         try:
@@ -105,7 +104,6 @@ class Host:
         self.stdout.write(frame(obj))
         self.stdout.flush()
 
-    # ---- D-Bus ----
 
     def call(self, path, iface, method, args, reply="()"):
         return self.bus.call_sync(

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The generic Wayland backend (wlr-foreign-toplevel + ext-workspace) against a real, headless
 # labwc: window list, focus and workspaces follow two real clients, and the control path
-# (focus, close, switch workspace) works. Private runtime dir; the live session is never touched.
+# (focus, close, switch workspace) works. Private runtime dir.
 #
 # Needs labwc + foot. Without root see integration/sway/test.sh (dnf download --resolve, rpm2cpio)
 # and set SLIVER_TEST_ROOT. Skips (exit 0) when either is missing.

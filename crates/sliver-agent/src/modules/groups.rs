@@ -36,12 +36,10 @@ pub fn module_index(zone_ids: &[String], zone_keys: &[String], pos: usize) -> Op
     None
 }
 
-/// Is this group a `drawer = { mode = "bar" }` one?
 pub(super) fn is_bar_drawer(m: &ModuleInstance) -> bool {
     drawer_opt(m, "mode").and_then(toml::Value::as_str) == Some("bar")
 }
 
-/// A drawer group's `drawer.<key>` setting.
 pub(super) fn drawer_opt<'a>(m: &'a ModuleInstance, key: &str) -> Option<&'a toml::Value> {
     m.get("drawer").and_then(|d| d.get(key))
 }
@@ -99,8 +97,7 @@ pub fn subbar_cells(
 pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mut Vec<Cell>) {
     let drawer = m.has("drawer");
     let open = (b.ui)(key).expanded;
-    // A closed drawer shows only its first module (the handle).
-    // (a bar-mode drawer never grows in place: its rest shows in the sub-bar)
+    // A closed drawer, and any bar-mode drawer, shows only its first module (the handle).
     let bar = drawer && is_bar_drawer(m);
     let shown = if drawer && (bar || !open) {
         1

@@ -52,14 +52,12 @@ pub fn gate() -> Result<&'static str, NotUnderHarness> {
     )
 }
 
-/// `SLIVER_SYSTEM_UNIT=1` only counts inside the system unit itself, so setting the variable by
-/// hand in a dev shell still doesn't grab the bar. Either proves it, and neither is possible
-/// without root:
+/// `SLIVER_SYSTEM_UNIT=1` only counts inside the system unit itself. Either proves it, and neither
+/// is possible without root:
 /// - `/proc/self/cgroup` is `0::/system.slice/sliverd.service` (no cgroup namespace), or
 /// - a private cgroup namespace (`0::/`, what `ProtectControlGroups=strict` gives on systemd
 ///   ≥ 257, so this is the real unit's case) *and* a `DynamicUser=` uid (61184–65519).
-///   Measured on the installed Mac14,7 (systemd 259): `0::/`, uid 65132. The first version of this
-///   check looked only for the unit path and crash-looped the RPM into the tiny-dfr fallback.
+///   Measured on the installed Mac14,7 (systemd 259): `0::/`, uid 65132.
 fn harness_env_ok(
     safeswap: Option<&str>,
     system_unit: Option<&str>,

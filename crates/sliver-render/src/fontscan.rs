@@ -1,19 +1,14 @@
-//! The system's fonts, mapped so that nothing reads whole font files into the page cache.
+//! The system's fonts, each file mapped once with `MADV_RANDOM`.
 //!
-//! A plain mapping reads ahead around each page fault, and with the usual 4 MB `read_ahead_kb`
-//! that's most of a font file per fault. fontdb maps every system font that way to parse it, so
-//! its `load_system_fonts` read ~214 MB (540 fonts) into the page cache, which the cgroup counts:
-//! systemd showed the agent's MemoryPeak at ~250 MB with 20 MB of RSS. cosmic-text then maps the
-//! fonts it draws with, or all of them when a glyph is in no font, the same way.
+//! A plain mapping reads ahead around each page fault (`read_ahead_kb`, commonly 4 MB): most of a
+//! font file per fault, into the page cache, which the cgroup counts. fontdb's
+//! `load_system_fonts` and cosmic-text map fonts that way. Without read-ahead only the parsed
+//! tables are read. The mapping stays in the database as a `SharedFile`, which cosmic-text uses
+//! rather than mapping the file again. [`release_pages`] drops touched pages from our RSS (they
+//! stay in the shared page cache).
 //!
-//! Here each font file is mapped once, with `MADV_RANDOM` (no read-ahead), and the mapping stays
-//! in the database as a `SharedFile`, which cosmic-text uses rather than mapping the file again.
-//! So the scan reads only the tables it parses (~14 MB in all), and a missing-glyph search reads
-//! each font's cmap rather than the whole file. [`release_pages`] drops the pages a mapping has
-//! touched from our RSS (they stay in the shared page cache) after the scan and on each trim.
-//!
-//! The directories and generic families come from the fontconfig config files, like fontdb does
-//! (its `load_fontconfig`, MIT), without the C library.
+//! Directories and generic families come from the fontconfig config files, as in fontdb's
+//! `load_fontconfig` (MIT), without the C library.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

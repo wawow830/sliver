@@ -1,6 +1,5 @@
 //! The `cava` module's spectrum: the `cava` program with raw output, run only while a spectrum
-//! is on the lit bar (the agent decides, [`super::Feeds::run_spectrum`]), so an idle, dark or
-//! spectrum-free bar costs nothing (invariant 3).
+//! is on the lit bar ([`super::Feeds::run_spectrum`]).
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};

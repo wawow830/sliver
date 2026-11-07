@@ -1,7 +1,7 @@
 //! The command line of sliver's programs (sliverd, sliver-agent, sliver-settings). Each declares
 //! a [`Cli`]: how it's run, and its options, each an [`Opt`] with its spellings and whether it
-//! takes a value. That one declaration is the grammar [`Cli::args`] parses with, what `--help`
-//! prints, what's refused (any other option), and what the man page tests hold the pages to.
+//! takes a value. [`Cli::args`] parses by it, `--help` prints it, any other option is refused, and
+//! the man page tests check the pages against it.
 //!
 //! ```
 //! use sliver_cli::{Cli, Opt};

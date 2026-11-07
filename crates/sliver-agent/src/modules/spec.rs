@@ -1,5 +1,5 @@
-//! The one presentation path: a module's source gives a [`Spec`] (values, verbs, level), and
-//! [`cell`] formats it with the module's config into a [`Cell`].
+//! A module's source gives a [`Spec`] (values, verbs, level), and [`cell`] formats it with the
+//! module's config into a [`Cell`].
 
 use super::*;
 
@@ -214,7 +214,7 @@ pub(super) fn flag(m: &ModuleInstance, key: &str) -> bool {
 }
 
 /// The slider presentation, for any module with a [`Spec::level`]: no text, a drag sets the level
-/// (when the module has a `set` verb), and a tap no longer does the button's thing. A collapsed
+/// (when the module has a `set` verb), and a tap doesn't do the button's thing. A collapsed
 /// slider shows just its icon until it's tapped open (like macOS's control strip).
 pub(super) fn as_slider(mut sp: Spec, m: &ModuleInstance, ui: &UiState) -> Spec {
     let Some(level) = sp.level else {
@@ -240,7 +240,7 @@ pub(super) fn source(at: &At) -> Option<Spec> {
 
 /// Where each module type's values come from. With the types [`cells_in`] composes from other
 /// modules (groups) or from what apps publish, this is the config's list of types
-/// (`sliver_config::MODULE_TYPES`; a test holds them together), so a type is added here.
+/// (`sliver_config::MODULE_TYPES`; a test holds them together).
 pub(super) type Source = fn(&At) -> Option<Spec>;
 pub(super) const SOURCES: &[(&str, Source)] = &[
     ("key", |_| Some(Spec::new(ValueMap::new(), ""))),
@@ -298,8 +298,8 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
     ("taskbar", |at| desktop::taskbar(at.m, at.world, at.item)),
 ];
 
-/// A formatted label: the one step every module's (and configured published item's) text goes
-/// through. waybar's `format`/`format-icons`/`states` over `values`, then the icon: the format's,
+/// A formatted label, for every module's (and configured published item's) text: waybar's
+/// `format`/`format-icons`/`states` over `values`, then the icon: the format's,
 /// else the module's `icon`, else `fallback` (a name looked up the same way). `None` when the
 /// format hides the cell.
 pub(crate) struct Shown {

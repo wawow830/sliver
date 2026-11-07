@@ -1,5 +1,5 @@
-//! Editing config files while keeping the user's comments and formatting (sliver-config(5)).
-//! The settings app and `sliverctl config set` go through this, and nothing else writes config.
+//! Editing config files while keeping the user's comments and formatting (sliver-config(5)), for
+//! the settings app and `sliverctl config set`.
 //!
 //! Key paths use the spelling from diagnostics: `bar.spacing`, `modules."custom/vpn".format`,
 //! `layouts.default.zones[1].modules`, `rules[0].layout`.
@@ -315,7 +315,7 @@ impl Editor {
     }
 
     /// Validates, then writes atomically (temp file in the same directory, then rename). Refuses if
-    /// there are errors, so a broken config never lands on disk from our tools.
+    /// there are errors.
     pub fn save(&self, hw: Hardware) -> Result<Diagnostics, Diagnostics> {
         let d = self.check(hw);
         if !d.ok() {
@@ -411,7 +411,6 @@ fn to_item(v: &Value, section_ok: bool) -> Item {
 pub fn inline(v: &Value) -> String {
     match v {
         Value::Table(t) => {
-            // `name` and `type` first: zones and inline modules read better that way.
             let first = ["name", "type"];
             let ordered = first
                 .iter()

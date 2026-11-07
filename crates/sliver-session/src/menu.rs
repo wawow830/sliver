@@ -93,7 +93,7 @@ pub fn layout(conn: &Connection, item: &TrayItem) -> zbus::Result<Vec<MenuItem>>
         return Ok(Vec::new());
     };
     let (dest, _) = parse_item_address(&item.key);
-    // Etiquette: tell the app the menu is about to be shown so it can refresh dynamic entries.
+    // Tell the app the menu is about to be shown so it can refresh dynamic entries.
     let _ = conn.call_method(
         Some(dest.as_str()),
         menu,

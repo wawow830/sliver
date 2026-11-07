@@ -1,5 +1,5 @@
 //! What the bar shows right now: rule selection, zone inheritance, module instantiation
-//! (sliver-config(5)). Runs in the agent. Pixel layout is the renderer's job.
+//! (sliver-config(5)). Runs in the agent.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -47,8 +47,8 @@ pub struct ModuleInstance {
 }
 
 impl ModuleInstance {
-    /// A type-specific key. Every one the runtime reads is declared in [`crate::MODULE_TYPES`],
-    /// which is what validation and the man page go by.
+    /// A type-specific key. Every key the runtime reads must be declared in
+    /// [`crate::MODULE_TYPES`].
     pub fn get(&self, key: &str) -> Option<&Value> {
         debug_assert!(
             crate::module::takes_key(&self.id.kind, key) != Some(false),
@@ -370,8 +370,8 @@ pub fn extends_chain(
 
 /// The zones a layout shows, from its `extends` chain's levels, farthest parent first (each its
 /// zones and `zone-order`): a zone replaces the one of the same name or is added, and a level's
-/// `zone-order` reorders and filters what there is so far. Generic over the zone, so editors
-/// working on the raw TOML inherit exactly like the parsed config.
+/// `zone-order` reorders and filters what there is so far. Generic over the zone so editors can
+/// use it on raw TOML.
 pub fn inherit_zones<Z: Clone>(
     levels: impl IntoIterator<Item = (Vec<Z>, Option<Vec<String>>)>,
     name: impl Fn(&Z) -> &str,

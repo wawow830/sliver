@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """A portal *backend* for the screenshot test: org.freedesktop.impl.portal.Screenshot and Access.
 
-The real xdg-desktop-portal (the frontend, which apps and Sliver talk to) runs in front of it, so
-the test covers everything except the compositor-specific part: grabbing pixels. Every call is
-appended to the log file (argv[1]) as one JSON line; Screenshot answers with a file:// uri."""
+The real xdg-desktop-portal (the frontend, which apps and Sliver talk to) runs in front of it. Every
+call is appended to the log file (argv[1]) as one JSON line; Screenshot answers with a file:// uri."""
 import json
 import sys
 

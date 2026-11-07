@@ -166,7 +166,7 @@ pub(crate) fn status_page(state: &State) -> gtk::Widget {
     reported.set_visible(false);
     page.add(&reported);
     // Config and stylesheet problems are already under Problems (this app checks the same
-    // files): only the agent's own (modules, runtime) are new here.
+    // files); only the agent's own (modules, runtime) are shown here.
     let ours: Vec<String> = state
         .loaded
         .files

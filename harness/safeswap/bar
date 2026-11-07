@@ -16,7 +16,7 @@ case "$cmd" in
     pkexec "$H" snap >"$out.tmp" && mv "$out.tmp" "$out" && echo "$out" ;;
   logs) cat /run/sliver-safeswap/out/sliverd.log ;;
   status) "$H" status ;;
-  stop) exec pkexec "$H" stop --by "$PPID" "$@" ;;   # --any: even someone else's run
+  stop) exec pkexec "$H" stop --by "$PPID" "$@" ;;
   restore) exec pkexec "$H" restore ;;
   *) echo "usage: bar run BIN [--seconds N] [-- ARGS] | snap [OUT.png] | status | stop [--any] | restore | logs" >&2; exit 2 ;;
 esac

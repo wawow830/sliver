@@ -13,9 +13,9 @@
 //! # Ok::<(), sliver_client::Error>(())
 //! ```
 //!
-//! Contexts are local handles. The client remembers what it published and **re-publishes it by
-//! itself** whenever `sliver-agent` (re)appears on the bus, so apps don't need to care about agent
-//! restarts. Contexts vanish when the [`Client`] is dropped (they're tied to the bus connection).
+//! Contexts are local handles. The client remembers what it published and re-publishes it
+//! whenever `sliver-agent` (re)appears on the bus. Contexts vanish when the [`Client`] is dropped
+//! (they're tied to the bus connection).
 
 use sliver_ipc::dbus::{BUS_NAME, IFACE_CONTEXT, IFACE_TOUCHBAR, ROOT_PATH};
 use std::collections::HashMap;

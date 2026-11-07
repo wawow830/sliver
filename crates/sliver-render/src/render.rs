@@ -143,8 +143,7 @@ impl Renderer {
     }
 
     /// Forget transition state for every scene but these (the ones on screen now). Call it
-    /// after drawing a set of scenes that replaced others (a layer change), or a fade left
-    /// running on a scene that's no longer drawn would keep requesting frames.
+    /// after a layer change: a fade left on a scene no longer drawn keeps requesting frames.
     pub fn retain_scenes(&mut self, keep: &[&Scene]) {
         let ids: Vec<String> = keep.iter().map(|s| s.classes.join(".")).collect();
         self.anim.retain_scenes(&ids);
@@ -156,7 +155,7 @@ impl Renderer {
     }
 
     /// When the next frame is due for transitions that are still running, or `None` when
-    /// everything is at rest (then there is nothing to redraw until something changes).
+    /// everything is at rest.
     pub fn animation_deadline(&self) -> Option<std::time::Instant> {
         self.anim.deadline()
     }
@@ -273,7 +272,7 @@ impl Renderer {
         layout
     }
 
-    /// Convenience: renders into a new `width` x `height` pixmap.
+    /// Renders into a new `width` x `height` pixmap.
     pub fn render_new(
         &mut self,
         scene: &Scene,

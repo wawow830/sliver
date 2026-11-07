@@ -7,7 +7,7 @@
 //! `@import "sliver:NAME"` (built-in themes) compose sheets.
 //!
 //! Loading never fails on content: problems become [`Diagnostic`]s with file:line:column and the
-//! offending rule or declaration is skipped, so a typo can't blank the bar.
+//! offending rule or declaration is skipped.
 
 mod parse;
 mod selector;

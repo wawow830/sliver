@@ -11,7 +11,6 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-# Internal crates. Depend on these as `sliver-config.workspace = true`.
 sliver-desktop = { path = "crates/sliver-desktop" }
 sliver-session = { path = "crates/sliver-session" }
 sliver-bus = { path = "crates/sliver-bus" }
@@ -29,7 +28,6 @@ sliver-testbus = { path = "crates/sliver-testbus" }
 sliver-hw = { path = "crates/sliver-hw" }
 sliver-render = { path = "crates/sliver-render" }
 sliverd = { path = "crates/sliverd" }
-# External crates shared by several members (members add features where they use them).
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 libc = "0.2"
 regex-lite = "0.1"

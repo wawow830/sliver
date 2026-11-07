@@ -12,7 +12,6 @@ use crate::module::ModuleId;
 use crate::resolve::Parsed;
 use crate::values::{Align, FireOn, Width, parse_duration};
 
-/// Current config schema version.
 pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -170,15 +169,13 @@ pub struct Config {
     /// Layer name → its default layout. `base` and `fn` are reserved.
     pub layers: BTreeMap<String, String>,
     pub layer_options: BTreeMap<String, LayerOptions>,
-    /// Read with [`Config::layouts`]: only loading sets it, so [`Config::module`]'s parsed modules
-    /// always agree with it.
+    /// Only loading sets it, so [`Config::module`]'s parsed modules agree with it.
     pub(crate) layouts: BTreeMap<String, Layout>,
     pub rules: Vec<Rule>,
     /// Module blocks, keyed by the canonical id (so `[modules.pulseaudio]` configures `audio`).
-    /// Read with [`Config::modules`]: only loading sets it (see `layouts`).
+    /// Only loading sets it (see `layouts`).
     pub(crate) modules: BTreeMap<ModuleId, Table>,
-    /// Every named module the config refers to (blocks, zones, groups), parsed when it loads:
-    /// rendering reads these, it doesn't parse ([`Config::module`]).
+    /// Every named module the config refers to (blocks, zones, groups), parsed when it loads.
     pub(crate) parsed: BTreeMap<ModuleId, std::sync::Arc<Parsed>>,
     pub gestures: BTreeMap<String, Action>,
     /// Per-app API preferences, keyed by app id (`"*"` = defaults).
@@ -189,7 +186,6 @@ pub struct Config {
 }
 
 impl Config {
-    /// The layouts, by name.
     pub fn layouts(&self) -> &BTreeMap<String, Layout> {
         &self.layouts
     }
@@ -200,8 +196,7 @@ impl Config {
     }
 }
 
-/// Always merged *underneath* every config, so built-in layers and layouts always exist and any
-/// of them can be redefined (sliver-config(5)).
+/// Merged underneath every config (sliver-config(5)).
 pub const BUILTIN: &str = include_str!("builtin.toml");
 
 impl Config {

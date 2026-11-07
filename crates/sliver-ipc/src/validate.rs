@@ -1,8 +1,8 @@
 //! What sliverd checks before trusting anything from the agent.
 //!
-//! sliverd treats the agent as untrusted. A frame that fails [`validate_present`] is rejected
-//! (the previous frame stays up). [`missing_safe_keys`] is advisory only. Layouts are fully
-//! editable, and invariant 1 is guaranteed by sliverd's hatch (`sliverd::hatch`).
+//! A frame that fails [`validate_present`] is rejected (the previous frame stays up).
+//! [`missing_safe_keys`] is advisory only: layouts are fully editable, and sliverd's hatch
+//! (`sliverd::hatch`) keeps the safe keys reachable.
 
 use crate::keys;
 use crate::proto::{MAX_BUFFERS, PanelInfo, PixelFormat, Present, Region, RegionKind};
@@ -74,8 +74,6 @@ impl Invalid {
     }
 }
 
-/// Checks an `attach_buffer` header. The fd's seals and size (≥ [`required_len`]) are checked by
-/// sliverd itself.
 /// What an attached buffer holds: its pixels' size and format, and the bytes per row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BufferShape {
@@ -85,6 +83,8 @@ pub struct BufferShape {
     pub format: PixelFormat,
 }
 
+/// Checks an `attach_buffer` header. The fd's seals and size (≥ [`required_len`]) are checked by
+/// sliverd itself.
 pub fn validate_buffer(
     panel: &PanelInfo,
     attached: usize,

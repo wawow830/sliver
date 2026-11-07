@@ -1,10 +1,9 @@
 //! The event loop: one `poll(2)` over the IPC listener, agent connections, hardware input and the
 //! seat watch, with the timeout taken from [`Daemon::next_deadline`]. With nothing to time (display
-//! off, no ping outstanding) it blocks until input arrives, so there are no idle wakeups (invariant
-//! 3).
+//! off, no ping outstanding) it blocks until input arrives.
 //!
-//! Single-threaded and bounded. Each wakeup reads at most [`MAX_PACKETS_PER_WAKE`] packets per
-//! connection, and an agent whose socket won't take a reply is disconnected, never waited for.
+//! Each wakeup reads at most [`MAX_PACKETS_PER_WAKE`] packets per connection, and an agent whose
+//! socket won't take a reply is disconnected, never waited for.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -42,10 +41,9 @@ enum Ready {
     Session,
 }
 
-/// Notices that the machine was suspended, without D-Bus and without a timer: `CLOCK_BOOTTIME`
-/// keeps counting while suspended, `CLOCK_MONOTONIC` (the daemon's clock) doesn't. Checked
-/// whenever the loop wakes anyway. After a resume something always wakes it: the lid, a key,
-/// the touchpad, the bar.
+/// Notices that the machine was suspended: `CLOCK_BOOTTIME` keeps counting while suspended,
+/// `CLOCK_MONOTONIC` (the daemon's clock) doesn't. Checked whenever the loop wakes; after a resume
+/// something always wakes it (the lid, a key, the touchpad, the bar).
 #[derive(Debug, Default)]
 pub struct SleepDetector {
     gap_ms: Option<i64>,
@@ -106,7 +104,6 @@ impl Server {
         self.clock.elapsed().as_millis() as u64
     }
 
-    /// Runs forever.
     pub fn run(&mut self) -> io::Result<()> {
         loop {
             self.run_once(None)?;

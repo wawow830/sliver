@@ -1,8 +1,8 @@
 //! Adaptive brightness curve: how the bar follows the main display (`display_policy.curve`).
 //!
-//! Shared so sliverd (which applies it) and the settings app (which plots it) use the same math.
-//! On the wire and here, points are `[screen, bar]` in per-mille (0–1000): screen = the main
-//! display's brightness, bar = share of the active brightness. Config uses percent (×10).
+//! sliverd applies it and the settings app plots it. On the wire and here, points are
+//! `[screen, bar]` in per-mille (0–1000): screen = the main display's brightness, bar = share of
+//! the active brightness. Config uses percent (×10).
 
 /// Most points a curve keeps.
 pub const MAX_POINTS: usize = 16;

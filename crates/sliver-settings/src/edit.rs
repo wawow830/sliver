@@ -1,12 +1,10 @@
-//! Editing operations for the settings app (instant apply + undo). They're pure:
-//! each one takes the user's file (an `Editor`) plus the merged effective config and edits the
-//! file. No GTK here, so they're unit-tested.
+//! Editing operations for the settings app. Each takes the user's file (an `Editor`) plus the
+//! merged effective config and edits the file. No GTK here.
 //!
-//! The subtle part is that TOML arrays replace and never merge. To change one zone
-//! of a layout that comes from the built-ins or an include, we first copy that layout's whole
-//! effective zone list into the user's file ("materialize"). Otherwise the user's partial list
-//! would silently drop the other zones. A zone inherited through `extends` is copied into the
-//! child as an override (whole zones).
+//! TOML arrays replace and never merge, so changing one zone of a layout from the built-ins or an
+//! include first copies that layout's whole effective zone list into the user's file
+//! ("materialize"). A zone inherited through `extends` is copied into the child as a whole-zone
+//! override.
 
 use sliver_config::{Editor, ModuleId};
 use toml::{Table, Value};

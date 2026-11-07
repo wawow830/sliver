@@ -1,14 +1,12 @@
 //! Renders a row of Touch Bar items to pixels.
 //!
 //! Pure Rust: [`tiny_skia`] rasterizes, [`resvg`] draws SVG icons and `cosmic-text` shapes text.
-//! There are no system library dependencies, and an embedded font and icon set mean the safe layer
-//! always renders (invariant 1).
+//! No system library dependencies; an embedded font and icon set render without installed assets.
 //!
 //! The pipeline:
 //! 1. A [`Stylesheet`] (waybar-style CSS) styles the `bar > zone > module` tree.
 //! 2. [`Renderer::layout`] measures content and [`solve`]s zones and their `Auto`/`Fixed`/`Fill`
-//!    items into rectangles. Use the same rects for touch regions ([`hit_test`]), so what you see
-//!    is what you touch.
+//!    items into rectangles. Touch regions use the same rects ([`hit_test`]).
 //! 3. [`Renderer::render`] draws a [`Scene`] into a landscape [`Pixmap`] (e.g. 2008x60).
 //!    Headless callers write it out with [`Pixmap::encode_png`].
 //! 4. [`panel::damage`] finds what changed since the last frame, and [`panel::blit_xrgb8888`]

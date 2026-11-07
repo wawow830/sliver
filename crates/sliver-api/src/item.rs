@@ -12,14 +12,14 @@
 //!   `popover`, `closed`, and `hold`, `double-tap`, `swipe-*` only when listed in `gestures`.
 //!   The agent updates toggles, sliders and selections at once; the app may correct them.
 //!
-//! Parsing is lenient (the forward compatibility rule): unknown keys and types become warnings and
+//! Parsing is lenient: unknown keys and types become warnings and
 //! wrong-typed values are ignored with a warning. Only structural problems are errors: a missing
 //! or duplicate `id`, a missing `type`, nesting deeper than one level, and size limits.
 
 use sliver_ipc::dbus::limits;
 use std::collections::{BTreeMap, HashSet};
 
-/// A D-Bus value, decoupled from zvariant so the model is testable without a bus.
+/// A D-Bus value, decoupled from zvariant.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prop {
     Bool(bool),

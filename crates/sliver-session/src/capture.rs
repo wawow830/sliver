@@ -1,22 +1,20 @@
-//! Who is capturing the microphone, the camera or the screen (the `privacy` module): PipeWire's
-//! stream nodes, followed over PipeWire's own socket.
+//! Who is capturing the microphone, the camera or the screen (the `privacy` module), from
+//! PipeWire's stream nodes over PipeWire's own socket.
 //!
-//! Why not `pw-dump -m`: it re-dumps whole objects on every change, which on a desktop with an
-//! audio filter chain (Fedora Asahi's) is hundreds of KB a second, about 2 % of a core, all day.
-//! Here the registry sends one small message per object that appears or goes away, and only the
-//! few stream nodes that could be a capture are bound to learn whether they are *running*.
-//! Nothing polls: the thread blocks in `read`. While the bar is off ([`Handle::set_awake`]) it
-//! disconnects, and a fresh connection on wake replays everything.
+//! `pw-dump -m` re-dumps whole objects on every change, hundreds of KB a second with an audio
+//! filter chain (Fedora Asahi's). The registry sends one small message per object that appears or
+//! goes away, and only stream nodes that could be a capture are bound to learn whether they are
+//! running. While the bar is off ([`Handle::set_awake`]) the connection is closed; a fresh one on
+//! wake replays everything.
 //!
-//! The native protocol is small for this use (docs.pipewire.org, "Native protocol"): messages are
+//! Native protocol (docs.pipewire.org, "Native protocol"): messages are
 //! `{id, opcode << 24 | size, seq, n_fds}` followed by an SPA POD struct.
 //!
-//! What counts: `Stream/Input/Audio` is a recording app (the microphone), unless it only records
-//! what a sink plays (`stream.monitor`, `stream.capture.sink`, or a level meter).
-//! `Stream/Input/Video` is an app *receiving* video: a camera when it says `media.role = Camera`, a
-//! screen share otherwise. Only streams in the `running` state count. A camera an app opens
-//! straight through V4L2, with PipeWire not involved, is found by [`v4l2`] and merged into
-//! `camera`.
+//! `Stream/Input/Audio` is the microphone unless it only records what a sink plays
+//! (`stream.monitor`, `stream.capture.sink`, or a level meter). `Stream/Input/Video` is an app
+//! receiving video: a camera when it says `media.role = Camera`, a screen share otherwise. Only
+//! streams in the `running` state count. A camera opened straight through V4L2, without PipeWire,
+//! is found by [`v4l2`] and merged into `camera`.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -41,7 +39,7 @@ impl Capture {
         self.mic.is_empty() && self.camera.is_empty() && self.screen.is_empty()
     }
 
-    /// The kinds in use, in a fixed order, each with its apps: what the module draws.
+    /// The kinds in use, in a fixed order, each with its apps.
     pub fn kinds(&self) -> Vec<(&'static str, &[String])> {
         [
             ("screen", &self.screen),
@@ -54,8 +52,6 @@ impl Capture {
         .collect()
     }
 }
-
-// ---- SPA PODs -------------------------------------------------------------------------------
 
 /// The parts of an SPA POD this client needs.
 #[derive(Debug, Clone, PartialEq)]
@@ -161,7 +157,6 @@ impl StructBuilder {
         self
     }
 
-    /// The finished struct POD.
     pub fn build(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(8 + self.0.len());
         out.extend((self.0.len() as u32).to_le_bytes());
@@ -179,8 +174,6 @@ fn flatten<'a>(pod: &'a Pod, out: &mut Vec<&'a Pod>) {
         p => out.push(p),
     }
 }
-
-// ---- Messages -------------------------------------------------------------------------------
 
 const CORE: u32 = 0;
 const CLIENT: u32 = 1;
@@ -455,8 +448,6 @@ fn run(stream: UnixStream, mut report: impl FnMut(Capture) -> bool) -> io::Resul
     }
 }
 
-// ---- The thread -----------------------------------------------------------------------------
-
 /// Where PipeWire listens: `$PIPEWIRE_REMOTE` (a name or a path), else `pipewire-0` in
 /// `$PIPEWIRE_RUNTIME_DIR`, `$XDG_RUNTIME_DIR`.
 pub fn socket_path(get: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
@@ -476,8 +467,8 @@ pub fn socket_path(get: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 /// turns off.
 #[derive(Default)]
 pub(crate) struct Gate {
-    /// The two independent sources, kept apart so each can replace its own part:
-    /// PipeWire's set, and the apps holding a V4L2 camera node.
+    /// PipeWire's set and the apps holding a V4L2 camera node, kept apart so each source replaces
+    /// only its own part.
     parts: Mutex<(Capture, Vec<String>)>,
     awake: Mutex<bool>,
     changed: Condvar,
@@ -499,14 +490,12 @@ impl Gate {
         Self::publish(hub, &p)
     }
 
-    /// The V4L2 holders changed.
     fn set_v4l2(&self, hub: &crate::Hub, apps: Vec<String>) -> bool {
         let mut p = self.parts.lock().unwrap_or_else(|e| e.into_inner());
         p.1 = apps;
         Self::publish(hub, &p)
     }
 
-    /// A camera is a camera whichever way the app reached it.
     fn publish(hub: &crate::Hub, p: &(Capture, Vec<String>)) -> bool {
         let mut c = p.0.clone();
         c.camera.extend(p.1.iter().cloned());
@@ -535,7 +524,7 @@ impl Gate {
     }
 }
 
-/// Blocks until `dir` gets a new entry (PipeWire creating its socket): no polling.
+/// Blocks until `dir` gets a new entry (PipeWire creating its socket).
 fn wait_for_entry(dir: &Path, name: &std::ffi::OsStr) {
     use rustix::fs::inotify::{CreateFlags, WatchFlags, add_watch, init};
     let Ok(fd) = init(CreateFlags::CLOEXEC) else {
@@ -555,8 +544,8 @@ fn wait_for_entry(dir: &Path, name: &std::ffi::OsStr) {
 }
 
 impl Handle {
-    /// Cameras held open straight through V4L2 (see [`v4l2`]), merged into `capture.camera`.
-    /// Event-driven, and quiet while nothing opens a camera; not gated by the bar's power state.
+    /// Cameras held open straight through V4L2 (see [`v4l2`]), merged into `capture.camera`. Not
+    /// gated by the bar's power state.
     fn start_v4l2(&self, dev: PathBuf, proc_root: PathBuf) {
         let (hub, gate) = (self.hub.clone(), self.capture_gate.clone());
         std::thread::Builder::new()
@@ -568,9 +557,8 @@ impl Handle {
     }
 
     /// Follow who is capturing the microphone, camera or screen, from the PipeWire socket at
-    /// `socket`, into [`SessionState::capture`](crate::SessionState). A missing PipeWire is waited
-    /// for (inotify), not retried on a timer. Starts once; later calls do nothing. See the module
-    /// docs.
+    /// `socket`, into [`SessionState::capture`](crate::SessionState). A missing socket is waited
+    /// for with inotify. Starts once; later calls do nothing.
     pub fn start_capture(&self, socket: PathBuf) {
         self.start_capture_in(socket, "/dev".into(), "/proc".into());
     }

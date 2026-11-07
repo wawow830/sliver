@@ -2,7 +2,7 @@
 # The generic Wayland backend (wlr-foreign-toplevel) against a real, headless river-classic 0.3:
 # the window list and focus follow two real clients, and the focus/close actions work. river has
 # no ext-workspace (its "tags" are a private protocol, river-status), so workspaces stay empty:
-# that is checked too, as the known gap. Private runtime dir; the live session is never touched.
+# that is checked too, as the known gap. Private runtime dir.
 #
 # river 0.4 ("river", not "river-classic") is a different thing: it manages no windows itself and
 # needs a separate window-manager client, so nothing maps without one. Not covered.

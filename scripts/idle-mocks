@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Quiet stand-ins for every service an event-driven module follows, for scripts/idle-wakeups'
-"full" phase: systemd (system and user managers), NetworkManager, BlueZ, fcitx5, a tray
-watcher, a notification server, and a PipeWire socket that accepts and then says nothing.
+"""Quiet stand-ins for the services event-driven modules follow, for scripts/idle-wakeups' "full"
+phase: systemd (system and user managers), NetworkManager, BlueZ, fcitx5, a tray watcher, a
+notification server, and a PipeWire socket that accepts and then says nothing.
 
-They answer what the sources ask at startup and then stay silent, like an idle desktop. So any
-wakeup the agent shows is its own. Each source that calls in is written to SEEN (one line per name)
-so idle-wakeups can fail when a source never connected (then the phase would prove nothing).
+They answer what the sources ask at startup, then stay silent. Each source that calls in is
+appended to SEEN, one line per name.
 
   scripts/idle-mocks --session ADDR --system ADDR --pipewire PATH --seen FILE
 """
@@ -32,7 +31,6 @@ def seen(name):
 
 
 class Props(dbus.service.Object):
-    """An object with fixed properties per interface."""
 
     def __init__(self, conn, path, props, tag):
         super().__init__(conn, path)
@@ -178,8 +176,8 @@ class Notifications(dbus.service.Object):
 
 
 def pipewire(path):
-    """Accept, read the client's hello and registry request, then say nothing (an idle desktop
-    with no capture streams). The client blocks in read, which is what we measure."""
+    """Reads the client's hello and registry request, then never answers: an idle desktop with no
+    capture streams."""
     try:
         os.unlink(path)
     except FileNotFoundError:

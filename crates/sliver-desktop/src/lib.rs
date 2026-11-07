@@ -1,19 +1,17 @@
 //! `sliver-desktop`: what the desktop tells the session agent.
 //!
-//! The agent decides which Touch Bar layout to show from a [`DesktopState`] (focused app,
-//! workspace, keyboard layout, ...). Each compositor gets a backend implementing
-//! [`DesktopSource`] ([`hyprland`], [`sway`], [`niri`], and [`wlr`] for the rest).
-//! [`fake::ScriptedSource`] drives tests without a compositor. Backends are blocking and
-//! runtime-agnostic (plain threads, no busy loops): they sleep in `read(2)` until the compositor
-//! says something changed.
+//! The agent picks the Touch Bar layout from a [`DesktopState`] (focused app, workspace, keyboard
+//! layout, ...). Each compositor has a [`DesktopSource`] backend ([`hyprland`], [`sway`],
+//! [`niri`], and [`wlr`] for the rest); [`fake::ScriptedSource`] drives tests without a
+//! compositor. Backends are blocking and sleep in `read(2)` until the compositor reports a change.
 //!
 //! No portal or cross-desktop standard says which window is focused (Wayland withholds it on
 //! purpose), so each desktop needs its own backend; [`Backend::detect`] picks one from the
 //! environment. GNOME and KDE have no in-process backend: an extension or KWin script pushes their
-//! focus through the agent's `Desktop1` instead. A dead compositor connection is
-//! `DesktopState { connected: false, .. }`, never an error, and every backend subscribes to events
-//! before its first read so no change falls between the two. Actions (switch workspace, focus or
-//! close a window, change layout) are only ever sent for an explicit user action ([`control`]).
+//! focus through the agent's `Desktop1`. A dead compositor connection is
+//! `DesktopState { connected: false, .. }`, never an error. Every backend subscribes to events
+//! before its first read. Actions (switch workspace, focus or close a window, change layout) are
+//! only sent for an explicit user action ([`control`]).
 
 pub mod control;
 pub mod fake;
@@ -129,8 +127,6 @@ pub struct WindowInfo {
     pub pid: Option<u32>,
 }
 
-/// Everything the compositor tells us. Only fields that changed behaviour-relevantly are here;
-/// system signals (power, media, lock...) come from `sliver-session`.
 /// An xkb keymap by RMLVO names, plus the active layout (group) index.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct XkbNames {
@@ -147,6 +143,7 @@ pub struct XkbNames {
 /// The name sliverd gives its uinput keyboard (`sliver_hw::uinput`).
 pub const BAR_KEYBOARD: &str = "Sliver Touch Bar Keys";
 
+/// System signals (power, media, lock...) come from `sliver-session`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DesktopState {
     /// False while the compositor connection is down (the agent should fall back to defaults).
@@ -211,7 +208,6 @@ impl DesktopState {
     }
 }
 
-/// A blocking stream of desktop state changes.
 pub trait DesktopSource {
     /// The state as of the last change (the snapshot right after connecting, initially).
     fn state(&self) -> &DesktopState;

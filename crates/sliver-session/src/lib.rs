@@ -1,23 +1,19 @@
 //! `sliver-session`: session and system state that is not the compositor's.
 //!
-//! Lock/idle/sleep (logind), power (UPower, power-profiles-daemon) and media (MPRIS) reduced to
-//! one flat, comparable [`SessionState`]. Sources are event driven: a thread sleeps in a D-Bus
-//! read and re-reads a handful of properties when a relevant signal arrives. Downstream only
-//! hears about real changes. Compositor state lives in `sliver-desktop`.
+//! Lock/idle/sleep (logind), power (UPower, power-profiles-daemon) and media (MPRIS), as one
+//! [`SessionState`]. Compositor state lives in `sliver-desktop`.
 //!
-//! Every source follows the same rules:
-//! - **Event driven.** A socket read, a D-Bus signal or a long-lived child's output wakes it.
-//!   Where only polling exists, it polls only while a module showing the value is on the lit bar
-//!   (invariant 3). [`Handle::set_awake`] drops the chatty system-bus match rules (NetworkManager,
-//!   BlueZ, UPower) while the bar is off and re-reads them on wake; logind's stay, since lock and
-//!   sleep must always work.
-//! - **Subscribe before the first read**, or a change between the two is lost.
-//! - **Unknown, never an error.** A missing service leaves its fields unknown, and a context key
-//!   with no known value is left out, so it never matches a rule.
-//! - **Never start a service** just by reading it (`NoAutoStart`).
+//! - Sources wake on a socket read, a D-Bus signal or a long-lived child's output. Where only
+//!   polling exists, they poll only while a module showing the value is on the lit bar.
+//!   [`Handle::set_awake`] drops the NetworkManager, BlueZ and UPower match rules while the bar is
+//!   off; logind's stay, since lock and sleep must always work.
+//! - Subscribe before the first read, or a change between the two is lost.
+//! - A missing service leaves its fields unknown; a context key with no known value is left out,
+//!   so it never matches a rule.
+//! - Reads use `NoAutoStart`, so reading never starts a service.
 //!
-//! Testing: [`fake::ScriptedSession`] replays states; the real sources are tested against mock
-//! services on a private `dbus-daemon` (see `tests/`).
+//! [`fake::ScriptedSession`] replays states; the real sources are tested against mock services on
+//! a private `dbus-daemon` (see `tests/`).
 
 pub mod appearance;
 pub mod art;
@@ -94,7 +90,7 @@ pub enum PlaybackStatus {
 /// The one player the Touch Bar should show (see [`mpris::pick_active`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Media {
-    /// Full bus name, e.g. `org.mpris.MediaPlayer2.firefox.instance_1_42`. Use it to control.
+    /// Full bus name, e.g. `org.mpris.MediaPlayer2.firefox.instance_1_42`.
     pub player: String,
     /// Human name (`Identity`), e.g. "Mozilla Firefox".
     pub identity: String,
@@ -104,8 +100,8 @@ pub struct Media {
     pub album: String,
     pub art_url: Option<String>,
     pub length_us: Option<i64>,
-    /// Position when this state was read. MPRIS never signals position changes: while
-    /// `Playing`, extrapolate from the time of the last state change instead of polling.
+    /// Position when this state was read. MPRIS never signals position changes, so extrapolate
+    /// from `position_at_ms` while `Playing`.
     pub position_us: Option<i64>,
     pub can_play_pause: bool,
     pub can_next: bool,
@@ -113,18 +109,17 @@ pub struct Media {
     pub can_seek: bool,
     /// `mpris:trackid`, needed to seek (`SetPosition`).
     pub track_id: Option<String>,
-    /// When `position_us` was read (unix ms), so a UI can extrapolate while playing.
+    /// When `position_us` was read (unix ms).
     pub position_at_ms: Option<u64>,
 }
 
-/// Everything in this crate, flat and comparable.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionState {
     /// logind `LockedHint` plus `Lock`/`Unlock` edges. A hint the locker sets, not a fact: the
     /// agent weighs it against the desktop's own signal and running lockers (`plausibly_locked`).
     pub locked: bool,
-    /// The desktop's own lock/screen-saver state (`ActiveChanged`), when it has one. Unlike
-    /// `locked` this is not a hint: it wins over it.
+    /// The desktop's own lock/screen-saver state (`ActiveChanged`), when it has one. It overrides
+    /// `locked`.
     pub screensaver: Option<bool>,
     /// logind `IdleHint`.
     pub idle: bool,
@@ -155,21 +150,17 @@ pub struct SessionState {
     pub failed_units: failed::FailedUnits,
 }
 
-/// A blocking stream of session state changes.
 pub trait SessionSource {
-    /// Block until the state changed, then return it. `Ok(None)` = the source is finished.
+    /// Blocks until the state changed. `Ok(None)`: the source is finished.
     fn next_change(&mut self) -> io::Result<Option<SessionState>>;
 }
 
-/// Shared state that the source threads update. Only real changes count, and a reader gets the
-/// latest state, not every step to it: a slow reader catches up in one read, and nothing queues
-/// up behind it.
+/// State the source threads update. A reader gets only the latest state, not every step to it.
 #[derive(Clone)]
 pub(crate) struct Hub(Arc<(Mutex<Shared>, Condvar)>);
 
 struct Shared {
     state: SessionState,
-    /// Bumped on every real change.
     version: u64,
     /// The reader ([`Latest`]) is gone: sources stop.
     closed: bool,
@@ -229,7 +220,6 @@ impl Latest {
         })
     }
 
-    /// The state if it's newer than the last one returned, without waiting.
     #[cfg(test)]
     fn try_take(&mut self) -> Option<SessionState> {
         let s = self.hub.lock();
@@ -253,8 +243,8 @@ pub struct Session {
     handle: Handle,
 }
 
-/// Cloneable control/feeding side of a [`Session`]: sources without a signal to wait on push
-/// their readings through it, and actions that change session state live here.
+/// Cloneable side of a [`Session`]: sources without a signal to wait on push their readings
+/// through it, and actions that change session state live here.
 #[derive(Clone)]
 pub struct Handle {
     hub: Hub,
@@ -267,7 +257,6 @@ pub struct Handle {
     chatty_on: Arc<std::sync::atomic::AtomicBool>,
     /// KDE's `Inhibit` cookie while Do Not Disturb is on (see [`Handle::set_dnd`]).
     dnd_cookie: Arc<Mutex<Option<u32>>>,
-    /// [`Handle::start_failed_units`] ran.
     failed_started: Arc<std::sync::atomic::AtomicBool>,
     /// The PipeWire capture follower's on/off switch ([`Handle::start_capture`]).
     capture_gate: Arc<capture::Gate>,
@@ -278,17 +267,14 @@ pub struct Handle {
 impl Handle {
     /// Re-read backlight levels from sysfs. Sysfs brightness has no reliable change event, so
     /// call this on our own writes, on wake, and on a slow timer only while a slider is shown.
-    /// `false` = the receiving side is gone.
+    /// `false`: the receiving side is gone.
     pub fn refresh_brightness(&self, sysfs: &brightness::Sysfs) -> bool {
         let levels = sysfs.levels();
         self.hub.update(|s| s.brightness = levels)
     }
 
-    /// The bar is on (`true`) or off (`false`). While it is off nothing is on screen, so the
-    /// NetworkManager, bluez and UPower subscriptions (they change several times a minute:
-    /// signal strength, scans, battery readings) are dropped and the session thread sleeps; they
-    /// come back with a fresh read of all three when the bar wakes (invariant 3). The work runs on
-    /// its own thread, so the caller never waits for the bus.
+    /// The bar is on (`true`) or off (`false`). While off, the NetworkManager, BlueZ and UPower
+    /// match rules are dropped; on wake all three are re-read. The bus work runs on its own thread.
     pub fn set_awake(&self, on: bool) {
         use std::sync::atomic::Ordering;
         if self.awake.swap(on, Ordering::SeqCst) == on {
@@ -353,10 +339,8 @@ impl Handle {
 }
 
 impl Session {
-    /// Read everything once, then spawn the watcher threads. Sources that are missing (no
-    /// UPower, no player) leave their fields at `None`/default; they never fail startup.
-    /// The threads are detached; they end when the `Session` is dropped and the next signal
-    /// arrives.
+    /// Read everything once, then spawn detached watcher threads, which end when the `Session` is
+    /// dropped and the next signal arrives. Missing sources leave their fields at `None`/default.
     pub fn start(system: zbus::blocking::Connection, session: zbus::blocking::Connection) -> Self {
         let sys_signals = subscribe(&system, &SYSTEM_RULES);
         let mpris_signals = subscribe(&session, &mpris::RULES);
@@ -410,9 +394,8 @@ impl SessionSource for Session {
     }
 }
 
-/// How many of the first [`SYSTEM_RULES`] are the chatty ones (NetworkManager, bluez and UPower
-/// emit property changes all the time: signal strength, scans, battery readings). They are dropped
-/// while the bar is off ([`Handle::set_awake`]); logind (lock, sleep, idle) always stays.
+/// How many of the first [`SYSTEM_RULES`] are dropped while the bar is off
+/// ([`Handle::set_awake`]).
 const CHATTY_RULES: usize = 3;
 
 const SYSTEM_RULES: [&str; 6] = [
@@ -458,9 +441,8 @@ fn watch_system(
     }
 }
 
-/// Subscribe to `rules` on `conn`; the result yields the signals that arrive. Rules the bus
-/// refuses are skipped (a missing service must not stop the others). Call this **before** the
-/// initial read so no change between the read and the subscription is lost.
+/// Signals from `subscribe`. Rules the bus refuses are skipped. Subscribe before the initial
+/// read, or a change between the read and the subscription is lost.
 pub(crate) type Signals = Box<dyn Iterator<Item = zbus::Message> + Send>;
 
 pub(crate) fn subscribe(conn: &zbus::blocking::Connection, rules: &[&str]) -> Signals {

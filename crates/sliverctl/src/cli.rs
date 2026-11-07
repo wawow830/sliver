@@ -1,4 +1,4 @@
-//! Argument parsing (pure, unit-tested). See `sliverctl help` / [`USAGE`].
+//! Argument parsing. See `sliverctl help` / [`USAGE`].
 
 use std::collections::BTreeMap;
 

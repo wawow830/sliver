@@ -8,7 +8,6 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-/// What was picked.
 pub enum Choice {
     /// A theme icon name, built-in name, or file path: the module's `icon`.
     Icon(String),
@@ -133,7 +132,6 @@ pub fn open(parent: &impl IsA<gtk::Widget>, theme: Option<String>, pick: Rc<dyn 
     let stack = adw::ViewStack::new();
     let fg = hex(parent.color());
 
-    // Icons.
     let names = Rc::new(icon_names(theme.as_deref()));
     let search = gtk::SearchEntry::builder()
         .placeholder_text("Search icons")
@@ -190,7 +188,6 @@ pub fn open(parent: &impl IsA<gtk::Widget>, theme: Option<String>, pick: Rc<dyn 
         .add_titled(&icons, Some("icons"), "Icons")
         .set_icon_name(Some("applications-graphics-symbolic"));
 
-    // Emoji.
     let esearch = gtk::SearchEntry::builder()
         .placeholder_text("Search emoji by name")
         .build();
@@ -267,7 +264,6 @@ pub fn open(parent: &impl IsA<gtk::Widget>, theme: Option<String>, pick: Rc<dyn 
         .add_titled(&emoji, Some("emoji"), "Emoji")
         .set_icon_name(Some("face-smile-symbolic"));
 
-    // File.
     let file_page = adw::StatusPage::builder()
         .icon_name("document-open-symbolic")
         .title("An image file")

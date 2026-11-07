@@ -3,7 +3,7 @@
 //! The event loop feeds it [`Input`]s with a monotonic timestamp in milliseconds, arms one timer
 //! for [`Daemon::next_deadline`], and carries out the returned [`Out`]s on the agent sockets.
 //! Hardware effects (frames, backlight, keys) go straight to the [`Backends`]. Nothing here
-//! blocks, sleeps or polls, so tests drive it with simulated time and fake hardware.
+//! blocks, sleeps or polls.
 //!
 //! The rules it keeps:
 //! - **Who drives.** Only connections of the seat's active uid become active; a newer hello from
@@ -53,7 +53,7 @@ mod input;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClientId(pub u64);
 
-/// Bounded everything: connections beyond this are closed at once.
+/// Connections beyond this are closed at once.
 pub const MAX_CLIENTS: usize = 8;
 /// `emit_keys` messages per second per client.
 pub const EMIT_KEYS_PER_SEC: u32 = 100;
@@ -428,8 +428,6 @@ impl Daemon {
         }
         std::mem::take(&mut self.out)
     }
-
-    // ---- timers -------------------------------------------------------------------------------
 
     fn run_timers(&mut self, now: u64) {
         let hung = self.liveness.outstanding.is_some_and(|(_, at)| now >= at);

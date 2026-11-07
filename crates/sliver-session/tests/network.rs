@@ -272,9 +272,8 @@ fn network_and_bluetooth_follow_their_services() {
     assert_eq!(next(&rx).network.state, NetState::Disconnected);
 }
 
-/// While the bar is off the NetworkManager subscription is dropped (invariant 3: signal strength
-/// updates are ~1 wakeup/s on a real laptop); signals then change nothing, and when the bar wakes
-/// the state is read again, so nothing is missed.
+/// While the bar is off the NetworkManager subscription is dropped and signals change nothing;
+/// when the bar wakes the state is read again.
 #[test]
 fn dark_bar_drops_chatty_subscriptions_and_resyncs_on_wake() {
     let Some(bus) = Bus::start() else {

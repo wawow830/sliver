@@ -1,7 +1,7 @@
 # Sourced by the integration tests and scripts/settings-headless: one private runtime directory,
 # every process started through `spawn` stopped on exit, a private D-Bus, and waits on the JSON
-# states a backend example prints, one per line, into $work/states.jsonl. The live session is never
-# touched: the environment that would reach it is cleared (`$clean`).
+# states a backend example prints, one per line, into $work/states.jsonl. The environment that
+# would reach the live session is cleared (`$clean`).
 #
 #   . "$(dirname "$0")/../lib.sh"
 #   need sway foot                 # skip (exit 0) unless installed
@@ -30,7 +30,7 @@ need() {
 examples=$root/target/debug/examples
 pids=()
 # On exit: `on_exit` (if defined), then every spawned process group gets SIGTERM, and SIGKILL
-# after 5 s (the same contract as scripts/sandbox.py), then $work goes.
+# after 5 s, then $work goes.
 stop_all() {
     if declare -F on_exit >/dev/null; then on_exit || true; fi
     if [ ${#pids[@]} -gt 0 ]; then

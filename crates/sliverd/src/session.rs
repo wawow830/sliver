@@ -1,9 +1,8 @@
 //! Who owns the active session on seat0: only that uid's agent may drive the bar.
 //!
 //! sd-login keeps this in `/run/systemd/seats/<seat>` (`ACTIVE_UID=…`), rewritten by rename on
-//! every session switch. [`SeatWatch`] reads it and watches the directory with inotify, which is
-//! exactly what `sd_seat_get_active` + `sd_login_monitor` do, without linking libsystemd or
-//! talking D-Bus from the privileged daemon.
+//! every session switch. [`SeatWatch`] reads it and watches the directory with inotify, as
+//! `sd_seat_get_active` + `sd_login_monitor` do, without libsystemd or D-Bus.
 
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};

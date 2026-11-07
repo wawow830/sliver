@@ -1,11 +1,9 @@
 //! An in-process sliverd for headless agent tests: the **real** daemon core on fake hardware,
 //! over a real `SOCK_SEQPACKET` pair with real sealed memfds.
 //!
-//! API-compatible with the former `sliver_ipc::fake::FakeDaemon` (same method and field names), so
-//! switching is an import change. It adds [`TestDaemon::frame`] (what the bar shows, as a pixmap
-//! with pressed feedback and the hatch included) and a simulated clock ([`TestDaemon::advance`])
-//! for idle/ping deadlines. Single-threaded: call [`TestDaemon::pump`] after the agent sends
-//! something.
+//! [`TestDaemon::frame`] is what the bar shows, as a pixmap with pressed feedback and the hatch
+//! included; [`TestDaemon::advance`] moves a simulated clock for idle/ping deadlines.
+//! Single-threaded: call [`TestDaemon::pump`] after the agent sends something.
 //!
 //! ```
 //! use sliver_ipc::proto::*;
@@ -34,7 +32,7 @@ use crate::ipc::{Attachment, import_attachment};
 
 const CLIENT: ClientId = ClientId(1);
 
-/// A frame as sliverd copied it: tightly packed XRGB8888 plus its regions (FakeDaemon's shape).
+/// A frame as sliverd copied it: tightly packed XRGB8888 plus its regions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     pub serial: u32,
@@ -68,8 +66,8 @@ pub struct TestDaemon {
     /// sliverd closed the connection (bye, protocol violation, hung agent) or the agent hung up.
     pub closed: bool,
     /// Answer the daemon's own liveness pings on the agent's behalf instead of forwarding them
-    /// (default: on, like FakeDaemon, which never pinged). Set it to false to test that the agent
-    /// pongs, and that a silent one is dropped after 2 s of simulated time.
+    /// (default: on). Set it to false to test that the agent pongs, and that a silent one is
+    /// dropped after 2 s of simulated time.
     pub auto_pong: bool,
     next_nonce: u64,
     lid_closed: bool,
@@ -330,7 +328,7 @@ impl TestDaemon {
         }
     }
 
-    /// Mirrors the daemon's state into the FakeDaemon-style public fields.
+    /// Mirrors the daemon's state into the public fields.
     fn sync(&mut self) {
         for e in self.hw.keys.take() {
             match e {

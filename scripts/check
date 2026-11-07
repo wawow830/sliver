@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# The gate every change to main passes (CI runs it too). Keep it fast, deterministic and hardware-free.
-# Each step runs a test suite or a file format's own validator; what a step checks lives beside the
-# files it checks.
+# The gate CI runs. It must stay fast, deterministic and hardware-free.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-# Nothing the checks start may outlive them (orphaned test daemons and helpers pile up on the
-# developer's machine): the gate runs under scripts/reap.py, which owns everything it starts and
-# stops, lists and fails on whatever is left, however the gate ends.
+# Runs under scripts/reap.py, which kills and fails on any process the checks leave behind.
 [[ -n ${SLIVER_REAPED:-} ]] || exec env SLIVER_REAPED=1 python3 scripts/reap.py "$0" "$@"
 
 echo "== harness and packaging"
@@ -16,18 +12,16 @@ python3 -m unittest discover -s harness/checks -p 'test_*.py' -q
 python3 -m unittest discover -s packaging -p 'test_*.py' -q
 
 echo "== docs"
-# Every docs/ path named in the tree exists: references are kept pointing at what exists.
+# Every docs/ path named in the tree must exist.
 missing=$( (git grep -ohE 'docs/[A-Za-z0-9_./-]+\.(md|xml)' || true) | sort -u \
   | while read -r p; do [[ -e $p ]] || echo "$p"; done)
 [[ -z $missing ]] || { echo "named but missing: $missing"; exit 1; }
 
 echo "== cargo fmt";   cargo fmt --all -- --check
 echo "== cargo clippy"; cargo clippy --workspace --all-targets --quiet -- -D warnings
-# The `//!` comments are the docs: their links must resolve.
 echo "== cargo doc";   RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet
-# Tests must never start the real audio tools (they leak `pactl subscribe` orphans and touch the
-# real PipeWire): fakes go through audio::Tools { wpctl, pactl } or SessionOptions::hermetic().
-# While they run, `pactl` and `wpctl` are tripwires that note who reached them and fail.
+# Tests must not start the real pactl/wpctl (they leak `pactl subscribe` orphans and touch the real
+# PipeWire); fakes go through audio::Tools or SessionOptions::hermetic(). These tripwires log calls.
 trip="$PWD/target/check-tripwire" && rm -rf "$trip" && mkdir -p "$trip/bin"
 for t in pactl wpctl; do
   printf '#!/bin/sh\necho "%s $*" >> "%s/reached"\nexit 1\n' "$t" "$trip" > "$trip/bin/$t"
@@ -36,11 +30,8 @@ done
 echo "== cargo test";  PATH="$trip/bin:$PATH" cargo test --workspace --quiet
 [[ ! -s $trip/reached ]] || { echo "tests started the real audio tools:"; cat "$trip/reached"; exit 1; }
 
-# The files' own validators, where installed. The units' behaviour in a real user manager:
-# packaging/itest-units.sh (~10 s).
+# The units' behaviour in a real user manager is tested by packaging/itest-units.sh (~10 s).
 echo "== validators"
-# has TOOL...: all installed. If not, that validator is skipped and the last line says so
-# (with SLIVER_CHECK_ALL=1, as in CI, a skip fails the gate).
 skipped=()
 has() { local t; for t in "$@"; do command -v "$t" >/dev/null || { skipped+=("$t"); return 1; }; done; }
 if has systemd-analyze udevadm; then

@@ -1,11 +1,9 @@
 //! The numbers behind the `cpu`, `memory`, `load`, `temperature`, `disk` and
 //! network-throughput modules, read from `/proc` and `/sys`.
 //!
-//! Everything is a plain file read (no polling thread, no subprocess). The agent's loop reads what
-//! the placed modules ask for ([`wants`]) when it builds a frame's world, into [`Readings`] that
-//! the modules only look at; a module's `interval` schedules the next frame. So a bar without
-//! these modules, or with the display off, never reads any of it, and building cells does no
-//! I/O. The file roots are injectable ([`Sampler::with_roots`]) so tests use fixture directories.
+//! The agent's loop reads what the placed modules ask for ([`wants`]) when it builds a frame's
+//! world, into [`Readings`] that the modules only look at; a module's `interval` schedules the
+//! next frame. Building cells does no I/O.
 
 mod cpu;
 mod disk;

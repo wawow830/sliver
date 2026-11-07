@@ -1,8 +1,7 @@
-"""What the packaging promises, checked by what the files do (scripts/check runs this).
+"""Packaging behaviour, checked by what the files do (scripts/check runs this).
 
 Units are parsed as systemd reads them, and the commands that hand the bar between sliverd and
-tiny-dfr are run against a fake systemctl, so a rewrite that keeps the behaviour passes and one
-that changes it fails, whatever it's spelled like.
+tiny-dfr are run against a fake systemctl.
 """
 
 import base64

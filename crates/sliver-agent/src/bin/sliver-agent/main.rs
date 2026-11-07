@@ -2,7 +2,7 @@
 //!
 //! Its command line is [`sliver_agent::CLI`].
 //!
-//! The config, its includes and stylesheets hot-reload on save (inotify, no polling), on
+//! The config, its includes and stylesheets reload on save (inotify), on
 //! `sliverctl reload` and on SIGUSR2. A config with errors is never applied: the last good one
 //! stays and the errors are logged and reported (`healthy = false`).
 
@@ -159,8 +159,7 @@ fn main() {
     // Log the first failure and the recovery, not every retry (tiny-dfr may own the bar for days).
     let mut failing = false;
     loop {
-        // Replaced by a `--replace` agent: stay off sliverd (we'd revoke each other) until it
-        // exits and the bus hands the name back.
+        // Replaced by a `--replace` agent: stay off sliverd until the bus hands the name back.
         if let Some(api) = &live.api
             && !api.owns_name()
         {
@@ -205,7 +204,7 @@ fn main() {
                 }
                 if e.kind() == std::io::ErrorKind::NotFound {
                     // No socket at all (tiny-dfr drives the bar): sleep on inotify until it
-                    // appears. Zero wakeups while idle (invariant 3).
+                    // appears.
                     sliver_agent::wait::wait_for_path(&a.socket, None);
                     backoff = Duration::from_millis(250);
                     continue;
@@ -217,7 +216,6 @@ fn main() {
     }
 }
 
-/// Drives one sliverd connection until it closes.
 /// Sleeps until we own the bus name again, answering `Control1` calls meanwhile (the
 /// `--replace` agent drives the bar, not us).
 fn wait_for_name(api: &ApiLink) {
@@ -252,14 +250,12 @@ fn run(
         }
         let out = driver.draw(&now, || live.world(now));
         perform(out, &driver, &mut link, &mut children, live)?;
-        // Not only after a draw: with the bar off nothing draws, and the state (layer, profile,
-        // health) must still be right. Sent only when it changed.
+        // Outside the draw: with the bar off nothing draws, and the state (layer, profile,
+        // health) must still be right.
         if let Some(api) = &live.api {
             api.set_control_state(control_state(driver.agent(), reloader, link.role));
         }
 
-        // Sleep until sliverd, a feed, the API or the config says something, or something is due.
-        // Nothing else wakes us (invariant 3).
         let timeout = driver
             .next_deadline(&now)
             .map(|d| d.as_millis() as i64 + 1)
@@ -376,7 +372,7 @@ fn run(
 }
 
 /// The rest of the session follows the bar's display state: the API reports it, the feeds and
-/// user module timers sleep while it's off (invariant 3), and turning on looks again at what
+/// user module timers sleep while it's off, and turning on looks again at what
 /// may have changed in the dark.
 fn display_changed(live: &mut Live, was: DisplayState, state: DisplayState) {
     if let Some(api) = &mut live.api {
@@ -397,7 +393,6 @@ fn display_changed(live: &mut Live, was: DisplayState, state: DisplayState) {
     }
 }
 
-/// Carries out the driver's outputs.
 fn perform(
     outputs: Vec<Output>,
     driver: &Driver,
@@ -418,7 +413,7 @@ fn perform(
             Output::Effect(e) => apply(e, link, children, live)?,
         }
     }
-    // Reap whatever finished, so no zombies pile up.
+    // Reap finished children.
     children.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
     if presented && let Some(api) = &mut live.api {
         let drawn = [Layer::Base, Layer::Fn]

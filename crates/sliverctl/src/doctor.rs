@@ -1,11 +1,9 @@
-//! `sliverctl doctor`: checks the whole install and says what to do about each problem
-//! (automates the troubleshooting table in the user guide).
+//! `sliverctl doctor`: checks the whole install and says what to do about each problem.
 //!
-//! The checks are plain functions over [`Sys`], the facts about the machine (units, bus names,
-//! files, the agent's properties), so they are tested against a fake; [`Real`] gathers the real
-//! ones. Reading only: nothing is started, changed or written. Checks that need root (the
-//! daemon's hardware side) are not here; they come from sliverd itself (its hardware report,
-//! sliverd(8)).
+//! The checks are functions over [`Sys`], the facts about the machine (units, bus names, files,
+//! the agent's properties); [`Real`] gathers the real ones. Reading only: nothing is started,
+//! changed or written. Checks that need root (the daemon's hardware side) come from sliverd
+//! itself (its hardware report, sliverd(8)).
 
 mod hardware;
 
@@ -203,7 +201,7 @@ fn daemon(sys: &dyn Sys) -> Vec<Check> {
             Some("sudo systemctl start sliverd (it starts by itself at the next boot)"),
         )
     });
-    // Two daemons on one bar is the one combination that is plainly wrong.
+    // Both daemons on one bar conflict.
     if d.active == "active" && tiny_active {
         out.push(check(
             "tiny-dfr",

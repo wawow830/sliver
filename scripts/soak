@@ -13,8 +13,8 @@ config that keeps the bar busy, then churns it for a while:
   * a clock with seconds.
 
 After a warm-up it samples the agent's resident memory every 10 s and fails if the end is more
-than a budget above the start (medians of the first and last samples). Caches that are bounded
-fill up during the warm-up; anything that keeps growing shows. ~4 min by default.
+than a budget above the start (medians of the first and last thirds of the samples). Bounded caches
+fill up during the warm-up. ~4 min by default.
 
   scripts/soak [--debug] [--minutes M] [--budget-mb B]
 """
@@ -64,7 +64,6 @@ RARE = ["\U00013000", "\U00010380", "\ua9b2", "\u16a0", "\U0010fffd", "\u2d63", 
 
 
 def png(w: int, h: int, rgb: tuple[int, int, int]) -> bytes:
-    """A tiny solid-colour PNG (no Pillow needed)."""
     raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
 
     def chunk(t: bytes, d: bytes) -> bytes:
@@ -87,7 +86,6 @@ def mem(pid: int) -> dict[str, int]:
 
 
 def publisher(bus_addr: str, stop: threading.Event, stats: dict) -> None:
-    """An app churning a status context through plain D-Bus (Gio)."""
     import gi
 
     gi.require_version("Gio", "2.0")
@@ -140,7 +138,6 @@ def publisher(bus_addr: str, stop: threading.Event, stats: dict) -> None:
 
 
 def ctl(bins: Path, env: dict, stop: threading.Event, stats: dict) -> None:
-    """sliverctl: push text to custom/push and toggle the media layer."""
     rng, n = random.Random(11), 0
     while not stop.is_set():
         text = f"push {n} " + "".join(rng.choice("pqrs") for _ in range(rng.randint(1, 20)))
@@ -155,7 +152,6 @@ def ctl(bins: Path, env: dict, stop: threading.Event, stats: dict) -> None:
 
 
 def toucher(sock: Path, stop: threading.Event, stats: dict) -> None:
-    """Random taps, slides and Fn presses into the fake sliverd."""
     import socket
 
     s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)

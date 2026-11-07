@@ -13,13 +13,6 @@
 //!   Sandboxed clients get `app` scope, and `status` once the user allows them; `Control1` and
 //!   `Desktop1` are for unsandboxed clients. Updates are coalesced to 30 redraws a second.
 //! - Breaking changes make `TouchBar2`; additions bump `Version` (`API_MINOR`).
-//!
-//! - [`item`]: the published-item vocabulary, parsed leniently into typed items.
-//! - [`registry`]: the sans-IO model: clients, contexts, ownership, limits, sandbox tiers,
-//!   who fills App controls / Status items, optimistic state and events.
-//! - [`identity`]: verified client identity from `/proc` (pid, Flatpak instance, app unit).
-//! - [`service`]: the zbus layer (`TouchBar1`, `Context1`, `Control1`, `Desktop1`) and
-//!   [`service::Api`], the handle the agent core uses.
 
 pub mod identity;
 pub mod item;

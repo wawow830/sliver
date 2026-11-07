@@ -75,7 +75,7 @@ fresh() {
 echo "== 1. crash loop → start limit → tiny-dfr"
 write_sliverd "/usr/bin/false"; fresh
 systemctl --user start "$P-sliverd.service" || true
-# While restarting, tiny-dfr must NOT be started yet (fast restarts are the first line of defence).
+# While restarting, tiny-dfr must not be started yet.
 sleep 1.2
 [[ "$(state "$P-tiny-dfr.service")" != active ]] || { echo "FAIL: tiny-dfr started before the start limit"; exit 1; }
 wait_for "$P-tiny-dfr.service" active 15

@@ -52,9 +52,6 @@ def now():
     return dt.datetime.now().astimezone()
 
 
-# ---- reading sources ----
-
-
 def fetch(url):
     cache_dir = os.path.join(
         os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "sliver", "calendar"
@@ -93,9 +90,6 @@ def texts(source):
     else:
         with open(os.path.expanduser(source), encoding="utf-8", errors="replace") as f:
             yield f.read()
-
-
-# ---- iCalendar ----
 
 
 def unfold(text):
@@ -287,9 +281,6 @@ def occurrences(sources, t0):
                 continue
             if s + length > t0 and s <= end_of_window:
                 yield s, s + length, ev.get("title") or "(no title)", ev.get("where")
-
-
-# ---- output ----
 
 
 def short(s):

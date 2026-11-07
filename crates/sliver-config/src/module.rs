@@ -148,9 +148,8 @@ fn slider_kind(t: &str) -> bool {
 pub struct ModuleId {
     /// Canonical type after aliasing (`audio`, `backlight`, `custom`, `key`).
     pub kind: String,
-    /// Written as waybar's `<type>/slider`. It's part of the module's identity (its config block
-    /// and CSS id), and the resolver turns it into `slider = true`, the one switch every module
-    /// with a value uses.
+    /// Written as waybar's `<type>/slider`. Part of the module's identity (its config block and
+    /// CSS id); the resolver turns it into `slider = true`.
     pub slider: bool,
     /// The name inside a parametric namespace (`vpn` in `custom/vpn`, `F1` in `key/F1`).
     pub name: Option<String>,
@@ -295,7 +294,7 @@ impl Gesture {
     }
 }
 
-/// waybar gestures with no touch equivalent: warn instead of silently ignoring.
+/// waybar gestures with no touch equivalent (warned about).
 const NO_TOUCH_EQUIVALENT: &[&str] = &[
     "on-click-middle",
     "on-click-middle-release",

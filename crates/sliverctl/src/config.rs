@@ -1,5 +1,5 @@
 //! `sliverctl config …`: offline config tools (sliver-config(5)). They only touch files, never
-//! D-Bus, because the file is the source of truth and the agent hot-reloads it.
+//! D-Bus; the agent hot-reloads the file.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

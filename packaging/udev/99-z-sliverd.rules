@@ -1,6 +1,6 @@
 # sliverd replaces tiny-dfr as the Touch Bar daemon.
 #
-# Sorts after 99-touchbar-tiny-dfr.rules on purpose. We override only its SYSTEMD_WANTS on the
+# Sorts after 99-touchbar-tiny-dfr.rules. It overrides only its SYSTEMD_WANTS on the
 # digitizers and keep its /dev/tiny_dfr_* aliases, so tiny-dfr can still start as sliverd's
 # OnFailure= fallback. Removing this file gives the bar back to tiny-dfr.
 #

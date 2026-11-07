@@ -21,7 +21,7 @@ serde.workspace = true
 toml.workspace = true
 
 [features]
-# sliverd::testing::TestDaemon for other crates' tests (the agent's). The daemon binary never needs it.
+# sliverd::testing::TestDaemon for other crates' tests.
 testing = []
 
 [dev-dependencies]

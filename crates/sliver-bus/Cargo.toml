@@ -13,7 +13,7 @@ workspace = true
 
 [dependencies]
 zbus.workspace = true
-# The versions zbus itself uses (no new code in the tree).
+# The versions zbus itself uses.
 async-io = "2"
 async-trait = "0.1"
 

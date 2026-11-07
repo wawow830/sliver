@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The `screenshot` module against the REAL xdg-desktop-portal (the frontend), on a private session
 # bus. The portal's backend is a small mock (mock-backend.py) because the real ones (xdpw, gtk,
-# kde...) need a compositor and a screen; what's checked is everything Sliver is responsible for:
-# the call Sliver makes (`Screenshot("", {interactive: true})`, signature `sa{sv}`) is accepted by
-# the real frontend, reaches a backend with its options intact, and the Response comes back.
+# kde...) need a compositor and a screen. Checks that the call Sliver makes
+# (`Screenshot("", {interactive: true})`, signature `sa{sv}`) is accepted by the real frontend,
+# reaches a backend with its options intact, and the Response comes back.
 #
 # Needs xdg-desktop-portal (/usr/libexec), python3-gobject, dbus-daemon. Skips (exit 0) without.
 . "$(dirname "$0")/../lib.sh"

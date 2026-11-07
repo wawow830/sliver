@@ -1,24 +1,14 @@
-//! Everything the agent learns from outside, in one place.
+//! Everything the agent learns from outside.
 //!
-//! Three kinds of input run on their own threads and arrive in one mailbox:
+//! The desktop (`sliver-desktop`), the session (`sliver-session`) and user modules
+//! ([`crate::scripts`]) run on their own threads, each sleeping in a blocking read, and arrive in
+//! one mailbox: poll [`Feeds::as_fd`], call [`Feeds::drain`] and fold each [`Feed`] into an
+//! [`Aggregate`].
 //!
-//! * the **desktop** (focused window, workspace, layout, outputs: `sliver-desktop`),
-//! * the **session** (lock, power, media, audio, brightness, notifications, tray:
-//!   `sliver-session`),
-//! * **user modules** (`custom/*` output: [`crate::scripts`]).
+//! A newer state replaces an undrained older one of the same kind ([`Feed::slot`]), so what waits
+//! is bounded by the number of kinds. Notes are events: the newest [`MAX_NOTES`] are kept.
 //!
-//! The agent's loop polls [`Feeds::as_fd`] together with its other descriptors; when it is
-//! readable it calls [`Feeds::drain`], folds each [`Feed`] into an [`Aggregate`], and uses
-//! [`Aggregate::context`] for rule matching and [`Aggregate::module_output`] for modules.
-//! Nothing here polls on a timer: every thread sleeps in a blocking read.
-//!
-//! Almost every feed is a state (the desktop, the session, a module's output): only the latest
-//! counts, so a newer one replaces an undrained older one of the same kind ([`Feed::slot`]). A
-//! slow loop catches up in one drain, and what waits for it is bounded by the number of kinds,
-//! not by how much happened. Notes are events: they're kept, the newest [`MAX_NOTES`].
-//!
-//! Every source degrades to "unknown" (a missing key in the context) instead of failing, and
-//! reports problems as [`Feed::Note`] for the status page.
+//! A source that fails leaves its context keys missing and reports a [`Feed::Note`].
 
 mod context;
 mod spectrum;
@@ -88,7 +78,6 @@ impl SessionOptions {
     }
 }
 
-/// One thing that happened.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Feed {
@@ -240,7 +229,7 @@ impl Feeds {
         })
     }
 
-    /// Readable when [`Feeds::drain`] has something. Poll it with the agent's other fds.
+    /// Readable when [`Feeds::drain`] has something.
     pub fn as_fd(&self) -> BorrowedFd<'_> {
         self.wake_rx.as_fd()
     }
@@ -354,7 +343,7 @@ impl Feeds {
     }
 
     /// [`Feeds::start_session`] on explicit buses and tools, so tests run against a private bus
-    /// and fake `wpctl`/`pactl` (tests must never start the real audio tools). `session` makes
+    /// and fake `wpctl`/`pactl`. `session` makes
     /// a fresh connection to the session bus each time it is called.
     pub fn start_session_on(
         &mut self,
@@ -491,7 +480,7 @@ impl Feeds {
     }
 
     /// The bar is on or off: sources that only matter while something is on screen sleep while
-    /// it is off (invariant 3).
+    /// it is off.
     pub fn set_awake(&self, on: bool) {
         if let Some(h) = &self.session {
             h.set_awake(on);
@@ -499,8 +488,8 @@ impl Feeds {
     }
 
     /// Runs what `config` needs: its user modules, and the watchers only some modules use
-    /// (failed units, capture, fcitx5). Called at start and after every reload. Returns the user
-    /// modules that couldn't be set up, as messages.
+    /// (failed units, capture, fcitx5). Returns the user modules that couldn't be set up, as
+    /// messages.
     pub fn follow(&mut self, config: &sliver_config::Config) -> Vec<String> {
         let (specs, errors) = crate::modules::user_module_specs(config);
         self.start_modules(specs);

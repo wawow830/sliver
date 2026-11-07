@@ -1,8 +1,8 @@
 //! `sliver-settings`: the settings app and WYSIWYG Touch Bar editor (GTK4 + libadwaita).
 //!
-//! Every edit goes through `sliver_config::Editor` on the user's config
-//! file: it's applied instantly, validated before it's written (a broken config never lands),
-//! and can be undone from the toast. The running agent hot-reloads the file.
+//! Every edit goes through `sliver_config::Editor` on the user's config file: applied at once,
+//! validated before it's written, and undoable from the toast. The running agent hot-reloads the
+//! file.
 
 mod act;
 mod apps;
@@ -32,7 +32,6 @@ use toml::Table;
 
 use preview::Preview;
 
-/// D-Bus-style app id under the project prefix.
 const APP_ID: &str = "io.github.wawow830.Sliver.Settings";
 
 pub(crate) struct State {
@@ -315,7 +314,6 @@ pub(crate) fn apply_with(
         Ok(m) => m,
         Err(e) => return ui.toast(&e),
     };
-    // Validated before anything is written: a broken config never lands.
     let d = ed.check(state.hw);
     if let Some(why) = d.errors.first() {
         return ui.toast(&format!("Not applied: {why}"));

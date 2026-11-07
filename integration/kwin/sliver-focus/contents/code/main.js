@@ -3,8 +3,7 @@
 // it once in System Settings → Window Management → KWin Scripts.
 //
 // KWin gives clients no way to ask "what is focused?", so the compositor side has to push.
-// Nothing here talks to anything but the agent, and the agent is optional: if it is not running
-// the calls fail quietly and the script keeps going. The first caller of SetFocus becomes the
+// If the agent is not running the calls fail quietly. The first caller of SetFocus becomes the
 // agent's focus source, so run only one of these (the package id is unique per session).
 
 "use strict";

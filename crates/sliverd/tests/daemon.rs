@@ -1,8 +1,8 @@
 //! End-to-end tests of the daemon core on fake hardware: simulated touches through the key-region
 //! semantics, asserting emitted keys, agent messages and PNG frames.
 //!
-//! Snapshots live in `tests/snapshots/`. Look at them when they change.
-//! Update after an intended change: `SLIVER_BLESS=1 cargo test -p sliverd --test daemon`.
+//! Snapshots live in `tests/snapshots/`. Update after an intended change:
+//! `SLIVER_BLESS=1 cargo test -p sliverd --test daemon`.
 
 use std::path::PathBuf;
 
@@ -260,8 +260,6 @@ fn rig_with_agent() -> (Rig, Vec<Region>) {
     (rig, regions)
 }
 
-// ---- safe layer + key-region semantics ---------------------------------------------------------
-
 #[test]
 fn starts_on_the_safe_layer() {
     let rig = Rig::new();
@@ -457,8 +455,6 @@ fn resume_repaints_and_rewrites_the_backlight() {
     assert_eq!(last.iter().map(|s| s.w).sum::<u32>(), 2008);
 }
 
-// ---- display power ------------------------------------------------------------------------------
-
 #[test]
 fn dims_turns_off_and_wake_touch_is_swallowed() {
     let mut rig = Rig::new();
@@ -498,8 +494,6 @@ fn backlight_written_only_on_change() {
     }
     assert_eq!(rig.hw.backlight.writes(), vec![128]);
 }
-
-// ---- agent --------------------------------------------------------------------------------------
 
 #[test]
 fn agent_frame_and_combo_region() {
@@ -544,7 +538,7 @@ fn agent_region_touches_are_forwarded_and_captured() {
             ..
         }
     ));
-    // First agent-region touch pings (liveness only when it matters).
+    // First agent-region touch pings.
     assert!(matches!(msgs[1], DaemonMsg::Ping { .. }));
     // Captured: moving onto a key region still goes to the agent and emits nothing.
     let out = rig.mv(3, regions[2].rect.x as f32 + 5.0);
@@ -1005,7 +999,7 @@ fn policy_change_applies_in_current_state() {
     assert_eq!(rig.hw.backlight.current(), Some(200));
 }
 
-/// The main screen's brightness changing (a udev event, no polling) re-applies an adaptive bar's
+/// The main screen's brightness changing (a udev event) re-applies an adaptive bar's
 /// brightness at once, and does nothing for a fixed one.
 #[test]
 fn screen_backlight_change_follows_without_a_touch() {

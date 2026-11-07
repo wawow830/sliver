@@ -1,11 +1,7 @@
 //! Common `{ dbus = {...} }` actions, offered by the module inspector.
-//! Each entry is the exact TOML a user would otherwise type; the tests parse every one with the
-//! real config parser so a preset can't drift out of the schema.
 
-/// One ready-made D-Bus call.
 pub struct Preset {
     pub label: &'static str,
-    /// Inline TOML of the action.
     pub toml: &'static str,
 }
 

@@ -1,5 +1,4 @@
-//! Touch → key/agent routing. It's pure state: feed it touches plus the regions currently on
-//! screen, and act on the output.
+//! Touch → key/agent routing, as pure state over touches and the regions currently on screen.
 //!
 //! - A touch is **captured** by the region it starts in. Later layer swaps don't change it.
 //! - Key region: down presses its keys, sliding off releases them, sliding back presses again,

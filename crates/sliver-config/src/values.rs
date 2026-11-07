@@ -1,4 +1,4 @@
-//! Small value types shared across the config: durations, widths, alignment, tap timing.
+//! Value types shared across the config: durations, widths, alignment, tap timing.
 
 use std::time::Duration;
 
@@ -134,7 +134,7 @@ pub enum Interval {
     Every(Duration),
 }
 
-/// The lowest poll interval we accept (invariant 3: cheap on power).
+/// The lowest poll interval accepted, to bound power use.
 pub const MIN_INTERVAL: Duration = Duration::from_millis(100);
 
 impl Interval {

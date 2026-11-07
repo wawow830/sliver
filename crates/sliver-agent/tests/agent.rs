@@ -130,7 +130,7 @@ fn default_config_end_to_end() {
     fake.tap((f5.x + f5.w / 2) as f32, 30.0).unwrap();
     assert_eq!(fake.keys, [(63, true), (63, false)]);
 
-    // Re-rendering the same state sends nothing (invariant 3).
+    // Re-rendering the same state sends nothing.
     let before = link.presents;
     let layers = a.render(&world(9, 41));
     present(&a, &mut link, &mut fake, &layers);
@@ -816,7 +816,7 @@ fn preview_of_the_default_bar() {
 }
 
 /// A `transition` in the stylesheet animates a press: the agent asks to be woken for the next
-/// frame while it runs, and not at all once it has settled (no busy loop).
+/// frame while it runs, and not at all once it has settled.
 #[test]
 fn transitions_wake_the_loop_only_while_animating() {
     use sliver_ipc::proto::TouchPhase;
@@ -874,8 +874,7 @@ fn transitions_wake_the_loop_only_while_animating() {
 }
 
 /// A layout change fades, and the agent's loop only draws when a deadline has come: so the
-/// fade's next frame must come due, and the fade must end (a deadline that's always one frame
-/// away left the bar frozen mid-fade, waking for nothing).
+/// fade's next frame must come due, and the fade must end.
 #[test]
 fn a_layout_fade_comes_due_and_ends() {
     use std::time::Duration;
@@ -2159,7 +2158,7 @@ fn active_layout_reports_the_rule() {
 
 /// With an AZERTY keymap on sliverd's keyboard, a "Ctrl+Z" button sends the key that types
 /// "z" there (the US "w" position), on both the fast path (key region, sliverd presses it) and the
-/// agent path (EmitKeys). Without a known keymap: plain positions, as before.
+/// agent path (EmitKeys). Without a known keymap: plain positions.
 #[test]
 fn key_combos_follow_the_bar_keyboard_layout() {
     use sliver_agent::agent::Effect::*;

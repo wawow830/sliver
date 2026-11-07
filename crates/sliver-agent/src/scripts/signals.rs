@@ -6,7 +6,7 @@ use signal_hook::iterator::Signals;
 use std::io;
 
 /// Route `SIGRTMIN+1 ..= SIGRTMIN+30` to [`Runtime::signal`] on a dedicated thread (blocked in
-/// `sigwait`-style iteration, so it costs nothing while idle). Call once, early, from the
+/// `sigwait`-style iteration). Call once, early, from the
 /// process that should receive the signals. The thread keeps `rt` alive; to replace runtimes
 /// (config reload), use [`forward_realtime_signals_to`] instead.
 pub fn forward_realtime_signals(rt: Runtime) -> io::Result<()> {

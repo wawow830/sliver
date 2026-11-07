@@ -1,9 +1,8 @@
 //! Telling the compositor what to do: switch workspace, focus or close a window. This is the
-//! write side of the lists in [`crate::DesktopState`] (workspaces bar, taskbar). It is the only
-//! part of this crate that changes the desktop, and only on an explicit user action.
+//! write side of the lists in [`crate::DesktopState`] (workspaces bar, taskbar), used only on an
+//! explicit user action.
 //!
-//! Hyprland and sway speak commands over their IPC sockets; niri takes JSON actions. Command
-//! strings are built by pure functions so they are tested without a compositor.
+//! Hyprland and sway take commands over their IPC sockets; niri takes JSON actions.
 
 use crate::{Backend, WorkspaceInfo, hyprland, niri, sway};
 use serde_json::json;
@@ -12,7 +11,6 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-/// What to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     FocusWorkspace(WorkspaceInfo),
@@ -110,8 +108,8 @@ pub fn niri_request(a: &Action) -> Option<serde_json::Value> {
 }
 
 /// A session-bus method call that does an [`Action`] on GNOME or KDE. The compositor side is a
-/// service (KWin's own, or the `sliver-focus` GNOME extension's), so the caller makes the call;
-/// this crate stays free of a D-Bus dependency. Never auto-start the destination.
+/// service (KWin's own, or the `sliver-focus` GNOME extension's) and the caller makes the call.
+/// Never auto-start the destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BusCall {
     pub dest: &'static str,
@@ -120,7 +118,7 @@ pub struct BusCall {
     pub method: &'static str,
     /// The single `i` (int32) argument, if the method takes one.
     pub arg: Option<i32>,
-    /// String arguments, after `arg` (at most one of the two is used per call today).
+    /// String arguments, after `arg` (at most one of the two is used per call).
     pub text: Vec<String>,
 }
 

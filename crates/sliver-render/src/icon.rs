@@ -209,9 +209,9 @@ impl Icon {
         builtin_svg(name)
     }
 
-    /// The same picture at most `max_h` pixels tall (aspect kept), so a photo or album cover
-    /// isn't kept at full size for a 60 px bar. SVGs, and rasters already that small, are
-    /// returned as they are. Halves first, then one bicubic step, so big reductions don't alias.
+    /// The same picture at most `max_h` pixels tall (aspect kept). SVGs, and rasters already that
+    /// small, are returned as they are. Halves first, then one bicubic step, so big reductions
+    /// don't alias.
     pub fn fit_height(self, max_h: u32) -> Icon {
         let Image::Raster(src) = &self.image else {
             return self;

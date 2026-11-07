@@ -3,7 +3,7 @@
 //! Long-lived helpers (`pactl subscribe`, exec modules, test `dbus-daemon`s) must not outlive
 //! the process that started them, whether it exits cleanly, panics, or is SIGKILLed.
 //!
-//! - [`spawn_tied`] sets `PR_SET_PDEATHSIG(SIGTERM)` in the child. Careful: Linux sends that
+//! - [`spawn_tied`] sets `PR_SET_PDEATHSIG(SIGTERM)` in the child. Linux sends that
 //!   signal when the **thread** that forked the child exits, not the process. So the fork happens
 //!   on one spawner thread that lives as long as the process, and children spawned from short-lived
 //!   threads (a `#[test]`, a worker) still only die with the process. A race check catches a
@@ -186,8 +186,8 @@ mod tests {
         assert!(wait_dead(grandchild), "grandchild {grandchild} survived");
     }
 
-    /// The point of the spawner thread: a child spawned from a short-lived thread survives that
-    /// thread, and dies only with the process.
+    /// A child spawned from a short-lived thread survives that thread, and dies only with the
+    /// process.
     #[test]
     fn child_outlives_spawning_thread() {
         let child = std::thread::spawn(|| {
@@ -205,7 +205,7 @@ mod tests {
         ChildGuard::new(child);
     }
 
-    /// The real guarantee: the child gets SIGTERM when its parent process dies, even by SIGKILL.
+    /// The child gets SIGTERM when its parent process dies, even by SIGKILL.
     /// The parent is this test binary re-executed as a helper that spawns `sleep` and waits.
     #[test]
     fn child_dies_with_its_process() {

@@ -1,10 +1,9 @@
-//! `sliver-bus`: D-Bus connections that leave an idle process asleep (invariant 3).
+//! `sliver-bus`: D-Bus connections that leave an idle process asleep.
 //!
 //! zbus 5 (async-io) connects Unix sockets and closes them through `blocking::unblock`. The
 //! `blocking` crate then keeps an idle pool thread in a 500 ms `wait_timeout` loop that it only
 //! leaves when the pool is over its limit (500), i.e. never: two wakeups a second, forever, in
-//! every process that ever connected or dropped a connection. That was the agent's whole idle
-//! floor of wakeups.
+//! every process that ever connected or dropped a connection.
 //!
 //! So this crate connects the socket itself (a plain `connect(2)` on a Unix socket doesn't block
 //! for long) and hands zbus a socket whose write half shuts down directly on close (`shutdown(2)`

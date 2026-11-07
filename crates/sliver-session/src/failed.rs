@@ -2,11 +2,10 @@
 //! system manager (system bus) and the user manager (session bus), plus the failed units' names
 //! for the module's sub-bar.
 //!
-//! Event-driven, no polling. `NFailedUnits` is the only Manager property that emits change
-//! signals, so a match on the Manager's `PropertiesChanged` wakes us only when the count
-//! changes. systemd sends those signals on the API bus only while some client has called
-//! `Subscribe()` (`bus_foreach_bus`), so we subscribe. systemd tracks the subscription and drops
-//! it when our connection closes. Started only when a layout uses the module.
+//! `NFailedUnits` is the only Manager property that emits change signals, so a match on the
+//! Manager's `PropertiesChanged` wakes only when the count changes. systemd sends those signals on
+//! the API bus only while some client has called `Subscribe()` (`bus_foreach_bus`), and drops the
+//! subscription when that connection closes. Started only when a layout uses the module.
 
 use crate::{Handle, props};
 use serde::{Deserialize, Serialize};

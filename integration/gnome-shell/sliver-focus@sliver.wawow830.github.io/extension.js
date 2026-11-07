@@ -6,8 +6,8 @@
 // so nothing happens while it is not running. The first caller of SetFocus becomes the agent's
 // focus source.
 //
-// Run against a real (headless) GNOME Shell 50.5 by integration/gnome-shell/test.sh; written from the
-// GNOME Shell 45+ extension API. Enable once: gnome-extensions enable sliver-focus@sliver.wawow830.github.io
+// Tested against a headless GNOME Shell 50.5 by integration/gnome-shell/test.sh.
+// Enable once: gnome-extensions enable sliver-focus@sliver.wawow830.github.io
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';

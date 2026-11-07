@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Prints sliver.spec: sliver.spec.in with what it states filled in from where it's true.
+"""Prints sliver.spec: sliver.spec.in with its placeholders filled in.
 
 @CARGO_VERSION@ and @CARGO_LICENSE@ are Cargo.toml's [workspace.package] version and license.
 @BUNDLED_LICENSES:crate@ is every license what `crate` ships is under: its normal dependencies,
 transitively, from `cargo metadata` (proc-macros aside), plus, with sliver-render among them, the
 embedded assets' (Noto Sans: OFL-1.1, Material icons: Apache-2.0). @BUNDLED_LICENSES@ is the same
-for every crate of ours (the source package). Each crate's expression is kept as
-written; only Cargo's old `/` becomes ` OR ` and alternatives are put in order, so equal
-expressions merge.
+for every crate of ours (the source package). Each crate's expression is kept as written, except
+that Cargo's old `/` becomes ` OR ` and alternatives are sorted, so equal expressions merge.
 """
 
 import json

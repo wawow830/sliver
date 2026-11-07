@@ -1,13 +1,9 @@
 //! Audio: default output volume/mute and default input (mic) mute through PipeWire.
 //!
-//! Reads and writes use `wpctl` (WirePlumber), which is the one stable CLI for "the default
-//! sink/source". Change events come from `pactl subscribe` (pipewire-pulse), a long-lived
-//! child that prints one line per change, so the agent sleeps until something happens. No
-//! build-time dependencies, nothing polled. Both tools are injectable ([`Tools`]) for tests.
-//! The native `pipewire` crate would need libpipewire's development files and bindgen at build
-//! time, and reading the default sink means following WirePlumber's `default` metadata. Without a
-//! PulseAudio server `pactl` exits at once, so its restart backoff only resets after it has
-//! stayed up 10 s.
+//! Reads and writes use `wpctl` (WirePlumber), the stable CLI for "the default sink/source".
+//! Change events come from `pactl subscribe` (pipewire-pulse), a long-lived child that prints one
+//! line per change. Both tools are injectable ([`Tools`]) for tests. Without a PulseAudio server
+//! `pactl` exits at once, so its restart backoff only resets after it has stayed up 10 s.
 
 use crate::Handle;
 use serde::{Deserialize, Serialize};
@@ -187,8 +183,8 @@ impl Handle {
                 }
                 let mut backoff = Duration::from_millis(500);
                 loop {
-                    // Tied to this process: `pactl subscribe` never runs on as an orphan
-                    // after the agent (or a test binary) exits, however it exits.
+                    // Tied to this process: `pactl subscribe` never outlives the agent (or a test
+                    // binary).
                     let mut cmd = Command::new(&tools.pactl);
                     cmd.arg("subscribe")
                         .stdin(Stdio::null())
@@ -202,9 +198,8 @@ impl Handle {
                         backoff = (backoff * 2).min(Duration::from_secs(10));
                         continue;
                     };
-                    // Only a pactl that stays up counts as recovered (below): without a PulseAudio
-                    // server it starts fine and exits at once, and resetting the backoff here made
-                    // that a ~1 Hz respawn loop of pactl + wpctl + threads (invariant 3).
+                    // Only a pactl that stays up resets the backoff (below): without a PulseAudio
+                    // server it starts fine and exits at once.
                     let started = std::time::Instant::now();
                     // Missed events while it was down: resync once connected again.
                     if !hub.update(|s| s.audio = read(&tools)) {
@@ -227,7 +222,7 @@ impl Handle {
                             }
                         }
                     });
-                    // recv blocks (no polling); after one event, swallow the burst that follows.
+                    // After one event, swallow the burst that follows.
                     while rx.recv().is_ok() {
                         loop {
                             match rx.recv_timeout(Duration::from_millis(40)) {

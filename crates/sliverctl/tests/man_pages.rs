@@ -1,4 +1,4 @@
-//! The man pages in `man/` must cover what the code knows about, so they can't silently drift:
+//! The man pages in `man/` must cover what the code knows about:
 //! every `sliverctl` command and option in `sliverctl help`, every option of `sliverd` and
 //! `sliver-agent` (their `sliver_cli::Cli`), and every module type and key, common module
 //! key, context key and bar gesture in `sliver-config` (sliver-settings checks its own page).

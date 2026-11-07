@@ -4,8 +4,7 @@
 //! the box itself, named `width` (or `min-width`): when the layout resizes or moves an element
 //! (a collapsed slider opening, neighbours making room), it glides there. `all` covers the paint
 //! properties only, so a pasted `transition: all 0.3s` theme doesn't start animating layout
-//! (each clock tick would move things). Other property names parse (so pasted GTK/waybar themes
-//! load without noise) and are ignored.
+//! (each clock tick would move things). Other property names parse and are ignored.
 
 use std::time::Duration;
 

@@ -1,10 +1,8 @@
 //! COLRv1 colour glyphs (Noto Color Emoji on Fedora), painted with tiny-skia.
 //!
 //! swash, which cosmic-text uses for glyph images, draws bitmap emoji (CBDT/sbix) and COLRv0 but
-//! not COLRv1. For a glyph that has a COLRv1 paint graph we walk it with `skrifa` and implement
-//! [`ColorPainter`] on a small canvas: transforms, glyph and box clips (as masks), solid, linear,
-//! radial and sweep fills, and layers with the COLR composite modes. The result is a bitmap
-//! cached by (font, glyph, size, foreground), so a frame only blits.
+//! not COLRv1, so a COLRv1 paint graph is walked with `skrifa` through [`ColorPainter`]. The
+//! bitmap is cached by (font, glyph, size, foreground).
 
 use skrifa::color::{
     Brush, ColorGlyphFormat, ColorPainter, ColorStop, CompositeMode, Extend,

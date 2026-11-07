@@ -1,5 +1,5 @@
 //! Snapshot tests: render known scenes with the embedded font and compare against committed PNGs
-//! in `tests/snapshots/`. Look at the PNGs when you change them.
+//! in `tests/snapshots/`.
 //!
 //! - Update after an intended change: `SLIVER_BLESS=1 cargo test -p sliver-render --test snapshots`
 //! - On mismatch the actual image is written to `target/snapshot-failures/<name>.png`.

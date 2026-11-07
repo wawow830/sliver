@@ -1,21 +1,11 @@
 //! `sliverd`: the system daemon. Owns the Touch Bar panel, touch input, backlight and uinput keys,
-//! and always keeps a built-in safe layer (Esc + F-keys) available (invariant 1). It's a daemon of
-//! its own because the bar's previous one, tiny-dfr, paints a crash screen and blocks while still
-//! DRM master when its config has an error: no Esc, no F-keys, and `Restart=` never fires.
+//! and always keeps a built-in safe layer (Esc + F-keys) available. The contract with
+//! `sliver-agent` is `sliver_ipc`.
 //!
-//! The contract with `sliver-agent` is `sliver_ipc`. Layout:
-//! - [`daemon`]: the sans-IO core. Agent frames + key regions, Fn layers, the safe hatch,
-//!   liveness, sessions, display power. Driven by [`daemon::Input`] with simulated time in tests.
-//! - [`builtin`]: the safe layer and built-in fn layer, rendered with sliver-render's embedded
-//!   font and icons.
-//! - [`backend`]: hardware traits. [`fake`] implements them for tests and headless runs. Real
-//!   DRM/evdev/uinput/sysfs backends only run through the safe-swap harness.
-//! - [`ipc`]: glue from `sliver_ipc::transport` packets/fds to [`daemon::Input`].
-//! - [`profile`]: per-model quirks.
-//! - [`server`]: the `poll(2)` event loop around the core. [`session`]: seat0's active uid.
-//!   [`config`]: `/etc/sliver/sliverd.toml`.
-//! - `testing` (feature): `TestDaemon`, the real core in-process for agent tests.
-//! - [`router`]: which touches become keys and which go to the agent. [`hatch`]: the Fn safe hatch.
+//! [`daemon`] is the sans-IO core, driven by [`daemon::Input`] (with simulated time in tests);
+//! [`server`] is the `poll(2)` event loop around it. [`fake`] implements the [`backend`] traits
+//! for tests and headless runs; the real backends only run through the safe-swap harness. The
+//! `testing` feature adds `TestDaemon`, the real core in-process for agent tests.
 
 use sliver_cli::{Cli, Opt};
 

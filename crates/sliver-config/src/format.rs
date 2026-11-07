@@ -1,6 +1,5 @@
 //! The format engine (sliver-config(5)): waybar format strings, `states`,
-//! `format-<status>-<state>` selection, `format-icons`, and `max-length`. Every module uses it,
-//! built-in or `custom/*` (no special powers).
+//! `format-<status>-<state>` selection, `format-icons`, and `max-length`.
 //!
 //! Placeholders: `{}` (the module's main value), `{name}`, `{name:spec}`, `{:spec}`. `{{` and `}}`
 //! are literal braces. A spec goes to the [`Values`] provider first (the clock uses strftime),
@@ -32,7 +31,7 @@ impl Format {
         self.template.as_ref().map_err(String::as_str)
     }
 
-    /// The rendered text; a format that doesn't parse shows its error, so it's seen on the bar.
+    /// The rendered text; a format that doesn't parse shows its error.
     pub fn render(&self, values: &dyn Values) -> String {
         match &self.template {
             Ok(t) => t.render(values),
@@ -48,7 +47,6 @@ impl std::ops::Deref for Format {
     }
 }
 
-/// A parsed format string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
     parts: Vec<Part>,
@@ -116,7 +114,7 @@ impl Template {
         })
     }
 
-    /// Unknown placeholders render literally (`{nope}`), so mistakes show up on the bar.
+    /// Unknown placeholders render literally (`{nope}`).
     pub fn render(&self, values: &dyn Values) -> String {
         let mut out = String::new();
         for p in &self.parts {

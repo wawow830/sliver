@@ -260,8 +260,7 @@ impl Action {
         action
     }
 
-    /// The action as config TOML, the form [`Action::parse`] reads back: editors write actions
-    /// through this, so the config's spelling of an action lives here only.
+    /// The action as config TOML, the form [`Action::parse`] reads back.
     pub fn to_value(&self) -> Value {
         let one = |k: &str, v: Value| Value::Table(Table::from_iter([(k.to_owned(), v)]));
         let s = |s: &str| Value::String(s.to_owned());

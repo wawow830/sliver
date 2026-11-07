@@ -1,13 +1,12 @@
 //! StatusNotifierItem host: the system tray, as data.
 //!
-//! We register as an additional **host** with whoever owns `org.kde.StatusNotifierWatcher`
-//! (KDE, quickshell, waybar, ...), follow its item list, and read each item's properties.
-//! Event driven: watcher register/unregister signals and the items' own `New*` signals; no
-//! polling. Activation goes straight to the item (`Activate`, `SecondaryActivate`,
-//! `ContextMenu`, `Scroll`). The dbusmenu behind an item's `Menu` path is in [`crate::menu`].
+//! Registers as an additional host with whoever owns `org.kde.StatusNotifierWatcher` (KDE,
+//! quickshell, waybar, ...), follows its item list, and reads each item's properties on the
+//! watcher's register/unregister signals and the items' own `New*` signals. Activation goes
+//! straight to the item (`Activate`, `SecondaryActivate`, `ContextMenu`, `Scroll`). The dbusmenu
+//! behind an item's `Menu` path is in [`crate::menu`].
 //!
-//! If there is no watcher on the bus the list stays empty until one appears (a host-owned
-//! fallback watcher is not implemented yet).
+//! With no watcher on the bus the list stays empty until one appears.
 
 use crate::{Handle, props};
 use serde::{Deserialize, Serialize};

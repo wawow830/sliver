@@ -1,7 +1,7 @@
 # sliverd: owns the Touch Bar (display, touch, backlight, key output). See sliverd(8).
 #
 # Started by udev (99-z-sliverd.rules) when the bar's digitizer appears, like tiny-dfr.
-# Invariant 1: if sliverd keeps failing, systemd hands the bar back to tiny-dfr.
+# If sliverd keeps failing, systemd hands the bar back to tiny-dfr.
 
 [Unit]
 Description=Sliver Touch Bar daemon
@@ -9,13 +9,11 @@ Documentation=man:sliverd(8)
 Requires=sliverd.socket
 After=sliverd.socket systemd-user-sessions.service systemd-logind.service plymouth-quit.service dev-sliver_display.device
 BindsTo=dev-sliver_display.device
-# Exactly one daemon drives the bar, but NOT via Conflicts=tiny-dfr: that stops tiny-dfr as soon
-# as a start is queued, even one the start limit then refuses, and OnFailure= doesn't fire again
-# for an already-failed unit, so a second `systemctl start sliverd` after the fallback would leave
-# the bar with no daemon. Instead ExecStartPre below stops tiny-dfr only when a start really runs,
-# and tiny-dfr's drop-in (tiny-dfr.service.d/50-sliver.conf) stops us when it starts.
-# Restart=always retries quickly. If that hits the start limit, fall back to tiny-dfr. Clear it
-# with `systemctl reset-failed sliverd`.
+# Not Conflicts=tiny-dfr: that stops tiny-dfr as soon as a start is queued, even one the start
+# limit then refuses, and OnFailure= doesn't fire again for an already-failed unit, which would
+# leave the bar with no daemon. ExecStartPre below stops tiny-dfr only when a start really runs,
+# and tiny-dfr.service.d/50-sliver.conf stops sliverd when tiny-dfr starts.
+# At the start limit, OnFailure= starts tiny-dfr. Clear it with `systemctl reset-failed sliverd`.
 StartLimitIntervalSec=60
 StartLimitBurst=5
 OnFailure=tiny-dfr.service
@@ -23,11 +21,11 @@ OnFailure=tiny-dfr.service
 [Service]
 Type=exec
 # sliver-hw refuses to open the bar outside the safe-swap harness unless this is set. Only this
-# unit sets it: OnFailure=tiny-dfr above is the safety net here.
+# unit sets it, because of its OnFailure= fallback.
 Environment=SLIVER_SYSTEM_UNIT=1
-# Blocking, so tiny-dfr has released DRM master before we open the card. Runs on every (re)start
-# that the start limit lets through, never on a refused one. If it fails, so does the start: the
-# two never fight over the bar. (The package requires tiny-dfr, so the fallback is always there.)
+# Blocking, so tiny-dfr has released DRM master before sliverd opens the card. Runs on every
+# (re)start that the start limit lets through, never on a refused one. If it fails, so does the
+# start. The package requires tiny-dfr.
 ExecStartPre=+/usr/bin/systemctl stop tiny-dfr.service
 ExecStart=/usr/libexec/sliverd
 Sockets=sliverd.socket

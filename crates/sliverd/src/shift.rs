@@ -2,12 +2,8 @@
 //!
 //! Same path as tiny-dfr's `pixel_shift.rs`: x walks back and forth across ±11 px, y follows a
 //! triangle wave of ±2 px tied to x (with a random phase), and it rests longer at each end.
-//! tiny-dfr slides each pixel over 4 s with a redraw every 200 ms. We take whole-pixel steps
-//! instead (one flush each), which costs almost nothing (invariant 3) and is still too slow to
-//! notice.
-//!
-//! Pure: the daemon asks [`PixelShift::deadline`] for its timer and calls [`PixelShift::tick`].
-//! Nothing moves while the display is off, so a dark bar sleeps.
+//! Steps are whole pixels, one flush each (tiny-dfr slides each pixel over 4 s with a redraw
+//! every 200 ms). Nothing moves while the display is off.
 
 /// Half the x range: the picture moves up to this far left or right. Content is laid out this far
 /// in from both ends while shifting (agent and built-in layers).
@@ -49,7 +45,7 @@ impl PixelShift {
         self.enabled
     }
 
-    /// Turns it on or off. Returns whether that changed anything.
+    /// Returns whether that changed anything.
     pub fn set_enabled(&mut self, on: bool, now: u64) -> bool {
         if on == self.enabled {
             return false;

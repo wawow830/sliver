@@ -1,6 +1,5 @@
-//! Hardware seams. Everything sliverd touches on the machine goes through one of these traits, so
-//! the daemon core runs unchanged against the fakes in [`crate::fake`] (tests, headless runs) and
-//! against the real DRM/evdev/uinput/sysfs backends (only ever through the safe-swap harness).
+//! Hardware seams: everything sliverd touches on the machine goes through these traits, implemented
+//! by the fakes in [`crate::fake`] and by the real DRM/evdev/uinput/sysfs backends.
 
 use sliver_ipc::proto::TouchPhase;
 use sliver_render::Pixmap;
@@ -32,7 +31,6 @@ pub trait Keys {
     fn sync(&mut self);
 }
 
-/// The hardware the daemon drives.
 pub struct Backends {
     pub display: Box<dyn Display>,
     pub backlight: Box<dyn Backlight>,
@@ -70,7 +68,7 @@ pub enum HwEvent {
     Lid {
         closed: bool,
     },
-    /// The main display's brightness changed (adaptive bar brightness, no polling).
+    /// The main display's brightness changed (adaptive bar brightness).
     ScreenBacklight,
 }
 

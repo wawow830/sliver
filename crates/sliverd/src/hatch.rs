@@ -1,8 +1,6 @@
 //! The safe hatch (invariant 1): **double-press Fn and hold** and sliverd shows its built-in
 //! layer ([`sliver_ipc::keys::safe_keys_for_panel`]) for as long as Fn stays down, whatever the
-//! agent, the config or any app is doing. Not configurable, by design.
-//!
-//! Pure state.
+//! agent, the config or any app is doing. Not configurable.
 
 /// Two Fn presses whose key-downs are at most this far apart count as a double press.
 pub const DOUBLE_PRESS_MS: u64 = 400;
@@ -22,8 +20,7 @@ impl FnHatch {
         self.active
     }
 
-    /// Feed a physical Fn key event (`time_ms` from a monotonic clock). Returns whether the hatch
-    /// is active afterwards.
+    /// `time_ms` is from a monotonic clock. Returns whether the hatch is active afterwards.
     pub fn fn_key(&mut self, down: bool, time_ms: u64) -> bool {
         if down {
             let double = self

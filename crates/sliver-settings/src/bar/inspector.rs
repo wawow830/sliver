@@ -165,7 +165,6 @@ pub(super) fn inspector(
         });
         g.add(&entry);
     }
-    // Touch: one action picker per gesture.
     let state = ui.state();
     let choices = Rc::new(crate::act::Choices {
         layers: state.loaded.config.layers.keys().cloned().collect(),

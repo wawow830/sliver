@@ -80,7 +80,7 @@ fn backlight_matching(sys_bl: &Path, names: &[&str]) -> Option<Backlight> {
 }
 
 /// The bar's backlight. `sys_bl` is normally `/sys/class/backlight`.
-/// Note T2's `appletb_backlight` has max 2 (off/dim/full).
+/// T2's `appletb_backlight` has max 2 (off/dim/full).
 pub fn bar_backlight(sys_bl: &Path) -> Option<Backlight> {
     backlight_matching(sys_bl, BAR_BACKLIGHT_NAMES)
 }

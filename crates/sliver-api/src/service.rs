@@ -1,8 +1,7 @@
 //! The zbus layer: `TouchBar1`, `Context1`, `Control1` and `Desktop1` on the session bus.
 //!
-//! Thin by design. Every call is translated into [`Registry`] methods (policy lives there) or
-//! forwarded to the agent core through [`Host`]. The core drives the other direction through
-//! [`Api`]: resolve what to draw, report interactions, on-screen state and display state.
+//! Calls go to [`Registry`] methods or to the agent core through [`Host`]; the core drives the
+//! other direction through [`Api`].
 
 use crate::identity::ProcInfo;
 use crate::item::{Gesture, Prop, Props};
@@ -137,8 +136,7 @@ pub struct Shared {
     pub policy: Policy,
     pub focus_source: FocusSource,
     focus_owner: Option<String>,
-    /// Who holds the current `HoldLayout` override. It's dropped when that client disconnects,
-    /// so a crashed editor (Mirror to Touch Bar) never leaves the bar on its layout.
+    /// Who holds the current `HoldLayout` override; dropped when that client disconnects.
     layout_owner: Option<String>,
     pub workspaces: Vec<Props>,
     /// `Desktop1.SetWindows`: every window, as a DE integration reports them.
@@ -219,9 +217,8 @@ impl Api {
     /// waits in the bus's queue and gets the name back when this one exits.
     ///
     /// Never replace by default: systemd runs the agent as `Type=dbus`, so a second agent taking
-    /// the name and then exiting stopped the installed one for good (zbus's `request_name` both
-    /// replaces and allows replacement). And no `DoNotQueue`: that's what puts a replaced owner
-    /// back in the queue instead of losing the name.
+    /// the name and exiting would stop the installed one (zbus's `request_name` both replaces and
+    /// allows replacement). No `DoNotQueue`: queueing is what gives a replaced owner the name back.
     pub async fn serve_claiming(
         conn: Connection,
         host: Arc<dyn Host>,
