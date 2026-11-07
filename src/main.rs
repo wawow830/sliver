@@ -44,7 +44,7 @@ use wayland::{Wl, client_of};
 
 pub const W: i32 = 2008;
 pub const H: i32 = 60;
-const TRANSFORM: Transform = Transform::_90;
+const TRANSFORM: Transform = Transform::_270;
 const IDLE: Duration = Duration::from_secs(60);
 const HZ: i32 = 60;
 const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];

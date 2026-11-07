@@ -24,10 +24,10 @@ use smithay::{
         input::{self, Libinput, LibinputInterface, event::DeviceEvent},
         udev,
     },
-    utils::{DeviceFd, Logical, Rectangle, Transform},
+    utils::{Buffer, DeviceFd, Logical, Physical, Rectangle, Transform},
 };
 
-use crate::{Bar, Keyboard, Sliver, TRANSFORM, Touch, fail, panel};
+use crate::{Bar, H, Keyboard, Sliver, Touch, W, fail, panel};
 
 const SEAT: &str = "seat-touchbar";
 const KEY_FN: u32 = 0x1d0;
@@ -169,8 +169,8 @@ impl Panel {
             .create_surface(crtc, mode, &[connector.handle()])
             .map_err(io::Error::other)?;
         let buffer = || -> io::Result<_> {
-            let buffer =
-                fd.create_dumb_buffer((panel.w as u32, panel.h as u32), Fourcc::Xrgb8888, 32)?;
+            let size = ((panel.w as u32).next_multiple_of(64), panel.h as u32);
+            let buffer = fd.create_dumb_buffer(size, Fourcc::Xrgb8888, 32)?;
             let fb = fd.add_framebuffer(&buffer, 24, 32)?;
             Ok((buffer, fb))
         };
@@ -195,20 +195,17 @@ impl Panel {
 
     fn present(&mut self, frame: &[u8]) -> io::Result<()> {
         let (buffer, fb) = &mut self.buffers[self.back];
-        let (w, h) = buffer.size();
         let pitch = buffer.pitch() as usize;
+        let row = panel::<Physical>().w as usize * 4;
         let mut map = self.fd.map_dumb_buffer(buffer)?;
-        for (row, pixels) in map
-            .chunks_exact_mut(pitch)
-            .zip(frame.chunks_exact(w as usize * 4))
-        {
-            row[..pixels.len()].copy_from_slice(pixels);
+        for (dst, src) in map.chunks_exact_mut(pitch).zip(frame.chunks_exact(row)) {
+            dst[..row].copy_from_slice(src);
         }
         let plane = PlaneState {
             handle: self.surface.plane(),
             config: Some(PlaneConfig {
-                src: Rectangle::from_size((w as f64, h as f64).into()),
-                dst: Rectangle::from_size((w as i32, h as i32).into()),
+                src: Rectangle::from_size(panel::<Buffer>().to_f64()),
+                dst: Rectangle::from_size(panel()),
                 transform: Transform::Normal,
                 alpha: 1.0,
                 damage_clips: None,
@@ -270,10 +267,8 @@ fn libinput(
 }
 
 fn touch(s: &mut Sliver, event: InputEvent<LibinputInputBackend>) {
-    let panel = panel::<Logical>();
-    let at = |e: &dyn AbsolutePositionEvent<LibinputInputBackend>| {
-        TRANSFORM.transform_point_in(e.position_transformed(panel), &panel.to_f64())
-    };
+    let at =
+        |e: &dyn AbsolutePositionEvent<LibinputInputBackend>| e.position_transformed((W, H).into());
     let id = |e: &dyn TouchEvent<LibinputInputBackend>| i32::from(e.slot()) as u32;
     s.touch(match event {
         InputEvent::TouchDown { event } => Touch::Down(id(&event), at(&event)),
