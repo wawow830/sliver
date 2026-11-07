@@ -172,9 +172,7 @@ impl XdgShellHandler for Sliver {
         self.update();
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, _: PositionerState) {
-        surface.send_popup_done();
-    }
+    fn new_popup(&mut self, _: PopupSurface, _: PositionerState) {}
 
     fn reposition_request(&mut self, _: PopupSurface, _: PositionerState, _: u32) {}
 
