@@ -32,7 +32,7 @@ use smithay::{
     },
 };
 
-use crate::{H, Keyboard, Sliver, TRANSFORM, W};
+use crate::{H, Keyboard, Sliver, TRANSFORM, W, panel};
 
 pub struct Wl {
     pub dh: DisplayHandle,
@@ -43,7 +43,6 @@ pub struct Wl {
     pub seat: Seat<Sliver>,
     pub output: Output,
     popups: PopupManager,
-    /// Mapped toplevels, oldest first.
     pub windows: Vec<Window>,
 }
 
@@ -62,7 +61,7 @@ impl Wl {
             },
         );
         let mode = Mode {
-            size: TRANSFORM.transform_size((W, H).into()),
+            size: panel(),
             refresh: 60_000,
         };
         output.change_current_state(
@@ -87,7 +86,6 @@ impl Wl {
         }
     }
 
-    /// The toplevel surface that `surface` is part of: through subsurfaces, then popups.
     fn root(&self, surface: &WlSurface) -> WlSurface {
         let mut root = surface.clone();
         while let Some(parent) = get_parent(&root) {
@@ -242,7 +240,6 @@ delegate_seat!(Sliver);
 delegate_shm!(Sliver);
 delegate_output!(Sliver);
 
-/// Its uinput device, until the virtual keyboard is destroyed.
 type Device = Mutex<Option<Keyboard>>;
 
 impl GlobalDispatch<ZwpVirtualKeyboardManagerV1, ()> for Sliver {

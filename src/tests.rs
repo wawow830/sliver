@@ -128,7 +128,6 @@ impl Bench {
         panic!("never saw {what}");
     }
 
-    /// Long enough for every client to have been answered.
     fn settle(&mut self) {
         for _ in 0..50 {
             self.pump();
@@ -152,10 +151,9 @@ impl Bench {
         self.s.touch(Touch::Frame);
     }
 
-    /// Landscape XRGB, as clients drew it.
     fn picture(&self) -> Vec<u32> {
         let log = self.log.lock().unwrap();
-        let panel = TRANSFORM.transform_size(Size::<i32, Logical>::from((W, H)));
+        let panel = panel::<Logical>();
         let mut out = vec![0; (W * H) as usize];
         for y in 0..H {
             for x in 0..W {
@@ -201,7 +199,6 @@ impl Bench {
     }
 }
 
-/// A window filled with one colour that logs its touch events.
 struct App {
     stream: UnixStream,
     events: Arc<Mutex<Vec<String>>>,
@@ -360,7 +357,6 @@ delegate_noop!(AppState: ignore XdgToplevel);
 delegate_noop!(AppState: ZwpVirtualKeyboardManagerV1);
 delegate_noop!(AppState: ZwpVirtualKeyboardV1);
 
-/// Types `code` on a virtual keyboard of its own and disconnects.
 fn type_and_quit(stream: UnixStream, code: u32) {
     let conn = Connection::from_socket(stream).unwrap();
     let (globals, queue) = registry_queue_init::<AppState>(&conn).unwrap();
@@ -552,7 +548,6 @@ fn held_keeps_the_bar_on() {
     assert!(!b.log().on);
 }
 
-/// Needs Quickshell and the module built into target/bar: run with `--ignored`.
 #[test]
 #[ignore]
 fn quickshell_draws_and_types() {

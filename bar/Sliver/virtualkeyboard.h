@@ -7,7 +7,6 @@ struct wl_display;
 struct wl_event_queue;
 struct zwp_virtual_keyboard_v1;
 
-// A keyboard of its own on the desktop: key(code, pressed) with evdev keycodes.
 class VirtualKeyboard : public QObject {
     Q_OBJECT
     QML_ELEMENT

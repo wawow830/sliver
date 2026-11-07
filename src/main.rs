@@ -42,24 +42,23 @@ use smithay::{
 
 use wayland::{ClientState, Wl, client_of};
 
-/// The bar in landscape, as clients see it.
 pub const W: i32 = 2008;
 pub const H: i32 = 60;
-/// The panel is 60×2008 portrait.
 const TRANSFORM: Transform = Transform::_90;
 const IDLE: Duration = Duration::from_secs(60);
 
-/// Key events, `(evdev code, pressed)`, into one uinput keyboard; dropping it destroys the device.
+pub fn panel<Kind>() -> Size<i32, Kind> {
+    TRANSFORM.transform_size((W, H).into())
+}
+
 pub type Keyboard = Box<dyn FnMut(u32, bool) + Send>;
 
 pub trait Bar {
-    /// Puts the frame (panel-native, XRGB8888) on the panel; `Sliver::presented` follows.
     fn show(&mut self, frame: &[u32]) -> io::Result<()>;
     fn power(&mut self, on: bool);
     fn keyboard(&mut self) -> io::Result<Keyboard>;
 }
 
-/// A surface and where its origin is on the bar.
 type Target = (WlSurface, Point<f64, Logical>);
 
 pub enum Touch {
@@ -81,7 +80,6 @@ pub struct Sliver {
     flipping: bool,
     dirty: bool,
     shown: Option<Window>,
-    /// Fingers down, and where their events go.
     touches: HashMap<u32, Option<Target>>,
     touched: Vec<WlSurface>,
     on: bool,
@@ -99,7 +97,6 @@ impl Sliver {
         lh.insert_source(
             Generic::new(display, Interest::READ, Mode::Level),
             |_, display, s| {
-                // SAFETY: the display is never dropped while the loop runs.
                 unsafe { display.get_mut().dispatch_clients(s)? };
                 Ok(PostAction::Continue)
             },
@@ -112,7 +109,7 @@ impl Sliver {
             .id();
         std::thread::spawn(|| fkeys::run(theirs));
         let mut renderer = PixmanRenderer::new().map_err(io::Error::other)?;
-        let size = TRANSFORM.transform_size(Size::<i32, Physical>::from((W, H)));
+        let size = panel::<Physical>();
         let frame = renderer
             .create_buffer(Fourcc::Xrgb8888, (size.w, size.h).into())
             .map_err(io::Error::other)?;
@@ -307,7 +304,6 @@ impl Sliver {
         Some((surface, loc.to_f64() - offset))
     }
 
-    /// The fingers stay down, but their events go nowhere until lifted.
     fn cancel_touches(&mut self) {
         let seat = self.wl.seat.clone();
         let seq = SERIAL_COUNTER.next_serial();
@@ -366,7 +362,6 @@ fn slot(id: u32) -> TouchSlot {
 }
 
 fn pixels<'a>(image: &'a Image<'static, 'static>) -> &'a [u32] {
-    // SAFETY: an Xrgb8888 image owns stride × height bytes and outlives the borrow.
     unsafe { std::slice::from_raw_parts(image.data(), image.stride() / 4 * image.height()) }
 }
 

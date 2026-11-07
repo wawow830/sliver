@@ -12,7 +12,6 @@
 
 namespace {
 
-// The protocol requires a keymap; the keycodes are evdev's, which is what this one says.
 const char keymap[] = "xkb_keymap { xkb_keycodes { include \"evdev\" }; xkb_types { include \"complete\" }; "
                       "xkb_compat { include \"complete\" }; xkb_symbols { include \"pc+us\" }; };";
 
@@ -26,7 +25,7 @@ void globalRemove(void *, wl_registry *, uint32_t) {}
 
 const wl_registry_listener listener{global, globalRemove};
 
-} // namespace
+}
 
 VirtualKeyboard::VirtualKeyboard(QObject *parent) : QObject(parent) {
     auto *wayland = qGuiApp->nativeInterface<QNativeInterface::QWaylandApplication>();
@@ -35,7 +34,6 @@ VirtualKeyboard::VirtualKeyboard(QObject *parent) : QObject(parent) {
         return;
     }
     display = wayland->display();
-    // Our own queue, so binding never dispatches Qt's events from here.
     queue = wl_display_create_queue(display);
     auto *wrapper = static_cast<wl_display *>(wl_proxy_create_wrapper(display));
     wl_proxy_set_queue(reinterpret_cast<wl_proxy *>(wrapper), queue);

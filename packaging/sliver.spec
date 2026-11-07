@@ -1,4 +1,3 @@
-# Source0: git archive --prefix=sliver-0.1.0/ -o ~/rpmbuild/SOURCES/sliver-0.1.0.tar.gz HEAD
 Name:           sliver
 Version:        0.1.0
 Release:        1%{?dist}

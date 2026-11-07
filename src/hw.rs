@@ -24,16 +24,15 @@ use smithay::{
         input::{Libinput, LibinputInterface},
         udev,
     },
-    utils::{DeviceFd, Logical, Rectangle, Size, Transform},
+    utils::{DeviceFd, Logical, Rectangle, Transform},
 };
 
-use crate::{Bar, H, Keyboard, Sliver, TRANSFORM, Touch, W};
+use crate::{Bar, Keyboard, Sliver, TRANSFORM, Touch, panel};
 
 const SEAT: &str = "seat-touchbar";
 const BACKLIGHT: &str = "/sys/class/backlight/228600000.dsi.0";
 const KEY_FN: u32 = 0x1d0;
 
-// From linux/uinput.h and linux/input.h.
 const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
 const UI_SET_KEYBIT: libc::c_ulong = 0x4004_5565;
 const UI_DEV_SETUP: libc::c_ulong = 0x405c_5503;
@@ -60,19 +59,14 @@ struct UinputEvent {
     value: i32,
 }
 
-/// A uinput keyboard; the kernel releases its held keys when the file closes.
-pub fn uinput_keyboard() -> io::Result<Keyboard> {
+fn uinput_keyboard() -> io::Result<Keyboard> {
     let file = File::options().write(true).open("/dev/uinput")?;
     let fd = file.as_raw_fd();
-    let ioctl = |request, arg: libc::c_ulong| {
-        // SAFETY: each request takes an int or a pointer to a live UinputSetup.
-        match unsafe { libc::ioctl(fd, request, arg) } {
-            -1 => Err(io::Error::last_os_error()),
-            _ => Ok(()),
-        }
+    let ioctl = |request, arg: libc::c_ulong| match unsafe { libc::ioctl(fd, request, arg) } {
+        -1 => Err(io::Error::last_os_error()),
+        _ => Ok(()),
     };
     ioctl(UI_SET_EVBIT, EV_KEY.into())?;
-    // Keys only: anything in the BTN_ ranges would make it look like a mouse or joystick.
     for code in (1..0x100).chain(0x160..0x2c0) {
         ioctl(UI_SET_KEYBIT, code)?;
     }
@@ -102,7 +96,6 @@ pub fn uinput_keyboard() -> io::Result<Keyboard> {
             event(EV_KEY, code as u16, pressed.into()),
             event(EV_SYN, 0, 0),
         ];
-        // SAFETY: UinputEvent is plain old data.
         let bytes = unsafe {
             std::slice::from_raw_parts(events.as_ptr().cast::<u8>(), size_of_val(&events))
         };
@@ -164,7 +157,11 @@ struct Screen {
 
 impl Screen {
     fn open(lh: &LoopHandle<'static, Sliver>) -> io::Result<Screen> {
-        let node = udev_devices("drm")?
+        let mut devices = udev::Enumerator::new()?;
+        devices.match_subsystem("drm")?;
+        devices.match_property("ID_SEAT", SEAT)?;
+        let node = devices
+            .scan_devices()?
             .find(|d| d.sysname().to_string_lossy().starts_with("card"))
             .and_then(|d| d.devnode().map(Path::to_path_buf))
             .ok_or_else(|| io::Error::other(format!("no display on {SEAT}")))?;
@@ -186,7 +183,7 @@ impl Screen {
             .modes()
             .first()
             .ok_or_else(|| io::Error::other("panel has no mode"))?;
-        let panel = TRANSFORM.transform_size(Size::<i32, Logical>::from((W, H)));
+        let panel = panel::<Logical>();
         if mode.size() != (panel.w as u16, panel.h as u16) {
             return Err(io::Error::other(format!(
                 "panel mode is {:?}, not {panel:?}",
@@ -261,13 +258,6 @@ impl Screen {
     }
 }
 
-fn udev_devices(subsystem: &str) -> io::Result<impl Iterator<Item = udev::Device>> {
-    let mut devices = udev::Enumerator::new()?;
-    devices.match_subsystem(subsystem)?;
-    devices.match_property("ID_SEAT", SEAT)?;
-    Ok(devices.scan_devices()?.collect::<Vec<_>>().into_iter())
-}
-
 fn libinput(
     lh: &LoopHandle<'static, Sliver>,
     seat: &str,
@@ -285,7 +275,7 @@ fn libinput(
 }
 
 fn touch(s: &mut Sliver, event: InputEvent<LibinputInputBackend>) {
-    let panel = TRANSFORM.transform_size(Size::<i32, Logical>::from((W, H)));
+    let panel = panel::<Logical>();
     let at = |e: &dyn AbsolutePositionEvent<LibinputInputBackend>| {
         TRANSFORM.transform_point_in(e.position_transformed(panel), &panel.to_f64())
     };

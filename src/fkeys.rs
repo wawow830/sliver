@@ -1,5 +1,3 @@
-//! Esc and F1–F12: an ordinary client of sliverd, shown when nothing else is.
-
 use std::{
     collections::HashMap,
     error::Error,
@@ -35,7 +33,6 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 
 use crate::{H, W};
 
-/// Labels and evdev keycodes, left to right.
 pub const KEYS: [(&str, u32); 13] = [
     ("ESC", 1),
     ("F1", 59),
@@ -52,13 +49,11 @@ pub const KEYS: [(&str, u32); 13] = [
     ("F12", 88),
 ];
 
-/// The keycode under landscape column `x`.
 pub fn key_at(x: f64) -> u32 {
     let i = (x.max(0.0) as i32 * KEYS.len() as i32 / W).min(KEYS.len() as i32 - 1);
     KEYS[i as usize].1
 }
 
-/// XRGB8888 rows of `W`.
 pub fn draw() -> Vec<u32> {
     const CAP: u32 = 0x2a2a2a;
     const INK: u32 = 0xffffff;
@@ -89,7 +84,6 @@ pub fn draw() -> Vec<u32> {
     px
 }
 
-/// 5×7 rows, most significant of the low five bits leftmost.
 fn glyph(c: u8) -> [u8; 7] {
     match c {
         b'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
@@ -110,7 +104,6 @@ fn glyph(c: u8) -> [u8; 7] {
     }
 }
 
-/// The protocol requires a keymap; the keycodes are evdev's, which is what this one says.
 const KEYMAP: &[u8] =
     b"xkb_keymap { xkb_keycodes { include \"evdev\" }; xkb_types { include \"complete\" }; \
 xkb_compat { include \"complete\" }; xkb_symbols { include \"pc+us\" }; };\0";
@@ -119,7 +112,6 @@ struct Keys {
     surface: WlSurface,
     buffer: WlBuffer,
     keyboard: ZwpVirtualKeyboardV1,
-    /// Touch id → the key it pressed.
     held: HashMap<i32, u32>,
 }
 
@@ -165,12 +157,10 @@ fn serve(stream: UnixStream) -> Result<(), Box<dyn Error>> {
 }
 
 fn memfd(bytes: &[u8]) -> std::io::Result<File> {
-    // SAFETY: memfd_create returns a new fd or -1.
     let fd = unsafe { libc::memfd_create(c"sliver".as_ptr(), libc::MFD_CLOEXEC) };
     if fd < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: the fd is fresh and owned by nobody else.
     let mut file = File::from(unsafe { OwnedFd::from_raw_fd(fd) });
     file.write_all(bytes)?;
     Ok(file)
