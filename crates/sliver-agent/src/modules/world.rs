@@ -85,7 +85,7 @@ impl World {
         }
     }
 
-    /// Plausible sample data (tests, benchmarks), so data modules show something instead of
+    /// Plausible sample data (tests), so data modules show something instead of
     /// hiding: battery, volume, brightness, now playing, focused window.
     pub fn sample(now: DateTime<Local>) -> World {
         use sliver_session::{Media, PlaybackStatus};
