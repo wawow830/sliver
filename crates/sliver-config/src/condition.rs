@@ -128,7 +128,6 @@ pub const CONTEXT_KEYS: &[&str] = &[
     "physical_esc",
     "layer",
     "layout",
-    "app_controls",
 ];
 
 /// `app-id`, `App_ID` and `power.on_battery` all become their canonical snake_case key.

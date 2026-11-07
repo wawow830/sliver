@@ -63,6 +63,3 @@ module:active slider { background-color: #e0e0e0; }
 .critical, .urgent { background-color: #c01c28; }
 #battery.charging { color: #57e389; }
 .error { color: #ff7b63; }
-
-/* Indeterminate progress (published items) is a full track: muted, so it doesn't read as 100%. */
-module.indeterminate highlight { background-color: alpha(@accent, 0.35); }

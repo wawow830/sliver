@@ -45,8 +45,7 @@ pub enum Width {
     /// Shares the leftover space by weight. `Fill(n)` spans `n` slots *including the gaps between
     /// them*, so a row of `Fill` items reproduces tiny-dfr's `Stretch` geometry exactly.
     Fill(u32),
-    /// Fits its content, but never narrower than the first or wider than the second value (a
-    /// published item's `width = {min, max}`).
+    /// Fits its content, but never narrower than the first or wider than the second value.
     Between(f32, f32),
 }
 

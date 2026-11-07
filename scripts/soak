@@ -4,10 +4,9 @@
 Runs `sliverd --fake-hardware` and `sliver-agent` in a sandbox (scripts/sandbox.py) with a
 config that keeps the bar busy, then churns it for a while:
 
-  * an app publishing status items with fresh ids, random labels (now and then a glyph no font
-    has) and a fresh random PNG icon on every update, and dropping and re-creating its context;
   * a continuous script module printing ~20 lines a second;
-  * an exec-less module updated with `sliverctl update`, and the media layer toggled;
+  * an exec-less module updated with `sliverctl update` (random text, now and then a glyph no font
+    has), and the media layer toggled;
   * touches through sliverd's real touch path (`--touch-socket`): taps anywhere, slides across
     the sliders, and Fn presses that flip the Fn layer;
   * a clock with seconds.
@@ -22,12 +21,10 @@ fill up during the warm-up. ~4 min by default.
 import argparse
 import random
 import statistics
-import struct
 import subprocess
 import sys
 import threading
 import time
-import zlib
 from pathlib import Path
 
 from sandbox import Sandbox
@@ -44,7 +41,7 @@ off-after = "2h"
 [[layouts.default.zones]]
 name = "main"
 width = "fill"
-modules = ["custom/stream", "custom/push", "status-items"]
+modules = ["custom/stream", "custom/push"]
 
 [[layouts.default.zones]]
 name = "controls"
@@ -63,16 +60,6 @@ format = "{}"
 RARE = ["\U00013000", "\U00010380", "\ua9b2", "\u16a0", "\U0010fffd", "\u2d63", "😀", "漢"]
 
 
-def png(w: int, h: int, rgb: tuple[int, int, int]) -> bytes:
-    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
-
-    def chunk(t: bytes, d: bytes) -> bytes:
-        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
-
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
-
-
 def mem(pid: int) -> dict[str, int]:
     out = {}
     try:
@@ -85,62 +72,12 @@ def mem(pid: int) -> dict[str, int]:
     return out
 
 
-def publisher(bus_addr: str, stop: threading.Event, stats: dict) -> None:
-    import gi
-
-    gi.require_version("Gio", "2.0")
-    from gi.repository import Gio, GLib
-
-    name, root = "io.github.wawow830.Sliver", "/io/github/wawow830/Sliver"
-    conn = Gio.DBusConnection.new_for_address_sync(
-        bus_addr,
-        Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
-        None, None,
-    )
-
-    def call(path, iface, method, args, reply):
-        return conn.call_sync(name, path, iface, method, args, GLib.VariantType(reply),
-                              Gio.DBusCallFlags.NONE, 5000, None).unpack()
-
-    rng, n, path = random.Random(7), 0, None
-    while not stop.is_set():
-        try:
-            if path is None:
-                opts = {"scope": GLib.Variant("s", "status"),
-                        "provider": GLib.Variant("s", f"org.example.Soak{n % 3}"),
-                        "title": GLib.Variant("s", "Soak")}
-                (path,) = call(root, name + ".TouchBar1", "CreateContext",
-                               GLib.Variant("(a{sv})", (opts,)), "(o)")
-            items = []
-            for k in range(4):
-                label = f"{n}-{k} " + "".join(rng.choice("abcxyz ") for _ in range(rng.randint(1, 12)))
-                if rng.random() < 0.1:
-                    label += rng.choice(RARE)
-                item = {"id": GLib.Variant("s", f"i{n}-{k}"),
-                        "type": GLib.Variant("s", "button"),
-                        "label": GLib.Variant("s", label)}
-                if k == 0:
-                    rgb = (rng.randrange(256), rng.randrange(256), rng.randrange(256))
-                    item["icon-data"] = GLib.Variant("ay", png(16, 16, rgb))
-                items.append(item)
-            call(path, name + ".Context1", "SetItems", GLib.Variant("(aa{sv})", (items,)), "(as)")
-            n += 1
-            if n % 40 == 0:
-                call(path, name + ".Context1", "Destroy", None, "()")
-                path = None
-            stats["published"] = n
-        except GLib.Error as e:
-            stats["errors"] = stats.get("errors", 0) + 1
-            stats["last_error"] = e.message
-            path = None
-            time.sleep(0.5)
-        stop.wait(0.1)
-
-
 def ctl(bins: Path, env: dict, stop: threading.Event, stats: dict) -> None:
     rng, n = random.Random(11), 0
     while not stop.is_set():
         text = f"push {n} " + "".join(rng.choice("pqrs") for _ in range(rng.randint(1, 20)))
+        if rng.random() < 0.1:
+            text += rng.choice(RARE)
         subprocess.run([str(bins / "sliverctl"), "update", "custom/push", f"text={text}"],
                        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if n % 15 == 0:
@@ -205,8 +142,7 @@ def soak(sb: Sandbox, a: argparse.Namespace, profile: str, stop: threading.Event
         print(f"soak: sliver-agent exited early; see {sb.dir}", file=sys.stderr)
         return 1
     env = sb.env
-    for target, args in ((publisher, (env["DBUS_SESSION_BUS_ADDRESS"], stop, stats)),
-                         (ctl, (sb.bins, env, stop, stats)),
+    for target, args in ((ctl, (sb.bins, env, stop, stats)),
                          (toucher, (touch, stop, stats))):
         threading.Thread(target=target, args=args).start()
 
@@ -221,11 +157,11 @@ def soak(sb: Sandbox, a: argparse.Namespace, profile: str, stop: threading.Event
         m = mem(agent.pid)
         samples.append(m)
         print(f"  RSS {m.get('VmRSS', 0) / 1024:6.1f} MB  anon {m.get('RssAnon', 0) / 1024:6.1f} MB"
-              f"  peak {m.get('VmHWM', 0) / 1024:6.1f} MB   published {stats.get('published', 0)}"
-              f"  ctl {stats.get('ctl', 0)}  touches {stats.get('touches', 0)}", flush=True)
+              f"  peak {m.get('VmHWM', 0) / 1024:6.1f} MB"
+              f"   ctl {stats.get('ctl', 0)}  touches {stats.get('touches', 0)}", flush=True)
         time.sleep(SAMPLE_S)
-    if stats.get("published", 0) < 100:
-        print(f"soak: the publisher barely ran ({stats}); see {sb.dir}", file=sys.stderr)
+    if stats.get("ctl", 0) < 100:
+        print(f"soak: sliverctl barely ran ({stats}); see {sb.dir}", file=sys.stderr)
         return 1
     k = max(1, len(samples) // 3)
     first = statistics.median(s.get("VmRSS", 0) for s in samples[:k]) / 1024
@@ -234,8 +170,6 @@ def soak(sb: Sandbox, a: argparse.Namespace, profile: str, stop: threading.Event
     sb.ok = growth <= a.budget_mb
     verdict = "ok" if sb.ok else "GROWING"
     print(f"soak: RSS {first:.1f} -> {last:.1f} MB ({growth:+.1f} MB, budget {a.budget_mb:g}) {verdict}")
-    if stats.get("errors"):
-        print(f"soak: publisher errors: {stats['errors']} (last: {stats.get('last_error')})")
     if not sb.ok:
         print(f"soak: logs kept in {sb.dir}", file=sys.stderr)
     return 0 if sb.ok else 1

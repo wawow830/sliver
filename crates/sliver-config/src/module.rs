@@ -15,7 +15,7 @@ use crate::options::takes_key;
 use crate::values::{FireOn, Interval, Width};
 
 /// Namespaces whose second part is a *name*, not part of the type (`custom/vpn`, `key/F1`).
-const PARAMETRIC: &[&str] = &["custom", "key", "group", "app"];
+const PARAMETRIC: &[&str] = &["custom", "key", "group"];
 
 /// waybar type names → sliver type names, so ported configs work.
 fn type_alias(t: &str) -> Option<&'static str> {
@@ -258,9 +258,6 @@ pub struct Common {
     pub menu_trigger: Option<Gesture>,
     pub swipe_threshold: Option<u32>,
     pub interval: Option<Interval>,
-    /// For app-published modules: also deliver the gesture to the app when a user `on-*`
-    /// binding exists. Default false, so the user binding replaces the app event.
-    pub pass_through: bool,
 }
 
 impl Common {
@@ -309,7 +306,6 @@ impl Common {
         if let Some(v) = r.get("interval") {
             c.interval = Interval::parse(v, &r.path("interval"), d);
         }
-        c.pass_through = r.bool("pass-through", d).unwrap_or(false);
         if let Some(states) = r.table("states", d) {
             for (name, v) in states {
                 match v.as_float().or(v.as_integer().map(|i| i as f64)) {
@@ -471,7 +467,6 @@ pub const COMMON_KEYS: &[&str] = &[
     "on-scroll-up",
     "on-drag",
     "on-update",
-    "pass-through",
 ];
 
 fn parse_menu(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<MenuEntry> {

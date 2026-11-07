@@ -7,7 +7,7 @@
 #
 #   [[layouts.default.zones]]
 #   name = "controls"
-#   modules = ["status-items", "custom/weather", "clock"]
+#   modules = ["custom/weather", "clock"]
 #
 # It runs every 15 minutes, and only while it's on the bar with the display on. Offline it
 # keeps the last reading (class `stale`). Style the classes clear, cloudy, rain, snow, storm and

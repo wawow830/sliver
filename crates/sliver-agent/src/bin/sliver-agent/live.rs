@@ -1,5 +1,5 @@
-//! The live world: the feeds (desktop, session, user modules), the public API and the ops
-//! thread, and the [`World`] they make for each frame.
+//! The live world: the feeds (desktop, session, user modules), `Control1` and the ops thread,
+//! and the [`World`] they make for each frame.
 
 use super::*;
 
@@ -12,13 +12,6 @@ pub(super) struct Live {
     pub(super) lock_watch: sliver_agent::context::LockWatch,
     pub(super) ops: Option<std::sync::mpsc::Sender<Op>>,
     pub(super) api: Option<ApiLink>,
-    pub(super) published: Published,
-    /// The registry changed since `published` was copied: copy it before the next frame
-    /// (not on every change, which an app may make hundreds of times a second).
-    pub(super) published_stale: bool,
-    /// Our own compositor backend (Hyprland/sway/niri IPC) is connected. Without one, what a
-    /// GNOME/KDE integration pushes over `Desktop1` is the desktop.
-    pub(super) own_desktop: bool,
     /// cpu/memory/... sampler, kept across frames for CPU deltas, and what the config's modules
     /// read with it.
     pub(super) stats: sliver_agent::stats::Sampler,
@@ -28,9 +21,9 @@ pub(super) struct Live {
 }
 
 impl Live {
-    /// `api`: serve the public API (`Some(replace)`), or not (`--render`).
+    /// `api`: serve `Control1` (`Some(replace)`), or not (`--render`).
     pub(super) fn start(config: &Config, api: Option<bool>) -> std::io::Result<Live> {
-        // The API first: owning the bus name is what tells systemd (Type=dbus) and D-Bus
+        // `Control1` first: owning the bus name is what tells systemd (Type=dbus) and D-Bus
         // activation that the agent is up, so it must not wait on slow session sources.
         let api = match api.map(ApiLink::start) {
             None => None,
@@ -46,7 +39,7 @@ impl Live {
                 std::process::exit(1);
             }
             Some(Err(e)) => {
-                eprintln!("sliver-agent: public D-Bus API unavailable: {e}");
+                eprintln!("sliver-agent: D-Bus interface unavailable: {e}");
                 None
             }
         };
@@ -68,9 +61,6 @@ impl Live {
             lock_watch: Default::default(),
             ops,
             api,
-            published: Published::default(),
-            published_stale: false,
-            own_desktop: false,
             stats: Default::default(),
             wants: Default::default(),
             apps: std::sync::Arc::new(sliver_icons::desktop::DesktopEntries::from_paths(
@@ -90,53 +80,12 @@ impl Live {
                     self.outputs.insert(u.module.clone(), u.output.clone());
                 }
                 Feed::Session(s) => self.locked_hint = s.locked,
-                Feed::Desktop(d) => self.own_desktop = d.connected,
                 Feed::Note(n) => eprintln!("sliver-agent: {n}"),
-                Feed::Art { .. } => {}
+                Feed::Desktop(_) | Feed::Art { .. } => {}
             }
             self.agg.apply(f);
         }
-        if any {
-            self.push_focus();
-        }
         any
-    }
-
-    /// Our compositor backend's focus decides who fills App controls (GNOME/KDE push theirs
-    /// over `Desktop1` instead).
-    pub(super) fn push_focus(&mut self) {
-        let d = &self.agg.desktop;
-        if let Some(api) = &self.api
-            && self.own_desktop
-            && d.connected
-        {
-            api.set_focus(Focus {
-                window: d.window.clone(),
-                workspace: d.workspace.as_ref().map(|w| w.name.clone()),
-                locked: self.world_locked(),
-            });
-            self.published_stale = true;
-        }
-    }
-
-    /// Without our own backend, what a DE integration pushed over `Desktop1` (focus, workspaces,
-    /// windows) is the desktop.
-    pub(super) fn sync_pushed_desktop(&mut self) -> bool {
-        if self.own_desktop {
-            return false;
-        }
-        let Some(api) = &self.api else {
-            return false;
-        };
-        let backend = sliver_desktop::Backend::detect(|k| std::env::var(k).ok());
-        let pushed = sliver_api::service::pushed_desktop(&api.api.state(), backend);
-        match pushed {
-            Some(d) if d != self.agg.desktop => {
-                self.agg.apply(Feed::Desktop(d));
-                true
-            }
-            _ => false,
-        }
     }
 
     pub(super) fn world_locked(&self) -> bool {
@@ -155,12 +104,6 @@ impl Live {
     /// Reads the statistics `wants` asks for: a preview's config may place modules the live one
     /// doesn't.
     pub(super) fn world_reading(&mut self, now: Now, wants: &sliver_agent::stats::Wants) -> World {
-        if self.published_stale
-            && let Some(api) = &self.api
-        {
-            self.published = Published::snapshot(&api.api);
-            self.published_stale = false;
-        }
         // logind's LockedHint can be stale; see context::plausibly_locked.
         let locked = self.world_locked();
         let mut session = self.agg.session.clone();
@@ -173,7 +116,6 @@ impl Live {
             desktop: self.agg.desktop.clone(),
             context,
             outputs: self.outputs.clone(),
-            published: self.published.clone(),
             stats: self.stats.readings(wants, now.instant),
             apps: self.apps.clone(),
             media_art: self.agg.media_art().map(std::path::Path::to_path_buf),
@@ -190,13 +132,10 @@ impl Live {
         self.feeds.modules.as_ref()
     }
 
-    /// Runs what `config` needs: its user modules (unchanged specs keep the running ones), the
-    /// watchers its modules use, and the API's policy.
+    /// Runs what `config` needs: its user modules (unchanged specs keep the running ones) and the
+    /// watchers its modules use.
     pub(super) fn follow(&mut self, config: &Config) {
         self.wants = sliver_agent::stats::wants(config);
-        if let Some(api) = &self.api {
-            api.set_policy(sliver_agent::api::policy_from_config(config));
-        }
         self.feeds.follow(config);
         if let Some(rt) = &self.feeds.modules {
             let keys: std::collections::HashSet<String> = rt.keys().into_iter().collect();

@@ -1,14 +1,10 @@
-//! The real `sliverctl` binary against the API server on a private `dbus-daemon`.
-//! Skipped when `dbus-daemon` isn't installed.
+//! The real `sliverctl` binary against the agent's `Control1` server on a private
+//! `dbus-daemon`. Skipped when `dbus-daemon` isn't installed.
 
-use sliver_api::identity::RealProc;
-use sliver_api::item::{Gesture, Prop};
-use sliver_api::registry::Interaction;
-use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use sliver_agent::api::{Api, Control, ControlReply, ControlState, Host, Prop};
+use sliver_config::Gesture;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 struct Bus {
     _tb: sliver_testbus::TestBus,
@@ -27,7 +23,6 @@ impl Bus {
 #[derive(Default)]
 struct Rec(Mutex<Vec<Control>>);
 impl Host for Rec {
-    fn changed(&self) {}
     fn control(&self, req: Control) -> Result<ControlReply, String> {
         let r = match &req {
             Control::ReloadConfig => ControlReply::Errors(vec!["bad.toml:1: nope".into()]),
@@ -53,32 +48,21 @@ fn sliverctl(bus: &Bus) -> Command {
     c
 }
 
-fn wait_until(mut f: impl FnMut() -> bool) -> bool {
-    let end = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < end {
-        if f() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    false
-}
-
 #[test]
-fn control_publish_and_events() {
+fn control_calls_reach_the_agent() {
     let Some(bus) = Bus::start() else {
         eprintln!("dbus-daemon not installed; skipping");
         return;
     };
     let host = Arc::new(Rec::default());
     let h: Arc<dyn Host> = host.clone();
-    let api = zbus::block_on(async {
+    let _api = zbus::block_on(async {
         let conn = zbus::connection::Builder::address(bus.addr.as_str())
             .unwrap()
             .build()
             .await
             .unwrap();
-        Api::serve(conn, h, Arc::new(RealProc)).await.unwrap()
+        Api::serve(conn, h, false).await.unwrap()
     });
 
     let ok = |args: &[&str]| {
@@ -121,55 +105,4 @@ fn control_publish_and_events() {
             Control::SetVariable("focus".into(), Prop::Bool(true))
         );
     }
-
-    // publish: events come out on stdout, updates go in on stdin.
-    let mut child = sliverctl(&bus)
-        .args([
-            "publish",
-            "--provider",
-            "org.example.Cli",
-            "--stdin",
-            "button:go:Go",
-            "toggle:t:T",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let ctx = || api.state().reg.contexts().next().map(|c| c.id);
-    assert!(wait_until(|| ctx().is_some_and(|id| api
-        .state()
-        .reg
-        .context(id)
-        .unwrap()
-        .find("t")
-        .is_some())));
-    let id = ctx().unwrap();
-    assert_eq!(
-        api.state().reg.context(id).unwrap().provider,
-        "org.example.Cli"
-    );
-
-    let mut stdin = child.stdin.take().unwrap();
-    writeln!(stdin, "go label='Going now'").unwrap();
-    assert!(wait_until(|| api
-        .state()
-        .reg
-        .context(id)
-        .unwrap()
-        .find("go")
-        .unwrap()
-        .label
-        .as_deref()
-        == Some("Going now")));
-
-    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
-    zbus::block_on(api.interact(id, "go", Interaction::Gesture(Gesture::Tap))).unwrap();
-    zbus::block_on(api.interact(id, "t", Interaction::Gesture(Gesture::Tap))).unwrap();
-    assert_eq!(lines.next().unwrap().unwrap(), "go tap");
-    assert_eq!(lines.next().unwrap().unwrap(), "t toggled state=true");
-
-    child.kill().unwrap();
-    child.wait().unwrap();
-    assert!(wait_until(|| ctx().is_none()), "context outlived sliverctl");
 }

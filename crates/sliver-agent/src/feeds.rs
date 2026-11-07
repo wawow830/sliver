@@ -239,8 +239,8 @@ impl Feeds {
             .expect("spawn thread");
     }
 
-    /// Run the compositor backend for this session (Hyprland, sway, niri). GNOME and KDE
-    /// have no in-process backend: their extension pushes focus over `Desktop1.SetFocus`.
+    /// Run the compositor backend for this session (Hyprland, sway, niri, other wlroots
+    /// compositors). GNOME and KDE have none.
     pub fn start_desktop(&self, get: impl Fn(&str) -> Option<String> + Send + 'static) {
         let out = self.out.clone();
         std::thread::Builder::new()

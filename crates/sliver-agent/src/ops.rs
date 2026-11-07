@@ -242,43 +242,6 @@ fn open_notification(ses: &Connection, id: u32) -> Result<(), String> {
     sliver_session::notifications::close(ses, id)
 }
 
-/// Make a GNOME/KDE desktop-control call on the session bus. It never starts the destination
-/// (no extension, no effect) and gives up after a few seconds.
-pub fn bus_call(call: &sliver_desktop::control::BusCall) -> Result<(), String> {
-    let conn = sliver_bus::session().map_err(|e| e.to_string())?;
-    let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(&conn)
-        .destination(call.dest)
-        .and_then(|b| b.path(call.path))
-        .and_then(|b| b.interface(call.iface))
-        .and_then(|b| b.cache_properties(zbus::proxy::CacheProperties::No).build())
-        .map_err(|e| e.to_string())?;
-    let flags = zbus::proxy::MethodFlags::NoAutoStart.into();
-    let r = match call.arg {
-        _ if call.text.len() == 2 => proxy
-            .call_with_flags::<_, _, ()>(
-                call.method,
-                flags,
-                &(call.text[0].as_str(), call.text[1].as_str()),
-            )
-            .map(|_| ()),
-        _ if call.text.len() == 1 => proxy
-            .call_with_flags::<_, _, ()>(call.method, flags, &(call.text[0].as_str(),))
-            .map(|_| ()),
-        Some(n) => proxy
-            .call_with_flags::<_, _, zbus::zvariant::OwnedValue>(call.method, flags, &(n,))
-            .map(|_| ()),
-        None => proxy
-            .call_with_flags::<_, _, zbus::zvariant::OwnedValue>(call.method, flags, &())
-            .map(|_| ()),
-    };
-    r.map_err(|e| {
-        format!(
-            "{}: {e} (is the Sliver extension/script running?)",
-            call.dest
-        )
-    })
-}
-
 /// Call `call` with its arguments coerced to the method's real types (see [`crate::dbus_call`]).
 pub fn dbus_call(conn: &Connection, call: &sliver_config::DBusCall) -> Result<(), String> {
     let types = if call.args.is_empty() {

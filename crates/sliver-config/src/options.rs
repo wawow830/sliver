@@ -144,9 +144,6 @@ pub const MODULE_TYPES: &[(&str, &[Keys])] = &[
             ("module-width", Kind::Width),
         ]],
     ),
-    ("app-controls", &[]),
-    ("status-items", &[]),
-    ("app", &[]),
     ("custom", &[SLIDER, SCRIPT]),
 ];
 

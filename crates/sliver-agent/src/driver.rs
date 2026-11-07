@@ -1,7 +1,7 @@
 //! The agent as one state machine: [`Input`]s in, [`Output`]s out.
 //!
 //! The driver decides when [`Agent`] draws: a touch or a layer change at once, content changes
-//! (feeds, published items) at most [`CONTENT_FPS`](crate::pace::CONTENT_FPS) times a second, a
+//! (feeds, script output) at most [`CONTENT_FPS`](crate::pace::CONTENT_FPS) times a second, a
 //! running transition on its next frame and a clock on its next tick. It also keeps what sliverd
 //! has been told (the display policy).
 //! It does no I/O: `main` turns file descriptors into inputs, carries out the outputs and sleeps
@@ -23,7 +23,7 @@ const SLACK: Duration = Duration::from_millis(5);
 pub enum Input {
     /// Time passed: run whatever is due.
     Tick,
-    /// What a module shows changed (feeds, published items): drawn when the pace allows.
+    /// What a module shows changed (feeds, script output): drawn when the pace allows.
     Changed,
     /// The whole frame may differ (config, stylesheet, accent colours): draw now.
     Redraw,
@@ -94,12 +94,9 @@ impl Driver {
     /// [`Input::Effects`]; `Err(req)` is the caller's to answer.
     pub fn control(
         &mut self,
-        req: sliver_api::service::Control,
+        req: crate::api::Control,
         now: &Now,
-    ) -> (
-        Result<crate::api::Reply, sliver_api::service::Control>,
-        Vec<Effect>,
-    ) {
+    ) -> (Result<crate::api::Reply, crate::api::Control>, Vec<Effect>) {
         let mut fx = Vec::new();
         let r = self.agent.control(req, now.mono_us, &mut fx);
         (r, fx)

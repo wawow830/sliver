@@ -25,11 +25,12 @@ and the stylesheet
 follows the focused app, workspace and session state, runs the modules, renders frames, and hands them to
 .BR sliverd (8),
 which owns the hardware.
-It also serves the public session D\-Bus API
-.RI ( io.github.wawow830.Sliver ),
-which
+It also serves a session D\-Bus interface
+.RI ( io.github.wawow830.Sliver ,
+.BR Control1 ),
+through which
 .BR sliverctl (1)
-and any other app or script can use to publish items and control the bar.
+and the user's scripts control the bar.
 .PP
 The agent runs unprivileged as a systemd user service in the graphical session.
 If it is not running, crashes or hangs,

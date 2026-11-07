@@ -1164,12 +1164,12 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "futures-lite",
  "libc",
  "rustix",
  "serde",
  "serde_json",
  "signal-hook",
- "sliver-api",
  "sliver-bus",
  "sliver-cli",
  "sliver-config",
@@ -1187,19 +1187,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sliver-api"
-version = "0.1.0"
-dependencies = [
- "futures-lite",
- "regex-lite",
- "serde",
- "sliver-desktop",
- "sliver-ipc",
- "sliver-testbus",
- "zbus",
-]
-
-[[package]]
 name = "sliver-bus"
 version = "0.1.0"
 dependencies = [
@@ -1212,19 +1199,6 @@ dependencies = [
 [[package]]
 name = "sliver-cli"
 version = "0.1.0"
-
-[[package]]
-name = "sliver-client"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sliver-api",
- "sliver-bus",
- "sliver-ipc",
- "sliver-testbus",
- "zbus",
-]
 
 [[package]]
 name = "sliver-config"
@@ -1318,9 +1292,7 @@ dependencies = [
  "libc",
  "serde",
  "sliver-agent",
- "sliver-api",
  "sliver-bus",
- "sliver-client",
  "sliver-config",
  "sliver-hw",
  "sliver-ipc",

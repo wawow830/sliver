@@ -1,7 +1,7 @@
 # sliver
 
-Sliver makes the Touch Bar on Linux Macs part of the desktop: waybar-style modules, layouts and
-stylesheets, a D-Bus API for apps (`docs/dbus/`, `examples/`), replacing tiny-dfr. It never trades
+Sliver makes the Touch Bar on Linux Macs part of the desktop: waybar-style modules (`examples/`),
+layouts and stylesheets, driven by `sliverctl` (`docs/dbus/`), replacing tiny-dfr. It never trades
 away: (1) Esc and the F-keys are always reachable, (2) a hardware experiment never strands the
 user, (3) it's cheap on power, (4) all of it is testable without hardware.
 

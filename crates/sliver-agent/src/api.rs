@@ -1,10 +1,12 @@
-//! Serving the public D-Bus API (`sliver_api`), and the [`Host`] through which its handlers reach
-//! the agent core.
+//! `Control1`, the agent's session D-Bus interface at `io.github.wawow830.Sliver` (names in
+//! `sliver_ipc::dbus`, the interface in `docs/dbus/io.github.wawow830.Sliver.xml`, which a test
+//! compares with what's served): the user's own tools (sliverctl) driving the agent. Sandboxed
+//! callers (Flatpak, Snap) are refused.
 //!
 //! zbus runs the handlers on its own executor thread; they reach the main loop through a wake
-//! socket it polls and a request channel.
+//! socket it polls and a request channel ([`ApiLink`]), or a test's [`Host`].
 
-use std::collections::HashSet;
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::net::UnixStream;
@@ -13,19 +15,213 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sliver_api::identity::RealProc;
-use sliver_api::registry::{AppPolicy, AppSource, ContextId, Focus, Policy};
-use sliver_api::service::{Api, Control, ControlReply, ControlState, Host};
+use sliver_ipc::dbus::{BUS_NAME, ROOT_PATH};
 
-const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+mod control1;
+mod prop;
+
+use control1::ControlIface;
+pub use prop::{prop_from_value, prop_to_value};
+
+/// A D-Bus value, decoupled from zvariant.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Prop {
+    Bool(bool),
+    Int(i64),
+    Num(f64),
+    Str(String),
+    Bytes(Vec<u8>),
+    List(Vec<Prop>),
+    Map(BTreeMap<String, Prop>),
+}
+
+/// An `a{sv}`.
+pub type Props = BTreeMap<String, Prop>;
+
+/// D-Bus errors. Names are checked against `sliver_ipc::dbus::error` in tests.
+#[derive(Debug, zbus::DBusError)]
+#[zbus(prefix = "io.github.wawow830.Sliver.Error")]
+pub enum Error {
+    #[zbus(error)]
+    ZBus(zbus::Error),
+    AccessDenied(String),
+    InvalidArgs(String),
+    Failed(String),
+}
+
+/// Requests the agent core answers. Module ids follow sliver-config(5).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Control {
+    SwitchLayer(String),
+    PushLayer(String, u32),
+    PopLayer,
+    ToggleLayer(String),
+    SetLayout(String),
+    SetProfile(String),
+    ReloadConfig,
+    RenderPreview(String, Props),
+    SetVariable(String, Prop),
+    Signal(u32),
+    Refresh(String),
+    Show(String),
+    Hide(String),
+    Toggle(String),
+    ResetVisibility,
+    /// A tap, double tap, hold or swipe, as if on the module's cell.
+    Trigger(String, sliver_config::Gesture),
+    Update(String, Props),
+    ListModules,
+    /// `show`, `hide` or `toggle` the whole bar (the hatch keeps working).
+    Bar(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ControlReply {
+    Done,
+    Errors(Vec<String>),
+    Png(Vec<u8>),
+    Modules(Vec<Props>),
+}
 
 pub type Reply = Result<ControlReply, String>;
 
+/// `Control1` properties.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ControlState {
+    pub active_layer: String,
+    /// The layout the base layer shows now.
+    pub active_layout: String,
+    /// Index into the config's `rules` of the rule that picked it, or -1.
+    pub active_rule: i32,
+    /// That rule's `name` (empty if unnamed or none).
+    pub active_rule_name: String,
+    /// Why this layout: `rule`, `default` (the layer's default) or `forced` (`SetLayout`).
+    /// Empty before the first frame.
+    pub layout_source: String,
+    pub layers: Vec<String>,
+    pub active_profile: String,
+    pub profiles: Vec<String>,
+    pub variables: Props,
+    pub healthy: bool,
+    /// Config, stylesheet and module problems now, one per line (`Errors`; empty = none).
+    pub errors: Vec<String>,
+}
+
+/// What answers `Control1`: the agent ([`ApiLink`]), or a test's stand-in.
+pub trait Host: Send + Sync + 'static {
+    fn control(&self, req: Control) -> Reply;
+    fn control_state(&self) -> ControlState;
+    /// This connection got or lost [`BUS_NAME`] (another agent took it with `--replace`, or gave
+    /// it back by exiting).
+    fn name_owned(&self, _owned: bool) {}
+}
+
+/// `Control1`, served.
+#[derive(Clone)]
+pub struct Api {
+    conn: zbus::Connection,
+}
+
+impl Api {
+    /// Serves on `conn` and requests [`BUS_NAME`]; `NameTaken` if another agent owns it. With
+    /// `replace`, takes the name from a running agent (`--replace`), which waits in the bus's
+    /// queue and gets it back when this one exits.
+    ///
+    /// Never replace by default: systemd runs the agent as `Type=dbus`, so a second agent taking
+    /// the name and exiting would stop the installed one (zbus's `request_name` both replaces and
+    /// allows replacement). No `DoNotQueue`: queueing is what gives a replaced owner the name back.
+    pub async fn serve(
+        conn: zbus::Connection,
+        host: Arc<dyn Host>,
+        replace: bool,
+    ) -> zbus::Result<Api> {
+        use zbus::fdo::{RequestNameFlags, RequestNameReply};
+        let api = Self::serve_unnamed(conn, host.clone()).await?;
+        let me = api.conn.unique_name().map(|n| n.to_string());
+        let mut changes = zbus::fdo::DBusProxy::new(&api.conn)
+            .await?
+            .receive_name_owner_changed()
+            .await?;
+        api.conn
+            .executor()
+            .spawn(
+                async move {
+                    use futures_lite::StreamExt;
+                    while let Some(sig) = changes.next().await {
+                        let Ok(args) = sig.args() else { continue };
+                        if args.name() == BUS_NAME {
+                            let owner = args.new_owner().as_ref().map(|o| o.to_string());
+                            host.name_owned(owner.is_some() && owner == me);
+                        }
+                    }
+                },
+                "sliver-name-owner-changed",
+            )
+            .detach();
+        let flags = if replace {
+            RequestNameFlags::AllowReplacement | RequestNameFlags::ReplaceExisting
+        } else {
+            RequestNameFlags::AllowReplacement.into()
+        };
+        match api.conn.request_name_with_flags(BUS_NAME, flags).await? {
+            RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner => Ok(api),
+            RequestNameReply::InQueue | RequestNameReply::Exists => {
+                // Don't wait in line: the caller says why and stops.
+                let _ = api.conn.release_name(BUS_NAME).await;
+                Err(zbus::Error::NameTaken)
+            }
+        }
+    }
+
+    /// Serves without the well-known name (tests running several agents on one bus).
+    pub async fn serve_unnamed(conn: zbus::Connection, host: Arc<dyn Host>) -> zbus::Result<Api> {
+        conn.object_server()
+            .at(ROOT_PATH, ControlIface { host })
+            .await?;
+        Ok(Api { conn })
+    }
+
+    pub fn connection(&self) -> &zbus::Connection {
+        &self.conn
+    }
+
+    /// The core's `Control1` properties changed.
+    pub async fn control_state_changed(&self) -> zbus::Result<()> {
+        let iface = self
+            .conn
+            .object_server()
+            .interface::<_, ControlIface>(ROOT_PATH)
+            .await?;
+        iface
+            .get()
+            .await
+            .state_changed(iface.signal_emitter())
+            .await
+    }
+}
+
+/// Runs in a Flatpak or Snap sandbox (read from `/proc`, never from what the client claims).
+fn sandboxed(pid: u32) -> bool {
+    let snap = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).is_ok_and(|cg| {
+        cg.lines()
+            .filter_map(|l| l.strip_prefix("0::"))
+            .any(|path| {
+                path.rsplit('/')
+                    .next()
+                    .is_some_and(|l| l.starts_with("snap."))
+            })
+    });
+    snap || std::path::Path::new(&format!("/proc/{pid}/root/.flatpak-info")).exists()
+}
+
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The agent's [`Host`]: requests wait on a channel for the main loop, which a wake socket
+/// rouses.
 struct AgentHost {
     wake: UnixStream,
-    changed: AtomicBool,
     requests: Mutex<Sender<(Control, Sender<Reply>)>>,
-    state: Arc<Mutex<ControlState>>,
+    state: Mutex<ControlState>,
     /// False while a `--replace` agent has the bus name.
     owned: AtomicBool,
 }
@@ -37,11 +233,6 @@ impl AgentHost {
 }
 
 impl Host for AgentHost {
-    fn changed(&self) {
-        self.changed.store(true, Ordering::SeqCst);
-        self.wake();
-    }
-
     fn control(&self, req: Control) -> Reply {
         let (tx, rx) = channel();
         let sent = self
@@ -68,47 +259,45 @@ impl Host for AgentHost {
     }
 }
 
+/// The main loop's side of the served API.
 pub struct ApiLink {
     pub api: Api,
     host: Arc<AgentHost>,
     wake_rx: UnixStream,
     requests: Receiver<(Control, Sender<Reply>)>,
-    on_screen: HashSet<ContextId>,
-    display: String,
 }
 
 impl ApiLink {
-    /// Serves the API on the session bus as `io.github.wawow830.Sliver`. `NameTaken` if another
-    /// agent owns it, unless `replace` (`--replace`).
+    /// Serves on the session bus as `io.github.wawow830.Sliver`. `NameTaken` if another agent
+    /// owns it, unless `replace` (`--replace`).
     pub fn start(replace: bool) -> zbus::Result<ApiLink> {
         // zbus's `blocking` API runs a pool thread that wakes twice a second.
         let conn = zbus::block_on(sliver_bus::session_async())?;
-        ApiLink::serve_claiming(conn, true, replace)
+        ApiLink::serve_on(conn, true, replace)
     }
 
     /// Serves on `conn` (tests use a private bus; `named = false` skips the well-known name).
     pub fn serve(conn: zbus::Connection, named: bool) -> zbus::Result<ApiLink> {
-        ApiLink::serve_claiming(conn, named, false)
+        ApiLink::serve_on(conn, named, false)
     }
 
-    fn serve_claiming(conn: zbus::Connection, named: bool, replace: bool) -> zbus::Result<ApiLink> {
+    fn serve_on(conn: zbus::Connection, named: bool, replace: bool) -> zbus::Result<ApiLink> {
         let (wake_rx, wake) = UnixStream::pair()?;
         wake_rx.set_nonblocking(true)?;
         wake.set_nonblocking(true)?;
         let (tx, requests) = channel();
         let host = Arc::new(AgentHost {
             wake,
-            changed: AtomicBool::new(true),
             requests: Mutex::new(tx),
-            state: Arc::default(),
+            state: Mutex::default(),
             owned: AtomicBool::new(true),
         });
         let h: Arc<dyn Host> = host.clone();
         let api = zbus::block_on(async {
             if named {
-                Api::serve_claiming(conn, h, Arc::new(RealProc), replace).await
+                Api::serve(conn, h, replace).await
             } else {
-                Api::serve_unnamed(conn, h, Arc::new(RealProc)).await
+                Api::serve_unnamed(conn, h).await
             }
         })?;
         Ok(ApiLink {
@@ -116,8 +305,6 @@ impl ApiLink {
             host,
             wake_rx,
             requests,
-            on_screen: HashSet::new(),
-            display: String::new(),
         })
     }
 
@@ -132,14 +319,11 @@ impl ApiLink {
         self.host.owned.load(Ordering::SeqCst)
     }
 
-    /// Whether published items changed since the last call, and the pending `Control1` requests.
-    pub fn drain(&self) -> (bool, Vec<(Control, Sender<Reply>)>) {
+    /// The pending requests.
+    pub fn drain(&self) -> Vec<(Control, Sender<Reply>)> {
         let mut buf = [0u8; 64];
         while matches!((&self.wake_rx).read(&mut buf), Ok(n) if n > 0) {}
-        (
-            self.host.changed.swap(false, Ordering::SeqCst),
-            self.requests.try_iter().collect(),
-        )
+        self.requests.try_iter().collect()
     }
 
     pub fn set_control_state(&self, s: ControlState) {
@@ -153,103 +337,11 @@ impl ApiLink {
 
     /// `Healthy` goes false, the rest stays as it was.
     pub fn set_disconnected(&self) {
-        let mut s = self
-            .host
-            .state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let mut s = self.host.control_state();
         if s.healthy {
             s.healthy = false;
             self.set_control_state(s);
         }
-    }
-
-    /// Which contexts the last frame drew (`OnScreen`).
-    pub fn set_on_screen(&mut self, drawn: HashSet<ContextId>) {
-        if drawn != self.on_screen {
-            let _ = zbus::block_on(self.api.set_on_screen(&drawn));
-            self.on_screen = drawn;
-        }
-    }
-
-    pub fn set_display(&mut self, state: &str) {
-        if state != self.display {
-            let _ = zbus::block_on(self.api.set_display_state(state));
-            self.display = state.to_owned();
-        }
-    }
-
-    /// The user's preferences for published items (`[apps]`, `[providers]`, `[api]`).
-    pub fn set_policy(&self, policy: Policy) {
-        self.api.state().policy = policy;
-        self.host.changed();
-    }
-
-    /// Focus from our own compositor backend (GNOME/KDE push theirs over `Desktop1`).
-    pub fn set_focus(&self, focus: Focus) {
-        self.api.set_focus(focus);
-    }
-
-    pub fn interact(
-        &self,
-        context: ContextId,
-        item: &str,
-        what: sliver_api::registry::Interaction,
-    ) {
-        if let Err(e) = zbus::block_on(self.api.interact(context, item, what)) {
-            eprintln!("sliver-agent: event to {item}: {e}");
-        }
-    }
-}
-
-/// `[apps."<app-id>"]`, `[providers."<id>"]` and `[api]` (sliver-config(5)) as the API
-/// registry's [`Policy`].
-pub fn policy_from_config(config: &sliver_config::Config) -> Policy {
-    let app = |p: sliver_config::AppPolicy| AppPolicy {
-        source: match (p.controls, p.pin) {
-            (false, _) => AppSource::Disabled,
-            (true, Some(provider)) => AppSource::Provider(provider),
-            (true, None) => AppSource::Auto,
-        },
-        allow_modal: p.whole_bar,
-    };
-    let mut per_app: std::collections::HashMap<String, AppPolicy> = config
-        .apps
-        .keys()
-        .filter(|k| k.as_str() != "*")
-        .map(|k| {
-            (
-                k.trim_end_matches(".desktop").to_owned(),
-                app(config.app_policy(k)),
-            )
-        })
-        .collect();
-    // `app_policy` of an unlisted id is `"*"` plus built-ins.
-    per_app.insert("*".into(), app(config.app_policy("*")));
-    let mut ordered: Vec<(i64, &String)> = config
-        .providers
-        .iter()
-        .filter_map(|(id, p)| p.order.map(|o| (o, id)))
-        .collect();
-    ordered.sort();
-    Policy {
-        allow_app: true,
-        allow_target: config.api.target,
-        per_app,
-        hidden_providers: config
-            .providers
-            .iter()
-            .filter(|(_, p)| !p.show)
-            .map(|(id, _)| id.clone())
-            .collect(),
-        status_order: ordered.into_iter().map(|(_, id)| id.clone()).collect(),
-        sandbox_status_allowed: config
-            .providers
-            .iter()
-            .filter(|(_, p)| p.allow)
-            .map(|(id, _)| id.clone())
-            .collect(),
     }
 }
 
@@ -258,45 +350,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_prefs_become_registry_policy() {
-        let loaded = sliver_config::load_str(
-            r#"
-version = 1
-[apps."*"]
-whole-bar = false
-[apps."org.mozilla.firefox.desktop"]
-pin = "org.example.FxTabs"
-[apps.foot]
-controls = false
-whole-bar = true
-[providers."org.example.Noisy"]
-show = false
-[providers."org.flat.App"]
-allow = true
-order = 2
-[providers."org.example.First"]
-order = 1
-[api]
-target = false
-"#,
-            std::path::Path::new("."),
+    fn error_names_match_the_spec() {
+        use sliver_ipc::dbus::error;
+        use zbus::DBusError;
+        let name = |e: Error| e.name().as_str().to_owned();
+        assert_eq!(
+            name(Error::AccessDenied(String::new())),
+            error::ACCESS_DENIED
         );
-        assert!(
-            loaded.diagnostics.errors.is_empty(),
-            "{:?}",
-            loaded.diagnostics.errors
+        assert_eq!(name(Error::InvalidArgs(String::new())), error::INVALID_ARGS);
+        assert_eq!(name(Error::Failed(String::new())), error::FAILED);
+    }
+
+    #[test]
+    fn value_roundtrip() {
+        let p = Prop::Map(Props::from([
+            (
+                "a".into(),
+                Prop::List(vec![Prop::Int(1), Prop::Str("x".into())]),
+            ),
+            ("b".into(), Prop::Bytes(vec![1, 2, 3])),
+            ("c".into(), Prop::Num(0.5)),
+            ("d".into(), Prop::Int(1 << 40)),
+        ]));
+        assert_eq!(prop_from_value(&prop_to_value(&p)), Some(p));
+    }
+
+    #[test]
+    fn this_test_is_not_sandboxed() {
+        assert_eq!(
+            sandboxed(std::process::id()),
+            std::path::Path::new("/.flatpak-info").exists()
         );
-        let p = policy_from_config(&loaded.config);
-        assert!(!p.allow_target);
-        let fx = p.for_app("org.mozilla.Firefox");
-        assert_eq!(fx.source, AppSource::Provider("org.example.FxTabs".into()));
-        assert!(!fx.allow_modal, "inherits whole-bar = false from \"*\"");
-        let foot = p.for_app("FOOT");
-        assert_eq!((foot.source, foot.allow_modal), (AppSource::Disabled, true));
-        let other = p.for_app("kitty");
-        assert_eq!((other.source, other.allow_modal), (AppSource::Auto, false));
-        assert!(p.hidden_providers.contains("org.example.Noisy"));
-        assert!(p.sandbox_status_allowed.contains("org.flat.App"));
-        assert_eq!(p.status_order, vec!["org.example.First", "org.flat.App"]);
     }
 }

@@ -7,8 +7,7 @@
 //!
 //! No portal or cross-desktop standard says which window is focused (Wayland withholds it on
 //! purpose), so each desktop needs its own backend; [`Backend::detect`] picks one from the
-//! environment. GNOME and KDE have no in-process backend: an extension or KWin script pushes their
-//! focus through the agent's `Desktop1`. A dead compositor connection is
+//! environment; GNOME and KDE have none. A dead compositor connection is
 //! `DesktopState { connected: false, .. }`, never an error. Every backend subscribes to events
 //! before its first read. Actions (switch workspace, focus or close a window, change layout) are
 //! only sent for an explicit user action ([`control`]).
@@ -258,9 +257,7 @@ pub fn watch<S: DesktopSource>(
 }
 
 /// Pick the compositor backend from the environment and run [`watch`] on it. Blocks until
-/// `on_change` breaks. GNOME, KDE and X11 have no in-process backend here: GNOME and KDE push
-/// focus through `Desktop1.SetFocus` (their extension/script), so they return
-/// `ErrorKind::Unsupported` and the caller should wait for that instead.
+/// `on_change` breaks. GNOME, KDE and X11 have no backend: `ErrorKind::Unsupported`.
 pub fn watch_auto(
     get: impl Fn(&str) -> Option<String>,
     on_change: impl FnMut(&DesktopState) -> ControlFlow<()>,
@@ -286,7 +283,7 @@ pub fn watch_auto(
         other => {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                format!("no in-process desktop backend for {other:?}; use Desktop1.SetFocus"),
+                format!("no desktop backend for {other:?}"),
             ));
         }
     }

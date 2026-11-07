@@ -2,15 +2,11 @@
 .\" page in sync with `sliverctl help`).
 .TH SLIVERCTL 1 2026-10-12 "sliver 0.1.0" "User Commands"
 .SH NAME
-sliverctl \- control the Touch Bar and publish items to it
+sliverctl \- control the Touch Bar
 .SH SYNOPSIS
 .B sliverctl
 .I command
 .RI [ args ...]
-.br
-.B sliverctl publish
-.RI [ options ]
-.IR type : id [: label ]...
 .br
 .B sliverctl config
 .I subcommand
@@ -19,14 +15,12 @@ sliverctl \- control the Touch Bar and publish items to it
 .B sliverctl
 talks to
 .BR sliver\-agent (1)
-over the session D\-Bus API
-.RI ( io.github.wawow830.Sliver ),
-the same API every app and script can use.
-It can inspect the bar, drive it the way
+over its session D\-Bus interface
+.RI ( io.github.wawow830.Sliver ,
+.BR Control1 ).
+It can inspect the bar and drive it the way
 .B pkill \-RTMIN+N waybar
-drives waybar, and publish buttons that stay on the bar for as long as
-.B sliverctl publish
-runs.
+drives waybar.
 .PP
 The
 .B config
@@ -41,29 +35,23 @@ is any module id:
 a built\-in
 .RB ( clock ,
 .BR battery#bat2 ),
-a user module
-.RB ( custom/vpn ),
-or an item published by an app
-.RB ( app/org.example.App#item ).
+or a user module
+.RB ( custom/vpn ).
 .SH INSPECTING
 .TP
 .B status
 Agent health, active layer and profile, the layout on the bar and why
 (the rule that picked it, the layer default, or forced by
 .BR layout ),
-display state (on, dimmed, off), the API version, and the agent's current config,
-stylesheet and module errors (one per line), if any.
+and the agent's current config, stylesheet and module errors (one per line), if any.
 .TP
 .B modules
-Every module with its id, type, source, visibility and placement.
-.TP
-.B contexts
-Contexts published by apps and scripts: provider, scope, and whether they are on screen.
+Every module on the bar: its id, key, type, layer, classes, x and width.
 .TP
 .RB "\fBdoctor\fR [" \-\-json ]
 Check the whole install, reading only: whether sliverd and tiny\-dfr are running (and not both),
-the agent's health and errors, the configuration, the desktop integration (the KWin script or
-GNOME extension when needed), and the services that feed modules (NetworkManager, UPower,
+the agent's health and errors, the configuration, whether the desktop says which window has
+focus, and the services that feed modules (NetworkManager, UPower,
 logind, a notification daemon, xdg\-desktop\-portal, PipeWire).
 Each line is ok, WARN (a module will be empty) or FAIL (the bar or config isn't working), with the
 fix under it.
@@ -112,8 +100,7 @@ The same for any gesture:
 .BR hold ,
 .BR double\-tap ,
 .BR swipe\-left ,
-.BR swipe\-right ,
-.BR drag .
+.BR swipe\-right .
 .TP
 .BI update " module key" = "value ..."
 Push output to a custom module that has no
@@ -164,105 +151,6 @@ Save what the bar shows now as PNG, or, with
 .BR \-\-config ,
 how it would look with that configuration (drawn with the live state, as if saved over the
 current configuration; the bar itself doesn't change).
-.SH PUBLISHING
-.B sliverctl publish
-creates a context, puts the given items on the bar, and keeps running.
-It prints one line per event,
-.IP
-.IR "item kind " [ key = value ...]
-.PP
-for example
-.B "go tap"
-or
-.BR "vol value value=0.4 phase=change" .
-The items disappear when
-.B sliverctl
-exits.
-If
-.B sliver\-agent
-restarts, they are published again automatically.
-.PP
-Items are written
-.IR type : id [: label ]
-with
-.I type
-one of
-.BR button ,
-.BR toggle ,
-.BR label ,
-.BR slider ,
-.BR progress ,
-.BR spacer ,
-.BR segmented ,
-.BR scrubber ,
-.B image
-(a picture filling the cell: set its
-.B icon
-to a PNG, JPEG or SVG file or an icon name, for example
-.BR "image:art \-p art.icon=$HOME/cover.jpg" ;
-needs an agent with API version 4 or later).
-For
-.B segmented
-and
-.BR scrubber ,
-.I label
-lists the choices separated by
-.BR | ,
-for example
-.BR "scrubber:tabs:Inbox|Drafts|Sent" ;
-the same goes for
-.B segments=
-and
-.B candidates=
-in
-.B \-p
-and
-.B \-\-stdin
-updates.
-A scrubber shows a few candidates at a time
-.RB ( visible\-count ,
-default 5): swiping it scrolls (event
-.BR "scrolled offset=" \fIn\fP ),
-\(fo and \(fc arrows page, and a tap picks one (event
-.BR "selected index=" \fIn\fP ).
-.TP
-.BR \-\-scope " " app | status | target
-Where the items show.
-.B status
-(the default) puts them in the user's Status items.
-.B app
-shows them while one of this process's windows is focused.
-.B target
-shows them while another app is focused (see
-.BR \-\-target\-app ).
-.TP
-.BI \-\-provider " id"
-Stable reverse\-DNS id.
-The user's settings for these items (hide, reorder, pin, style) are keyed by it, and so are module ids
-.RB ( app/\fIid\fP#\fIitem\fP ).
-.TP
-.BI \-\-title " text"
-Name shown by
-.BR "sliverctl contexts" .
-.TP
-.BI \-\-target\-app " app-id"
-For
-.BR "\-\-scope target" .
-.TP
-.B \-\-modal
-Cover the Main and Controls zones while shown, if the user allows it.
-.TP
-\fB\-p\fR \fIid.key\fB=\fIvalue\fR, \fB\-\-prop\fR \fIid.key\fB=\fIvalue\fR
-Set any item property (the published-item keys), for example
-.BR "\-p go.icon=media\-playback\-start" .
-This option can be repeated.
-.TP
-.B \-\-stdin
-Read
-.IR "id key" = "value ..."
-lines from standard input and apply them as updates.
-Quote values that contain spaces:
-.BR "go label='Going now'" .
 .SH CONFIGURATION
 .B sliverctl config
 edits the user configuration file.
@@ -340,22 +228,6 @@ to force a string
 .B DBUS_SESSION_BUS_ADDRESS
 The session bus to use.
 .SH EXAMPLES
-A button that runs a build:
-.PP
-.EX
-sliverctl publish \-\-provider org.example.Build button:build:Build |
-  while read \-r item kind _; do
-    [ "$kind" = tap ] && make \-C ~/src/project
-  done
-.EE
-.PP
-A label updated by a script:
-.PP
-.EX
-while sleep 2; do echo "load label='$(cut \-d' ' \-f1 /proc/loadavg)'"; done |
-  sliverctl publish \-\-provider org.example.Load \-\-stdin label:load:load
-.EE
-.PP
 waybar\-style control:
 .PP
 .EX

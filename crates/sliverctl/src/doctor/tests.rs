@@ -13,7 +13,6 @@ struct Fake {
     no_session_bus: bool,
     agent: Option<Result<Agent, String>>,
     config: ConfigState,
-    run: HashMap<String, String>,
     bar: hardware::BarSysfs,
     report: Option<hardware::ReportOutcome>,
 }
@@ -66,7 +65,6 @@ impl Fake {
         f.agent = Some(Ok(Agent {
             healthy: true,
             errors: vec![],
-            version: Some("3".into()),
         }));
         f.bar = hardware::BarSysfs {
             card: Some("/dev/dri/card1".into()),
@@ -132,9 +130,6 @@ impl Sys for Fake {
     }
     fn read(&self, path: &Path) -> Option<String> {
         self.files.get(path).cloned()
-    }
-    fn run(&self, cmd: &[&str]) -> Option<String> {
-        self.run.get(&cmd.join(" ")).cloned()
     }
     fn bar_sysfs(&self) -> hardware::BarSysfs {
         self.bar.clone()
@@ -229,7 +224,6 @@ fn agent_problems_come_with_the_errors() {
     f.agent = Some(Ok(Agent {
         healthy: true,
         errors: vec!["config.toml: layouts.x: bad width".into()],
-        version: None,
     }));
     let c = run_checks(&f);
     let a = find(&c, "agent");
@@ -246,7 +240,6 @@ fn agent_problems_come_with_the_errors() {
     f.agent = Some(Ok(Agent {
         healthy: false,
         errors: vec![],
-        version: None,
     }));
     f.units
         .get_mut(&("sliver-agent.service".into(), true))
@@ -353,26 +346,14 @@ fn no_session_bus_is_one_clear_warning_per_source_not_a_crash() {
 }
 
 #[test]
-fn the_desktop_helpers_are_checked_where_they_are_needed() {
-    // KDE: the script must be enabled in kwinrc
+fn the_desktop_says_what_follows_it() {
+    // KDE and GNOME: no focus
     let mut f = Fake::healthy();
     f.env.remove("HYPRLAND_INSTANCE_SIGNATURE");
-    f.env.insert("XDG_CURRENT_DESKTOP".into(), "KDE".into());
-    f.env.insert("HOME".into(), "/home/u".into());
-    assert_eq!(find(&run_checks(&f), "desktop").level, Level::Warn);
-    f.files.insert(
-        "/home/u/.config/kwinrc".into(),
-        "[Plugins]\nsliver-focusEnabled=true\n".into(),
-    );
-    assert_eq!(find(&run_checks(&f), "desktop").level, Level::Ok);
-    // GNOME: asks gnome-extensions
-    f.env.insert("XDG_CURRENT_DESKTOP".into(), "GNOME".into());
-    assert_eq!(find(&run_checks(&f), "desktop").level, Level::Warn);
-    f.run.insert(
-        "gnome-extensions list --enabled".into(),
-        "sliver-focus@sliver.wawow830.github.io\n".into(),
-    );
-    assert_eq!(find(&run_checks(&f), "desktop").level, Level::Ok);
+    for de in ["KDE", "GNOME"] {
+        f.env.insert("XDG_CURRENT_DESKTOP".into(), de.into());
+        assert_eq!(find(&run_checks(&f), "desktop").level, Level::Warn);
+    }
     // X11 only
     let mut x = Fake::healthy();
     x.env.remove("HYPRLAND_INSTANCE_SIGNATURE");

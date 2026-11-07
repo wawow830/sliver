@@ -42,11 +42,8 @@ pub struct Icons {
     cache: HashMap<(String, Option<String>, u32), Option<Icon>>,
     /// Relative icon paths are relative to the config file's directory.
     base: Option<std::path::PathBuf>,
-    /// Pictures for `image` modules and published `image` items, by file (see [`Icons::image`]).
+    /// Pictures for `image` modules, by file (see [`Icons::image`]).
     images: HashMap<std::path::PathBuf, (ImageStamp, Option<Icon>)>,
-    /// Published `icon-data`, by a hash of the bytes and the size limit: published cells are
-    /// rebuilt on every frame, and a 256 KiB picture shouldn't be decoded each time.
-    decoded: HashMap<(u64, Option<u32>), Option<Icon>>,
 }
 
 /// What a cached picture was read from: re-read when the file changes (scripts rewrite the
@@ -64,7 +61,6 @@ impl Icons {
             cache: HashMap::new(),
             base: None,
             images: HashMap::new(),
-            decoded: HashMap::new(),
         }
     }
 
@@ -75,7 +71,6 @@ impl Icons {
             cache: HashMap::new(),
             base: None,
             images: HashMap::new(),
-            decoded: HashMap::new(),
         }
     }
 
@@ -113,31 +108,6 @@ impl Icons {
         }
         let icon = Icon::load(&path).ok().map(|i| i.fit_height(max_h));
         self.images.insert(path, (stamp, icon.clone()));
-        icon
-    }
-
-    /// Decodes published `icon-data` (PNG, JPEG or SVG), cached by content. With `max_h`, a
-    /// raster is kept at most that tall (pictures; see [`Icon::fit_height`]).
-    pub fn from_bytes(&mut self, data: &[u8], max_h: Option<u32>) -> Option<Icon> {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        data.hash(&mut h);
-        let key = (h.finish(), max_h);
-        if let Some(hit) = self.decoded.get(&key) {
-            return hit.clone();
-        }
-        if self.decoded.len() >= 4 * MAX_IMAGES {
-            self.decoded.clear();
-        }
-        let icon = Icon::from_png(data)
-            .or_else(|_| Icon::from_jpeg(data))
-            .or_else(|_| Icon::from_svg(data))
-            .ok()
-            .map(|i| match max_h {
-                Some(h) => i.fit_height(h),
-                None => i,
-            });
-        self.decoded.insert(key, icon.clone());
         icon
     }
 

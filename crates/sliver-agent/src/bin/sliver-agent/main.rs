@@ -17,17 +17,14 @@ use chrono::Local;
 use rustix::event::{PollFd, PollFlags, poll};
 use sliver_agent::Agent;
 use sliver_agent::agent::{Effect, SessionOp};
-use sliver_agent::api::{ApiLink, Reply};
+use sliver_agent::api::{ApiLink, Control, ControlReply, ControlState, Reply};
 use sliver_agent::driver::{Driver, Input, Now, Output};
 use sliver_agent::feeds::{Aggregate, Feed, Feeds};
 use sliver_agent::icons::Icons;
 use sliver_agent::link::{Event, Link};
 use sliver_agent::modules::World;
 use sliver_agent::ops::{Op, start_ops};
-use sliver_agent::published::Published;
 use sliver_agent::reload::Applied;
-use sliver_api::registry::Focus;
-use sliver_api::service::{Control, ControlReply, ControlState};
 use sliver_config::Config;
 use sliver_ipc::proto::{AgentMsg, DisplayState, Layer, Role, SOCKET_PATH};
 use sliver_ipc::transport::Conn;
@@ -164,7 +161,6 @@ fn main() {
             && !api.owns_name()
         {
             wait_for_name(api);
-            live.published_stale = true;
             eprintln!("sliver-agent: the bus name is back; taking the bar again");
         }
         match Conn::connect(&a.socket)
@@ -223,8 +219,7 @@ fn wait_for_name(api: &ApiLink) {
         let fd = api.fd();
         let mut fds = [PollFd::new(&fd, PollFlags::IN)];
         let _ = poll(&mut fds, None);
-        let (_, requests) = api.drain();
-        for (_, reply) in requests {
+        for (_, reply) in api.drain() {
             let _ = reply.send(Err(
                 "another sliver-agent (--replace) drives the bar right now".into(),
             ));
@@ -319,13 +314,7 @@ fn run(
             inputs.push(Input::OnBattery(live.agg.session.power.on_battery));
         }
         if api_woke && let Some(api) = &live.api {
-            let (changed, requests) = api.drain();
-            if changed {
-                live.published_stale = true;
-                live.sync_pushed_desktop();
-                inputs.push(Input::Changed);
-            }
-            for (req, reply) in requests {
+            for (req, reply) in api.drain() {
                 let _ = reply.send(control(&mut driver, live, reloader, req, &mut inputs));
             }
         }
@@ -370,21 +359,12 @@ fn run(
     }
 }
 
-/// The rest of the session follows the bar's display state: the API reports it, the feeds and
-/// user module timers sleep while it's off, and turning on looks again at what
-/// may have changed in the dark.
+/// The rest of the session follows the bar's display state: the feeds and user module timers
+/// sleep while it's off, and turning on looks again at what may have changed in the dark.
 fn display_changed(live: &mut Live, was: DisplayState, state: DisplayState) {
-    if let Some(api) = &mut live.api {
-        api.set_display(match state {
-            DisplayState::On => "on",
-            DisplayState::Dimmed => "dimmed",
-            DisplayState::Off => "off",
-        });
-    }
     if was == DisplayState::Off && state != DisplayState::Off {
         // A locker may have started while we were dark and nothing told us.
         live.lock_watch.wake();
-        live.push_focus();
     }
     live.feeds.set_awake(state != DisplayState::Off);
     if let Some(rt) = live.modules() {
@@ -399,13 +379,11 @@ fn perform(
     children: &mut Vec<Child>,
     live: &mut Live,
 ) -> std::io::Result<()> {
-    let mut presented = false;
     for o in outputs {
         match o {
             Output::Present(layer) => {
                 let f = driver.agent().frame(layer).expect("just drawn");
                 link.present(layer, &f.image, &f.pressed, &f.regions)?;
-                presented = true;
             }
             Output::Policy(p) => link.send(&AgentMsg::DisplayPolicy(p))?,
             Output::Effect(e) => apply(e, link, children, live)?,
@@ -413,17 +391,5 @@ fn perform(
     }
     // Reap finished children.
     children.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
-    if presented && let Some(api) = &mut live.api {
-        let drawn = [Layer::Base, Layer::Fn]
-            .iter()
-            .filter_map(|l| driver.agent().frame(*l))
-            .flat_map(|f| {
-                f.cells
-                    .iter()
-                    .filter_map(|c| c.published.as_ref().map(|p| p.context))
-            })
-            .collect();
-        api.set_on_screen(drawn);
-    }
     Ok(())
 }

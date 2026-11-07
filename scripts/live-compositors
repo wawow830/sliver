@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Run integration/{sway,labwc,river,niri,gnome-shell}/test.sh against real compositors, headless,
+# Run integration/{sway,labwc,river,niri}/test.sh against real compositors, headless,
 # without root. Missing packages are fetched into $SLIVER_TEST_ROOT (default target/test-compositors)
 # with `dnf download --resolve` + rpm2cpio: about 400 MB the first time. Not part of scripts/check.
 #
-#   scripts/live-compositors [--fetch-only] [sway|labwc|river|niri|gnome-shell ...]
+#   scripts/live-compositors [--fetch-only] [sway|labwc|river|niri ...]
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 prefix=${SLIVER_TEST_ROOT:-$root/target/test-compositors}
@@ -15,7 +15,7 @@ for a in "$@"; do
         *) want+=("$a") ;;
     esac
 done
-[ ${#want[@]} -gt 0 ] || want=(sway labwc river niri gnome-shell)
+[ ${#want[@]} -gt 0 ] || want=(sway labwc river niri)
 
 fetch() { # name, packages...
     local name=$1; shift
@@ -35,15 +35,10 @@ for c in "${want[@]}"; do
         labwc)       fetch labwc labwc foot wlroots0.19 ;;
         river)       fetch river river-classic foot ;;
         niri)        fetch niri niri sway foot wlroots0.19 ;;
-        gnome-shell) fetch gnome-shell gnome-shell mutter gjs gsettings-desktop-schemas ;;
         *) echo "unknown compositor $c"; exit 2 ;;
     esac
     [ $fetch_only = 1 ] && continue
     echo "=== $c"
-    if [ "$c" = gnome-shell ]; then
-        SLIVER_GNOME_ROOT=$prefix/$c/root "$root/integration/gnome-shell/test.sh" || status=1
-    else
-        SLIVER_TEST_ROOT=$prefix/$c/root "$root/integration/$c/test.sh" || status=1
-    fi
+    SLIVER_TEST_ROOT=$prefix/$c/root "$root/integration/$c/test.sh" || status=1
 done
 exit $status

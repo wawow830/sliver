@@ -1,5 +1,4 @@
-//! What actions do inside the agent: layouts and layers, module actions, menus and published
-//! items.
+//! What actions do inside the agent: layouts and layers, module actions and menus.
 
 use super::*;
 use crate::act::{Act, UiChange};
@@ -77,14 +76,7 @@ impl Agent {
     }
 
     /// `Control1.Trigger(module, gesture)`: as if the user did it on the module's cell.
-    pub fn trigger(
-        &mut self,
-        module: &str,
-        g: sliver_api::item::Gesture,
-        now: u64,
-        fx: &mut Vec<Effect>,
-    ) {
-        use sliver_api::item::Gesture as AG;
+    pub fn trigger(&mut self, module: &str, g: CGesture, now: u64, fx: &mut Vec<Effect>) {
         let found = [Layer::Base, Layer::Fn].iter().find_map(|l| {
             let f = self.frame(*l)?;
             let i = f
@@ -100,19 +92,19 @@ impl Agent {
             return;
         };
         let g = match g {
-            AG::Tap => Gesture::Tap,
-            AG::Hold => Gesture::Hold,
-            AG::SwipeLeft => Gesture::SwipeLeft,
-            AG::SwipeRight => Gesture::SwipeRight,
-            AG::DoubleTap => Gesture::DoubleTap,
-            AG::Drag => return,
+            CGesture::Tap => Gesture::Tap,
+            CGesture::Hold => Gesture::Hold,
+            CGesture::SwipeLeft => Gesture::SwipeLeft,
+            CGesture::SwipeRight => Gesture::SwipeRight,
+            CGesture::DoubleTap => Gesture::DoubleTap,
+            _ => return,
         };
         self.dispatch(region, g, now, fx);
     }
 
     /// What's on the bar now, for `Control1.ListModules` / `sliverctl modules`.
-    pub fn list_modules(&self) -> Vec<sliver_api::item::Props> {
-        use sliver_api::item::Prop;
+    pub fn list_modules(&self) -> Vec<crate::api::Props> {
+        use crate::api::Prop;
         [(Layer::Base, "base"), (Layer::Fn, "fn")]
             .iter()
             .filter_map(|(l, name)| Some((self.frame(*l)?, *name)))
@@ -136,119 +128,6 @@ impl Agent {
                 })
             })
             .collect()
-    }
-
-    /// A gesture on an item an app published: the user's binding on the placeholder wins
-    /// (and passes the event through only with `pass-through`), else the app hears about it.
-    pub(super) fn dispatch_published(
-        &mut self,
-        region: u32,
-        cell: &Cell,
-        p: &crate::published::PubRef,
-        g: Gesture,
-        now: u64,
-        fx: &mut Vec<Effect>,
-    ) {
-        use crate::published::PubKind;
-        use sliver_api::item::Gesture as AG;
-        use sliver_api::registry::{Interaction as I, Phase};
-        let send = |what: I, fx: &mut Vec<Effect>| {
-            fx.push(Effect::Api {
-                context: p.context,
-                item: p.item.clone(),
-                what,
-            })
-        };
-        if let Gesture::Drag(x) = g {
-            let PubKind::Slider { min, max, step } = p.kind else {
-                return;
-            };
-            let f = self.frame_for(region).expect("cell came from a frame");
-            let i = f.cell_index(region).expect("cell came from a frame");
-            let Some(t) = f.layout.tracks.get(i).copied().flatten() else {
-                return;
-            };
-            let frac = if t.w > 0.0 {
-                ((x - t.x) / t.w).clamp(0.0, 1.0) as f64
-            } else {
-                0.0
-            };
-            let mut v = min + frac * (max - min);
-            if step > 0.0 {
-                v = (min + ((v - min) / step).round() * step).clamp(min, max);
-            }
-            let phase = if self.touches.pub_drag.contains_key(&region) {
-                Phase::Change
-            } else {
-                Phase::Begin
-            };
-            if self.touches.pub_drag.insert(region, v) != Some(v) || phase == Phase::Begin {
-                send(I::Slider { value: v, phase }, fx);
-            }
-            return;
-        }
-        if g == Gesture::Release
-            && let Some(v) = self.touches.pub_drag.remove(&region)
-        {
-            send(
-                I::Slider {
-                    value: v,
-                    phase: Phase::End,
-                },
-                fx,
-            );
-        }
-        let (want, ag) = match g {
-            Gesture::Tap => (CGesture::Tap, AG::Tap),
-            Gesture::DoubleTap => (CGesture::DoubleTap, AG::DoubleTap),
-            Gesture::Hold => (CGesture::Hold, AG::Hold),
-            Gesture::SwipeLeft => (CGesture::SwipeLeft, AG::SwipeLeft),
-            Gesture::SwipeRight => (CGesture::SwipeRight, AG::SwipeRight),
-            _ => return,
-        };
-        if let Some(d) = cell.binding(want).cloned() {
-            self.run(&d, None, Some(region), now, fx);
-            if !p.pass_through {
-                return;
-            }
-        }
-        match (p.kind, ag) {
-            (PubKind::Close, AG::Tap) => send(I::CloseModal, fx),
-            (PubKind::Close, _) => {}
-            (PubKind::Segment(i), AG::Tap) => send(I::Select(i), fx),
-            (PubKind::Candidate { index, .. }, AG::Tap) => send(I::Select(index), fx),
-            // Swiping left brings the candidates to the right into view.
-            (PubKind::Candidate { next, .. }, AG::SwipeLeft) => send(I::Scroll(next), fx),
-            (PubKind::Candidate { prev, .. }, AG::SwipeRight) => send(I::Scroll(prev), fx),
-            (PubKind::Candidate { .. }, _) => {}
-            (PubKind::ScrollTo(to), AG::Tap) => send(I::Scroll(to), fx),
-            (PubKind::ScrollTo(_), _) => {}
-            (PubKind::Popover, AG::Tap) => {
-                let class = cell
-                    .look
-                    .classes
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "app".into());
-                self.overlay = Some(overlay::Overlay::Popover {
-                    context: p.context,
-                    item: p.item.clone(),
-                    class,
-                });
-                fx.extend(self.cancel_touches());
-                fx.push(Effect::Redraw);
-                send(I::Popover(true), fx);
-            }
-            (PubKind::PopoverClose, AG::Tap) => {
-                self.overlay = None;
-                fx.extend(self.cancel_touches());
-                fx.push(Effect::Redraw);
-                send(I::Popover(false), fx);
-            }
-            (PubKind::PopoverClose, _) => {}
-            (PubKind::Slider { .. }, AG::Tap) => {}
-            _ => send(I::Gesture(ag), fx),
-        }
     }
 
     /// Opens `items` as the menu of the cell `key`: the ✕ takes that cell's place if the menu

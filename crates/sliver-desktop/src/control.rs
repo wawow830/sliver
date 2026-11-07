@@ -107,85 +107,6 @@ pub fn niri_request(a: &Action) -> Option<serde_json::Value> {
     })
 }
 
-/// A session-bus method call that does an [`Action`] on GNOME or KDE. The compositor side is a
-/// service (KWin's own, or the `sliver-focus` GNOME extension's) and the caller makes the call.
-/// Never auto-start the destination.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BusCall {
-    pub dest: &'static str,
-    pub path: &'static str,
-    pub iface: &'static str,
-    pub method: &'static str,
-    /// The single `i` (int32) argument, if the method takes one.
-    pub arg: Option<i32>,
-    /// String arguments, after `arg` (at most one of the two is used per call).
-    pub text: Vec<String>,
-}
-
-/// What the GNOME extension exports (`integration/gnome-shell`).
-pub const GNOME_SHELL_NAME: &str = "io.github.wawow830.Sliver.Shell";
-
-/// The bus call for `a` on `backend`, or `None` when there is none (the compositor has an
-/// in-process backend, or it can't do that). Workspace ids are 1-based desktop numbers there.
-pub fn bus_call(backend: Backend, a: &Action) -> Option<BusCall> {
-    match (backend, a) {
-        (Backend::Kde, Action::FocusWorkspace(w)) => Some(BusCall {
-            dest: "org.kde.KWin",
-            path: "/KWin",
-            iface: "org.kde.KWin",
-            method: "setCurrentDesktop",
-            arg: Some(i32::try_from(w.id).ok()?),
-            text: Vec::new(),
-        }),
-        (Backend::Kde, Action::NextLayout) => Some(BusCall {
-            dest: "org.kde.keyboard",
-            path: "/Layouts",
-            iface: "org.kde.KeyboardLayouts",
-            method: "switchToNextLayout",
-            arg: None,
-            text: Vec::new(),
-        }),
-        // KWin's own window runner (what KRunner uses): "0_{internalId}" is a window. The script
-        // reports windows as `kwin:{internalId}`. It can activate but has no close action.
-        (Backend::Kde, Action::FocusWindow { address }) => Some(BusCall {
-            dest: "org.kde.KWin",
-            path: "/WindowsRunner",
-            iface: "org.kde.krunner1",
-            method: "Run",
-            arg: None,
-            text: vec![
-                format!("0_{}", address.strip_prefix("kwin:")?),
-                String::new(),
-            ],
-        }),
-        (Backend::Gnome, Action::FocusWindow { address }) => Some(BusCall {
-            dest: GNOME_SHELL_NAME,
-            path: "/io/github/wawow830/Sliver/Shell",
-            iface: "io.github.wawow830.Sliver.Shell1",
-            method: "FocusWindow",
-            arg: None,
-            text: vec![address.strip_prefix("mutter:")?.to_owned()],
-        }),
-        (Backend::Gnome, Action::CloseWindow { address }) => Some(BusCall {
-            dest: GNOME_SHELL_NAME,
-            path: "/io/github/wawow830/Sliver/Shell",
-            iface: "io.github.wawow830.Sliver.Shell1",
-            method: "CloseWindow",
-            arg: None,
-            text: vec![address.strip_prefix("mutter:")?.to_owned()],
-        }),
-        (Backend::Gnome, Action::FocusWorkspace(w)) => Some(BusCall {
-            dest: GNOME_SHELL_NAME,
-            path: "/io/github/wawow830/Sliver/Shell",
-            iface: "io.github.wawow830.Sliver.Shell1",
-            method: "FocusWorkspace",
-            arg: Some(i32::try_from(w.id).ok()?),
-            text: Vec::new(),
-        }),
-        _ => None,
-    }
-}
-
 /// Do `a` on the compositor of this session (`get` reads the environment).
 pub fn run(get: impl Fn(&str) -> Option<String>, a: &Action) -> io::Result<()> {
     match Backend::detect(&get) {
@@ -290,40 +211,6 @@ mod tests {
         assert_eq!(
             niri_request(&Action::SetLayout(1)).unwrap()["Action"]["SwitchLayout"]["layout"],
             json!({"Index": 1})
-        );
-    }
-
-    #[test]
-    fn gnome_and_kde_bus_calls() {
-        let w = WorkspaceInfo {
-            id: 3,
-            name: "3".into(),
-            ..Default::default()
-        };
-        let k = bus_call(Backend::Kde, &Action::FocusWorkspace(w.clone())).unwrap();
-        assert_eq!(
-            (k.dest, k.method, k.arg),
-            ("org.kde.KWin", "setCurrentDesktop", Some(3))
-        );
-        let g = bus_call(Backend::Gnome, &Action::FocusWorkspace(w.clone())).unwrap();
-        assert_eq!(
-            (g.dest, g.method, g.arg),
-            (GNOME_SHELL_NAME, "FocusWorkspace", Some(3))
-        );
-        assert_eq!(
-            bus_call(Backend::Kde, &Action::NextLayout).unwrap().method,
-            "switchToNextLayout"
-        );
-        assert!(bus_call(Backend::Hyprland, &Action::FocusWorkspace(w.clone())).is_none());
-        assert!(bus_call(Backend::Gnome, &Action::NextLayout).is_none());
-        assert!(
-            bus_call(
-                Backend::Kde,
-                &Action::CloseWindow {
-                    address: "x".into()
-                }
-            )
-            .is_none()
         );
     }
 

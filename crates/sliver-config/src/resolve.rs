@@ -17,12 +17,9 @@ use crate::values::{Align, Width};
 pub const MAX_DEPTH: usize = 8;
 
 /// Module types that never show while the session is locked (sliver-config(5)).
-/// Whatever the layout says: published items, script output, notification text, and window titles
+/// Whatever the layout says: script output, notification text, and window titles
 /// (a stale focus can still name the last window, e.g. an email subject).
 pub const HIDDEN_WHILE_LOCKED: &[&str] = &[
-    "app-controls",
-    "status-items",
-    "app",
     "custom",
     "graph",
     "image",
@@ -375,13 +372,6 @@ impl Config {
         })
     }
 
-    /// The module `id` as it would be instantiated in a zone for `ctx` (its `[modules."…"]` block
-    /// applied; `None` if its `when` doesn't hold or it's hidden while locked). The agent uses it
-    /// for app-published items configured by id but shown in a placeholder.
-    pub fn instance(&self, id: &ModuleId, ctx: &Context) -> Option<ModuleInstance> {
-        self.instantiate(&ModuleRef::Named(id.clone()), None, ctx, &mut Vec::new())
-    }
-
     /// The module `m` with its block parsed, whatever the context: no `when`, no zone width,
     /// no group members. What runs behind a module (a user module's script, a graph's source)
     /// is the same wherever it shows.
@@ -622,7 +612,7 @@ mod tests {
             r#"
             [[layouts.firefox.zones]]
             name = "main"
-            modules = ["key/Back", "key/Forward", "app-controls"]
+            modules = ["key/Back", "key/Forward"]
             [layouts.firefox]
             extends = "default"
 
@@ -646,7 +636,7 @@ mod tests {
             ["esc", "main", "controls"],
             "inherited zones keep their order"
         );
-        assert_eq!(ids(&r)[1], ["key/Back", "key/Forward", "app-controls"]);
+        assert_eq!(ids(&r)[1], ["key/Back", "key/Forward"]);
         assert!(
             ids(&r)[2].contains(&"group/control-strip".to_owned()),
             "controls inherited"
@@ -708,7 +698,7 @@ modules = ["notifications", "clock"]"#,
 format = "vpn"
 [[layouts.default.zones]]
 name = "main"
-modules = ["custom/vpn", "clock", "app-controls", "window", "taskbar"]"#,
+modules = ["custom/vpn", "clock", "window", "taskbar"]"#,
         );
         let r = c
             .resolve("base", &Context::new().with("locked", true))
@@ -717,7 +707,7 @@ modules = ["custom/vpn", "clock", "app-controls", "window", "taskbar"]"#,
         assert_eq!(
             ids(&r),
             [["clock"]],
-            "custom/* and app items are hidden while locked"
+            "custom/* and window titles are hidden while locked"
         );
     }
 

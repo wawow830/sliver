@@ -45,8 +45,8 @@ pub use load::{
     Loaded, edit_path, find_config, load, load_file, load_str, load_str_as, search_path,
 };
 pub use model::{
-    ApiPrefs, AppPolicy, AppPrefs, BAR_GESTURES, BUILTIN, Bar, Config, Display, DisplayOverride,
-    FnMode, LayerOptions, Layout, ModuleRef, ProviderPrefs, Rule, SCHEMA_VERSION, Zone,
+    BAR_GESTURES, BUILTIN, Bar, Config, Display, DisplayOverride, FnMode, LayerOptions, Layout,
+    ModuleRef, Rule, SCHEMA_VERSION, Zone,
 };
 pub use module::{COMMON_KEYS, Common, Gesture, MenuEntry, ModuleId};
 pub use options::{

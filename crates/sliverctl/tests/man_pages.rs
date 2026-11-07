@@ -98,14 +98,7 @@ fn sliverctl_page_covers_the_help() {
 #[test]
 fn help_commands_are_real() {
     // The other direction: every word the help (and so the man page) promises parses.
-    for cmd in [
-        "status",
-        "modules",
-        "contexts",
-        "reload",
-        "reset-visibility",
-        "help",
-    ] {
+    for cmd in ["status", "modules", "reload", "reset-visibility", "help"] {
         let out = Command::new(env!("CARGO_BIN_EXE_sliverctl"))
             .arg(cmd)
             .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")

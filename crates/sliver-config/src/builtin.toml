@@ -13,13 +13,12 @@ modules = ["key/Esc#auto"]
 [[layouts.default.zones]]
 name = "main"
 width = "fill"
-# 2008 px Macs have no F-key row and most Linux apps publish no controls: F1-F12 show until the
-# focused app publishes some.
-modules = ["app-controls", "group/fkeys"]
+# 2008 px Macs have no F-key row.
+modules = ["group/fkeys"]
 
 [[layouts.default.zones]]
 name = "controls"
-modules = ["status-items", "mpris", "group/control-strip", "backlight/slider", "audio/slider", "key/Mute"]
+modules = ["mpris", "group/control-strip", "backlight/slider", "audio/slider", "key/Mute"]
 
 # tiny-dfr's primary layer.
 [[layouts.fkeys.zones]]
@@ -77,8 +76,6 @@ drawer = { reveal = "tap", mode = "inline", collapse-after = "5s" }
 modules = ["key/F1", "key/F2", "key/F3", "key/F4", "key/F5", "key/F6",
            "key/F7", "key/F8", "key/F9", "key/F10", "key/F11", "key/F12"]
 module-width = "fill"
-# An unknown app-controls state shows the F-keys.
-when = { not = { app-controls = true } }
 
 [modules."custom/expand"]
 format = "‹"

@@ -3,7 +3,7 @@
 #
 #   [[layouts.default.zones]]
 #   name = "main"
-#   modules = ["app-controls", "custom/screenshot", "custom/power"]
+#   modules = ["custom/screenshot", "custom/power"]
 #
 # Tapping the power button opens a sub-bar (entries and a ✕); picking one runs it.
 

@@ -155,25 +155,9 @@ pub(super) fn apply(
                     eprintln!("sliver-agent: update: no user module {key:?}");
                 }
             }
-            Effect::Api {
-                context,
-                item,
-                what,
-            } => {
-                if let Some(api) = &live.api {
-                    api.interact(context, &item, what);
-                }
-            }
             Effect::Desktop(action) => {
                 // A compositor round trip: keep it off the main loop.
                 std::thread::spawn(move || {
-                    let backend = sliver_desktop::Backend::detect(|k| std::env::var(k).ok());
-                    if let Some(call) = sliver_desktop::control::bus_call(backend, &action) {
-                        if let Err(e) = sliver_agent::ops::bus_call(&call) {
-                            eprintln!("sliver-agent: {action:?}: {e}");
-                        }
-                        return;
-                    }
                     if let Err(e) = sliver_desktop::control::run(|k| std::env::var(k).ok(), &action)
                     {
                         eprintln!("sliver-agent: {action:?}: {e}");

@@ -1,14 +1,14 @@
-//! `sliverctl`: command-line client of the public sliver session D-Bus API.
+//! `sliverctl`: the agent's `Control1` from the command line, the config files offline, and
+//! `doctor`.
 
 mod cli;
 mod config;
 mod doctor;
 
-use cli::{Call, Cmd, ItemSpec, KeyVals, Publish, Val};
-use sliver_client::{Client, ContextOptions, Item};
-use sliver_ipc::dbus::{BUS_NAME, IFACE_CONTROL, IFACE_TOUCHBAR, ROOT_PATH};
+use cli::{Call, Cmd, KeyVals, Val};
+use sliver_ipc::dbus::{BUS_NAME, IFACE_CONTROL, ROOT_PATH};
 use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::process::ExitCode;
 use zbus::blocking::Connection;
 use zbus::zvariant::{OwnedValue, Value};
@@ -76,16 +76,6 @@ fn value(v: &Val) -> Value<'static> {
     }
 }
 
-/// A property value; `segments`/`candidates` take `a|b|c` (one label each).
-fn prop_value(key: &str, v: &Val) -> Value<'static> {
-    match (key, v) {
-        ("segments" | "candidates", Val::Str(s)) => {
-            Value::from(Item::labels(&s.split('|').collect::<Vec<_>>()))
-        }
-        _ => value(v),
-    }
-}
-
 fn owned(v: Value<'_>) -> OwnedValue {
     OwnedValue::try_from(v).expect("plain values")
 }
@@ -143,19 +133,14 @@ where
         .map_err(describe)
 }
 
-fn property(conn: &Connection, iface: &str, name: &str) -> Result<OwnedValue, String> {
+fn property(conn: &Connection, name: &str) -> Result<OwnedValue, String> {
     let props = zbus::blocking::fdo::PropertiesProxy::builder(conn)
         .destination(BUS_NAME)
         .and_then(|b| b.path(ROOT_PATH))
         .and_then(|b| b.build())
         .map_err(describe)?;
     props
-        .get(
-            iface
-                .try_into()
-                .map_err(|e: zbus::names::Error| e.to_string())?,
-            name,
-        )
+        .get(IFACE_CONTROL.try_into().expect("interface name"), name)
         .map_err(|e| describe(e.into()))
 }
 
@@ -175,50 +160,41 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
         Cmd::Doctor(args) => return Ok(doctor::run(&args)),
         _ => {}
     }
-    // Opened directly (sliver_bus): `publish` runs for hours and must not wake twice a second.
+    // sliver_bus: no zbus pool thread waking twice a second.
     let conn = sliver_bus::session().map_err(|e| format!("session bus: {e}"))?;
     match cmd {
         Cmd::Help | Cmd::Version | Cmd::Config(_) | Cmd::Doctor(_) => {
             unreachable!()
         }
         Cmd::Status => {
-            for (iface, name) in [
-                (IFACE_CONTROL, "Healthy"),
-                (IFACE_CONTROL, "ActiveLayer"),
-                (IFACE_CONTROL, "ActiveLayout"),
-                (IFACE_CONTROL, "ActiveLayoutSource"),
-                (IFACE_CONTROL, "ActiveRule"),
-                (IFACE_CONTROL, "ActiveRuleName"),
-                (IFACE_CONTROL, "Layers"),
-                (IFACE_CONTROL, "ActiveProfile"),
-                (IFACE_CONTROL, "Profiles"),
-                (IFACE_TOUCHBAR, "DisplayState"),
-                (IFACE_TOUCHBAR, "Version"),
+            for name in [
+                "Healthy",
+                "ActiveLayer",
+                "ActiveLayout",
+                "ActiveLayoutSource",
+                "ActiveRule",
+                "ActiveRuleName",
+                "Layers",
+                "ActiveProfile",
+                "Profiles",
             ] {
-                let v = property(&conn, iface, name)?;
+                let v = property(&conn, name)?;
                 out(&format!("{name}: {}", show(&v)));
             }
-            // Errors (API minor 3): an older agent doesn't have it.
-            if let Ok(v) = property(&conn, IFACE_CONTROL, "Errors")
-                && let Ok(errors) = <Vec<String>>::try_from(v)
-            {
-                if errors.is_empty() {
-                    out("Errors: none");
-                } else {
-                    out(&format!("Errors: {}", errors.len()));
-                    for e in &errors {
-                        out(&format!("  {e}"));
-                    }
+            let errors: Vec<String> = property(&conn, "Errors")?
+                .try_into()
+                .map_err(|e: zbus::zvariant::Error| e.to_string())?;
+            if errors.is_empty() {
+                out("Errors: none");
+            } else {
+                out(&format!("Errors: {}", errors.len()));
+                for e in &errors {
+                    out(&format!("  {e}"));
                 }
             }
         }
-        Cmd::Modules | Cmd::Contexts => {
-            let member = if cmd == Cmd::Modules {
-                "ListModules"
-            } else {
-                "ListContexts"
-            };
-            let list: Vec<HashMap<String, OwnedValue>> = control(&conn, member, &())?
+        Cmd::Modules => {
+            let list: Vec<HashMap<String, OwnedValue>> = control(&conn, "ListModules", &())?
                 .body()
                 .deserialize()
                 .map_err(|e| e.to_string())?;
@@ -242,7 +218,6 @@ fn run(cmd: Cmd) -> Result<ExitCode, String> {
             std::fs::write(&out, png).map_err(|e| format!("{out}: {e}"))?;
         }
         Cmd::Call(call) => return call_control(&conn, call),
-        Cmd::Publish(p) => return publish(conn, p),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -278,107 +253,5 @@ fn call_control(conn: &Connection, call: Call) -> Result<ExitCode, String> {
         Call::Bar(a) => control(conn, "Bar", &(a,))?,
         Call::SetVariable(n, v) => control(conn, "SetVariable", &(n, owned(value(&v))))?,
     };
-    Ok(ExitCode::SUCCESS)
-}
-
-fn item(spec: &ItemSpec) -> Item {
-    let mut it = match spec.ty.as_str() {
-        "toggle" => Item::toggle(&spec.id),
-        "label" => Item::label_item(&spec.id, ""),
-        "slider" => Item::slider(&spec.id, 0.0, 1.0, 0.0),
-        "progress" => Item::progress(&spec.id, 0.0),
-        "spacer" => Item::spacer(&spec.id, "small"),
-        // The picture: `-p ID.icon=PATH` (PNG, JPEG, SVG) or an icon name.
-        "image" => Item::image(&spec.id),
-        // The LABEL lists the segments / candidates: `scrubber:tabs:one|two|three`.
-        "segmented" | "scrubber" => {
-            let labels: Vec<&str> = spec
-                .label
-                .as_deref()
-                .map_or_else(Vec::new, |l| l.split('|').collect());
-            if spec.ty == "scrubber" {
-                Item::scrubber(&spec.id, &labels, -1)
-            } else {
-                Item::segmented(&spec.id, &labels, -1)
-            }
-        }
-        _ => Item::button(&spec.id),
-    };
-    if let Some(l) = spec
-        .label
-        .as_ref()
-        .filter(|_| !matches!(spec.ty.as_str(), "segmented" | "scrubber"))
-    {
-        it = it.label(l);
-    }
-    for (k, v) in &spec.props {
-        it = it.set(k, prop_value(k, v));
-    }
-    it
-}
-
-fn publish(conn: Connection, p: Publish) -> Result<ExitCode, String> {
-    let client = Client::new(conn).map_err(describe)?;
-    if !client.agent_running() {
-        eprintln!("sliverctl: sliver-agent isn't running; items will appear when it starts");
-    }
-    let mut opts = match (p.scope.as_str(), &p.target_app) {
-        ("target", Some(app)) => {
-            ContextOptions::target_app(p.provider.as_deref().unwrap_or("sliverctl"), app)
-        }
-        ("app", _) => ContextOptions::app(),
-        _ => ContextOptions::status(p.provider.as_deref().unwrap_or("sliverctl")),
-    };
-    if let Some(pr) = &p.provider {
-        opts = opts.provider(pr);
-    }
-    if let Some(t) = &p.title {
-        opts = opts.title(t);
-    }
-    if p.modal {
-        opts = opts.modal(true);
-    }
-    let ctx = client.context(opts).map_err(describe)?;
-    for w in ctx
-        .set_items(p.items.iter().map(item).collect())
-        .map_err(describe)?
-    {
-        eprintln!("sliverctl: warning: {w}");
-    }
-    if p.stdin {
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            for line in std::io::stdin().lock().lines() {
-                let Ok(line) = line else { break };
-                match cli::parse_update_line(&line) {
-                    Ok(Some((id, kv))) => {
-                        let mut props = Item::props();
-                        for (k, v) in &kv {
-                            props = props.set(k, prop_value(k, v));
-                        }
-                        match ctx.update(&id, props) {
-                            Ok(ws) => ws.iter().for_each(|w| eprintln!("sliverctl: warning: {w}")),
-                            Err(e) => eprintln!("sliverctl: {}", describe(e)),
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => eprintln!("sliverctl: {e}"),
-                }
-            }
-        });
-    }
-    let mut out = std::io::stdout().lock();
-    for ev in client.events() {
-        let data = show_dict(&ev.data);
-        let line = if data.is_empty() {
-            format!("{} {}", ev.item, ev.kind)
-        } else {
-            format!("{} {} {data}", ev.item, ev.kind)
-        };
-        // A closed pipe (`| head -1`) ends the program.
-        if writeln!(out, "{line}").and_then(|_| out.flush()).is_err() {
-            break;
-        }
-    }
     Ok(ExitCode::SUCCESS)
 }

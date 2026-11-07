@@ -239,8 +239,8 @@ pub(super) fn source(at: &At) -> Option<Spec> {
     values(at)
 }
 
-/// Where each module type's values come from. With the types [`cells_in`] composes from other
-/// modules (groups) or from what apps publish, this is the config's list of types
+/// Where each module type's values come from. With `group`, which [`cells_in`] composes from
+/// other modules, this is the config's list of types
 /// (`sliver_config::MODULE_TYPES`; a test holds them together).
 pub(super) type Source = fn(&At) -> Option<Spec>;
 pub(super) const SOURCES: &[(&str, Source)] = &[
@@ -292,7 +292,7 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
     ("taskbar", |at| desktop::taskbar(at.m, at.world, at.item)),
 ];
 
-/// A formatted label, for every module's (and configured published item's) text: waybar's
+/// A formatted label, for every module's text: waybar's
 /// `format`/`format-icons`/`states` over `values`, then the icon: the format's,
 /// else the module's `icon`, else `fallback` (a name looked up the same way). `None` when the
 /// format hides the cell.

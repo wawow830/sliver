@@ -60,6 +60,3 @@ module:active trough { background-color: #aeaeb2; }
 .critical, .urgent { background-color: #c01c28; color: #fff; }
 #battery.charging { color: #1a7f37; }
 .error { color: #c01c28; }
-
-/* Indeterminate progress is a full track: muted, so it doesn't read as 100%. */
-module.indeterminate highlight { background-color: alpha(@accent, 0.35); }

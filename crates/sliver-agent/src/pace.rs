@@ -1,5 +1,4 @@
-//! Frame pacing for content that changes on its own: published items, script output and other
-//! feeds may change hundreds of times a second. Each change only marks the bar stale; it's
+//! Frame pacing for content that changes on its own: script output and other feeds may change hundreds of times a second. Each change only marks the bar stale; it's
 //! redrawn at most [`CONTENT_FPS`] times a second, and the last change always gets drawn.
 //!
 //! Touches, layer switches and animations draw at once.

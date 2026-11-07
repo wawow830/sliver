@@ -8,11 +8,10 @@ use std::time::Duration;
 
 use chrono::{Local, TimeZone};
 use sliver_agent::agent::Effect;
+use sliver_agent::api::{Control, ControlReply, Prop, Props};
 use sliver_agent::link::Link;
 use sliver_agent::modules::World;
 use sliver_agent::{Agent, icons::Icons};
-use sliver_api::item::{Prop, Props};
-use sliver_api::service::{Control, ControlReply};
 use sliver_config::load_str;
 use sliver_ipc::proto::{Layer, RegionKind};
 use sliver_render::{Content, Fonts, Pixmap, Renderer, Stylesheet};
@@ -424,7 +423,7 @@ fn session_world() -> World {
 }
 
 /// Lock-screen privacy: whatever the layout says, a locked bar shows no media
-/// title, notification text, window title, script output or app items, and no custom/*,
+/// title, notification text, window title or script output, and no custom/*,
 /// window or taskbar module at all. Keys, sliders and the clock stay.
 #[test]
 fn locked_screen_shows_nothing_private() {
@@ -435,7 +434,7 @@ fn locked_screen_shows_nothing_private() {
         [[layouts.default.zones]]
         name = "main"
         width = "fill"
-        modules = ["mpris", "notifications", "window", "taskbar", "custom/secret", "app-controls"]
+        modules = ["mpris", "notifications", "window", "taskbar", "custom/secret"]
         [[layouts.default.zones]]
         name = "controls"
         modules = ["clock", "backlight/slider", "audio/slider"]

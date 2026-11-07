@@ -28,7 +28,7 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False \
             git gcc pkgconf-pkg-config libxkbcommon-devel \
             dbus-daemon groff systemd systemd-udev rpm-build \
-            nodejs python3 python3-gobject procps-ng fontconfig dejavu-sans-fonts util-linux rustup
+            python3 python3-gobject procps-ng fontconfig dejavu-sans-fonts util-linux rustup
           useradd -m ci
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2

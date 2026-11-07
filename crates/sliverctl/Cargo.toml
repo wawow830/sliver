@@ -16,7 +16,6 @@ sliver-ipc.workspace = true
 sliver-hw.workspace = true
 sliver-config.workspace = true
 toml.workspace = true
-sliver-client.workspace = true
 sliver-bus.workspace = true
 zbus.workspace = true
 serde.workspace = true
@@ -24,6 +23,5 @@ libc.workspace = true
 
 [dev-dependencies]
 sliver-agent.workspace = true
-sliver-api.workspace = true
 sliverd.workspace = true
 sliver-testbus.workspace = true

@@ -47,14 +47,6 @@ fi
 if has rpmspec; then
   packaging/rpm/spec.py > target/check-sliver.spec && rpmspec -P target/check-sliver.spec >/dev/null
 fi
-if has node; then
-  for f in integration/kwin/sliver-focus/contents/code/main.js integration/gnome-shell/*/extension.js integration/browser/extension/background.js; do
-    tmp=$(mktemp --suffix=.mjs); cp "$f" "$tmp"; node --check "$tmp"; rm -f "$tmp"
-  done
-fi
-for f in integration/kwin/sliver-focus/metadata.json integration/gnome-shell/*/metadata.json integration/browser/extension/*.json integration/browser/native/*.json; do
-  python3 -m json.tool "$f" >/dev/null
-done
 
 if [[ -n ${skipped[0]:-} && -n ${SLIVER_CHECK_ALL:-} ]]; then
   echo "SLIVER_CHECK_ALL: validators skipped for missing tools: ${skipped[*]}"; exit 1

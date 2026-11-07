@@ -10,7 +10,7 @@ pub enum Content {
     /// them. Neither is an empty button. The label is in the Pango-markup subset of
     /// [`crate::markup`] (`<b>`, `<span foreground=…>`); [`Content::text`] escapes plain text.
     Label { icon: Option<Icon>, text: String },
-    /// A picture (the `image` module, a published `image` item): fills the content box, keeping
+    /// A picture (the `image` module, album art): fills the content box, keeping
     /// its aspect ratio, and its natural width follows that ratio. Never recolored, unlike a
     /// symbolic icon.
     Image(Icon),

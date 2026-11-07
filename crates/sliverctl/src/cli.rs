@@ -6,12 +6,11 @@ pub const USAGE: &str = "\
 usage: sliverctl COMMAND [ARGS]
 
 Inspect
-  status                          agent health, layer, profile, display state
-  modules                         every module: id, type, source, visibility
-  contexts                        contexts published by apps and scripts
+  status                          agent health, layer, layout, profile, errors
+  modules                         every module on the bar: id, key, type, layer, classes, x, width
   doctor [--json]                 check the whole install; says what to fix (exit 1 on a failure)
 
-Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.x.Y#item)
+Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn)
   reload                          reload config (prints errors)
   validate FILE                   check a config file without applying it (= config check FILE)
   signal N                        like `pkill -RTMIN+N waybar`
@@ -19,7 +18,7 @@ Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.
   show|hide|toggle MODULE         runtime visibility (not saved)
   reset-visibility
   tap|hold|double-tap MODULE      fire a gesture's binding as if touched
-  trigger MODULE GESTURE          tap, hold, swipe-left, swipe-right, double-tap, drag
+  trigger MODULE GESTURE          tap, hold, swipe-left, swipe-right, double-tap
   update MODULE KEY=VALUE...      push output to an exec-less custom module (text, icon, class, percentage, alt)
   layer switch|push|pop|toggle [NAME] [TIMEOUT_MS]
   layout NAME | profile NAME
@@ -29,14 +28,6 @@ Control (waybar-style; MODULE is any module id, e.g. clock, custom/vpn, app/org.
 
 Config (offline: edits ~/.config/sliver/config.toml, keeps comments; `sliverctl config help`)
   config path|check|get|set|unset|resolve|profile ...
-
-Publish (stays connected; prints `ITEM KIND [KEY=VALUE...]` per event)
-  publish [--scope app|status|target] [--provider ID] [--title T] [--target-app APP_ID]
-          [--modal] [--stdin] ITEM...
-      ITEM  = TYPE:ID[:LABEL]   TYPE = button toggle label slider progress spacer
-                                       segmented scrubber (LABEL = a|b|c, the choices)
-      -p ID.KEY=VALUE           set an extra property (repeatable)
-      --stdin                   read `ID KEY=VALUE...` lines and apply them as updates
 
 Values: true/false -> bool, integers -> int, decimals -> double, anything else -> string
 (prefix with s: to force a string, e.g. text=s:42).
@@ -88,71 +79,17 @@ pub fn parse_kv(args: &[String]) -> Result<KeyVals, String> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ItemSpec {
-    pub ty: String,
-    pub id: String,
-    pub label: Option<String>,
-    pub props: KeyVals,
-}
-
-const TYPES: &[&str] = &[
-    "button",
-    "toggle",
-    "label",
-    "slider",
-    "progress",
-    "spacer",
-    "segmented",
-    "scrubber",
-    "image",
-];
-
-pub fn parse_item(s: &str) -> Result<ItemSpec, String> {
-    let mut parts = s.splitn(3, ':');
-    let ty = parts.next().unwrap_or_default();
-    let id = parts
-        .next()
-        .filter(|i| !i.is_empty())
-        .ok_or_else(|| format!("item {s:?}: expected TYPE:ID[:LABEL]"))?;
-    if !TYPES.contains(&ty) {
-        return Err(format!(
-            "item {s:?}: unknown type {ty:?} (one of {})",
-            TYPES.join(", ")
-        ));
-    }
-    Ok(ItemSpec {
-        ty: ty.into(),
-        id: id.into(),
-        label: parts.next().map(str::to_owned),
-        props: KeyVals::new(),
-    })
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Publish {
-    pub scope: String,
-    pub provider: Option<String>,
-    pub title: Option<String>,
-    pub target_app: Option<String>,
-    pub modal: bool,
-    pub stdin: bool,
-    pub items: Vec<ItemSpec>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum Cmd {
     Help,
     Version,
     Status,
     Modules,
-    Contexts,
     /// A `Control1` method with plain arguments.
     Call(Call),
     Render {
         config: Option<String>,
         out: String,
     },
-    Publish(Publish),
     /// `config …`: offline, handled by `config::run`.
     Config(Vec<String>),
     Doctor(Vec<String>),
@@ -196,7 +133,6 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
         "version" | "-V" | "--version" => Ok(Cmd::Version),
         "status" => Ok(Cmd::Status),
         "modules" => Ok(Cmd::Modules),
-        "contexts" => Ok(Cmd::Contexts),
         "config" => Ok(Cmd::Config(rest.to_vec())),
         "doctor" => Ok(Cmd::Doctor(rest.to_vec())),
         "reload" => c(Call::Reload),
@@ -261,106 +197,8 @@ pub fn parse(args: &[String]) -> Result<Cmd, String> {
                 out: out.ok_or("render needs -o OUT.png")?,
             })
         }
-        "publish" => parse_publish(rest).map(Cmd::Publish),
         other => Err(format!("unknown command {other:?} (try `sliverctl help`)")),
     }
-}
-
-fn parse_publish(args: &[String]) -> Result<Publish, String> {
-    let mut p = Publish {
-        scope: "status".into(),
-        provider: None,
-        title: None,
-        target_app: None,
-        modal: false,
-        stdin: false,
-        items: Vec::new(),
-    };
-    let mut extra: Vec<(String, String, Val)> = Vec::new();
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        let mut val = |name: &str| {
-            it.next()
-                .cloned()
-                .ok_or_else(|| format!("{name} needs a value"))
-        };
-        match a.as_str() {
-            "--scope" => p.scope = val("--scope")?,
-            "--provider" => p.provider = Some(val("--provider")?),
-            "--title" => p.title = Some(val("--title")?),
-            "--target-app" => p.target_app = Some(val("--target-app")?),
-            "--modal" => p.modal = true,
-            "--stdin" => p.stdin = true,
-            "-p" | "--prop" => {
-                let spec = val("-p")?;
-                let (lhs, v) = spec
-                    .split_once('=')
-                    .ok_or_else(|| format!("-p {spec:?}: expected ID.KEY=VALUE"))?;
-                let (id, key) = lhs
-                    .split_once('.')
-                    .ok_or_else(|| format!("-p {spec:?}: expected ID.KEY=VALUE"))?;
-                extra.push((id.into(), key.into(), parse_value(v)));
-            }
-            s if s.starts_with('-') => return Err(format!("unknown publish option {s:?}")),
-            s => p.items.push(parse_item(s)?),
-        }
-    }
-    if !["app", "status", "target"].contains(&p.scope.as_str()) {
-        return Err(format!("unknown scope {:?}", p.scope));
-    }
-    if p.scope == "target" && p.target_app.is_none() {
-        return Err("--scope target needs --target-app APP_ID".into());
-    }
-    if p.items.is_empty() {
-        return Err("publish needs at least one ITEM".into());
-    }
-    for (id, key, v) in extra {
-        let item = p
-            .items
-            .iter_mut()
-            .find(|i| i.id == id)
-            .ok_or_else(|| format!("-p: no item {id:?}"))?;
-        item.props.insert(key, v);
-    }
-    Ok(p)
-}
-
-/// One line of `publish --stdin` input: `ID KEY=VALUE...`.
-pub fn parse_update_line(line: &str) -> Result<Option<(String, KeyVals)>, String> {
-    let words = shell_words(line)?;
-    match words.split_first() {
-        None => Ok(None),
-        Some((id, kv)) if !kv.is_empty() => Ok(Some((id.clone(), parse_kv(kv)?))),
-        Some(_) => Err(format!("expected `ID KEY=VALUE...`, got {line:?}")),
-    }
-}
-
-/// Split on whitespace, honouring '…' and "…" so labels can contain spaces.
-fn shell_words(line: &str) -> Result<Vec<String>, String> {
-    let (mut out, mut cur, mut quote, mut any) = (Vec::new(), String::new(), None, false);
-    for ch in line.chars() {
-        match (quote, ch) {
-            (None, '\'' | '"') => (quote, any) = (Some(ch), true),
-            (Some(q), c) if c == q => quote = None,
-            (None, c) if c.is_whitespace() => {
-                if any {
-                    out.push(std::mem::take(&mut cur));
-                    any = false;
-                }
-            }
-            (_, c) => {
-                cur.push(c);
-                any = true;
-            }
-        }
-    }
-    if quote.is_some() {
-        return Err("unterminated quote".into());
-    }
-    if any {
-        out.push(cur);
-    }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -419,49 +257,5 @@ mod tests {
                 out: "out.png".into()
             }
         );
-    }
-
-    #[test]
-    fn publish() {
-        let Cmd::Publish(pb) =
-            p("publish --provider org.x.Y button:go:Go toggle:t -p go.icon=media-playback-start")
-                .unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(pb.scope, "status");
-        assert_eq!(pb.items[0].label.as_deref(), Some("Go"));
-        assert_eq!(
-            pb.items[0].props.get("icon"),
-            Some(&Val::Str("media-playback-start".into()))
-        );
-        assert_eq!(pb.items[1].label, None);
-        assert!(p("publish").is_err());
-        assert!(p("publish hologram:x").is_err());
-        let Cmd::Publish(pb) = p("publish image:art -p art.icon=/home/me/cover.jpg").unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(pb.items[0].ty, "image");
-        assert!(p("publish --scope target button:x").is_err());
-        assert!(p("publish button:x -p y.label=z").is_err());
-        // Labels may contain colons.
-        assert_eq!(
-            parse_item("label:clock:12:30").unwrap().label.as_deref(),
-            Some("12:30")
-        );
-    }
-
-    #[test]
-    fn update_lines() {
-        let (id, kv) = parse_update_line(r#"go label="⏸ 24:59" value=0.5"#)
-            .unwrap()
-            .unwrap();
-        assert_eq!(id, "go");
-        assert_eq!(kv.get("label"), Some(&Val::Str("⏸ 24:59".into())));
-        assert_eq!(kv.get("value"), Some(&Val::Num(0.5)));
-        assert_eq!(parse_update_line("   ").unwrap(), None);
-        assert!(parse_update_line("go").is_err());
-        assert!(parse_update_line("go label='x").is_err());
     }
 }

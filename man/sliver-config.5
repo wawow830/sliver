@@ -196,38 +196,6 @@ For example, a dimmer bar that turns off sooner:
 .B max\-brightness = 60
 and
 .BR "off\-after = \(dq20s\(dq" .
-.SH [apps], [providers] AND [api]
-What apps and scripts that use the D\-Bus API may put on the bar.
-Your own layouts and rules always win over them.
-.TP
-.BR [apps."\fIapp\-id\fP"]
-.B controls
-(default true): the app's items (or a provider's) may fill
-.BR app\-controls .
-.B whole\-bar
-(default true): a modal context of the app may cover the bar beyond its first zone.
-.B pin
-= \fIprovider\fP: only that provider fills the app's controls.
-App ids match case\-insensitively, with a
-.B .desktop
-suffix ignored.
-.B [apps."*"]
-sets the defaults for every app.
-.TP
-.BR [providers."\fIid\fP"]
-The D\-Bus provider id (a Flatpak or Snap id when sandboxed).
-.B show
-(default true): false hides it everywhere, in Status items and App controls.
-.B allow
-(default false): let a sandboxed provider show status items.
-.B order
-= \fIn\fP: its place among status items (lower first; unlisted ones follow, by id).
-.TP
-.B [api]
-.B target
-(default true): let clients put controls on the bar for another app.
-.PP
-The agent applies changes to these tables on reload, without restarting clients.
 .SH LAYERS, LAYOUTS AND RULES
 .TP
 .B [layers]
@@ -302,11 +270,8 @@ If none matches, the
 default applies.
 .PP
 The built\-in base layout's main zone is
-.B app\-controls
-followed by
 .B group/fkeys
-(F1\(enF12, shown while no app fills App controls), so the bar shows F\-keys until the focused app
-publishes controls.
+(F1\(enF12).
 The control strip is the drawer group
 .BR group/control\-strip ;
 nothing about it is hard\-coded.
@@ -321,7 +286,7 @@ Like any array, your own
 replace it, and
 .B rules = []
 removes it.
-Whatever the rules say, published app items,
+Whatever the rules say,
 .B custom/
 output, notifications, window titles and the taskbar are never shown while the screen is locked.
 .SH CONDITIONS
@@ -418,9 +383,7 @@ Other
 \&...),
 .BR physical_esc ,
 .BR layer ,
-.BR layout ,
-.B app_controls
-(true while an app fills App controls, so a layout can show something else when none does)
+.B layout
 .PP
 .B layout
 is the layout the rules chose, so only module conditions can use it; a rule on it never matches.
@@ -429,8 +392,8 @@ User variables set with
 can be used too.
 .PP
 Which window has focus comes from the compositor: Hyprland, sway, niri and other wlroots
-compositors are read directly; GNOME and KDE need the extension or KWin script that ship with
-sliver.
+compositors are read directly. GNOME and KDE don't say, so there per\-app rules never match and
+the window, workspace and taskbar modules stay empty.
 .B locked
 believes, in order, the desktop's screensaver
 .B ActiveChanged
@@ -1107,28 +1070,6 @@ Hidden without a picture, and while locked.
 See
 .BR Groups .
 .TP
-.BR app\-controls ", " status\-items
-Where items that apps publish go: App controls holds the focused app's, Status items holds
-background status items, including StatusNotifierItems
-.RB ( tray
-is an alias).
-A layout without them shows none.
-Their
-.B width
-sizes the slot:
-.B auto
-fits the items; a pixel width reserves that much, even when empty, and drops the lowest\-priority
-items that don't fit; while
-.B fill
-adds a share of the zone's leftover after the items.
-.TP
-.B app
-.BI app/ provider # item
-pins one published item anywhere, like any module, and
-.BI app/ provider
-a whole context.
-Pinned items leave the placeholders.
-.TP
 .B custom
 .RB ( custom/ \fIname\fP )
 A user module (see
@@ -1227,7 +1168,7 @@ plus
 .BR "slider = true" )
 and
 .BR hidden ).
-Built\-in modules produce exactly these fields, and so do published items and
+Built\-in modules produce exactly these fields, and so does
 .BR "sliverctl update" .
 .TP
 .BR escape ", " timeout ", " env
@@ -1391,10 +1332,6 @@ first in the base and fn layers.
 Touch targets are advice: the check warns when a module with an action is narrower than 80 pixels
 (about 9\ mm), and more strongly below 60, but never refuses.
 .PP
-App items
-.RB ( app\-controls ,
-.BR status\-items ,
-.BR app/ ),
 .B custom/
 output,
 .BR image ,
@@ -1410,7 +1347,6 @@ of
 which you can remove).
 .PP
 Intervals have a 100\ ms floor, restarts a 1\ s floor, and scripts have timeouts.
-Modal app contexts never cover your first zone.
 A configuration error never reaches the bar: the last good configuration stays, and
 .BR sliverd 's
 built\-in layer is the backstop.
@@ -1454,8 +1390,7 @@ Animation belongs to the stylesheet:
 .TP
 .B cffi
 In\-process plugins could take the bar down: use
-.B custom/
-or the D\-Bus API.
+.BR custom/ .
 .TP
 GtkBuilder \fBmenu\-file\fP
 Use

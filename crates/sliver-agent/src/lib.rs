@@ -19,7 +19,7 @@
 //!   height and reach up to [`frame::REGION_SLOP`] into the gaps between cells.
 //! - Nothing renders unless something changed, and no deadline runs while the display is off.
 //!   Content that changes on its own is drawn at most [`pace::CONTENT_FPS`] times a second.
-//! - Script output, published items and user stylesheets are untrusted, and systemd restarts a
+//! - Script output and user stylesheets are untrusted, and systemd restarts a
 //!   crashed agent into the same input: oversized raster icons are refused before decoding, and
 //!   building a frame runs under `catch_unwind`, keeping that layer's last good frame.
 
@@ -78,7 +78,6 @@ pub mod now;
 pub mod ops;
 pub mod pace;
 pub mod privacy;
-pub mod published;
 pub mod reload;
 pub mod scripts;
 pub mod stats;

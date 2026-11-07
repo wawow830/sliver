@@ -57,66 +57,24 @@ systemd hands the bar back to tiny-dfr.
 Summary:        Sliver Touch Bar session agent
 License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliver-agent@
 Requires:       sliverd = %{version}-%{release}
-# sliver-settings was retired; this removes it on upgrade (it requires the old sliver-agent).
+# Retired packages, removed on upgrade: the settings app and the GNOME, KDE and browser
+# integrations of the app API.
 Obsoletes:      sliver-settings < %{version}-%{release}
+Obsoletes:      gnome-shell-extension-sliver < %{version}-%{release}
+Obsoletes:      sliver-kwin < %{version}-%{release}
+Obsoletes:      sliver-browser < %{version}-%{release}
 
 %description -n sliver-agent
 The per-user agent: reads ~/.config/sliver, follows the focused app, workspace and system state,
-renders the bar and drives sliverd. It serves the public io.github.wawow830.Sliver D-Bus API.
+renders the bar and drives sliverd. sliverctl controls it over D-Bus (io.github.wawow830.Sliver).
 
 %package -n sliverctl
 Summary:        Command-line control for the Sliver Touch Bar
 License:        (%{sliver_license}) AND @BUNDLED_LICENSES:sliverctl@
 
 %description -n sliverctl
-sliverctl switches layers and profiles, edits and checks the config, publishes items from
-scripts, and imports tiny-dfr and waybar configs.
-
-# Desktop integrations: tell the agent the focused window and workspaces on GNOME and KDE.
-# Installed alongside the desktop (Supplements:) but never enabled: each user turns them on.
-%package -n gnome-shell-extension-sliver
-Summary:        GNOME Shell extension that feeds the Sliver Touch Bar agent focus and workspaces
-License:        %{sliver_license}
-BuildArch:      noarch
-Requires:       gnome-shell >= 45
-Requires:       sliver-agent
-Supplements:    (sliver-agent and gnome-shell)
-Provides:       sliver-gnome-shell = %{version}-%{release}
-
-%description -n gnome-shell-extension-sliver
-Tells sliver-agent which window and workspace are focused on GNOME Shell (io.github.wawow830.Sliver.Desktop1),
-so per-app layouts, the workspaces module and the taskbar work there. Not enabled by default:
-gnome-extensions enable sliver-focus@sliver.wawow830.github.io, then log out and back in.
-
-%package -n sliver-kwin
-Summary:        KWin script that feeds the Sliver Touch Bar agent focus and virtual desktops
-License:        %{sliver_license}
-BuildArch:      noarch
-Requires:       kwin
-Requires:       sliver-agent
-Supplements:    (sliver-agent and kwin)
-
-%description -n sliver-kwin
-Tells sliver-agent which window and virtual desktop are active on KDE Plasma 6, so per-app layouts,
-the workspaces module and the taskbar work there. Not enabled by default: System Settings → Window
-Management → KWin Scripts → Sliver focus (or: kwriteconfig6 --file kwinrc --group Plugins
---key sliver-focusEnabled true, then qdbus6 org.kde.KWin /KWin reconfigure).
-
-# Not noarch: Firefox's system manifest directory is %%{_libdir}/mozilla/native-messaging-hosts.
-%package -n sliver-browser
-Summary:        Touch Bar tabs and navigation for Firefox and Chromium (Sliver)
-License:        %{sliver_license}
-Requires:       sliver-agent = %{version}-%{release}
-Requires:       python3
-Requires:       python3-gobject-base
-Requires:       mozilla-filesystem
-
-%description -n sliver-browser
-The native-messaging host and browser extension that give the focused Firefox or Chromium window
-Touch Bar controls: back, forward, reload, new tab, and its tabs as a scrollable strip. The host
-publishes them through Sliver's public D-Bus API. Load the extension once: Chromium,
-chrome://extensions, Load unpacked, %{_datadir}/sliver/browser/chromium; Firefox, about:debugging,
-Load Temporary Add-on, %{_datadir}/sliver/browser/firefox/manifest.json.
+sliverctl switches layers and profiles, pushes output to modules, edits and checks the config,
+and says what's wrong with an install (doctor).
 
 %prep
 %autosetup -n %{name}-%{version} -p1 -a1
@@ -134,32 +92,6 @@ out=${CARGO_TARGET_DIR:-target}/rpm
 install -Dpm0755 $out/sliverd %{buildroot}%{_libexecdir}/sliverd
 install -Dpm0755 $out/sliver-agent %{buildroot}%{_bindir}/sliver-agent
 install -Dpm0755 $out/sliverctl %{buildroot}%{_bindir}/sliverctl
-# Browser integration: host, per-browser native-messaging manifests, and ready-to-load
-# extension folders (what integration/browser/install.sh builds for a checkout).
-install -Dpm0755 integration/browser/host/sliver-browser-host %{buildroot}%{_libexecdir}/sliver-browser-host
-nm=io.github.wawow830.sliver_browser
-install -Dpm0644 integration/browser/native/$nm.firefox.json \
-    %{buildroot}%{_libdir}/mozilla/native-messaging-hosts/$nm.json
-for d in %{_sysconfdir}/chromium %{_sysconfdir}/opt/chrome; do
-    install -Dpm0644 integration/browser/native/$nm.chromium.json \
-        %{buildroot}$d/native-messaging-hosts/$nm.json
-done
-for b in firefox chromium; do
-    install -Dpm0644 integration/browser/extension/background.js \
-        %{buildroot}%{_datadir}/sliver/browser/$b/background.js
-    install -Dpm0644 integration/browser/extension/manifest.$b.json \
-        %{buildroot}%{_datadir}/sliver/browser/$b/manifest.json
-done
-# GNOME extension and KWin script. KWin 6.7 also reads /usr/share/kwin/scripts (checked in a nested
-# kwin_wayland), and Plasma 6.0-6.3 only read it.
-gs=sliver-focus@sliver.wawow830.github.io
-for f in metadata.json extension.js; do
-    install -Dpm0644 integration/gnome-shell/$gs/$f %{buildroot}%{_datadir}/gnome-shell/extensions/$gs/$f
-done
-install -Dpm0644 integration/kwin/sliver-focus/metadata.json \
-    %{buildroot}%{_datadir}/kwin/scripts/sliver-focus/metadata.json
-install -Dpm0644 integration/kwin/sliver-focus/contents/code/main.js \
-    %{buildroot}%{_datadir}/kwin/scripts/sliver-focus/contents/code/main.js
 
 install -Dpm0644 packaging/systemd/sliverd.service %{buildroot}%{_unitdir}/sliverd.service
 install -Dpm0644 packaging/systemd/sliverd.socket %{buildroot}%{_unitdir}/sliverd.socket
@@ -260,30 +192,6 @@ fi
 %license LICENSE-MIT LICENSE-APACHE LICENSE.dependencies
 %{_bindir}/sliverctl
 %{_mandir}/man1/sliverctl.1*
-
-%files -n gnome-shell-extension-sliver
-%license LICENSE-MIT LICENSE-APACHE
-%{_datadir}/gnome-shell/extensions/sliver-focus@sliver.wawow830.github.io
-
-%files -n sliver-kwin
-%license LICENSE-MIT LICENSE-APACHE
-%dir %{_datadir}/kwin
-%dir %{_datadir}/kwin/scripts
-%{_datadir}/kwin/scripts/sliver-focus
-
-%files -n sliver-browser
-%license LICENSE-MIT LICENSE-APACHE
-%{_libexecdir}/sliver-browser-host
-%{_libdir}/mozilla/native-messaging-hosts/io.github.wawow830.sliver_browser.json
-# Shared directory ownership, like gnome-browser-connector and other native-messaging hosts.
-%dir %{_sysconfdir}/chromium
-%dir %{_sysconfdir}/chromium/native-messaging-hosts
-%{_sysconfdir}/chromium/native-messaging-hosts/io.github.wawow830.sliver_browser.json
-%dir %{_sysconfdir}/opt/chrome
-%dir %{_sysconfdir}/opt/chrome/native-messaging-hosts
-%{_sysconfdir}/opt/chrome/native-messaging-hosts/io.github.wawow830.sliver_browser.json
-%dir %{_datadir}/sliver
-%{_datadir}/sliver/browser
 
 %changelog
 * Mon Oct 12 2026 Sliver <sliver@sliver.invalid> - 0.1.0-0.1

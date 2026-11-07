@@ -1,9 +1,20 @@
-//! `Control1`: the user's own tools (sliverctl) driving the agent.
+//! The `Control1` interface: each method is a [`Control`] request to the [`Host`].
 
-use super::*;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use zbus::message::Header;
+use zbus::object_server::SignalEmitter;
+use zbus::zvariant::OwnedValue;
+use zbus::{Connection, interface, names::BusName};
+
+use super::prop::{to_owned_dict, to_props};
+use super::{Control, ControlReply, Error, Host, prop_from_value, sandboxed};
+
+type Result<T> = std::result::Result<T, Error>;
 
 pub(super) struct ControlIface {
-    pub(super) inner: Arc<Inner>,
+    pub(super) host: Arc<dyn Host>,
 }
 
 impl ControlIface {
@@ -13,24 +24,39 @@ impl ControlIface {
         hdr: &Header<'_>,
         req: Control,
     ) -> Result<ControlReply> {
-        self.inner.admit_unsandboxed(conn, hdr).await?;
-        self.inner.host.control(req).map_err(Error::Failed)
+        let sender = hdr
+            .sender()
+            .ok_or_else(|| Error::AccessDenied("no sender".into()))?;
+        let creds = zbus::fdo::DBusProxy::new(conn)
+            .await?
+            .get_connection_credentials(BusName::from(sender.to_owned()))
+            .await
+            .map_err(zbus::Error::from)?;
+        if creds.process_id().is_none_or(sandboxed) {
+            return Err(Error::AccessDenied(
+                "not available to sandboxed apps".into(),
+            ));
+        }
+        self.host.control(req).map_err(Error::Failed)
     }
 
     async fn unit(&self, conn: &Connection, hdr: &Header<'_>, req: Control) -> Result<()> {
         self.call(conn, hdr, req).await.map(|_| ())
     }
 
-    async fn error_list(
-        &self,
-        conn: &Connection,
-        hdr: &Header<'_>,
-        req: Control,
-    ) -> Result<Vec<String>> {
-        match self.call(conn, hdr, req).await? {
-            ControlReply::Errors(e) => Ok(e),
-            _ => Ok(Vec::new()),
-        }
+    /// Every property changed (the host says when, not which).
+    pub(super) async fn state_changed(&self, e: &SignalEmitter<'_>) -> zbus::Result<()> {
+        self.active_layer_changed(e).await?;
+        self.active_layout_changed(e).await?;
+        self.active_rule_changed(e).await?;
+        self.active_rule_name_changed(e).await?;
+        self.active_layout_source_changed(e).await?;
+        self.layers_changed(e).await?;
+        self.active_profile_changed(e).await?;
+        self.profiles_changed(e).await?;
+        self.variables_changed(e).await?;
+        self.healthy_changed(e).await?;
+        self.errors_changed(e).await
     }
 }
 
@@ -91,7 +117,10 @@ impl ControlIface {
         #[zbus(header)] h: Header<'_>,
         #[zbus(connection)] c: &Connection,
     ) -> Result<Vec<String>> {
-        self.error_list(c, &h, Control::ReloadConfig).await
+        match self.call(c, &h, Control::ReloadConfig).await? {
+            ControlReply::Errors(e) => Ok(e),
+            _ => Ok(Vec::new()),
+        }
     }
     async fn render_preview(
         &self,
@@ -118,69 +147,6 @@ impl ControlIface {
         let v = prop_from_value(&value)
             .ok_or_else(|| Error::InvalidArgs("unsupported value type".into()))?;
         self.unit(c, &h, Control::SetVariable(name, v)).await
-    }
-    async fn list_contexts(
-        &self,
-        #[zbus(header)] h: Header<'_>,
-        #[zbus(connection)] c: &Connection,
-    ) -> Result<Vec<HashMap<String, OwnedValue>>> {
-        self.inner.admit_unsandboxed(c, &h).await?;
-        let s = self.inner.lock();
-        Ok(s.reg
-            .contexts()
-            .map(|ctx| {
-                let mut p = Props::new();
-                p.insert("path".into(), Prop::Str(ctx.id.path()));
-                p.insert("provider".into(), Prop::Str(ctx.provider.clone()));
-                p.insert(
-                    "title".into(),
-                    Prop::Str(ctx.opts.title.clone().unwrap_or_default()),
-                );
-                p.insert("scope".into(), Prop::Str(ctx.opts.scope.name().into()));
-                p.insert("visible".into(), Prop::Bool(ctx.visible));
-                p.insert("on-screen".into(), Prop::Bool(ctx.on_screen));
-                p.insert("items".into(), Prop::Int(ctx.items.len() as i64));
-                // What `app/<provider>#<id>` can place (top-level items; spacers aren't worth it),
-                // with a name to show: the label, else the a11y label, else the id.
-                let placeable: Vec<&crate::item::Item> = ctx
-                    .items
-                    .iter()
-                    .filter(|i| !matches!(i.kind, crate::item::ItemKind::Spacer { .. }))
-                    .collect();
-                p.insert(
-                    "item-ids".into(),
-                    Prop::List(placeable.iter().map(|i| Prop::Str(i.id.clone())).collect()),
-                );
-                p.insert(
-                    "item-labels".into(),
-                    Prop::List(
-                        placeable
-                            .iter()
-                            .map(|i| {
-                                Prop::Str(
-                                    i.label
-                                        .clone()
-                                        .filter(|l| !l.is_empty())
-                                        .or_else(|| i.a11y_label.clone())
-                                        .unwrap_or_else(|| i.id.clone()),
-                                )
-                            })
-                            .collect(),
-                    ),
-                );
-                let sandboxed = s
-                    .reg
-                    .client(&ctx.owner)
-                    .is_some_and(|c| c.identity.sandboxed());
-                p.insert("sandboxed".into(), Prop::Bool(sandboxed));
-                if let Scope::Target(t) = &ctx.opts.scope
-                    && let Some(a) = &t.app_id
-                {
-                    p.insert("target-app-id".into(), Prop::Str(a.clone()));
-                }
-                to_owned_dict(&p)
-            })
-            .collect())
     }
     async fn signal(
         &self,
@@ -229,6 +195,7 @@ impl ControlIface {
     ) -> Result<()> {
         self.unit(c, &h, Control::ResetVisibility).await
     }
+    /// `gesture`: `tap`, `double-tap`, `hold`, `swipe-left` or `swipe-right`.
     async fn trigger(
         &self,
         #[zbus(header)] h: Header<'_>,
@@ -236,7 +203,10 @@ impl ControlIface {
         module: String,
         gesture: String,
     ) -> Result<()> {
-        let g = Gesture::parse(&gesture)
+        use sliver_config::Gesture as G;
+        let g = [G::Tap, G::DoubleTap, G::Hold, G::SwipeLeft, G::SwipeRight]
+            .into_iter()
+            .find(|g| g.key().strip_prefix("on-") == Some(gesture.as_str()))
             .ok_or_else(|| Error::InvalidArgs(format!("unknown gesture {gesture:?}")))?;
         self.unit(c, &h, Control::Trigger(module, g)).await
     }
@@ -276,48 +246,48 @@ impl ControlIface {
 
     #[zbus(property)]
     fn active_layer(&self) -> String {
-        self.inner.host.control_state().active_layer
+        self.host.control_state().active_layer
     }
     #[zbus(property)]
     fn active_layout(&self) -> String {
-        self.inner.host.control_state().active_layout
+        self.host.control_state().active_layout
     }
     #[zbus(property)]
     fn active_rule(&self) -> i32 {
-        self.inner.host.control_state().active_rule
+        self.host.control_state().active_rule
     }
     #[zbus(property)]
     fn active_rule_name(&self) -> String {
-        self.inner.host.control_state().active_rule_name
+        self.host.control_state().active_rule_name
     }
     #[zbus(property)]
     fn active_layout_source(&self) -> String {
-        self.inner.host.control_state().layout_source
+        self.host.control_state().layout_source
     }
     #[zbus(property)]
     fn layers(&self) -> Vec<String> {
-        self.inner.host.control_state().layers
+        self.host.control_state().layers
     }
     #[zbus(property)]
     fn active_profile(&self) -> String {
-        self.inner.host.control_state().active_profile
+        self.host.control_state().active_profile
     }
     #[zbus(property)]
     fn profiles(&self) -> Vec<String> {
-        self.inner.host.control_state().profiles
+        self.host.control_state().profiles
     }
     #[zbus(property)]
     fn variables(&self) -> HashMap<String, OwnedValue> {
-        to_owned_dict(&self.inner.host.control_state().variables)
+        to_owned_dict(&self.host.control_state().variables)
     }
     #[zbus(property)]
     fn healthy(&self) -> bool {
-        self.inner.host.control_state().healthy
+        self.host.control_state().healthy
     }
     /// What's wrong with the config, stylesheet or a module right now (one line each, the file
     /// and line first when known). Empty when all is well.
     #[zbus(property)]
     fn errors(&self) -> Vec<String> {
-        self.inner.host.control_state().errors
+        self.host.control_state().errors
     }
 }

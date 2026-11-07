@@ -70,23 +70,11 @@ impl Agent {
         }
     }
 
-    /// Display off, hatch, layer switch: every touch ends. A published slider being dragged is
-    /// told the drag ended, and a `hold` layer no longer waits for its finger.
+    /// Display off, hatch, layer switch: every touch ends, and a `hold` layer no longer waits
+    /// for its finger.
     pub fn cancel_touches(&mut self) -> Vec<Effect> {
         let mut fx = Vec::new();
-        let (pressed, dragged) = self.touches.end();
-        for (region, value) in dragged {
-            if let Some(p) = self.cell(region).and_then(|c| c.published.clone()) {
-                fx.push(Effect::Api {
-                    context: p.context,
-                    item: p.item,
-                    what: sliver_api::registry::Interaction::Slider {
-                        value,
-                        phase: sliver_api::registry::Phase::End,
-                    },
-                });
-            }
-        }
+        let pressed = self.touches.end();
         if matches!(self.closes, Some((_, Closes::Release(_)))) {
             self.closes = None;
         }
@@ -110,12 +98,6 @@ impl Agent {
         let Some(cell) = self.cell(region).cloned() else {
             return;
         };
-        if let Some(p) = &cell.published
-            && !matches!(g, Gesture::Pressed(_))
-        {
-            self.dispatch_published(region, &cell, p, g, now, fx);
-            return;
-        }
         let want = match g {
             Gesture::Bar(_) => return, // handled in `touch`
             Gesture::Pressed(on) => {
@@ -423,28 +405,6 @@ pub(super) fn collapsed_slider(c: &Cell) -> bool {
 
 /// What the recognizer should look for on this cell.
 pub(super) fn bindings(c: &Cell) -> Bindings {
-    if let Some(p) = &c.published {
-        use sliver_api::item::Gesture as AG;
-        let has = |g: AG| p.gestures.contains(&g);
-        let slider = matches!(p.kind, crate::published::PubKind::Slider { .. });
-        let scrubber = matches!(p.kind, crate::published::PubKind::Candidate { .. });
-        let user = |g: CGesture| c.on.iter().any(|(x, _)| *x == g);
-        return Bindings {
-            tap: !slider,
-            double_tap: has(AG::DoubleTap) || user(CGesture::DoubleTap),
-            hold: has(AG::Hold) || user(CGesture::Hold),
-            release: slider,
-            swipe: scrubber
-                || has(AG::SwipeLeft)
-                || has(AG::SwipeRight)
-                || user(CGesture::SwipeLeft)
-                || user(CGesture::SwipeRight),
-            drag: slider,
-            on_press: false,
-            slide: false,
-            swipe_threshold: None,
-        };
-    }
     let has = |g: CGesture| c.on.iter().any(|(x, _)| *x == g);
     let hold_layer = matches!(
         c.binding(CGesture::Tap).and_then(Do::action),

@@ -48,11 +48,6 @@ pub struct Cell {
     pub drawer: Option<Drawer>,
     /// When this cell's content changes next on its own (clock ticks), if ever.
     pub next_change: Option<DateTime<Local>>,
-    /// A published item: touches go to the app that owns it.
-    pub published: Option<crate::published::PubRef>,
-    /// Part of a sized App controls / Status items slot (`width` = px or fill), by the slot's
-    /// key: its published items, and the trailing `kind = "slot"` spacer that reserves the rest.
-    pub slot: Option<String>,
 }
 
 impl Cell {
@@ -73,8 +68,6 @@ impl Cell {
             on: Vec::new(),
             drawer: None,
             next_change: None,
-            published: None,
-            slot: None,
         }
     }
 
@@ -109,28 +102,14 @@ pub enum Opens {
     Slider,
 }
 
-/// `ui` gives each cell's agent-side state, by cell key.
 /// What the agent adds to the world for one frame.
 #[derive(Debug, Default)]
 pub struct Placed {
     /// Output given with `sliverctl update` to modules without `exec`. A script's output wins.
     pub pushed: HashMap<String, crate::scripts::Output>,
-    /// Published items the layout places itself (`app/<provider>#<item>`, or `app/<provider>`
-    /// for a whole context): App controls / Status items leave them out.
-    pub pinned: std::collections::HashSet<(String, Option<String>)>,
-    /// `[modules."app/<provider>#<item>"]` blocks for items that show in a placeholder, by id.
-    pub configured: HashMap<String, ModuleInstance>,
 }
 
-impl Placed {
-    pub fn is_pinned(&self, provider: &str, item: &str) -> bool {
-        self.pinned.contains(&(provider.to_owned(), None))
-            || self
-                .pinned
-                .contains(&(provider.to_owned(), Some(item.to_owned())))
-    }
-}
-
+/// `ui` gives each cell's agent-side state, by cell key.
 pub struct Build<'a> {
     pub world: &'a World,
     pub placed: &'a Placed,
@@ -149,11 +128,7 @@ fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut V
         let key = format!("{prefix}{}", m.id);
         match m.id.kind.as_str() {
             "group" => group_cells(m, &key, b, out),
-            "app-controls" | "status-items" => placeholder_cells(m, &key, prefix, b, out),
-            // A published item (or a whole context) placed by the layout: `app/<provider>#<item>`.
-            "app" => pinned_app(m, b, out),
-            // Any other module is a cell, or one per item it lists (workspaces, windows, who's
-            // recording).
+            // Any other module is a cell, or one per item it lists (workspaces, windows).
             _ => {
                 let cells: Vec<(String, Option<Part>)> = match items(m, b.world) {
                     Some(list) => list
@@ -187,7 +162,6 @@ fn esc(s: &str) -> FmtValue {
 /// `image` pictures are kept at most this tall: twice the 60 px bar, so scaling down stays sharp.
 pub(crate) const IMAGE_MAX_HEIGHT: u32 = 120;
 
-mod apps;
 mod clock;
 mod desktop;
 mod graph;
@@ -200,7 +174,6 @@ mod system;
 mod widgets;
 mod world;
 
-use apps::*;
 use clock::*;
 use desktop::*;
 pub use graph::*;

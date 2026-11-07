@@ -58,6 +58,3 @@ module:active highlight { background-color: #000; }
 .critical, .urgent { background-color: #ff453a; border-color: #ff453a; color: #000; }
 #battery.charging { color: #30d158; border-color: #30d158; }
 .error { color: #ff453a; border-color: #ff453a; }
-
-/* Indeterminate progress is a full track: grey, not white, so it doesn't read as 100%. */
-module.indeterminate highlight { background-color: #8e8e93; }

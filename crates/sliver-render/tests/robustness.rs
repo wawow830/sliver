@@ -1,6 +1,5 @@
-//! Untrusted input never panics the renderer: script output and app-published labels arrive as
-//! markup, and users write stylesheets. Inputs are pseudo-random with fixed seeds; the failing
-//! input is printed.
+//! Untrusted input never panics the renderer: script output arrives as markup, and users write
+//! stylesheets. Inputs are pseudo-random with fixed seeds; the failing input is printed.
 
 use sliver_render::{Content, Fonts, Item, Pixmap, Renderer, Scene, Stylesheet, markup};
 

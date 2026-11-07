@@ -14,8 +14,6 @@ pub struct World {
     pub context: Context,
     /// Latest output of each user module (`custom/*` with `exec`), by module key.
     pub outputs: HashMap<String, Output>,
-    /// What apps publish for the App controls / Status items placeholders.
-    pub published: crate::published::Published,
     /// cpu, memory, load, temperature, disk and network throughput, as read for this frame.
     pub stats: crate::stats::Readings,
     /// Local file of the current player's album art (fetched by the feeds).
@@ -33,7 +31,6 @@ impl World {
             desktop: DesktopState::default(),
             context: Context::new(),
             outputs: HashMap::new(),
-            published: Default::default(),
             stats: Default::default(),
             apps: Default::default(),
             media_art: None,

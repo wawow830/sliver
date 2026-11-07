@@ -79,7 +79,6 @@ impl Unit {
 pub struct Agent {
     pub healthy: bool,
     pub errors: Vec<String>,
-    pub version: Option<String>,
 }
 
 /// The config as loaded: its path, and what is wrong with it.
@@ -104,8 +103,6 @@ pub trait Sys {
     fn agent(&self) -> Result<Agent, String>;
     fn config(&self) -> ConfigState;
     fn read(&self, path: &Path) -> Option<String>;
-    /// Stdout of a command, `None` if it isn't there or fails.
-    fn run(&self, cmd: &[&str]) -> Option<String>;
     /// The bar as sysfs shows it (no root, nothing opened).
     fn bar_sysfs(&self) -> hardware::BarSysfs;
     /// sliverd's read-only hardware report.
@@ -261,10 +258,7 @@ fn agent(sys: &dyn Sys) -> Vec<Check> {
         Ok(a) if a.healthy && a.errors.is_empty() => out.push(check(
             "agent",
             Level::Ok,
-            format!(
-                "the agent is driving the bar{}",
-                a.version.map(|v| format!(" (API {v})")).unwrap_or_default()
-            ),
+            "the agent is driving the bar",
             None,
         )),
         Ok(a) if !a.errors.is_empty() => {
@@ -369,48 +363,13 @@ fn desktop(sys: &dyn Sys) -> Check {
             "sway: focus, workspaces and windows follow it",
             None,
         )
-    } else if part("kde") {
-        let enabled = sys
-            .read(&config_dir(sys).join("kwinrc"))
-            .is_some_and(|s| s.lines().any(|l| l.trim() == "sliver-focusEnabled=true"));
-        if enabled {
-            check(
-                "desktop",
-                Level::Ok,
-                "KDE: the Sliver focus KWin script is enabled",
-                None,
-            )
-        } else {
-            check(
-                "desktop",
-                Level::Warn,
-                "KDE: the Sliver focus KWin script isn't enabled, so per-app layouts won't follow the focus",
-                Some(
-                    "System Settings → Window Management → KWin Scripts → Sliver focus (package sliver-kwin)",
-                ),
-            )
-        }
-    } else if part("gnome") {
-        let enabled = sys
-            .run(&["gnome-extensions", "list", "--enabled"])
-            .is_some_and(|s| s.lines().any(|l| l.trim().starts_with("sliver-focus@")));
-        if enabled {
-            check(
-                "desktop",
-                Level::Ok,
-                "GNOME: the Sliver focus extension is enabled",
-                None,
-            )
-        } else {
-            check(
-                "desktop",
-                Level::Warn,
-                "GNOME: the Sliver focus extension isn't enabled, so per-app layouts won't follow the focus",
-                Some(
-                    "gnome-extensions enable sliver-focus@sliver.wawow830.github.io, then log out and in (package gnome-shell-extension-sliver)",
-                ),
-            )
-        }
+    } else if part("kde") || part("gnome") {
+        check(
+            "desktop",
+            Level::Warn,
+            "KDE and GNOME don't say which window has focus: per-app layouts, window, workspace and taskbar modules stay empty",
+            Some("layouts still switch by layer, profile and state (battery, media, lock)"),
+        )
     } else if set("WAYLAND_DISPLAY") {
         check(
             "desktop",
@@ -435,14 +394,6 @@ fn desktop(sys: &dyn Sys) -> Check {
             ),
         )
     }
-}
-
-fn config_dir(sys: &dyn Sys) -> PathBuf {
-    sys.env("XDG_CONFIG_HOME")
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| sys.env("HOME").map(|h| Path::new(&h).join(".config")))
-        .unwrap_or_default()
 }
 
 // ---- session sources ------------------------------------------------------------------------
@@ -739,15 +690,7 @@ impl Sys for Real {
             .ok()
             .and_then(|v| <Vec<String>>::try_from(v).ok())
             .unwrap_or_default();
-        let version = get(sliver_ipc::dbus::IFACE_TOUCHBAR, "Version")
-            .ok()
-            .and_then(|v| u32::try_from(v).ok())
-            .map(|v| v.to_string());
-        Ok(Agent {
-            healthy,
-            errors,
-            version,
-        })
+        Ok(Agent { healthy, errors })
     }
 
     fn config(&self) -> ConfigState {
@@ -765,10 +708,6 @@ impl Sys for Real {
 
     fn read(&self, path: &Path) -> Option<String> {
         std::fs::read_to_string(path).ok()
-    }
-
-    fn run(&self, cmd: &[&str]) -> Option<String> {
-        run_cmd(cmd)
     }
 
     fn bar_sysfs(&self) -> hardware::BarSysfs {

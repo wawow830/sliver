@@ -55,7 +55,7 @@ mod spec_tests {
     #[test]
     fn sources_are_the_configs_module_types() {
         // Composed in `cells_in`.
-        let composed = ["group", "app", "app-controls", "status-items"];
+        let composed = ["group"];
         let mut ours: Vec<&str> = SOURCES.iter().map(|(k, _)| *k).chain(composed).collect();
         ours.sort();
         let mut config: Vec<&str> = sliver_config::MODULE_TYPES

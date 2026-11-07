@@ -2,9 +2,7 @@
 //! applies its own consequences (a redraw, cancelled touches).
 
 use super::*;
-use crate::api::Reply;
-use sliver_api::item::Prop;
-use sliver_api::service::{Control, ControlReply};
+use crate::api::{Control, ControlReply, Prop, Props, Reply};
 
 impl Agent {
     /// Answers `req` from the agent's own state. `Err(req)` hands back what needs the outside
@@ -118,7 +116,7 @@ impl Agent {
 
     /// `sliverctl update MODULE KEY=VALUE…`: output for an exec-less custom module. All of it or
     /// none of it: a mistyped field leaves the module as it was.
-    fn update(&mut self, module: String, props: sliver_api::item::Props) -> Result<(), String> {
+    fn update(&mut self, module: String, props: Props) -> Result<(), String> {
         let mut out = self.pushed.get(&module).cloned().unwrap_or_default();
         for (k, v) in props {
             match (k.as_str(), v) {

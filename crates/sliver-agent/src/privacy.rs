@@ -3,11 +3,10 @@
 //!
 //! 1. [`sanitize`]: modules are built from a copy of the world with the private data removed:
 //!    media title/artist/album/art, the latest notification's text, window titles and the
-//!    window list, script output, everything apps published.
+//!    window list, script output.
 //! 2. [`allowed`]: cells of kinds that exist to show private things are dropped: `custom/*`
 //!    (arbitrary script output, and running commands from a locked bar), `image` and `graph` (a
-//!    picture or a history a script picked), app-published items and
-//!    their App controls / Status items slots, `window` and `taskbar`.
+//!    picture or a history a script picked), `window` and `taskbar`.
 //!
 //! What stays: keys (Esc, F-keys, media keys), sliders, toggles, clock, battery, workspaces,
 //! keyboard layout, the notification *count*, media play/pause without the title.
@@ -16,18 +15,9 @@ use crate::modules::{Cell, World};
 
 /// Module kinds never shown while locked.
 const HIDDEN_KINDS: &[&str] = &[
-    "custom",
-    // A picture a script picked (album art, a photo).
-    "image",
-    // A history of something (custom-graph/<name> is kind `graph` too).
-    "graph",
-    "app-controls",
-    "status-items",
-    "slot",
-    "app",
-    "status",
-    "window",
-    "taskbar",
+    "custom", // A picture a script picked (album art, a photo).
+    "image",  // A history of something (custom-graph/<name> is kind `graph` too).
+    "graph", "window", "taskbar",
 ];
 
 /// The world as a locked screen may see it.
@@ -45,11 +35,10 @@ pub fn sanitize(world: &World) -> World {
     w.desktop.window = None;
     w.desktop.windows.clear();
     w.outputs.clear();
-    w.published = Default::default();
     w
 }
 
 /// May this cell be drawn on a locked screen?
 pub fn allowed(c: &Cell) -> bool {
-    c.published.is_none() && !HIDDEN_KINDS.contains(&c.kind.as_str())
+    !HIDDEN_KINDS.contains(&c.kind.as_str())
 }

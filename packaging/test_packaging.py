@@ -4,9 +4,6 @@ Units are parsed as systemd reads them, and the commands that hand the bar betwe
 tiny-dfr are run against a fake systemctl.
 """
 
-import base64
-import hashlib
-import json
 import os
 import re
 import shutil
@@ -137,17 +134,6 @@ class Spec(unittest.TestCase):
                              capture_output=True, text=True, check=True).stdout
         self.assertNotRegex(out, r"@CARGO_[A-Z]+@|@BUNDLED_LICENSES[^@]*@")
         self.assertRegex(out, r"(?m)^%global bundled_licenses .*\bOFL-1\.1\b")
-
-
-class Browser(unittest.TestCase):
-    def test_native_host_allows_the_extension_its_key_names(self):
-        # A Chromium extension's id comes from the public key in its manifest.
-        ext = ROOT / "integration/browser/extension/manifest.chromium.json"
-        key = json.loads(ext.read_text())["key"]
-        h = hashlib.sha256(base64.b64decode(key)).hexdigest()[:32]
-        ext_id = "".join(chr(ord("a") + int(c, 16)) for c in h)
-        native = ROOT / "integration/browser/native/io.github.wawow830.sliver_browser.chromium.json"
-        self.assertIn(f"chrome-extension://{ext_id}/", json.loads(native.read_text())["allowed_origins"])
 
 
 if __name__ == "__main__":

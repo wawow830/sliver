@@ -582,7 +582,7 @@ fn default_bar_with_sample_data() {
             &mut out,
         );
     }
-    // The default main zone shows F1-F12 until an app fills App controls (group/fkeys).
+    // The default main zone shows F1-F12 (group/fkeys).
     let fkeys = out
         .iter()
         .filter(|c| c.key.starts_with("group/fkeys/"))
@@ -746,7 +746,7 @@ fn systemd_failed_units() {
 #[test]
 fn closed_drawer_shows_its_handle() {
     let cells = build("", "base");
-    // group/fkeys (F1-F12 until an app publishes) comes first; it's not a drawer.
+    // group/fkeys (F1-F12) comes first; it's not a drawer.
     let cells: Vec<Cell> = cells
         .into_iter()
         .filter(|c| !c.key.starts_with("group/fkeys/"))

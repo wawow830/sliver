@@ -1,5 +1,5 @@
-# D-Bus activation for the public Touch Bar API. A client calling
-# io.github.wawow830.Sliver (an app publishing items, sliverctl) starts the session agent through
+# D-Bus activation for the agent's Control1. A client calling io.github.wawow830.Sliver
+# (sliverctl, a user's script) starts the session agent through
 # systemd, so it runs in its proper unit, never as a bus-spawned child.
 [D-BUS Service]
 Name=io.github.wawow830.Sliver

@@ -61,12 +61,6 @@ pub enum Effect {
     Profile(String),
     /// Switch workspace or focus/close a window on the compositor (workspaces, taskbar).
     Desktop(sliver_desktop::control::Action),
-    /// Tell the app that owns a published item what the user did.
-    Api {
-        context: sliver_api::registry::ContextId,
-        item: String,
-        what: sliver_api::registry::Interaction,
-    },
 }
 
 /// Session-side changes the built-in modules make.
@@ -150,7 +144,7 @@ pub struct Agent {
     /// `graph` modules' samples, by module id. Sampled in [`Agent::render`] while the bar is
     /// drawn.
     graphs: HashMap<String, Samples>,
-    /// A menu, drawer sub-bar or popover covering the bar.
+    /// A menu or drawer sub-bar covering the bar.
     overlay: Option<overlay::Overlay>,
     /// Sliders under a finger, by cell key: the value there, and when it was let go. They show
     /// it at once (the system's level is set at most every [`DRAG_INTERVAL_US`] and reported back
@@ -179,7 +173,7 @@ struct Samples {
 }
 
 /// The fingers on the bar: the gesture recognizer, the cells they press, and the sliders they
-/// slide or drag. All of it ends together when touches are cancelled (the display going off, the
+/// slide. All of it ends together when touches are cancelled (the display going off, the
 /// hatch, the bar changing under them).
 struct Touches {
     recognizer: Recognizer,
@@ -187,18 +181,15 @@ struct Touches {
     pressed: HashSet<String>,
     /// Press-and-slide anchors per region: (finger x, slider value 0–100) when sliding began.
     slide: HashMap<u32, (f32, f64)>,
-    /// Published sliders being dragged: the last value sent, by region.
-    pub_drag: HashMap<u32, f64>,
 }
 
 impl Touches {
     /// Ends every touch (the recognizer keeps its bar gestures). Returns whether anything was
-    /// pressed, and the published sliders that were being dragged, with their last values.
-    fn end(&mut self) -> (bool, HashMap<u32, f64>) {
+    /// pressed.
+    fn end(&mut self) -> bool {
         self.recognizer.cancel_all();
         self.slide.clear();
-        let pressed = !std::mem::take(&mut self.pressed).is_empty();
-        (pressed, std::mem::take(&mut self.pub_drag))
+        !std::mem::take(&mut self.pressed).is_empty()
     }
 }
 
@@ -208,7 +199,6 @@ impl Default for Touches {
             recognizer: Recognizer::new(),
             pressed: HashSet::new(),
             slide: HashMap::new(),
-            pub_drag: HashMap::new(),
         }
     }
 }
@@ -368,7 +358,6 @@ impl Agent {
             world.now.wall,
             self.physical_esc,
             self.base_layer(),
-            world.published.app.is_some(),
         );
         for (k, v) in &self.ctx_overrides {
             ctx.set(k, v.clone());
@@ -421,15 +410,15 @@ impl Agent {
                     }
                     // A panic while building is caught: systemd would restart the agent into the
                     // same panic. The layer keeps its last good frame, and what a build changes
-                    // besides caches (overlay, sliders under a finger) is restored.
-                    let kept = (self.overlay.clone(), self.under_finger.clone());
+                    // besides caches (sliders under a finger) is restored.
+                    let kept = self.under_finger.clone();
                     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         self.build(&r, world, id_base)
                     }));
                     let mut f = match built {
                         Ok(f) => f,
                         Err(p) => {
-                            (self.overlay, self.under_finger) = kept;
+                            self.under_finger = kept;
                             let msg = p
                                 .downcast_ref::<String>()
                                 .map(String::as_str)
@@ -495,40 +484,8 @@ impl Agent {
     }
 
     fn build(&mut self, r: &Resolved, world: &World, id_base: u32) -> Frame {
-        // Published items the layout places itself (`app/<provider>#<item>`) leave the
-        // App controls / Status items placeholders.
-        fn pinned(ms: &[sliver_config::ModuleInstance], out: &mut Vec<(String, Option<String>)>) {
-            for m in ms {
-                if m.id.kind == "app"
-                    && let Some(p) = &m.id.name
-                {
-                    out.push((p.clone(), m.id.instance.clone()));
-                }
-                pinned(&m.children, out);
-            }
-        }
-        let mut pins = Vec::new();
-        for z in &r.zones {
-            pinned(&z.modules, &mut pins);
-        }
-        // Items configured by id (`[modules."app/…#…"]`) but shown in a placeholder.
-        let configured: std::collections::HashMap<String, sliver_config::ModuleInstance> = self
-            .config
-            .modules()
-            .keys()
-            .filter(|id| id.kind == "app" && id.instance.is_some())
-            .filter(|id| {
-                !pins.iter().any(|(p, i)| {
-                    Some(p) == id.name.as_ref()
-                        && i.as_ref().is_none_or(|i| Some(i) == id.instance.as_ref())
-                })
-            })
-            .filter_map(|id| Some((id.to_string(), self.config.instance(id, &self.ctx)?)))
-            .collect();
         let placed = modules::Placed {
             pushed: self.pushed.clone(),
-            pinned: pins.into_iter().collect(),
-            configured,
         };
         let ui = &self.ui;
         let graphs = &self.graphs;
@@ -539,11 +496,11 @@ impl Agent {
             }
             s
         };
-        // A menu, drawer, popover or modal app context covers all but the first zone.
+        // A menu or drawer covers all but the first zone.
         let mut cover = (id_base == 0)
             .then(|| {
                 overlay::cover(
-                    &mut self.overlay,
+                    self.overlay.as_ref(),
                     &r.zones,
                     world,
                     &placed,
@@ -552,10 +509,9 @@ impl Agent {
                 )
             })
             .flatten();
-        let modal = cover.as_ref().is_some_and(|c| c.modal);
         let (zones, covered) = overlay::zones(&r.zones, cover.as_ref());
         let hidden = &self.hidden_modules;
-        let per_zone: Vec<Vec<Cell>> = zones
+        let mut per_zone: Vec<Vec<Cell>> = zones
             .iter()
             .enumerate()
             .map(|(zi, z)| {
@@ -592,11 +548,7 @@ impl Agent {
                 cells
             })
             .collect();
-        let mut classes = vec![format!("layer-{}", r.layer), format!("layout-{}", r.layout)];
-        if modal {
-            classes.push("modal".into());
-        }
-        let mut per_zone = per_zone;
+        let classes = vec![format!("layer-{}", r.layer), format!("layout-{}", r.layout)];
         // Fast-path key regions (sliverd presses them itself) get layout-mapped keys too.
         if world.desktop.bar_keymap != self.keymap_names {
             // Built before either is replaced: the names always say what the keymap is.
@@ -614,31 +566,6 @@ impl Agent {
         if self.ctx.flag("locked") {
             for cells in &mut per_zone {
                 cells.retain(crate::privacy::allowed);
-            }
-        }
-        self.fit_slots(&zones, &mut per_zone, &classes);
-        // Published items with a lower `priority` give way when their zone overflows,
-        // a group as a unit. Only measured when some priority differs.
-        if per_zone.iter().flatten().any(|c| {
-            c.published
-                .as_ref()
-                .is_some_and(|p| p.priority != 0 && p.priority != i32::MAX)
-        }) {
-            for _ in 0..crate::published::MAX_OVERFLOW_DROPS {
-                let probe = frame::scene(&zones, &per_zone, classes.clone());
-                let layout = self
-                    .renderer
-                    .layout(&probe, &self.sheet, self.width, self.height);
-                let Some((zi, ctx, unit)) =
-                    crate::published::overflow_victim(&per_zone, &layout.overflow)
-                else {
-                    break;
-                };
-                per_zone[zi].retain(|c| {
-                    !c.published
-                        .as_ref()
-                        .is_some_and(|p| p.context == ctx && p.unit == unit)
-                });
             }
         }
         let scene = frame::scene(&zones, &per_zone, classes);
@@ -661,82 +588,6 @@ impl Agent {
             panic!("test panic in build");
         }
         f
-    }
-
-    /// Fixed-width App controls / Status items slots (`width = 332`): measure the items, give
-    /// the trailing spacer what's left, and if they don't fit, drop the lowest-priority item (a
-    /// group as a unit) until they do. Fill slots need nothing: their spacer is `Fill`.
-    fn fit_slots(
-        &mut self,
-        zones: &[sliver_config::ResolvedZone],
-        per_zone: &mut [Vec<Cell>],
-        classes: &[String],
-    ) {
-        use sliver_render::Width;
-        let is_px_spacer = |c: &Cell| c.kind == "slot" && matches!(c.look.width, Width::Fixed(_));
-        // The slots' sizes, then measure with their spacers at zero.
-        let mut want: HashMap<String, f32> = HashMap::new();
-        for c in per_zone.iter_mut().flatten().filter(|c| is_px_spacer(c)) {
-            if let (Width::Fixed(w), Some(s)) = (c.look.width, &c.slot) {
-                want.insert(s.clone(), w);
-                c.look.width = Width::Fixed(0.0);
-            }
-        }
-        if want.is_empty() {
-            return;
-        }
-        for _ in 0..crate::published::MAX_OVERFLOW_DROPS {
-            let probe = frame::scene(zones, per_zone, classes.to_vec());
-            let layout = self
-                .renderer
-                .layout(&probe, &self.sheet, self.width, self.height);
-            // Per slot: from its first item's left edge to the spacer's (gap included).
-            let mut too_big: Option<String> = None;
-            let mut sizes: Vec<(usize, usize, f32)> = Vec::new();
-            let mut i = 0;
-            for (zi, cells) in per_zone.iter().enumerate() {
-                let mut first: HashMap<&str, f32> = HashMap::new();
-                for (ci, c) in cells.iter().enumerate() {
-                    let r = layout.items[i + ci];
-                    let Some(s) = c.slot.as_deref() else { continue };
-                    if c.kind != "slot" {
-                        first.entry(s).or_insert(r.x);
-                    } else if let Some(&w) = want.get(s) {
-                        let used = first.get(s).map_or(0.0, |x0| r.x - x0);
-                        if used > w + 0.5 {
-                            too_big.get_or_insert_with(|| s.to_string());
-                        }
-                        sizes.push((zi, ci, (w - used).max(0.0)));
-                    }
-                }
-                i += cells.len();
-            }
-            let Some(slot) = too_big else {
-                for (zi, ci, rest) in sizes {
-                    per_zone[zi][ci].look.width = Width::Fixed(rest.floor());
-                }
-                return;
-            };
-            // Drop the lowest-priority item of the overfull slot (the last one on a tie).
-            let victim = per_zone
-                .iter()
-                .flatten()
-                .filter(|c| c.slot.as_deref() == Some(slot.as_str()) && c.kind != "slot")
-                .filter_map(|c| c.published.as_ref())
-                .rev()
-                .min_by_key(|p| p.priority)
-                .map(|p| (p.context, p.unit.clone()));
-            let Some((ctx, unit)) = victim else { return };
-            for cells in per_zone.iter_mut() {
-                cells.retain(|c| {
-                    c.slot.as_deref() != Some(slot.as_str())
-                        || !c
-                            .published
-                            .as_ref()
-                            .is_some_and(|p| p.context == ctx && p.unit == unit)
-                });
-            }
-        }
     }
 
     /// Re-renders just the images of frames whose pressed cells changed (after
@@ -872,9 +723,8 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    /// A panic while building a frame is caught: the layer keeps its last good frame, what the
-    /// build changed is undone (here: it closed a popover whose app is gone), the error is
-    /// reported, and the next render works again.
+    /// A panic while building a frame is caught: the layer keeps its last good frame, the error
+    /// is reported, and the next render works again.
     #[test]
     fn a_panicking_build_keeps_the_last_frame() {
         let l = sliver_config::load_str("", std::path::Path::new("."));
@@ -893,14 +743,8 @@ mod tests {
         );
         assert_eq!(a.render(&w), [Layer::Base, Layer::Fn]);
         let good = a.frame(Layer::Base).unwrap().image.clone();
-        a.overlay = Some(overlay::Overlay::Popover {
-            context: sliver_api::registry::ContextId(7),
-            item: "gone".into(),
-            class: "app".into(),
-        });
         a.panic_in_build = true;
         assert!(a.render(&w).is_empty(), "nothing new to present");
-        assert!(a.overlay.is_some(), "the panicked build's close was undone");
         assert!(
             a.errors.iter().any(|e| e.contains("panicked")),
             "{:?}",
@@ -910,6 +754,5 @@ mod tests {
         a.panic_in_build = false;
         assert_eq!(a.render(&w), [Layer::Base, Layer::Fn]);
         assert!(a.errors.is_empty());
-        assert!(a.overlay.is_none(), "a build that returns closes it");
     }
 }

@@ -1,6 +1,10 @@
-//! Converting item properties to and from D-Bus values.
+//! [`Prop`]s to and from D-Bus values.
 
-use super::*;
+use std::collections::HashMap;
+
+use zbus::zvariant::{Array, Dict, OwnedValue, Signature, Str, Value};
+
+use super::{Prop, Props};
 
 /// zvariant → [`Prop`]. Unsupported types (fds, structs of mixed types) become `None`.
 pub fn prop_from_value(v: &Value<'_>) -> Option<Prop> {
@@ -63,7 +67,7 @@ pub fn prop_to_value(p: &Prop) -> Value<'static> {
     }
 }
 
-pub(super) fn to_dict_value(m: &Props) -> Dict<'static, 'static> {
+fn to_dict_value(m: &Props) -> Dict<'static, 'static> {
     let mut d = Dict::new(&Signature::Str, &Signature::Variant);
     for (k, v) in m {
         let _ = d.append(
@@ -72,12 +76,6 @@ pub(super) fn to_dict_value(m: &Props) -> Dict<'static, 'static> {
         );
     }
     d
-}
-
-pub(super) fn to_dict(m: &Props) -> HashMap<String, Value<'static>> {
-    m.iter()
-        .map(|(k, v)| (k.clone(), prop_to_value(v)))
-        .collect()
 }
 
 pub(super) fn to_owned_dict(m: &Props) -> HashMap<String, OwnedValue> {
