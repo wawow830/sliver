@@ -40,8 +40,6 @@ pub struct SessionOptions {
     pub appearance: bool,
     /// The desktop's lock-screen state (`ActiveChanged`).
     pub screensaver: bool,
-    /// Who is capturing the microphone, camera or screen, from PipeWire's socket (`privacy`).
-    pub capture: bool,
 }
 
 impl Default for SessionOptions {
@@ -53,7 +51,6 @@ impl Default for SessionOptions {
             tray: true,
             appearance: true,
             screensaver: true,
-            capture: true,
         }
     }
 }
@@ -68,7 +65,6 @@ impl SessionOptions {
             tray: false,
             appearance: false,
             screensaver: false,
-            capture: false,
         }
     }
 }
@@ -185,8 +181,6 @@ pub struct Feeds {
     specs: Vec<Spec>,
     /// Starts the failed-units watcher on the real buses ([`Feeds::watch_failed_units`]).
     failed_units: Option<Box<dyn Fn() + Send>>,
-    /// Starts the PipeWire capture follower ([`Feeds::watch_capture`]).
-    capture: Option<Box<dyn Fn() + Send>>,
     /// Where album art is cached (`None`: no art).
     pub art_cache: Option<std::path::PathBuf>,
 }
@@ -209,7 +203,6 @@ impl Feeds {
             signal_target: None,
             specs: Vec::new(),
             failed_units: None,
-            capture: None,
             art_cache: sliver_session::art::default_cache_dir(|k| std::env::var(k).ok()),
         })
     }
@@ -365,12 +358,6 @@ impl Feeds {
         if let Some(tools) = opts.audio {
             handle.start_audio(tools);
         }
-        if opts.capture
-            && let Some(socket) = sliver_session::capture::socket_path(|k| std::env::var(k).ok())
-        {
-            let h = handle.clone();
-            self.capture = Some(Box::new(move || h.start_capture(socket.clone())));
-        }
         if let Some(sysfs) = &opts.sysfs {
             handle.refresh_brightness(sysfs);
         }
@@ -421,15 +408,6 @@ impl Feeds {
         }
     }
 
-    /// A layout uses `privacy`: follow who is capturing the microphone, camera or screen (once;
-    /// later calls do nothing). Not started otherwise: every registry change in PipeWire would
-    /// wake the agent for nothing.
-    pub fn watch_capture(&self) {
-        if let Some(f) = &self.capture {
-            f();
-        }
-    }
-
     /// The bar is on or off: sources that only matter while something is on screen sleep while
     /// it is off.
     pub fn set_awake(&self, on: bool) {
@@ -439,15 +417,12 @@ impl Feeds {
     }
 
     /// Runs what `config` needs: its user modules, and the watchers only some modules use
-    /// (failed units, capture).
+    /// (failed units).
     pub fn follow(&mut self, config: &sliver_config::Config) {
         self.start_modules(crate::modules::user_module_specs(config));
         let uses = |kind| crate::modules::uses_kind(config, kind);
         if uses("systemd-failed-units") {
             self.watch_failed_units();
-        }
-        if uses("privacy") {
-            self.watch_capture();
         }
     }
 

@@ -120,7 +120,6 @@ pub const MODULE_TYPES: &[(&str, &[Keys])] = &[
             SCRIPT,
         ],
     ),
-    ("privacy", &[]),
     (
         "systemd-failed-units",
         &[&[

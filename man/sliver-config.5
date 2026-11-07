@@ -1013,24 +1013,6 @@ and
 apply to the latest value.
 Hidden until the first sample, and while locked.
 .TP
-.B privacy
-One icon per kind of capture in use (screen share, camera, microphone), nothing while idle;
-.BR {app} ,
-.BR {kind} ,
-.BR {count} ;
-classes
-.BR .privacy\-screen ,
-.BR .privacy\-camera ,
-.BR .privacy\-mic ;
-.B format\-screen
-and so on.
-Read from PipeWire, event\-driven: level meters, monitors and loopbacks don't count.
-Cameras opened through V4L2 directly are found too (your own processes only).
-Leave
-.B icon
-unset: it would replace all three icons.
-It stays on the locked screen.
-.TP
 .B systemd\-failed\-units
 Failed units of the system and user managers:
 .BR {nr_failed} ,

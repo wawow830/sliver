@@ -385,36 +385,6 @@ pub(super) fn dark_mode(world: &World) -> Option<Spec> {
     Some(sp.does(Gesture::Tap, "toggle", session(SessionOp::ToggleDark)))
 }
 
-/// Who is recording the microphone, the camera or the screen (PipeWire). One item per kind
-/// in use: icon only by default, the apps' names in `{app}`.
-pub(super) fn privacy(world: &World, item: Option<Part>) -> Option<Spec> {
-    let s = &world.session;
-    let kinds = s.capture.kinds();
-    let (kind, apps) = *kinds.get(item?.nth()?)?;
-    let names = apps.join(", ");
-    let v = ValueMap::new()
-        .with("kind", kind)
-        .with("app", esc(&names))
-        .with("count", apps.len() as i64)
-        .with("", esc(&names));
-    let (icon, text) = match kind {
-        "screen" => ("video-display-symbolic", "🖥"),
-        "camera" => ("camera-web-symbolic", "📷"),
-        _ => ("audio-input-microphone-symbolic", "🎙"),
-    };
-    let mut sp = Spec::new(v, "").icon(icon);
-    sp.face = Face::Label {
-        fallback: Some(text.into()),
-    };
-    sp.status = Some(match kind {
-        "screen" => "screen",
-        "camera" => "camera",
-        _ => "mic",
-    });
-    sp.extra_classes = vec![format!("privacy-{kind}")];
-    Some(sp)
-}
-
 /// One-shot actions: no state, so they are always there.
 pub(super) fn screenshot() -> Option<Spec> {
     let mut sp = Spec::new(ValueMap::new(), "")

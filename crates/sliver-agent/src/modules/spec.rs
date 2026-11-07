@@ -139,7 +139,7 @@ pub(super) fn pct(v: Option<u8>) -> Option<f64> {
 /// Which item of a module that shows several ([`items`]) a cell is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Part {
-    /// The `n`th of what the module lists (a workspace, a window, a kind of capture).
+    /// The `n`th of what the module lists (a workspace, a window).
     Nth(usize),
     /// The taskbar's `n`th pinned app.
     Pin(usize),
@@ -158,15 +158,6 @@ impl Part {
 /// is one cell.
 pub(super) fn items(m: &ModuleInstance, world: &World) -> Option<Vec<(String, Part)>> {
     Some(match m.id.kind.as_str() {
-        // One per kind in use (screen, camera, microphone), nothing while idle.
-        "privacy" => world
-            .session
-            .capture
-            .kinds()
-            .into_iter()
-            .enumerate()
-            .map(|(i, (kind, _))| (kind.to_owned(), Part::Nth(i)))
-            .collect(),
         "workspaces" => listed(m, world)
             .into_iter()
             .map(|i| (world.desktop.workspaces[i].id.to_string(), Part::Nth(i)))
@@ -289,7 +280,6 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
     ("power", |at| system::power(at.key)),
     ("dnd", |at| system::dnd(at.world)),
     ("dark-mode", |at| system::dark_mode(at.world)),
-    ("privacy", |at| system::privacy(at.world, at.item)),
     ("cpu", |at| stat_spec(at.m, at.world)),
     ("memory", |at| stat_spec(at.m, at.world)),
     ("temperature", |at| stat_spec(at.m, at.world)),

@@ -541,9 +541,12 @@ fn sources(sys: &dyn Sys) -> Vec<Check> {
         .or_else(|| sys.env("XDG_RUNTIME_DIR"));
     let socket = runtime.map(|r| Path::new(&r).join("pipewire-0"));
     out.push(match socket {
-        Some(s) if sys.exists(&s) && sys.command("wpctl") && sys.command("pactl") => {
-            check("source/audio", Level::Ok, "PipeWire is running (wpctl and pactl found)", None)
-        }
+        Some(s) if sys.exists(&s) && sys.command("wpctl") && sys.command("pactl") => check(
+            "source/audio",
+            Level::Ok,
+            "PipeWire is running (wpctl and pactl found)",
+            None,
+        ),
         Some(s) if sys.exists(&s) => check(
             "source/audio",
             Level::Warn,
@@ -553,7 +556,7 @@ fn sources(sys: &dyn Sys) -> Vec<Check> {
         _ => check(
             "source/audio",
             Level::Warn,
-            "PipeWire isn't running: the audio sliders, mute toggles and the `privacy` module will be empty",
+            "PipeWire isn't running: the audio sliders and mute toggles will be empty",
             Some("systemctl --user enable --now pipewire pipewire-pulse wireplumber"),
         ),
     });

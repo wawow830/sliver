@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Quiet stand-ins for the services event-driven modules follow, for scripts/idle-wakeups' "full"
-phase: systemd (system and user managers), NetworkManager, BlueZ, a tray watcher, a notification
-server, and a PipeWire socket that accepts and then says nothing.
+phase: systemd (system and user managers), NetworkManager, BlueZ, a tray watcher and a
+notification server.
 
 They answer what the sources ask at startup, then stay silent. Each source that calls in is
 appended to SEEN, one line per name.
 
-  scripts/idle-mocks --session ADDR --system ADDR --pipewire PATH --seen FILE
+  scripts/idle-mocks --session ADDR --system ADDR --seen FILE
 """
 
 import argparse
-import os
-import socket
 import threading
 
 import dbus
@@ -139,31 +137,10 @@ class Notifications(dbus.service.Object):
         pass
 
 
-def pipewire(path):
-    """Reads the client's hello and registry request, then never answers: an idle desktop with no
-    capture streams."""
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(path)
-    srv.listen()
-
-    def serve(c):
-        seen("pipewire")  # one line per connection: reconnects show up as repeats
-        while c.recv(4096):
-            pass
-
-    while True:
-        c, _ = srv.accept()
-        threading.Thread(target=serve, args=(c,), daemon=True).start()
-
-
 def main():
     global SEEN
     ap = argparse.ArgumentParser()
-    for a in ("--session", "--system", "--pipewire", "--seen"):
+    for a in ("--session", "--system", "--seen"):
         ap.add_argument(a, required=True)
     a = ap.parse_args()
     SEEN = a.seen
@@ -179,7 +156,6 @@ def main():
     network(system)
     keep += [Bluez(system, "/"), Watcher(session),
              Notifications(session, "/org/freedesktop/Notifications")]
-    threading.Thread(target=pipewire, args=(a.pipewire,), daemon=True).start()
     print("ready", flush=True)
     GLib.MainLoop().run()
 

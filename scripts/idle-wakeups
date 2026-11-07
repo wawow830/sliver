@@ -11,10 +11,10 @@ thread of both and of every helper process the agent starts:
 in two scenarios:
 
   default: the default config, with no services at all
-  full:    every event-driven module placed (privacy, systemd-failed-units, notifications,
-           tray, network, bluetooth, graph) with quiet stand-ins for their services
+  full:    every event-driven module placed (systemd-failed-units, notifications, tray,
+           network, bluetooth, graph) with quiet stand-ins for their services
            (scripts/idle-mocks: systemd, NetworkManager, BlueZ, a tray watcher, a notification
-           server, a PipeWire socket). It fails if a source never called its
+           server). It fails if a source never called its
            service.
 
 It fails if any phase is over budget. ~80 s per scenario; not part of scripts/check (too slow).
@@ -48,15 +48,14 @@ FULL_LAYOUT = """
 [[layouts.default.zones]]
 name = "main"
 width = "fill"
-modules = ["privacy", "systemd-failed-units", "notifications", "status-items", "network",
-           "bluetooth", "graph#cpu"]
+modules = ["systemd-failed-units", "notifications", "status-items", "network", "bluetooth",
+           "graph#cpu"]
 
 [modules.systemd-failed-units]
 hide-on-ok = false
 """
 # Services that must have been called in "full", by scripts/idle-mocks' names.
-FULL_SOURCES = {"systemd-system", "systemd-user", "network", "bluetooth", "tray", "notifications",
-                "pipewire"}
+FULL_SOURCES = {"systemd-system", "systemd-user", "network", "bluetooth", "tray", "notifications"}
 SETTLE_S = 5
 # Display timeouts in the sandbox config: "on" is measured before dim, "off" after off.
 DIM_AFTER_S = 40
@@ -185,8 +184,7 @@ def measured(name: str, full: bool, sb: Sandbox, a: argparse.Namespace) -> bool:
     sliverd = sb.sliverd()
     seen = sb.dir / "seen"
     if full:
-        # An idle audio server: the real tools would hang on the silent PipeWire stand-in until
-        # their timeout and be retried.
+        # An idle audio server, so the audio feed waits for events instead of retrying.
         fake_bin = sb.dir / "bin"
         fake_bin.mkdir()
         (fake_bin / "pactl").write_text('#!/bin/sh\n[ "$1" = subscribe ] && exec sleep infinity\nexit 0\n')
@@ -198,7 +196,7 @@ def measured(name: str, full: bool, sb: Sandbox, a: argparse.Namespace) -> bool:
         log = sb.dir / "mocks.log"
         mocks = sb.start([sys.executable, str(ROOT / "scripts" / "idle-mocks"),
                           "--session", sb.bus["session"], "--system", sb.bus["system"],
-                          "--pipewire", str(sb.dir / "run" / "pipewire-0"), "--seen", str(seen)],
+                          "--seen", str(seen)],
                          "mocks.log")
         if not sb.wait(lambda: "ready" in log.read_text() or mocks.poll() is not None) \
                 or "ready" not in log.read_text():
