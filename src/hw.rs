@@ -107,14 +107,8 @@ fn uinput_keyboard() -> io::Result<Keyboard> {
 
 pub fn run() -> io::Result<()> {
     let mut lp = EventLoop::<Sliver>::try_new()?;
-    let screen = Screen::open(&lp.handle())?;
-    let max = fs::read_to_string(Path::new(BACKLIGHT).join("max_brightness"))?;
-    let hw = Hw {
-        screen,
-        brightness: Path::new(BACKLIGHT).join("brightness"),
-        max: max.trim().into(),
-    };
-    let mut sliver = Sliver::new(lp.handle(), Box::new(hw))?;
+    let panel = Panel::open(&lp.handle())?;
+    let mut sliver = Sliver::new(lp.handle(), Box::new(panel))?;
     sliver.listen(Path::new("/run/sliver"))?;
     libinput(&lp.handle(), SEAT, touch)?;
     libinput(&lp.handle(), "seat0", laptop)?;
@@ -124,39 +118,19 @@ pub fn run() -> io::Result<()> {
     .map_err(io::Error::other)
 }
 
-struct Hw {
-    screen: Screen,
-    brightness: PathBuf,
-    max: String,
-}
-
-impl Bar for Hw {
-    fn show(&mut self, frame: &[u32]) -> io::Result<()> {
-        self.screen.show(frame)
-    }
-
-    fn power(&mut self, on: bool) {
-        if let Err(e) = fs::write(&self.brightness, if on { &self.max } else { "0" }) {
-            eprintln!("sliverd: backlight: {e}");
-        }
-    }
-
-    fn keyboard(&mut self) -> io::Result<Keyboard> {
-        uinput_keyboard()
-    }
-}
-
-struct Screen {
+struct Panel {
     fd: DrmDeviceFd,
     _device: DrmDevice,
     surface: DrmSurface,
     buffers: [(DumbBuffer, framebuffer::Handle); 2],
     back: usize,
     started: bool,
+    brightness: PathBuf,
+    max: String,
 }
 
-impl Screen {
-    fn open(lh: &LoopHandle<'static, Sliver>) -> io::Result<Screen> {
+impl Panel {
+    fn open(lh: &LoopHandle<'static, Sliver>) -> io::Result<Panel> {
         let mut devices = udev::Enumerator::new()?;
         devices.match_subsystem("drm")?;
         devices.match_property("ID_SEAT", SEAT)?;
@@ -212,28 +186,31 @@ impl Screen {
             DrmEvent::Error(e) => eprintln!("sliverd: drm: {e}"),
         })
         .map_err(|e| io::Error::other(e.error))?;
-        Ok(Screen {
+        let max = fs::read_to_string(Path::new(BACKLIGHT).join("max_brightness"))?;
+        Ok(Panel {
             fd,
             _device: device,
             surface,
             buffers,
             back: 0,
             started: false,
+            brightness: Path::new(BACKLIGHT).join("brightness"),
+            max: max.trim().into(),
         })
     }
+}
 
-    fn show(&mut self, frame: &[u32]) -> io::Result<()> {
+impl Bar for Panel {
+    fn show(&mut self, frame: &[u8]) -> io::Result<()> {
         let (buffer, fb) = &mut self.buffers[self.back];
         let (w, h) = buffer.size();
         let pitch = buffer.pitch() as usize;
         let mut map = self.fd.map_dumb_buffer(buffer)?;
         for (row, pixels) in map
             .chunks_exact_mut(pitch)
-            .zip(frame.chunks_exact(w as usize))
+            .zip(frame.chunks_exact(w as usize * 4))
         {
-            for (dst, px) in row.chunks_exact_mut(4).zip(pixels) {
-                dst.copy_from_slice(&px.to_ne_bytes());
-            }
+            row[..pixels.len()].copy_from_slice(pixels);
         }
         let plane = PlaneState {
             handle: self.surface.plane(),
@@ -255,6 +232,16 @@ impl Screen {
         self.started = true;
         self.back ^= 1;
         Ok(())
+    }
+
+    fn power(&mut self, on: bool) {
+        if let Err(e) = fs::write(&self.brightness, if on { &self.max } else { "0" }) {
+            eprintln!("sliverd: backlight: {e}");
+        }
+    }
+
+    fn keyboard(&mut self) -> io::Result<Keyboard> {
+        uinput_keyboard()
     }
 }
 

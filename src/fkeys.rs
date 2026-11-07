@@ -1,37 +1,8 @@
-use std::{
-    collections::HashMap,
-    error::Error,
-    fs::File,
-    io::Write,
-    os::fd::{AsFd, FromRawFd, OwnedFd},
-    os::unix::net::UnixStream,
-};
+use std::collections::HashMap;
 
-use wayland_client::{
-    Connection, Dispatch, QueueHandle, WEnum, delegate_noop,
-    globals::{GlobalListContents, registry_queue_init},
-    protocol::{
-        wl_buffer::WlBuffer,
-        wl_compositor::WlCompositor,
-        wl_registry::WlRegistry,
-        wl_seat::{self, WlSeat},
-        wl_shm::{self, WlShm},
-        wl_shm_pool::WlShmPool,
-        wl_surface::WlSurface,
-        wl_touch::{self, WlTouch},
-    },
-};
-use wayland_protocols::xdg::shell::client::{
-    xdg_surface::{self, XdgSurface},
-    xdg_toplevel::XdgToplevel,
-    xdg_wm_base::{self, XdgWmBase},
-};
-use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
-    zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
-    zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
-};
+use wayland_client::protocol::wl_touch;
 
-use crate::{H, W};
+use crate::{H, W, client::Client};
 
 pub const KEYS: [(&str, u32); 13] = [
     ("ESC", 1),
@@ -49,7 +20,7 @@ pub const KEYS: [(&str, u32); 13] = [
     ("F12", 88),
 ];
 
-pub fn key_at(x: f64) -> u32 {
+fn key_at(x: f64) -> u32 {
     let i = (x.max(0.0) as i32 * KEYS.len() as i32 / W).min(KEYS.len() as i32 - 1);
     KEYS[i as usize].1
 }
@@ -60,23 +31,22 @@ pub fn draw() -> Vec<u32> {
     const GAP: i32 = 4;
     const SCALE: i32 = 3;
     let mut px = vec![0; (W * H) as usize];
+    let mut fill = |x: i32, y: i32, w: i32, h: i32, color: u32| {
+        for y in y..y + h {
+            px[(y * W + x) as usize..(y * W + x + w) as usize].fill(color);
+        }
+    };
     let n = KEYS.len() as i32;
     for (i, (label, _)) in (0..).zip(KEYS) {
         let (x0, x1) = (i * W / n + GAP / 2, (i + 1) * W / n - GAP / 2);
-        for y in GAP..H - GAP {
-            px[(y * W + x0) as usize..(y * W + x1) as usize].fill(CAP);
-        }
+        fill(x0, GAP, x1 - x0, H - 2 * GAP, CAP);
         let text_w = label.len() as i32 * 6 * SCALE - SCALE;
         let (tx, ty) = ((x0 + x1 - text_w) / 2, (H - 7 * SCALE) / 2);
         for (c, ch) in (0..).zip(label.bytes()) {
             for (row, bits) in (0..).zip(glyph(ch)) {
-                for col in 0..5 {
-                    if bits >> (4 - col) & 1 == 1 {
-                        for dy in 0..SCALE {
-                            let (x, y) = (tx + (c * 6 + col) * SCALE, ty + row * SCALE + dy);
-                            px[(y * W + x) as usize..(y * W + x + SCALE) as usize].fill(INK);
-                        }
-                    }
+                for col in (0..5).filter(|col| bits >> (4 - col) & 1 == 1) {
+                    let (x, y) = (tx + (c * 6 + col) * SCALE, ty + row * SCALE);
+                    fill(x, y, SCALE, SCALE, INK);
                 }
             }
         }
@@ -104,172 +74,31 @@ fn glyph(c: u8) -> [u8; 7] {
     }
 }
 
-const KEYMAP: &[u8] =
-    b"xkb_keymap { xkb_keycodes { include \"evdev\" }; xkb_types { include \"complete\" }; \
-xkb_compat { include \"complete\" }; xkb_symbols { include \"pc+us\" }; };\0";
-
-struct Keys {
-    surface: WlSurface,
-    buffer: WlBuffer,
-    keyboard: ZwpVirtualKeyboardV1,
-    held: HashMap<i32, u32>,
-}
-
-pub fn run(stream: UnixStream) {
-    if let Err(e) = serve(stream) {
-        eprintln!("sliverd: fkeys: {e}");
-    }
-}
-
-fn serve(stream: UnixStream) -> Result<(), Box<dyn Error>> {
-    let conn = Connection::from_socket(stream)?;
-    let (globals, mut queue) = registry_queue_init::<Keys>(&conn)?;
-    let qh = queue.handle();
-    let compositor: WlCompositor = globals.bind(&qh, 4..=4, ())?;
-    let shm: WlShm = globals.bind(&qh, 1..=1, ())?;
-    let base: XdgWmBase = globals.bind(&qh, 1..=1, ())?;
-    let seat: WlSeat = globals.bind(&qh, 1..=1, ())?;
-    let manager: ZwpVirtualKeyboardManagerV1 = globals.bind(&qh, 1..=1, ())?;
-
-    let keymap = memfd(KEYMAP)?;
-    let keyboard = manager.create_virtual_keyboard(&seat, &qh, ());
-    keyboard.keymap(1, keymap.as_fd(), KEYMAP.len() as u32);
-
-    let pixels: Vec<u8> = draw().iter().flat_map(|p| p.to_le_bytes()).collect();
-    let pool = shm.create_pool(memfd(&pixels)?.as_fd(), pixels.len() as i32, &qh, ());
-    let buffer = pool.create_buffer(0, W, H, W * 4, wl_shm::Format::Xrgb8888, &qh, ());
-    pool.destroy();
-
-    let surface = compositor.create_surface(&qh, ());
-    let xdg = base.get_xdg_surface(&surface, &qh, ());
-    xdg.get_toplevel(&qh, ());
-    surface.commit();
-
-    let mut keys = Keys {
-        surface,
-        buffer,
-        keyboard,
-        held: HashMap::new(),
-    };
-    loop {
-        queue.blocking_dispatch(&mut keys)?;
-    }
-}
-
-fn memfd(bytes: &[u8]) -> std::io::Result<File> {
-    let fd = unsafe { libc::memfd_create(c"sliver".as_ptr(), libc::MFD_CLOEXEC) };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut file = File::from(unsafe { OwnedFd::from_raw_fd(fd) });
-    file.write_all(bytes)?;
-    Ok(file)
-}
-
-impl Keys {
-    fn press(&mut self, id: i32, key: u32) {
-        self.held.insert(id, key);
-        self.keyboard.key(0, key, 1);
-    }
-
-    fn release(&mut self, id: i32) {
-        if let Some(key) = self.held.remove(&id) {
-            self.keyboard.key(0, key, 0);
-        }
-    }
-}
-
-impl Dispatch<XdgSurface, ()> for Keys {
-    fn event(
-        keys: &mut Self,
-        xdg: &XdgSurface,
-        event: xdg_surface::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        if let xdg_surface::Event::Configure { serial } = event {
-            xdg.ack_configure(serial);
-            keys.surface.attach(Some(&keys.buffer), 0, 0);
-            keys.surface.damage_buffer(0, 0, W, H);
-            keys.surface.commit();
-        }
-    }
-}
-
-impl Dispatch<WlSeat, ()> for Keys {
-    fn event(
-        _: &mut Self,
-        seat: &WlSeat,
-        event: wl_seat::Event,
-        _: &(),
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-    ) {
-        if let wl_seat::Event::Capabilities {
-            capabilities: WEnum::Value(caps),
-        } = event
-            && caps.contains(wl_seat::Capability::Touch)
-        {
-            seat.get_touch(qh, ());
-        }
-    }
-}
-
-impl Dispatch<WlTouch, ()> for Keys {
-    fn event(
-        keys: &mut Self,
-        _: &WlTouch,
-        event: wl_touch::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        match event {
-            wl_touch::Event::Down { id, x, .. } => keys.press(id, key_at(x)),
-            wl_touch::Event::Up { id, .. } => keys.release(id),
+pub fn run(stream: std::os::unix::net::UnixStream) {
+    let serve = || {
+        let client = Client::connect(stream)?;
+        let keyboard = client.keyboard()?;
+        let mut held = HashMap::new();
+        client.show(&draw(), move |event| match event {
+            wl_touch::Event::Down { id, x, .. } => {
+                let key = key_at(x);
+                held.insert(id, key);
+                keyboard.key(0, key, 1);
+            }
+            wl_touch::Event::Up { id, .. } => {
+                if let Some(key) = held.remove(&id) {
+                    keyboard.key(0, key, 0);
+                }
+            }
             wl_touch::Event::Cancel => {
-                for id in keys.held.keys().copied().collect::<Vec<_>>() {
-                    keys.release(id);
+                for (_, key) in held.drain() {
+                    keyboard.key(0, key, 0);
                 }
             }
             _ => {}
-        }
+        })
+    };
+    if let Err(e) = serve() {
+        eprintln!("sliverd: fkeys: {e}");
     }
 }
-
-impl Dispatch<XdgWmBase, ()> for Keys {
-    fn event(
-        _: &mut Self,
-        base: &XdgWmBase,
-        event: xdg_wm_base::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        if let xdg_wm_base::Event::Ping { serial } = event {
-            base.pong(serial);
-        }
-    }
-}
-
-impl Dispatch<WlRegistry, GlobalListContents> for Keys {
-    fn event(
-        _: &mut Self,
-        _: &WlRegistry,
-        _: wayland_client::protocol::wl_registry::Event,
-        _: &GlobalListContents,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-delegate_noop!(Keys: WlCompositor);
-delegate_noop!(Keys: ignore WlShm);
-delegate_noop!(Keys: WlShmPool);
-delegate_noop!(Keys: ignore WlBuffer);
-delegate_noop!(Keys: ignore WlSurface);
-delegate_noop!(Keys: ignore XdgToplevel);
-delegate_noop!(Keys: ZwpVirtualKeyboardManagerV1);
-delegate_noop!(Keys: ZwpVirtualKeyboardV1);

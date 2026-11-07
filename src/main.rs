@@ -1,3 +1,4 @@
+mod client;
 mod fkeys;
 mod hw;
 #[cfg(test)]
@@ -9,7 +10,6 @@ use std::{
     io,
     os::unix::net::UnixStream,
     path::Path,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -40,7 +40,7 @@ use smithay::{
     utils::{Logical, Physical, Point, SERIAL_COUNTER, Scale, Size, Transform},
 };
 
-use wayland::{ClientState, Wl, client_of};
+use wayland::{Wl, client_of};
 
 pub const W: i32 = 2008;
 pub const H: i32 = 60;
@@ -54,7 +54,7 @@ pub fn panel<Kind>() -> Size<i32, Kind> {
 pub type Keyboard = Box<dyn FnMut(u32, bool) + Send>;
 
 pub trait Bar {
-    fn show(&mut self, frame: &[u32]) -> io::Result<()>;
+    fn show(&mut self, frame: &[u8]) -> io::Result<()>;
     fn power(&mut self, on: bool);
     fn keyboard(&mut self) -> io::Result<Keyboard>;
 }
@@ -81,7 +81,7 @@ pub struct Sliver {
     dirty: bool,
     shown: Option<Window>,
     touches: HashMap<u32, Option<Target>>,
-    touched: Vec<WlSurface>,
+    unframed: Option<WlSurface>,
     on: bool,
     fn_held: bool,
     idle_at: Option<Instant>,
@@ -103,10 +103,7 @@ impl Sliver {
         )
         .map_err(io::Error::other)?;
         let (ours, theirs) = UnixStream::pair()?;
-        let fkeys = wl
-            .dh
-            .insert_client(ours, Arc::new(ClientState::default()))?
-            .id();
+        let fkeys = wl.connect(ours)?.id();
         std::thread::spawn(|| fkeys::run(theirs));
         let mut renderer = PixmanRenderer::new().map_err(io::Error::other)?;
         let size = panel::<Physical>();
@@ -126,7 +123,7 @@ impl Sliver {
             dirty: false,
             shown: None,
             touches: HashMap::new(),
-            touched: Vec::new(),
+            unframed: None,
             on: false,
             fn_held: false,
             idle_at: None,
@@ -145,10 +142,7 @@ impl Sliver {
                 Generic::new(socket, Interest::READ, Mode::Level),
                 |_, socket, s| {
                     while let Some(stream) = socket.accept()? {
-                        if let Err(e) =
-                            s.wl.dh
-                                .insert_client(stream, Arc::new(ClientState::default()))
-                        {
+                        if let Err(e) = s.wl.connect(stream) {
                             eprintln!("sliverd: client: {e}");
                         }
                     }
@@ -178,11 +172,15 @@ impl Sliver {
     }
 
     fn render(&mut self) {
-        if !self.on {
-            return;
+        if !self.dirty && !self.flipping {
+            self.lh.insert_idle(Sliver::draw);
         }
-        if self.flipping {
-            self.dirty = true;
+        self.dirty = true;
+    }
+
+    fn draw(&mut self) {
+        self.dirty = false;
+        if !self.on {
             return;
         }
         let elements: Vec<WaylandSurfaceRenderElement<PixmanRenderer>> = match &self.shown {
@@ -228,8 +226,8 @@ impl Sliver {
     pub fn presented(&mut self) {
         self.flipping = false;
         self.send_frames();
-        if std::mem::take(&mut self.dirty) {
-            self.render();
+        if self.dirty {
+            self.draw();
         }
     }
 
@@ -254,7 +252,7 @@ impl Sliver {
                         time,
                     };
                     surface.down(&seat, self, &event, seq);
-                    self.touched.push(surface.clone());
+                    self.unframed = Some(surface.clone());
                 }
                 self.touches.insert(id, target);
             }
@@ -266,7 +264,7 @@ impl Sliver {
                         time,
                     };
                     surface.motion(&seat, self, &event, seq);
-                    self.touched.push(surface);
+                    self.unframed = Some(surface);
                 }
             }
             Touch::Up(id) => {
@@ -281,11 +279,11 @@ impl Sliver {
                         },
                         seq,
                     );
-                    self.touched.push(surface);
+                    self.unframed = Some(surface);
                 }
             }
             Touch::Frame => {
-                for surface in std::mem::take(&mut self.touched) {
+                if let Some(surface) = self.unframed.take() {
                     surface.frame(&seat, self, seq);
                 }
             }
@@ -308,7 +306,7 @@ impl Sliver {
         let seat = self.wl.seat.clone();
         let seq = SERIAL_COUNTER.next_serial();
         let surfaces: Vec<_> = self.touches.values_mut().filter_map(Option::take).collect();
-        self.touched.clear();
+        self.unframed = None;
         for (surface, _) in surfaces {
             if surface.is_alive() {
                 surface.cancel(&seat, self, seq);
@@ -361,8 +359,8 @@ fn slot(id: u32) -> TouchSlot {
     Some(id).into()
 }
 
-fn pixels<'a>(image: &'a Image<'static, 'static>) -> &'a [u32] {
-    unsafe { std::slice::from_raw_parts(image.data(), image.stride() / 4 * image.height()) }
+fn pixels<'a>(image: &'a Image<'static, 'static>) -> &'a [u8] {
+    unsafe { std::slice::from_raw_parts(image.data().cast(), image.stride() * image.height()) }
 }
 
 fn main() -> io::Result<()> {

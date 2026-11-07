@@ -1,4 +1,8 @@
-use std::sync::Mutex;
+use std::{
+    io,
+    os::unix::net::UnixStream,
+    sync::{Arc, Mutex},
+};
 
 use smithay::{
     backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
@@ -97,6 +101,11 @@ impl Wl {
         }
     }
 
+    pub fn connect(&mut self, stream: UnixStream) -> io::Result<Client> {
+        self.dh
+            .insert_client(stream, Arc::new(ClientState::default()))
+    }
+
     fn toplevel(&self, surface: &WlSurface) -> Option<ToplevelSurface> {
         self.xdg
             .toplevel_surfaces()
@@ -111,7 +120,7 @@ pub fn client_of(window: &Window) -> Option<ClientId> {
 }
 
 #[derive(Default)]
-pub struct ClientState(CompositorClientState);
+struct ClientState(CompositorClientState);
 
 impl ClientData for ClientState {
     fn initialized(&self, _: ClientId) {}

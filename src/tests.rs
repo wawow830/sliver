@@ -1,38 +1,14 @@
 use std::{
     fs::File,
-    io::Write,
-    os::fd::{AsFd, FromRawFd, OwnedFd},
     path::Path,
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
     thread,
 };
 
 use smithay::{reexports::calloop::EventLoop, utils::Rectangle};
-use wayland_client::{
-    Connection, Dispatch, QueueHandle, WEnum, delegate_noop,
-    globals::{GlobalListContents, registry_queue_init},
-    protocol::{
-        wl_buffer::WlBuffer,
-        wl_compositor::WlCompositor,
-        wl_registry::{self, WlRegistry},
-        wl_seat::{self, WlSeat},
-        wl_shm::{self, WlShm},
-        wl_shm_pool::WlShmPool,
-        wl_surface::WlSurface,
-        wl_touch::{self, WlTouch},
-    },
-};
-use wayland_protocols::xdg::shell::client::{
-    xdg_surface::{self, XdgSurface},
-    xdg_toplevel::XdgToplevel,
-    xdg_wm_base::{self, XdgWmBase},
-};
-use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
-    zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
-    zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
-};
+use wayland_client::protocol::wl_touch;
 
-use super::*;
+use super::{client::Client, *};
 
 const RED: u32 = 0xff0000;
 const BLUE: u32 = 0x0000ff;
@@ -64,9 +40,12 @@ impl Drop for FakeKeyboard {
 }
 
 impl Bar for FakeBar {
-    fn show(&mut self, frame: &[u32]) -> io::Result<()> {
+    fn show(&mut self, frame: &[u8]) -> io::Result<()> {
         let mut log = self.0.lock().unwrap();
-        log.frame = frame.to_vec();
+        log.frame = frame
+            .chunks_exact(4)
+            .map(|px| u32::from_ne_bytes(px.try_into().unwrap()))
+            .collect();
         log.shows += 1;
         Ok(())
     }
@@ -136,11 +115,7 @@ impl Bench {
 
     fn connect(&mut self) -> UnixStream {
         let (ours, theirs) = UnixStream::pair().unwrap();
-        self.s
-            .wl
-            .dh
-            .insert_client(ours, Arc::new(ClientState::default()))
-            .unwrap();
+        self.s.wl.connect(ours).unwrap();
         theirs
     }
 
@@ -209,7 +184,20 @@ impl App {
         let stream = b.connect();
         let events = Arc::new(Mutex::new(Vec::new()));
         let (s, e) = (stream.try_clone().unwrap(), events.clone());
-        thread::spawn(move || app(s, color, e));
+        thread::spawn(move || {
+            let pixels = vec![color; (W * H) as usize];
+            let _ = Client::connect(s).unwrap().show(&pixels, move |event| {
+                let name = match event {
+                    wl_touch::Event::Down { id, x, y, .. } => format!("down {id} {x} {y}"),
+                    wl_touch::Event::Motion { id, x, y, .. } => format!("motion {id} {x} {y}"),
+                    wl_touch::Event::Up { id, .. } => format!("up {id}"),
+                    wl_touch::Event::Frame => "frame".into(),
+                    wl_touch::Event::Cancel => "cancel".into(),
+                    _ => return,
+                };
+                e.lock().unwrap().push(name);
+            });
+        });
         App { stream, events }
     }
 
@@ -224,149 +212,6 @@ impl App {
     fn kill(self) {
         self.stream.shutdown(std::net::Shutdown::Both).unwrap();
     }
-}
-
-struct AppState {
-    surface: WlSurface,
-    buffer: WlBuffer,
-    events: Arc<Mutex<Vec<String>>>,
-}
-
-fn app(stream: UnixStream, color: u32, events: Arc<Mutex<Vec<String>>>) {
-    let conn = Connection::from_socket(stream).unwrap();
-    let (globals, mut queue) = registry_queue_init::<AppState>(&conn).unwrap();
-    let qh = queue.handle();
-    let compositor: WlCompositor = globals.bind(&qh, 4..=4, ()).unwrap();
-    let shm: WlShm = globals.bind(&qh, 1..=1, ()).unwrap();
-    let base: XdgWmBase = globals.bind(&qh, 1..=1, ()).unwrap();
-    let _: WlSeat = globals.bind(&qh, 1..=7, ()).unwrap();
-    let pixels: Vec<u8> = (0..W * H).flat_map(|_| color.to_le_bytes()).collect();
-    let pool = shm.create_pool(memfd(&pixels).as_fd(), pixels.len() as i32, &qh, ());
-    let buffer = pool.create_buffer(0, W, H, W * 4, wl_shm::Format::Xrgb8888, &qh, ());
-    let surface = compositor.create_surface(&qh, ());
-    let xdg = base.get_xdg_surface(&surface, &qh, ());
-    xdg.get_toplevel(&qh, ());
-    surface.commit();
-    let mut state = AppState {
-        surface,
-        buffer,
-        events,
-    };
-    while queue.blocking_dispatch(&mut state).is_ok() {}
-}
-
-fn memfd(bytes: &[u8]) -> File {
-    let fd = unsafe { libc::memfd_create(c"test".as_ptr(), libc::MFD_CLOEXEC) };
-    assert!(fd >= 0);
-    let mut file = File::from(unsafe { OwnedFd::from_raw_fd(fd) });
-    file.write_all(bytes).unwrap();
-    file
-}
-
-impl Dispatch<XdgSurface, ()> for AppState {
-    fn event(
-        app: &mut Self,
-        xdg: &XdgSurface,
-        event: xdg_surface::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        if let xdg_surface::Event::Configure { serial } = event {
-            xdg.ack_configure(serial);
-            app.surface.attach(Some(&app.buffer), 0, 0);
-            app.surface.damage_buffer(0, 0, W, H);
-            app.surface.commit();
-        }
-    }
-}
-
-impl Dispatch<WlSeat, ()> for AppState {
-    fn event(
-        _: &mut Self,
-        seat: &WlSeat,
-        event: wl_seat::Event,
-        _: &(),
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-    ) {
-        if let wl_seat::Event::Capabilities {
-            capabilities: WEnum::Value(caps),
-        } = event
-            && caps.contains(wl_seat::Capability::Touch)
-        {
-            seat.get_touch(qh, ());
-        }
-    }
-}
-
-impl Dispatch<WlTouch, ()> for AppState {
-    fn event(
-        app: &mut Self,
-        _: &WlTouch,
-        event: wl_touch::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        let name = match event {
-            wl_touch::Event::Down { id, x, y, .. } => format!("down {id} {x} {y}"),
-            wl_touch::Event::Motion { id, x, y, .. } => format!("motion {id} {x} {y}"),
-            wl_touch::Event::Up { id, .. } => format!("up {id}"),
-            wl_touch::Event::Frame => "frame".into(),
-            wl_touch::Event::Cancel => "cancel".into(),
-            _ => return,
-        };
-        app.events.lock().unwrap().push(name);
-    }
-}
-
-impl Dispatch<XdgWmBase, ()> for AppState {
-    fn event(
-        _: &mut Self,
-        base: &XdgWmBase,
-        event: xdg_wm_base::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        if let xdg_wm_base::Event::Ping { serial } = event {
-            base.pong(serial);
-        }
-    }
-}
-
-impl Dispatch<WlRegistry, GlobalListContents> for AppState {
-    fn event(
-        _: &mut Self,
-        _: &WlRegistry,
-        _: wl_registry::Event,
-        _: &GlobalListContents,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
-
-delegate_noop!(AppState: WlCompositor);
-delegate_noop!(AppState: ignore WlShm);
-delegate_noop!(AppState: WlShmPool);
-delegate_noop!(AppState: ignore WlBuffer);
-delegate_noop!(AppState: ignore WlSurface);
-delegate_noop!(AppState: ignore XdgToplevel);
-delegate_noop!(AppState: ZwpVirtualKeyboardManagerV1);
-delegate_noop!(AppState: ZwpVirtualKeyboardV1);
-
-fn type_and_quit(stream: UnixStream, code: u32) {
-    let conn = Connection::from_socket(stream).unwrap();
-    let (globals, queue) = registry_queue_init::<AppState>(&conn).unwrap();
-    let qh = queue.handle();
-    let seat: WlSeat = globals.bind(&qh, 1..=1, ()).unwrap();
-    let manager: ZwpVirtualKeyboardManagerV1 = globals.bind(&qh, 1..=1, ()).unwrap();
-    let keyboard = manager.create_virtual_keyboard(&seat, &qh, ());
-    keyboard.keymap(1, memfd(b"\0").as_fd(), 1);
-    keyboard.key(0, code, 1);
-    conn.roundtrip().unwrap();
 }
 
 fn center() -> Point<f64, Logical> {
@@ -424,7 +269,16 @@ fn fkeys_type() {
 fn virtual_keyboard_is_its_own_device() {
     let mut b = Bench::new();
     let stream = b.connect();
-    thread::spawn(move || type_and_quit(stream, 30));
+    let theirs = stream.try_clone().unwrap();
+    thread::spawn(move || {
+        let client = Client::connect(theirs).unwrap();
+        client.keyboard().unwrap().key(0, 30, 1);
+        let _ = client.show(&vec![RED; (W * H) as usize], |_| {});
+    });
+    b.until("A down", |b| {
+        b.log().keys.contains(&Device::Key(1, 30, true))
+    });
+    stream.shutdown(std::net::Shutdown::Both).unwrap();
     b.until("the device gone", |b| {
         b.log().keys.contains(&Device::Destroyed(1))
     });
