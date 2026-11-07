@@ -296,11 +296,7 @@ pub(super) const SOURCES: &[(&str, Source)] = &[
     ("disk", |at| stat_spec(at.m, at.world)),
     ("load", |at| stat_spec(at.m, at.world)),
     ("mpris", media::mpris),
-    // fcitx5 (CJK input methods) takes over while it runs; else the compositor's layout.
-    ("language", |at| match at.world.session.input_method {
-        Some(_) => desktop::language_input_method(at.world),
-        None => desktop::language(at.world),
-    }),
+    ("language", |at| desktop::language(at.world)),
     ("window", |at| desktop::window(at.m, at.world)),
     ("mode", |at| desktop::mode(at.world)),
     ("workspaces", |at| desktop::workspaces(at.world, at.item)),

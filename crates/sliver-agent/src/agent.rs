@@ -99,8 +99,6 @@ pub enum SessionOp {
     ToggleBluetooth,
     ToggleDnd,
     ToggleDark,
-    /// fcitx5: `None` toggles (activate/deactivate), `Some(id)` selects that input method.
-    InputMethod(Option<String>),
     /// Invoke the latest notification's default action (where the daemon has a tool for it).
     OpenNotification,
     /// Close the latest notification.

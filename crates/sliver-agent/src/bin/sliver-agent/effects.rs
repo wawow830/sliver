@@ -100,7 +100,6 @@ pub(super) fn apply(
                         }
                     }
                     SessionOp::DBus(call) => Op::DBus(call),
-                    SessionOp::InputMethod(id) => Op::InputMethod(id),
                     SessionOp::ToggleDark => {
                         Op::Dark(!live.agg.session.appearance.dark.unwrap_or(false))
                     }

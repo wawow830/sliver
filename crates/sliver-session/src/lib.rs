@@ -23,7 +23,6 @@ pub mod brightness;
 pub mod capture;
 pub mod failed;
 pub mod fake;
-pub mod fcitx;
 pub mod logind;
 pub mod menu;
 pub mod mpris;
@@ -132,8 +131,6 @@ pub struct SessionState {
     pub audio: audio::Audio,
     /// Who is recording the microphone, the camera or the screen (PipeWire; see [`capture`]).
     pub capture: capture::Capture,
-    /// fcitx5's current input method, when it is running and has one (see [`fcitx`]).
-    pub input_method: Option<fcitx::InputMethod>,
     pub notifications: notifications::Notifications,
     pub appearance: appearance::Appearance,
     /// StatusNotifierItem tray, in registration order (empty until `Handle::start_tray`).
@@ -261,7 +258,6 @@ pub struct Handle {
     /// The PipeWire capture follower's on/off switch ([`Handle::start_capture`]).
     capture_gate: Arc<capture::Gate>,
     capture_started: Arc<std::sync::atomic::AtomicBool>,
-    input_method: fcitx::Mailbox,
 }
 
 impl Handle {
@@ -281,7 +277,6 @@ impl Handle {
             return;
         }
         self.capture_gate.set(on);
-        self.input_method.awake(on);
         let me = self.clone();
         std::thread::spawn(move || {
             let _one_at_a_time = me.awake_gate.lock().unwrap_or_else(|e| e.into_inner());
@@ -362,7 +357,6 @@ impl Session {
             failed_started: Arc::default(),
             capture_gate: capture::Gate::new(),
             capture_started: Arc::default(),
-            input_method: fcitx::Mailbox::default(),
         };
         let h = hub.clone();
         std::thread::Builder::new()

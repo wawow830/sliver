@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Quiet stand-ins for the services event-driven modules follow, for scripts/idle-wakeups' "full"
-phase: systemd (system and user managers), NetworkManager, BlueZ, fcitx5, a tray watcher, a
-notification server, and a PipeWire socket that accepts and then says nothing.
+phase: systemd (system and user managers), NetworkManager, BlueZ, a tray watcher, a notification
+server, and a PipeWire socket that accepts and then says nothing.
 
 They answer what the sources ask at startup, then stay silent. Each source that calls in is
 appended to SEEN, one line per name.
@@ -97,42 +97,6 @@ class Bluez(dbus.service.Object):
         }}}
 
 
-FCITX = "org.fcitx.Fcitx.Controller1"
-
-
-def im_info(id_, label):
-    return dbus.Struct((id_, id_, "", "icon", label, "xx", "addon", dbus.Boolean(True), "",
-                        dbus.Dictionary({}, signature="sv")), signature="sssssssbsa{sv}")
-
-
-class Fcitx(dbus.service.Object):
-    @dbus.service.method(FCITX, in_signature="", out_signature="(sssssssbsa{sv})")
-    def CurrentInputMethodInfo(self):
-        seen("fcitx")
-        return im_info("keyboard-us", "en")
-
-    @dbus.service.method(FCITX, in_signature="", out_signature="s")
-    def CurrentInputMethod(self):
-        seen("fcitx")
-        return "keyboard-us"
-
-    @dbus.service.method(FCITX, in_signature="", out_signature="s")
-    def CurrentInputMethodGroup(self):
-        return "Default"
-
-    @dbus.service.method(FCITX, in_signature="s",
-                         out_signature="(sssa{sv}a(sssssssbsa{sv}))")
-    def FullInputMethodGroupInfo(self, group):
-        return dbus.Struct(("Default", "keyboard-us", "us", dbus.Dictionary({}, signature="sv"),
-                            dbus.Array([im_info("keyboard-us", "en"), im_info("pinyin", "拼")],
-                                       signature="(sssssssbsa{sv})")),
-                           signature="sssa{sv}a(sssssssbsa{sv})")
-
-    @dbus.service.signal(FCITX, signature="")
-    def InputMethodGroupsChanged(self):
-        pass
-
-
 SNW = "org.kde.StatusNotifierWatcher"
 
 
@@ -209,11 +173,11 @@ def main():
     session = dbus.bus.BusConnection(a.session)
     keep = []
     for conn, names in ((system, ["org.freedesktop.systemd1", NM, "org.bluez"]),
-                        (session, ["org.freedesktop.systemd1", "org.fcitx.Fcitx5", SNW, NOTIF])):
+                        (session, ["org.freedesktop.systemd1", SNW, NOTIF])):
         keep += [dbus.service.BusName(n, conn) for n in names]
     keep += [Systemd(system, "systemd-system"), Systemd(session, "systemd-user")]
     network(system)
-    keep += [Bluez(system, "/"), Fcitx(session, "/controller"), Watcher(session),
+    keep += [Bluez(system, "/"), Watcher(session),
              Notifications(session, "/org/freedesktop/Notifications")]
     threading.Thread(target=pipewire, args=(a.pipewire,), daemon=True).start()
     print("ready", flush=True)

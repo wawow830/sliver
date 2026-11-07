@@ -11,10 +11,10 @@ thread of both and of every helper process the agent starts:
 in two scenarios:
 
   default: the default config, with no services at all
-  full:    every event-driven module placed (privacy, language, systemd-failed-units,
-           notifications, tray, network, bluetooth, graph) with quiet stand-ins for their
-           services (scripts/idle-mocks: systemd, NetworkManager, BlueZ, fcitx5, a tray watcher,
-           a notification server, a PipeWire socket). It fails if a source never called its
+  full:    every event-driven module placed (privacy, systemd-failed-units, notifications,
+           tray, network, bluetooth, graph) with quiet stand-ins for their services
+           (scripts/idle-mocks: systemd, NetworkManager, BlueZ, a tray watcher, a notification
+           server, a PipeWire socket). It fails if a source never called its
            service.
 
 It fails if any phase is over budget. ~80 s per scenario; not part of scripts/check (too slow).
@@ -40,24 +40,23 @@ ROOT = Path(__file__).resolve().parent.parent
 # reactor.
 BUDGET_ON = float(os.environ.get("IDLE_WAKEUPS_ON", "8"))
 BUDGET_OFF = float(os.environ.get("IDLE_WAKEUPS_OFF", "3"))
-# "full", measured on the Mac14,7 with an idle audio server (stand-in pactl/wpctl): every module
-# but `language` placed: on 1.5, off 0.00. With `language` and fcitx5 running: on 6.1, off 0.00
-# (fcitx5 is polled with one CurrentInputMethod call every 2 s).
+# "full", measured on the Mac14,7 with an idle audio server (stand-in pactl/wpctl): on 1.5, off
+# 0.00.
 BUDGET_FULL_ON = float(os.environ.get("IDLE_WAKEUPS_FULL_ON", "8"))
 BUDGET_FULL_OFF = float(os.environ.get("IDLE_WAKEUPS_FULL_OFF", "1.5"))
 FULL_LAYOUT = """
 [[layouts.default.zones]]
 name = "main"
 width = "fill"
-modules = ["privacy", "language", "systemd-failed-units", "notifications", "status-items",
-           "network", "bluetooth", "graph#cpu"]
+modules = ["privacy", "systemd-failed-units", "notifications", "status-items", "network",
+           "bluetooth", "graph#cpu"]
 
 [modules.systemd-failed-units]
 hide-on-ok = false
 """
 # Services that must have been called in "full", by scripts/idle-mocks' names.
-FULL_SOURCES = {"systemd-system", "systemd-user", "network", "bluetooth", "fcitx", "tray",
-                "notifications", "pipewire"}
+FULL_SOURCES = {"systemd-system", "systemd-user", "network", "bluetooth", "tray", "notifications",
+                "pipewire"}
 SETTLE_S = 5
 # Display timeouts in the sandbox config: "on" is measured before dim, "off" after off.
 DIM_AFTER_S = 40

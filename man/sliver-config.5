@@ -853,26 +853,12 @@ The keyboard layout.
 Tap switches to the next one; hold opens a sub\-bar of the configured layouts (Hyprland, sway,
 niri), unless the module has its own
 .BR menu .
-While fcitx5 runs and a window has an input method, the module shows the method's own label instead;
-tap toggles it and hold lists the active group.
 Placeholders
-.B {}
-or
-.B {short}
-(the label),
-.B {input_method}
-or
-.BR {long} ,
-and
-.BR {id} ;
-without fcitx5,
+.BR {} ,
 .B {short}
 and
-.B {input_method}
-are the layout name, so one
-.B format
-serves both.
-fcitx5 is asked every 2\ s, only while the bar is on, fcitx5 runs and a layout uses the module.
+.BR {long} :
+the layout name.
 .TP
 .B idle\-inhibitor
 Caffeine: tap holds an idle inhibitor.

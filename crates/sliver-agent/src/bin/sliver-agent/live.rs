@@ -93,17 +93,7 @@ impl Live {
                     self.outputs.insert(u.module.clone(), u.output.clone());
                 }
                 Feed::Session(s) => self.locked_hint = s.locked,
-                Feed::Desktop(d) => {
-                    self.own_desktop = d.connected;
-                    // Each window has its own input context: a new focus can mean another
-                    // fcitx5 input method (a no-op unless the `language` module follows fcitx5).
-                    let focus = |d: &sliver_desktop::DesktopState| {
-                        d.window.as_ref().map(|w| w.address.clone())
-                    };
-                    if focus(d) != focus(&self.agg.desktop) {
-                        self.feeds.refresh_input_method();
-                    }
-                }
+                Feed::Desktop(d) => self.own_desktop = d.connected,
                 Feed::Note(n) => eprintln!("sliver-agent: {n}"),
                 Feed::Art { .. } => {}
             }

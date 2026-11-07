@@ -42,8 +42,6 @@ pub struct SessionOptions {
     pub screensaver: bool,
     /// Who is capturing the microphone, camera or screen, from PipeWire's socket (`privacy`).
     pub capture: bool,
-    /// fcitx5's current input method (`language`).
-    pub input_method: bool,
 }
 
 impl Default for SessionOptions {
@@ -56,7 +54,6 @@ impl Default for SessionOptions {
             appearance: true,
             screensaver: true,
             capture: true,
-            input_method: true,
         }
     }
 }
@@ -72,7 +69,6 @@ impl SessionOptions {
             appearance: false,
             screensaver: false,
             capture: false,
-            input_method: false,
         }
     }
 }
@@ -191,8 +187,6 @@ pub struct Feeds {
     failed_units: Option<Box<dyn Fn() + Send>>,
     /// Starts the PipeWire capture follower ([`Feeds::watch_capture`]).
     capture: Option<Box<dyn Fn() + Send>>,
-    /// Starts the fcitx5 follower ([`Feeds::watch_input_method`]).
-    input_method: Option<Box<dyn Fn() + Send>>,
     /// Where album art is cached (`None`: no art).
     pub art_cache: Option<std::path::PathBuf>,
 }
@@ -216,7 +210,6 @@ impl Feeds {
             specs: Vec::new(),
             failed_units: None,
             capture: None,
-            input_method: None,
             art_cache: sliver_session::art::default_cache_dir(|k| std::env::var(k).ok()),
         })
     }
@@ -378,18 +371,6 @@ impl Feeds {
             let h = handle.clone();
             self.capture = Some(Box::new(move || h.start_capture(socket.clone())));
         }
-        if opts.input_method {
-            // A fresh connection per start, made when a layout first uses `language`.
-            let h = handle.clone();
-            let once = std::sync::Once::new();
-            self.input_method = Some(Box::new(move || {
-                once.call_once(|| {
-                    if let Ok(c) = sliver_bus::session() {
-                        h.start_input_method(c);
-                    }
-                });
-            }));
-        }
         if let Some(sysfs) = &opts.sysfs {
             handle.refresh_brightness(sysfs);
         }
@@ -449,20 +430,6 @@ impl Feeds {
         }
     }
 
-    /// A layout uses `language`: follow fcitx5's input method too (once; later calls do nothing).
-    pub fn watch_input_method(&self) {
-        if let Some(f) = &self.input_method {
-            f();
-        }
-    }
-
-    /// Read fcitx5's state now: the focused window changed, or we switched it.
-    pub fn refresh_input_method(&self) {
-        if let Some(h) = &self.session {
-            h.refresh_input_method();
-        }
-    }
-
     /// The bar is on or off: sources that only matter while something is on screen sleep while
     /// it is off.
     pub fn set_awake(&self, on: bool) {
@@ -472,7 +439,7 @@ impl Feeds {
     }
 
     /// Runs what `config` needs: its user modules, and the watchers only some modules use
-    /// (failed units, capture, fcitx5).
+    /// (failed units, capture).
     pub fn follow(&mut self, config: &sliver_config::Config) {
         self.start_modules(crate::modules::user_module_specs(config));
         let uses = |kind| crate::modules::uses_kind(config, kind);
@@ -481,9 +448,6 @@ impl Feeds {
         }
         if uses("privacy") {
             self.watch_capture();
-        }
-        if uses("language") {
-            self.watch_input_method();
         }
     }
 

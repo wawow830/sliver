@@ -1,52 +1,14 @@
 //! Specs for modules showing the compositor's state: keyboard layout, window, workspaces, taskbar.
 
 use super::*;
-use crate::agent::SessionOp;
 use sliver_desktop::control::Action as Control;
-
-/// fcitx5 (CJK input methods) takes over while it is running and has a current method:
-/// the label is the method's own (拼, あ, en); the compositor's layout shows otherwise.
-pub(super) fn language_input_method(world: &World) -> Option<Spec> {
-    let s = &world.session;
-    let im = s.input_method.as_ref()?;
-    let v = ValueMap::new()
-        .with("", esc(&im.current.label))
-        .with("short", esc(&im.current.label))
-        .with("input_method", esc(&im.current.name))
-        .with("long", esc(&im.current.name))
-        .with("id", esc(&im.current.id));
-    let mut sp = Spec::new(v, "{}").does(
-        Gesture::Tap,
-        "im-toggle",
-        Act::Session(SessionOp::InputMethod(None)),
-    );
-    if im.group.len() > 1 {
-        sp.menu = im
-            .group
-            .iter()
-            .map(|i| MenuItem {
-                label: format!(
-                    "{}{} {}",
-                    if i.id == im.current.id { "✓ " } else { "" },
-                    i.label,
-                    i.name
-                ),
-                icon: None,
-                on_tap: Act::Session(SessionOp::InputMethod(Some(i.id.clone()))).into(),
-            })
-            .collect();
-    }
-    Some(sp)
-}
 
 pub(super) fn language(world: &World) -> Option<Spec> {
     let l = world.desktop.keyboard_layout.as_deref()?;
-    // The same names as the fcitx5 variant, so one `format` works whichever is running.
     let v = ValueMap::new()
         .with("", esc(l))
         .with("long", esc(l))
-        .with("short", esc(l))
-        .with("input_method", esc(l));
+        .with("short", esc(l));
     let mut sp = Spec::new(v, "{}").does(Gesture::Tap, "next", Act::Desktop(Control::NextLayout));
     // Hold lists the configured layouts (when the compositor says what they are).
     let d = &world.desktop;

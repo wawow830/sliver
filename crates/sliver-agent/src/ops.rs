@@ -46,8 +46,6 @@ pub enum Op {
     },
     Dnd(bool),
     Dark(bool),
-    /// fcitx5: toggle (`None`) or select an input method.
-    InputMethod(Option<String>),
     /// Open (invoke) or close notification `id`.
     OpenNotification(u32),
     CloseNotification(u32),
@@ -70,7 +68,6 @@ impl Op {
                 ("notifications", "")
             }
             Op::Dark(_) => ("appearance", ""),
-            Op::InputMethod(_) => ("input-method", ""),
             Op::DBus(c) if c.system_bus => ("system-bus", &c.dest),
             Op::DBus(c) => ("session-bus", &c.dest),
         }
@@ -87,8 +84,7 @@ impl Op {
             (Op::Caffeine(_), Op::Caffeine(_))
             | (Op::Wifi(_), Op::Wifi(_))
             | (Op::Dnd(_), Op::Dnd(_))
-            | (Op::Dark(_), Op::Dark(_))
-            | (Op::InputMethod(Some(_)), Op::InputMethod(Some(_))) => true,
+            | (Op::Dark(_), Op::Dark(_)) => true,
             _ => false,
         }
     }
@@ -223,12 +219,6 @@ impl Ctx {
                     .map_err(|e| format!("dbus {}.{}: {e}", call.interface, call.method))
             }
             Op::Dark(on) => sliver_session::appearance::set_dark(on),
-            Op::InputMethod(id) => {
-                let r = sliver_session::fcitx::switch(ses, id.as_deref());
-                // No change signal from fcitx5: read back after our own switch.
-                handle.refresh_input_method();
-                r
-            }
         }
     }
 }
