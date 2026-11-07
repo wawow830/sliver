@@ -339,22 +339,21 @@ fn stylesheet_file(state: &crate::State, c: &sliver_config::Config) -> std::path
 }
 
 /// Reads the managed look from `file`, lets `f` change it, and writes it back (the rest of the
-/// file untouched). The config directory is watched, so the window and preview refresh.
+/// file untouched), as one undoable change. A stylesheet that can't be read is left alone.
 fn change_look(ui: &Rc<Ui>, file: &std::path::Path, f: impl FnOnce(&mut crate::look::Look)) {
-    let text = std::fs::read_to_string(file).unwrap_or_default();
+    let text = match sliver_config::files::read(file) {
+        Ok(t) => t.unwrap_or_default(),
+        Err(e) => return ui.toast(&format!("Not saved: {e}")),
+    };
     let mut look = crate::look::Look::parse(&text);
     f(&mut look);
     let new = look.splice(&text);
-    if new == text {
-        return;
-    }
-    let r = file
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|_| std::fs::write(file, new));
-    match r {
-        Ok(()) => ui.toast("Look saved to your stylesheet"),
-        Err(e) => ui.toast(&format!("Couldn't write {}: {e}", file.display())),
+    if new != text {
+        crate::commit(
+            ui,
+            vec![(file.to_owned(), Some(new))],
+            "Look saved to your stylesheet".into(),
+        );
     }
 }
 
@@ -532,12 +531,13 @@ pub fn appearance_page(ui: &Rc<Ui>) -> gtk::Widget {
     {
         let (ui, file) = (ui.clone(), file.clone());
         open.connect_activated(move |_| {
-            if !file.exists() {
-                let _ = std::fs::create_dir_all(file.parent().unwrap_or(std::path::Path::new(".")));
-                let _ = std::fs::write(
+            if !file.exists()
+                && let Err(e) = sliver_config::files::write_atomic(
                     &file,
                     "/* Your overrides on top of the theme. Saved changes apply at once. */\n",
-                );
+                )
+            {
+                return ui.toast(&format!("Couldn't create it: {e}"));
             }
             let launcher = gtk::FileLauncher::new(Some(&gtk::gio::File::for_path(&file)));
             let ui2 = ui.clone();

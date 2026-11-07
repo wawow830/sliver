@@ -325,7 +325,7 @@ impl Editor {
             .path
             .as_deref()
             .expect("save() needs an editor from open()");
-        if let Err(e) = write_atomic(path, &self.text()) {
+        if let Err(e) = crate::files::write_atomic(path, &self.text()) {
             let mut d = d;
             d.error(path.display().to_string(), format!("can't write: {e}"));
             return Err(d);
@@ -440,20 +440,6 @@ pub(crate) fn key_str(k: &str) -> String {
     } else {
         Value::String(k.to_owned()).to_string()
     }
-}
-
-fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir)?;
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "config.toml".into());
-    let tmp = dir.join(format!(".{name}.sliver-tmp-{}", std::process::id()));
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@
 mod action;
 mod condition;
 mod diag;
+pub mod files;
 pub mod format;
 mod keys;
 mod keys_table;

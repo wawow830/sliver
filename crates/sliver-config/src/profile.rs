@@ -199,14 +199,9 @@ pub fn watch_paths() -> Vec<PathBuf> {
     marker_path().into_iter().chain(active_path()).collect()
 }
 
+/// [`crate::files::write_atomic`], its error as text.
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
-    let err = |e: std::io::Error| format!("{}: {e}", path.display());
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(err)?;
-    }
-    let tmp = path.with_extension("sliver-tmp");
-    std::fs::write(&tmp, text).map_err(err)?;
-    std::fs::rename(&tmp, path).map_err(err)
+    crate::files::write_atomic(path, text).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

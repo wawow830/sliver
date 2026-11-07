@@ -22,7 +22,7 @@ mod preview;
 mod rules;
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -288,14 +288,22 @@ fn main() -> glib::ExitCode {
 /// Applies one edit to the user's config: edit → validate → write, with an Undo toast. On any
 /// problem nothing is written and the reason is shown.
 pub(crate) fn apply(ui: &Rc<Ui>, op: impl FnOnce(&mut Editor, &Table) -> Result<String, String>) {
+    apply_with(ui, Vec::new(), op);
+}
+
+/// [`apply`], and `also` these files in the same change (an import's stylesheet).
+pub(crate) fn apply_with(
+    ui: &Rc<Ui>,
+    also: sliver_config::files::Snapshot,
+    op: impl FnOnce(&mut Editor, &Table) -> Result<String, String>,
+) {
     let state = ui.state();
     let (path, include) = state.edit_target();
-    let before = std::fs::read_to_string(&path).ok();
     let mut ed = match Editor::open(&path) {
         Ok(e) => e,
         Err(e) => return ui.toast(&format!("Can't open {}: {e}", path.display())),
     };
-    if before.is_none()
+    if !path.exists()
         && let Some(inc) = include
     {
         let _ = ed.set(
@@ -307,8 +315,32 @@ pub(crate) fn apply(ui: &Rc<Ui>, op: impl FnOnce(&mut Editor, &Table) -> Result<
         Ok(m) => m,
         Err(e) => return ui.toast(&e),
     };
-    match ed.save(state.hw) {
-        Ok(_) => {
+    // Validated before anything is written: a broken config never lands.
+    let d = ed.check(state.hw);
+    if let Some(why) = d.errors.first() {
+        return ui.toast(&format!("Not applied: {why}"));
+    }
+    let mut files = vec![(path, Some(ed.text()))];
+    files.extend(also);
+    commit(ui, files, msg);
+}
+
+/// An import's stylesheet (tiny-dfr's font and outline overrides; its look is
+/// `theme = "classic"`) as `style.css` in `dir`, unless there is one: the user's is kept.
+pub(crate) fn import_stylesheet(dir: &Path, css: String) -> sliver_config::files::Snapshot {
+    let path = dir.join("style.css");
+    if path.exists() {
+        Vec::new()
+    } else {
+        vec![(path, Some(css))]
+    }
+}
+
+/// Every change the window makes to the user's files: all of them or none
+/// ([`sliver_config::files::commit`]), one undo step, a toast that can undo it.
+pub(crate) fn commit(ui: &Rc<Ui>, files: sliver_config::files::Snapshot, msg: String) {
+    match sliver_config::files::commit(&files) {
+        Ok(before) => {
             ui.history.borrow_mut().record(before, msg.clone());
             let toast = adw::Toast::builder()
                 .title(glib::markup_escape_text(&msg))
@@ -320,14 +352,7 @@ pub(crate) fn apply(ui: &Rc<Ui>, op: impl FnOnce(&mut Editor, &Table) -> Result<
             ui.toasts.add_toast(toast);
             rebuild(ui);
         }
-        Err(d) => {
-            let why = d
-                .errors
-                .first()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "invalid".into());
-            ui.toast(&format!("Not applied: {why}"));
-        }
+        Err(e) => ui.toast(&format!("Not saved: {e}")),
     }
 }
 
@@ -339,36 +364,20 @@ fn redo(ui: &Rc<Ui>) {
     step(ui, false);
 }
 
-/// Undo or redo one edit by restoring the file's text.
+/// Undo or redo one change by putting its files back.
 fn step(ui: &Rc<Ui>, back: bool) {
-    let (path, _) = ui.state().edit_target();
-    let current = std::fs::read_to_string(&path).ok();
-    let entry = {
+    let commit = |files: &_| sliver_config::files::commit(files);
+    let done = {
         let mut h = ui.history.borrow_mut();
-        if back {
-            h.undo(current)
-        } else {
-            h.redo(current)
-        }
+        if back { h.undo(commit) } else { h.redo(commit) }
     };
-    let verb = if back { "Undid" } else { "Redid" };
-    let Some((text, msg)) = entry else {
-        return ui.toast(if back {
-            "Nothing to undo"
-        } else {
-            "Nothing to redo"
-        });
-    };
-    let result = match text {
-        Some(text) => std::fs::write(&path, text),
-        None => std::fs::remove_file(&path),
-    };
-    match result {
-        Ok(()) => ui.toast(&format!("{verb}: {msg}")),
-        Err(e) => ui.toast(&format!(
-            "Couldn't {}: {e}",
-            if back { "undo" } else { "redo" }
-        )),
+    match (done, back) {
+        (None, true) => return ui.toast("Nothing to undo"),
+        (None, false) => return ui.toast("Nothing to redo"),
+        (Some(Ok(msg)), true) => ui.toast(&format!("Undid: {msg}")),
+        (Some(Ok(msg)), false) => ui.toast(&format!("Redid: {msg}")),
+        (Some(Err(e)), true) => ui.toast(&format!("Couldn't undo: {e}")),
+        (Some(Err(e)), false) => ui.toast(&format!("Couldn't redo: {e}")),
     }
     rebuild(ui);
 }
@@ -611,7 +620,14 @@ fn onboarding(ui: &Rc<Ui>) {
             .then(sliver_import::tinydfr::import_system)
             .and_then(Result::ok)
             .flatten();
-        apply(&ui2, move |ed, _| match imported {
+        let dir = ui2.state().edit_target().0;
+        let also = imported.as_ref().map_or_else(Vec::new, |imp| {
+            import_stylesheet(
+                dir.parent().unwrap_or(Path::new(".")),
+                imp.stylesheet.clone(),
+            )
+        });
+        apply_with(&ui2, also, move |ed, _| match imported {
             Some(imp) => {
                 ed.replace_text(&imp.config)?;
                 Ok("Imported your tiny-dfr setup".into())
@@ -621,15 +637,6 @@ fn onboarding(ui: &Rc<Ui>) {
                 Ok("Your config lives in ~/.config/sliver/config.toml".into())
             }
         });
-        if r == "dfr" {
-            // tiny-dfr's font/outline overrides; the look itself is theme = "classic".
-            if let Ok(Some(imp)) = sliver_import::tinydfr::import_system() {
-                let css = ui2.state().edit_target().0.with_file_name("style.css");
-                if !css.exists() {
-                    let _ = std::fs::write(&css, imp.stylesheet);
-                }
-            }
-        }
     });
     dialog.present(Some(&ui.win_widget()));
 }

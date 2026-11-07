@@ -12,10 +12,17 @@ use sliver_config::preset::{self, Bundle};
 use sliver_config::profile;
 
 use crate::pages::group;
-use crate::{Ui, apply};
+use crate::{Ui, apply_with};
 
-/// Replace the user's config with `text` (an import), after asking.
-fn replace_config(ui: &Rc<Ui>, what: &str, text: String, note: String) {
+/// Replace the user's config with `text` (an import), after asking; with `also` (its
+/// stylesheet), in the same change.
+fn replace_config(
+    ui: &Rc<Ui>,
+    what: &str,
+    text: String,
+    also: sliver_config::files::Snapshot,
+    note: String,
+) {
     let dialog = adw::AlertDialog::builder()
         .heading(format!("Replace your config with the {what} import?"))
         .body(format!(
@@ -29,7 +36,7 @@ fn replace_config(ui: &Rc<Ui>, what: &str, text: String, note: String) {
         if r == "replace" {
             let text = text.clone();
             let what = what.clone();
-            apply(&ui2, move |ed, _| {
+            apply_with(&ui2, also.clone(), move |ed, _| {
                 ed.replace_text(&text)?;
                 Ok(format!("Imported your {what} setup"))
             });
@@ -67,19 +74,13 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
         let ui = ui.clone();
         dfr.connect_activated(move |_| match sliver_import::tinydfr::import_system() {
             Ok(Some(imp)) => {
-                // The look is `theme = "classic"`; style.css only holds font/outline overrides,
-                // and an existing one is kept.
-                let css = config_dir(&ui).join("style.css");
-                if !css.exists() {
-                    let _ = std::fs::create_dir_all(css.parent().unwrap_or(Path::new(".")));
-                    let _ = std::fs::write(&css, &imp.stylesheet);
-                }
+                let also = crate::import_stylesheet(&config_dir(&ui), imp.stylesheet);
                 let note = if imp.warnings.is_empty() {
                     String::new()
                 } else {
                     format!("Notes: {}\n\n", imp.warnings.join("; "))
                 };
-                replace_config(&ui, "tiny-dfr", imp.config, note);
+                replace_config(&ui, "tiny-dfr", imp.config, also, note);
             }
             Ok(None) => ui.toast("tiny-dfr isn't installed"),
             Err(e) => ui.toast(&e),
@@ -117,7 +118,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
                             imp.modules.len(),
                             imp.dropped.len()
                         );
-                        replace_config(&ui2, "waybar", imp.toml, note);
+                        replace_config(&ui2, "waybar", imp.toml, Vec::new(), note);
                     }
                     Err(e) => ui2.toast(&e),
                 }
