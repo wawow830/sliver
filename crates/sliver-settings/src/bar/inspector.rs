@@ -169,7 +169,7 @@ pub(super) fn inspector(
     let state = ui.state();
     let choices = Rc::new(crate::act::Choices {
         layers: state.loaded.config.layers.keys().cloned().collect(),
-        layouts: state.loaded.config.layouts.keys().cloned().collect(),
+        layouts: state.loaded.config.layouts().keys().cloned().collect(),
         profiles: sliver_config::profile::list(),
     });
     // One picker per gesture. A waybar spelling (on-click…) shows under its

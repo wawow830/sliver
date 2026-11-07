@@ -10,7 +10,7 @@ pub(super) fn zone_groups(ui: &Rc<Ui>, container: &gtk::Box, layout: &str) {
         return;
     };
     let own: Vec<String> = config
-        .layouts
+        .layouts()
         .get(layout)
         .map(|l| l.zones.iter().map(|z| z.name.clone()).collect())
         .unwrap_or_default();

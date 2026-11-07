@@ -73,7 +73,7 @@ fn builds_a_layout_with_the_esc_zone_and_filtered_modules() {
 fn custom_block_and_aliases_survive_verbatim() {
     let i = import();
     let cfg = sliver_config::load_str(&i.toml, Path::new(".")).config;
-    let vpn = &cfg.modules[&ModuleId::parse("custom/vpn").unwrap()];
+    let vpn = &cfg.modules()[&ModuleId::parse("custom/vpn").unwrap()];
     assert_eq!(vpn["exec"].as_str(), Some("~/bin/vpn --json"));
     assert_eq!(vpn["return-type"].as_str(), Some("json"));
     assert_eq!(vpn["signal"].as_integer(), Some(8));

@@ -10,7 +10,7 @@ pub fn placed_modules(config: &sliver_config::Config) -> Vec<ModuleInstance> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     let mut todo: Vec<ModuleRef> = Vec::new();
-    for name in config.layouts.keys() {
+    for name in config.layouts().keys() {
         if let Ok(zones) = config.layout_zones(name) {
             todo.extend(zones.into_iter().flat_map(|z| z.modules));
         }

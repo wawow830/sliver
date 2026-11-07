@@ -152,7 +152,7 @@ pub fn page(ui: &Rc<Ui>) -> gtk::Widget {
             "Edit a layout on the Bar page: pick the layer, or preview as an app its rule matches.",
         ),
     );
-    for (name, l) in &c.layouts {
+    for (name, l) in c.layouts() {
         let zones = c
             .layout_zones(name)
             .map(|z| {
@@ -245,7 +245,7 @@ fn rule_dialog(ui: &Rc<Ui>, index: usize, title: &str) {
         c
     };
     let layers: Vec<String> = state.loaded.config.layers.keys().cloned().collect();
-    let layouts: Vec<String> = state.loaded.config.layouts.keys().cloned().collect();
+    let layouts: Vec<String> = state.loaded.config.layouts().keys().cloned().collect();
     g.add(&choose(
         "layer",
         "On layer",

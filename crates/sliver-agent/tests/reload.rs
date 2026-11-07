@@ -217,7 +217,7 @@ fn invalid_config_at_start_falls_back_to_the_defaults_with_reasons() {
     let (r, first) = Reloader::start(Some(&d.path("config.toml")));
     assert!(!first.errors.is_empty());
     assert!(
-        r.current().config.layouts.contains_key("default"),
+        r.current().config.layouts().contains_key("default"),
         "built-in layouts are there"
     );
 }

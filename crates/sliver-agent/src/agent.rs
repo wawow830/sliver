@@ -332,7 +332,7 @@ impl Agent {
     /// longer placed.
     fn sample_graphs(&mut self, world: &World) {
         use crate::modules::{graph_params, graph_sample};
-        if !self.config.modules.keys().any(|id| id.kind == "graph") {
+        if !self.config.modules().keys().any(|id| id.kind == "graph") {
             self.graphs.clear();
             return;
         }
@@ -553,7 +553,7 @@ impl Agent {
         // Items configured by id (`[modules."app/…#…"]`) but shown in a placeholder.
         let configured: std::collections::HashMap<String, sliver_config::ModuleInstance> = self
             .config
-            .modules
+            .modules()
             .keys()
             .filter(|id| id.kind == "app" && id.instance.is_some())
             .filter(|id| {

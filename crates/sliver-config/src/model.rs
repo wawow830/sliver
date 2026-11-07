@@ -170,10 +170,13 @@ pub struct Config {
     /// Layer name → its default layout. `base` and `fn` are reserved.
     pub layers: BTreeMap<String, String>,
     pub layer_options: BTreeMap<String, LayerOptions>,
-    pub layouts: BTreeMap<String, Layout>,
+    /// Read with [`Config::layouts`]: only loading sets it, so [`Config::module`]'s parsed modules
+    /// always agree with it.
+    pub(crate) layouts: BTreeMap<String, Layout>,
     pub rules: Vec<Rule>,
     /// Module blocks, keyed by the canonical id (so `[modules.pulseaudio]` configures `audio`).
-    pub modules: BTreeMap<ModuleId, Table>,
+    /// Read with [`Config::modules`]: only loading sets it (see `layouts`).
+    pub(crate) modules: BTreeMap<ModuleId, Table>,
     /// Every named module the config refers to (blocks, zones, groups), parsed when it loads:
     /// rendering reads these, it doesn't parse ([`Config::module`]).
     pub(crate) parsed: BTreeMap<ModuleId, std::sync::Arc<Parsed>>,
@@ -183,6 +186,18 @@ pub struct Config {
     /// Per-provider preferences, keyed by D-Bus provider id (a Flatpak/Snap id when sandboxed).
     pub providers: BTreeMap<String, ProviderPrefs>,
     pub api: ApiPrefs,
+}
+
+impl Config {
+    /// The layouts, by name.
+    pub fn layouts(&self) -> &BTreeMap<String, Layout> {
+        &self.layouts
+    }
+
+    /// The `[modules]` blocks, keyed by canonical id.
+    pub fn modules(&self) -> &BTreeMap<ModuleId, Table> {
+        &self.modules
+    }
 }
 
 /// Always merged *underneath* every config, so built-in layers and layouts always exist and any

@@ -26,7 +26,7 @@ impl Agent {
         if self
             .forced
             .as_ref()
-            .is_some_and(|f| !c.layouts.contains_key(&f.layout))
+            .is_some_and(|f| !c.layouts().contains_key(&f.layout))
         {
             self.forced = None;
         }
