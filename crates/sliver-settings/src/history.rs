@@ -1,10 +1,11 @@
 //! Undo and redo of the window's edits. Each entry is the files an edit changed, as they were on
-//! the other side of it ([`sliver_config::files::Snapshot`]). A step is only taken once its files
-//! are written.
+//! each side of it ([`sliver_config::files::Snapshot`]). A step is only taken once its files
+//! are written, and only if they are still as the window left them.
 
 use sliver_config::files::Snapshot;
 
-type Entry = (Snapshot, String);
+/// The files to put back, as they are now, and what the step did.
+type Entry = (Snapshot, Snapshot, String);
 
 #[derive(Debug, Default)]
 pub struct History {
@@ -13,24 +14,25 @@ pub struct History {
 }
 
 impl History {
-    /// An edit was made; `before` is what it replaced. A new edit ends the redo chain.
-    pub fn record(&mut self, before: Snapshot, msg: String) {
-        self.undo.push((before, msg));
+    /// An edit made the files `after`, replacing `before`. A new edit ends the redo chain.
+    pub fn record(&mut self, before: Snapshot, after: Snapshot, msg: String) {
+        self.undo.push((before, after, msg));
         self.redo.clear();
     }
 
-    /// Step back: `commit` puts the files back (`sliver_config::files::commit`) and returns what
-    /// it replaced. If it fails, nothing moves. `None`: nothing to undo.
+    /// Step back: `commit(files, expect)` puts the files back if they are still `expect`
+    /// ([`sliver_config::files::commit_if`]) and returns what it replaced. If it fails, nothing
+    /// moves. `None`: nothing to undo.
     pub fn undo<E>(
         &mut self,
-        commit: impl FnOnce(&Snapshot) -> Result<Snapshot, E>,
+        commit: impl FnOnce(&Snapshot, &Snapshot) -> Result<Snapshot, E>,
     ) -> Option<Result<String, E>> {
         step(&mut self.undo, &mut self.redo, commit)
     }
 
     pub fn redo<E>(
         &mut self,
-        commit: impl FnOnce(&Snapshot) -> Result<Snapshot, E>,
+        commit: impl FnOnce(&Snapshot, &Snapshot) -> Result<Snapshot, E>,
     ) -> Option<Result<String, E>> {
         step(&mut self.redo, &mut self.undo, commit)
     }
@@ -49,12 +51,12 @@ impl History {
 fn step<E>(
     from: &mut Vec<Entry>,
     to: &mut Vec<Entry>,
-    commit: impl FnOnce(&Snapshot) -> Result<Snapshot, E>,
+    commit: impl FnOnce(&Snapshot, &Snapshot) -> Result<Snapshot, E>,
 ) -> Option<Result<String, E>> {
-    let (files, _) = from.last()?;
-    Some(commit(files).map(|other_side| {
-        let (_, msg) = from.pop().expect("just looked");
-        to.push((other_side, msg.clone()));
+    let (files, now, _) = from.last()?;
+    Some(commit(files, now).map(|other_side| {
+        let (files, _, msg) = from.pop().expect("just looked");
+        to.push((other_side, files, msg.clone()));
         msg
     }))
 }
@@ -73,10 +75,16 @@ mod tests {
         vec![(PathBuf::from("f"), t.map(str::to_owned))]
     }
 
+    /// Fails like `commit_if` when the file isn't what the step left.
     fn commit(
         f: &std::cell::RefCell<Option<String>>,
-    ) -> impl Fn(&Snapshot) -> Result<Snapshot, ()> + '_ {
-        |to| Ok(snap(f.replace(to[0].1.clone()).as_deref()))
+    ) -> impl Fn(&Snapshot, &Snapshot) -> Result<Snapshot, &'static str> + '_ {
+        |to, expect| {
+            if *f.borrow() != expect[0].1 {
+                return Err("changed since");
+            }
+            Ok(snap(f.replace(to[0].1.clone()).as_deref()))
+        }
     }
 
     #[test]
@@ -84,8 +92,8 @@ mod tests {
         let mut h = History::default();
         // file: None -> "a" -> "ab"
         let f = file(Some("ab"));
-        h.record(snap(None), "first".into());
-        h.record(snap(Some("a")), "second".into());
+        h.record(snap(None), snap(Some("a")), "first".into());
+        h.record(snap(Some("a")), snap(Some("ab")), "second".into());
         assert_eq!(h.undo(commit(&f)), Some(Ok("second".into())));
         assert_eq!(*f.borrow(), Some("a".into()));
         assert_eq!(h.undo(commit(&f)), Some(Ok("first".into())));
@@ -105,9 +113,9 @@ mod tests {
     #[test]
     fn a_failed_step_stays_where_it_was() {
         let mut h = History::default();
-        h.record(snap(Some("a")), "x".into());
+        h.record(snap(Some("a")), snap(Some("b")), "x".into());
         assert_eq!(
-            h.undo(|_| Err::<Snapshot, _>("read-only")),
+            h.undo(|_: &Snapshot, _: &Snapshot| Err::<Snapshot, _>("read-only")),
             Some(Err("read-only"))
         );
         assert!(h.can_undo() && !h.can_redo());
@@ -116,14 +124,25 @@ mod tests {
         assert!(h.can_redo());
     }
 
+    /// A file edited outside the window since the step stops undo, rather than being lost.
+    #[test]
+    fn undo_does_not_write_over_an_outside_edit() {
+        let mut h = History::default();
+        h.record(snap(Some("a")), snap(Some("b")), "x".into());
+        let f = file(Some("b, then edited elsewhere"));
+        assert_eq!(h.undo(commit(&f)), Some(Err("changed since")));
+        assert_eq!(*f.borrow(), Some("b, then edited elsewhere".into()));
+        assert!(h.can_undo());
+    }
+
     #[test]
     fn a_new_edit_ends_the_redo_chain() {
         let mut h = History::default();
-        h.record(snap(Some("a")), "x".into());
+        h.record(snap(Some("a")), snap(Some("b")), "x".into());
         let f = file(Some("b"));
-        h.undo(commit(&f));
+        h.undo(commit(&f)).unwrap().unwrap();
         assert!(h.can_redo());
-        h.record(snap(Some("a")), "y".into());
+        h.record(snap(Some("a")), snap(Some("c")), "y".into());
         assert!(!h.can_redo());
         assert!(h.can_undo());
     }

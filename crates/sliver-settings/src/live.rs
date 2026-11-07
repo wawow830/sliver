@@ -107,34 +107,30 @@ pub fn agent_status(done: impl FnOnce(Agent) + 'static) {
     in_background(query, || Agent::Absent(LATE.into()), done);
 }
 
-/// The session-bus connection Mirror holds for the window's lifetime: `HoldLayout` lasts as long
-/// as the connection that asked, so a crashed or killed editor never pins the bar.
+/// The session-bus connection Mirror holds for the window's lifetime: a hold lasts as long as
+/// the connection that asked, so a crashed or killed editor never pins the bar. Connected on the
+/// first hold that finds a session bus.
 fn mirror_conn() -> Option<Connection> {
-    static CONN: std::sync::OnceLock<Option<Connection>> = std::sync::OnceLock::new();
-    CONN.get_or_init(|| Connection::session().ok()).clone()
+    static CONN: std::sync::Mutex<Option<Connection>> = std::sync::Mutex::new(None);
+    let mut c = CONN.lock().unwrap_or_else(|e| e.into_inner());
+    if c.is_none() {
+        *c = Connection::session().ok();
+    }
+    c.clone()
 }
 
-fn hold(conn: &Connection, layout: &str, select_only: bool) {
+fn hold(conn: &Connection, layout: &str, select_only: bool) -> zbus::Result<()> {
     use std::collections::HashMap;
     use zbus::zvariant::Value;
     let options: HashMap<&str, Value> = HashMap::from([("select-only", Value::from(select_only))]);
-    let with = conn.call_method(
+    conn.call_method(
         Some(BUS_NAME),
         ROOT_PATH,
         Some(IFACE_CONTROL),
         "HoldLayoutWith",
         &(layout, options),
-    );
-    // An agent older than API 2 has only HoldLayout (touches then always fire).
-    if with.is_err() {
-        let _ = conn.call_method(
-            Some(BUS_NAME),
-            ROOT_PATH,
-            Some(IFACE_CONTROL),
-            "HoldLayout",
-            &(layout,),
-        );
-    }
+    )
+    .map(|_| ())
 }
 
 /// One Mirror command: hold `layout` (`""`: release), and say when it's sent.
@@ -145,17 +141,26 @@ struct Hold {
 }
 
 /// Mirror's commands go out in order, from one thread, and a newer one replaces any still
-/// waiting: each says what the bar should show, so only the last one asked for matters.
+/// waiting: each says what the bar should show, so only the last one asked for matters. One the
+/// agent already confirmed is not sent again; after a failure, the next command is.
 fn mirror() -> &'static mpsc::Sender<Hold> {
     static TX: std::sync::OnceLock<mpsc::Sender<Hold>> = std::sync::OnceLock::new();
     TX.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Hold>();
         std::thread::spawn(move || {
+            let mut applied: Option<(String, bool)> = None;
             while let Ok(h) = rx.recv() {
                 let (h, sent) = latest(h, &rx);
-                if let Some(c) = mirror_conn() {
-                    hold(&c, &h.layout, h.select_only);
-                    listen_held(&c);
+                let want = (h.layout.clone(), h.select_only);
+                if applied.as_ref() != Some(&want) {
+                    applied = None;
+                    if let Some(c) = mirror_conn() {
+                        match hold(&c, &h.layout, h.select_only) {
+                            Ok(()) => applied = Some(want),
+                            Err(e) => eprintln!("sliver-settings: mirror: {e}"),
+                        }
+                        listen_held(&c);
+                    }
                 }
                 for s in sent {
                     let _ = s.send(());

@@ -96,14 +96,15 @@ pub(crate) struct Ui {
     monitors: RefCell<Vec<gtk::gio::FileMonitor>>,
     /// A refresh is already scheduled (debounce).
     refresh_pending: Cell<bool>,
-    /// The user file's text as we last loaded or wrote it, to tell our own saves from others'.
-    last_text: RefCell<Option<String>>,
-    /// Mirror to Touch Bar (on by default) and what we last asked the agent to show.
+    /// The watched files as we last loaded or wrote them, to tell our own saves from others'.
+    seen: RefCell<sliver_config::files::Snapshot>,
+    /// Mirror to Touch Bar (on by default).
     pub mirror: Cell<bool>,
     /// "Select only": touches on the mirrored bar select in the editor without firing.
     pub select_only: Cell<bool>,
     /// The Bar page's handler for a touch on the mirrored bar (zone name, index in its modules).
     pub on_held_pressed: RefCell<Option<HeldPressed>>,
+    /// The layout last asked to be held on the real bar (Mirror's thread knows what took).
     mirrored: RefCell<Option<String>>,
     /// The layout the Bar page shows, mirrored again when the window regains focus.
     mirror_wanted: RefCell<Option<String>>,
@@ -130,10 +131,8 @@ impl Ui {
         if !self.mirror.get() || !self.win.is_active() {
             return;
         }
-        if self.mirrored.borrow().as_deref() != Some(layout) {
-            live::set_layout(layout, self.select_only.get());
-            *self.mirrored.borrow_mut() = Some(layout.to_owned());
-        }
+        live::set_layout(layout, self.select_only.get());
+        *self.mirrored.borrow_mut() = Some(layout.to_owned());
     }
 
     /// "Select only" changed: hold the mirrored layout again with the new option.
@@ -243,7 +242,7 @@ fn main() -> glib::ExitCode {
             history: RefCell::default(),
             monitors: RefCell::default(),
             refresh_pending: Cell::new(false),
-            last_text: RefCell::default(),
+            seen: RefCell::default(),
             mirror: Cell::new(true),
             select_only: Cell::new(false),
             on_held_pressed: RefCell::default(),
@@ -339,7 +338,7 @@ pub(crate) fn import_stylesheet(dir: &Path, css: String) -> sliver_config::files
 pub(crate) fn commit(ui: &Rc<Ui>, files: sliver_config::files::Snapshot, msg: String) {
     match sliver_config::files::commit(&files) {
         Ok(before) => {
-            ui.history.borrow_mut().record(before, msg.clone());
+            ui.history.borrow_mut().record(before, files, msg.clone());
             let toast = adw::Toast::builder()
                 .title(glib::markup_escape_text(&msg))
                 .button_label("Undo")
@@ -364,7 +363,8 @@ fn redo(ui: &Rc<Ui>) {
 
 /// Undo or redo one change by putting its files back.
 fn step(ui: &Rc<Ui>, back: bool) {
-    let commit = |files: &_| sliver_config::files::commit(files);
+    use sliver_config::files::Snapshot;
+    let commit = |files: &Snapshot, now: &Snapshot| sliver_config::files::commit_if(files, now);
     let done = {
         let mut h = ui.history.borrow_mut();
         if back { h.undo(commit) } else { h.redo(commit) }
@@ -384,7 +384,6 @@ fn step(ui: &Rc<Ui>, back: bool) {
 pub(crate) fn rebuild(ui: &Rc<Ui>) {
     let state = Rc::new(State::load());
     *ui.state.borrow_mut() = state.clone();
-    *ui.last_text.borrow_mut() = std::fs::read_to_string(state.edit_target().0).ok();
     watch_config(ui, &state);
     let pages = PAGES.iter().map(|&(id, title, icon)| {
         let widget = match id {
@@ -640,8 +639,8 @@ fn onboarding(ui: &Rc<Ui>) {
 }
 
 /// Refreshes the window when the config changes on disk from outside the app (an editor,
-/// `sliverctl config set`). Directories are watched, so atomic rename-saves count. Our own saves
-/// are recognized (`last_text`) and skipped.
+/// `sliverctl config set`): the config, its includes and the stylesheets. Directories are
+/// watched, so atomic rename-saves count. Our own saves are recognized (`seen`) and skipped.
 fn watch_config(ui: &Rc<Ui>, state: &State) {
     use gtk::gio::prelude::*;
     let mut files: Vec<PathBuf> = state.loaded.files.clone();
@@ -650,6 +649,12 @@ fn watch_config(ui: &Rc<Ui>, state: &State) {
     if let Some(p) = &state.path {
         files.push(p.with_file_name("style.css"));
     }
+    files.sort();
+    files.dedup();
+    let seen = |files: &[PathBuf]| {
+        sliver_config::files::snapshot(files.iter().map(PathBuf::as_path)).unwrap_or_default()
+    };
+    *ui.seen.borrow_mut() = seen(&files);
     let names: std::collections::HashSet<std::ffi::OsString> = files
         .iter()
         .filter_map(|f| f.file_name().map(Into::into))
@@ -669,7 +674,7 @@ fn watch_config(ui: &Rc<Ui>, state: &State) {
         ) else {
             continue;
         };
-        let (ui, names) = (ui.clone(), names.clone());
+        let (ui, names, files) = (ui.clone(), names.clone(), files.clone());
         m.connect_changed(move |_, file, other, _| {
             let hit = |f: Option<&gtk::gio::File>| {
                 f.and_then(|f| f.basename())
@@ -678,11 +683,10 @@ fn watch_config(ui: &Rc<Ui>, state: &State) {
             if !(hit(Some(file)) || hit(other)) || ui.refresh_pending.replace(true) {
                 return;
             }
-            let ui = ui.clone();
+            let (ui, files) = (ui.clone(), files.clone());
             glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
                 ui.refresh_pending.set(false);
-                let text = std::fs::read_to_string(ui.state().edit_target().0).ok();
-                if text != *ui.last_text.borrow() {
+                if seen(&files) != *ui.seen.borrow() {
                     rebuild(&ui);
                     ui.toast("The config changed on disk; reloaded");
                 }
