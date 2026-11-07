@@ -63,7 +63,7 @@ pub fn plausibly_locked(
     }
 }
 
-/// [`plausibly_locked`] with the process scan cached for [`SCAN_TTL`]: worlds are built on every
+/// [`plausibly_locked`] with the process scan cached for 1.5 s: worlds are built on every
 /// render, and `/proc` has hundreds of entries. [`LockWatch::wake`] drops the cache.
 #[derive(Debug, Default)]
 pub struct LockWatch {
