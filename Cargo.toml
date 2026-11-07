@@ -1,0 +1,15 @@
+[package]
+name = "sliverd"
+version = "0.1.0"
+edition = "2024"
+description = "The Touch Bar's display server: a keyboard with a screen"
+license = "MIT"
+
+[dependencies]
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "renderer_pixman"] }
+png = "0.18"
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
