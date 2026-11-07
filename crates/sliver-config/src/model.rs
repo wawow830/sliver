@@ -671,7 +671,7 @@ fn parse_zone(
                 let p = format!("{path}.modules[{i}]");
                 let parsed = match item {
                     Value::String(s) => ModuleId::parse(s).map(ModuleRef::Named),
-                    Value::Table(t) => parse_inline(layout, &z.name, i, t, blocks),
+                    Value::Table(t) => parse_inline(layout, &z.name, i, t, &p, blocks),
                     other => Err(format!(
                         "expected a module name or inline table, got {}",
                         other.type_str()
@@ -702,6 +702,7 @@ fn parse_inline(
     zone: &str,
     i: usize,
     t: &Table,
+    path: &str,
     blocks: &BTreeMap<ModuleId, Table>,
 ) -> Result<ModuleRef, String> {
     let ty = t
@@ -717,6 +718,7 @@ fn parse_inline(
     let parsed = Parsed::new(
         &id,
         &crate::resolve::merged_block(&id, blocks.get(&id), &block),
+        path,
     );
     Ok(ModuleRef::Inline(id, block, std::sync::Arc::new(parsed)))
 }

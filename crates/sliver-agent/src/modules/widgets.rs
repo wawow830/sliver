@@ -93,12 +93,7 @@ pub(super) fn image(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let path = match world.outputs.get(&m.id.to_string()) {
         Some(out) if out.hidden => return None,
         Some(out) => out.text.lines().next().unwrap_or("").trim().to_owned(),
-        None => m
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_owned(),
+        None => m.text("path").unwrap_or("").trim().to_owned(),
     };
     if path.is_empty() {
         return None;
@@ -148,9 +143,7 @@ pub(super) fn emoji() -> Option<Spec> {
 pub(super) fn timer(at: &At) -> Option<Spec> {
     let (m, world, ui) = (at.m, at.world, at.ui);
     let total = m
-        .get("duration")
-        .and_then(|v| sliver_config::parse_duration(v).ok())
-        .filter(|d| !d.is_zero())
+        .duration("duration")
         .unwrap_or(std::time::Duration::from_secs(25 * 60));
     let (left, status) = match &ui.timer {
         None => (total, "idle"),

@@ -213,9 +213,7 @@ impl Live {
         if let Some(api) = &self.api {
             api.set_policy(sliver_agent::api::policy_from_config(config));
         }
-        for e in self.feeds.follow(config) {
-            eprintln!("sliver-agent: {e}");
-        }
+        self.feeds.follow(config);
         if let Some(rt) = &self.feeds.modules {
             let keys: std::collections::HashSet<String> = rt.keys().into_iter().collect();
             self.outputs.retain(|k, _| keys.contains(k));

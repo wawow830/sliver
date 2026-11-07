@@ -130,7 +130,7 @@ fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut V
             "app-controls" | "status-items" => placeholder_cells(m, &key, prefix, b, out),
             // A published item (or a whole context) placed by the layout: `app/<provider>#<item>`.
             "app" => pinned_app(m, &key, b, out),
-            "emoji" if m.get("mode").and_then(|v| v.as_str()) == Some("strip") => {
+            "emoji" if m.text("mode") == Some("strip") => {
                 emoji_strip(m, &key, b.world, &(b.ui)(&key).emoji, out)
             }
             // Any other module is a cell, or one per item it lists (workspaces, windows, who's

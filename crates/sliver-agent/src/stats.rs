@@ -65,10 +65,10 @@ pub enum TempSource {
 
 impl TempSource {
     pub fn of(m: &sliver_config::ModuleInstance) -> TempSource {
-        if let Some(p) = m.get("hwmon-path").and_then(|v| v.as_str()) {
+        if let Some(p) = m.text("hwmon-path") {
             return TempSource::File(p.into());
         }
-        match m.get("thermal-zone").and_then(|v| v.as_integer()) {
+        match m.int("thermal-zone") {
             Some(z) => TempSource::Zone(z),
             None => TempSource::Hottest,
         }
@@ -99,7 +99,7 @@ pub fn wants(config: &sliver_config::Config) -> Wants {
             "load" => w.load = true,
             "memory" => w.mem = true,
             "disk" => {
-                let path = m.get("path").and_then(|p| p.as_str()).unwrap_or("/");
+                let path = m.text("path").unwrap_or("/");
                 w.disks.insert(path.to_owned());
             }
             "temperature" => {

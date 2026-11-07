@@ -210,7 +210,7 @@ pub(super) fn is_collapsible(m: &ModuleInstance) -> bool {
 }
 
 pub(super) fn flag(m: &ModuleInstance, key: &str) -> bool {
-    m.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+    m.flag(key).unwrap_or(false)
 }
 
 /// The slider presentation, for any module with a [`Spec::level`]: no text, a drag sets the level

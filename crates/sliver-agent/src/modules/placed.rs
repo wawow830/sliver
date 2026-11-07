@@ -6,7 +6,7 @@ use super::*;
 /// Every module some layout places (group members included, each id once), parsed whatever
 /// the context ([`sliver_config::Config::module`]).
 pub fn placed_modules(config: &sliver_config::Config) -> Vec<ModuleInstance> {
-    use sliver_config::{ModuleId, ModuleRef};
+    use sliver_config::ModuleRef;
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     let mut todo: Vec<ModuleRef> = Vec::new();
@@ -21,15 +21,7 @@ pub fn placed_modules(config: &sliver_config::Config) -> Vec<ModuleInstance> {
         }
         let m = config.module(&r);
         if m.id.kind == "group" {
-            let members = m.get("modules").and_then(|v| v.as_array());
-            todo.extend(
-                members
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|v| v.as_str())
-                    .filter_map(|s| ModuleId::parse(s).ok())
-                    .map(ModuleRef::Named),
-            );
+            todo.extend(m.members().iter().cloned().map(ModuleRef::Named));
             continue;
         }
         out.push(m);
@@ -44,22 +36,15 @@ pub fn uses_kind(config: &sliver_config::Config, kind: &str) -> bool {
 }
 
 /// Runtime specs for every `custom/*`, `image` and `graph` module with an `exec`, in any layout
-/// (including group members), for the feeds' module runtime. Problems come back as messages.
-pub fn user_module_specs(
-    config: &sliver_config::Config,
-) -> (Vec<crate::scripts::Spec>, Vec<String>) {
-    let (mut specs, mut errors) = (Vec::new(), Vec::new());
-    for m in placed_modules(config) {
-        if !matches!(m.id.kind.as_str(), "custom" | "image" | "graph") || !m.has("exec") {
-            continue;
-        }
-        match crate::scripts::Spec::from_instance(&m) {
-            Ok(s) => specs.push(s),
-            Err(e) => errors.push(format!("{}: {e}", m.id)),
-        }
-    }
+/// (including group members), for the feeds' module runtime.
+pub fn user_module_specs(config: &sliver_config::Config) -> Vec<crate::scripts::Spec> {
+    let mut specs: Vec<_> = placed_modules(config)
+        .iter()
+        .filter(|m| matches!(m.id.kind.as_str(), "custom" | "image" | "graph") && m.has("exec"))
+        .map(crate::scripts::Spec::from_instance)
+        .collect();
     specs.sort_by(|a, b| a.key.cmp(&b.key));
-    (specs, errors)
+    specs
 }
 
 #[cfg(test)]
@@ -100,8 +85,7 @@ mod spec_tests {
             "#,
             std::path::Path::new("."),
         );
-        let (specs, errors) = user_module_specs(&l.config);
-        assert!(errors.is_empty(), "{errors:?}");
+        let specs = user_module_specs(&l.config);
         let keys: Vec<&str> = specs.iter().map(|s| s.key.as_str()).collect();
         assert_eq!(keys, ["custom/a", "custom/b"]);
         // `interval` is a common key: the runtime runs it on that period, not as a stream.

@@ -2,17 +2,14 @@
 //! may legitimately do, including removing every F-key, is at most a warning.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
-
-use toml::Value;
 
 use crate::condition::Context;
 use crate::diag::{Diagnostics, join};
 use crate::keys::Key;
 use crate::model::{Config, ModuleRef};
-use crate::module::{Common, Gesture, ModuleId, check_type_keys};
-use crate::resolve::group_members;
-use crate::values::{Width, parse_duration};
+use crate::module::{Gesture, ModuleId};
+use crate::resolve::Parsed;
+use crate::values::Width;
 
 /// Touch-target advice: ~9 mm, with 60 px as the "really too small" mark.
 pub const COMFORTABLE_TARGET_PX: u32 = 80;
@@ -128,30 +125,19 @@ impl Config {
             for (zi, z) in layout.zones.iter().enumerate() {
                 for (mi, m) in z.modules.iter().enumerate() {
                     placed.insert(m.id().clone());
-                    if let ModuleRef::Inline(..) = m {
+                    if let ModuleRef::Inline(_, _, parsed) = m {
                         let p = format!("layouts.{lname}.zones[{zi}].modules[{mi}]");
-                        self.check_module(m, &p, z.module_width, d);
+                        self.check_module(parsed, &p, z.module_width, d);
                     }
                 }
             }
         }
-        for (id, block) in &self.modules {
+        for id in self.modules.keys() {
             let p = join("modules", &id.to_string());
-            self.check_module(&ModuleRef::Named(id.clone()), &p, None, d);
+            let parsed = &self.parsed[id];
+            self.check_module(parsed, &p, None, d);
             if id.kind == "group" {
-                let members = group_members(block);
-                placed.extend(members.iter().cloned());
-                if let Some(Value::Array(list)) = block.get("modules") {
-                    for (i, v) in list.iter().enumerate() {
-                        if let Err(e) = v
-                            .as_str()
-                            .ok_or("expected a module name".to_owned())
-                            .and_then(ModuleId::parse)
-                        {
-                            d.error(format!("{p}.modules[{i}]"), e);
-                        }
-                    }
-                }
+                placed.extend(parsed.instance.members().iter().cloned());
                 self.check_group_cycle(id, &p, d);
             }
         }
@@ -181,40 +167,12 @@ impl Config {
             .contains(&id.to_string())
     }
 
-    fn check_module(
-        &self,
-        m: &ModuleRef,
-        path: &str,
-        zone_width: Option<Width>,
-        d: &mut Diagnostics,
-    ) {
-        let id = m.id();
-        let block = self.module_block(m);
-        let (common, rest) = Common::parse(&block, path, d);
-        check_type_keys(id, &rest, path, d);
-        if let Some(r) = rest.get("rewrite") {
-            crate::Rewrite::parse(r, &crate::diag::join(path, "rewrite"), d);
-        }
-        let formats = [
-            ("format", common.format.as_ref()),
-            ("format-alt", common.format_alt.as_ref()),
-            ("detail-format", common.detail_format.as_ref()),
-        ];
-        let variants = common
-            .format_variants
-            .iter()
-            .map(|(k, v)| (k.as_str(), Some(v)));
-        for (key, f) in formats.into_iter().chain(variants) {
-            if let Some(Err(e)) = f.map(crate::format::Format::template) {
-                let key = if common.format_variants.contains_key(key) {
-                    format!("format-{key}")
-                } else {
-                    key.to_owned()
-                };
-                d.error(join(path, &key), e);
-            }
-        }
-        let width = if block.contains_key("width") {
+    /// What parsing `p` found, and advice about the module as a whole.
+    fn check_module(&self, p: &Parsed, path: &str, zone_width: Option<Width>, d: &mut Diagnostics) {
+        d.extend(p.diagnostics.clone());
+        let m = &p.instance;
+        let common = &m.common;
+        let width = if p.sized {
             common.width
         } else {
             zone_width.unwrap_or(common.width)
@@ -232,42 +190,18 @@ impl Config {
                 "on-double-tap delays this module's single tap while it waits for a second one",
             );
         }
-        match id.kind.as_str() {
-            "custom" => {
-                if common.format.is_none() && !rest.contains_key("exec") && common.icon.is_none() {
-                    d.warn(
-                        path,
-                        "a custom module with no exec, format or icon shows nothing",
-                    );
-                }
-                if let Some(v) = rest.get("restart-interval") {
-                    match parse_duration(v) {
-                        Ok(t) if t < Duration::from_secs(1) => d.warn(
-                            join(path, "restart-interval"),
-                            "below the 1s floor; using 1s",
-                        ),
-                        Ok(_) => {}
-                        Err(e) => d.error(join(path, "restart-interval"), e),
-                    }
-                }
-                if let Some(v) = rest.get("timeout") {
-                    if let Err(e) = parse_duration(v) {
-                        d.error(join(path, "timeout"), e);
-                    }
-                }
+        match m.id.kind.as_str() {
+            "custom" if common.format.is_none() && !m.has("exec") && common.icon.is_none() => {
+                d.warn(
+                    path,
+                    "a custom module with no exec, format or icon shows nothing",
+                );
             }
-            "group" => {
-                let vertical = rest.get("orientation").and_then(Value::as_str) == Some("vertical");
-                if vertical {
-                    for child in group_members(&rest) {
-                        let (cc, _) = Common::parse(
-                            &self.module_block(&ModuleRef::Named(child.clone())),
-                            "",
-                            &mut Diagnostics::default(),
-                        );
-                        if cc.has_actions() {
-                            d.warn(path, format!("{child} has actions, but vertical groups stack 30 px rows, too small to touch reliably"));
-                        }
+            "group" if m.text("orientation") == Some("vertical") => {
+                for child in m.members() {
+                    let (c, _) = self.parse_module(&ModuleRef::Named(child.clone()));
+                    if c.common.has_actions() {
+                        d.warn(path, format!("{child} has actions, but vertical groups stack 30 px rows, too small to touch reliably"));
                     }
                 }
             }
@@ -280,11 +214,13 @@ impl Config {
             if stack.contains(id) {
                 return true;
             }
-            let Some(block) = c.modules.get(id) else {
+            let Some(p) = c.parsed.get(id) else {
                 return false;
             };
             stack.push(id.clone());
-            let cyc = group_members(block)
+            let cyc = p
+                .instance
+                .members()
                 .iter()
                 .filter(|m| m.kind == "group")
                 .any(|m| walk(c, m, stack));
@@ -311,16 +247,15 @@ impl Config {
             if seen > 512 {
                 break;
             }
-            let block = self.module_block(&m);
-            let (common, rest) = Common::parse(&block, "", &mut Diagnostics::default());
-            if common.when.as_ref().is_some_and(|w| !w.eval(&ctx)) {
+            let (inst, _) = self.parse_module(&m);
+            if inst.common.when.as_ref().is_some_and(|w| !w.eval(&ctx)) {
                 continue;
             }
-            if let Some(a) = common.on.get(&Gesture::Tap) {
+            if let Some(a) = inst.common.on.get(&Gesture::Tap) {
                 keys.extend(a.keys());
             }
-            if m.id().kind == "group" && !rest.contains_key("drawer") {
-                todo.extend(group_members(&rest).into_iter().map(ModuleRef::Named));
+            if inst.drawer().is_none() {
+                todo.extend(inst.members().iter().cloned().map(ModuleRef::Named));
             }
         }
         keys

@@ -968,3 +968,107 @@ fn user_module_output_is_formatted_like_any_module() {
     );
     assert!(cell("", crate::scripts::Output::hidden(), false).is_none());
 }
+
+/// A module of every type, with every key its type declares, goes through every reader: each
+/// read is of a declared key, as its declared kind (the accessors assert it in debug builds).
+#[test]
+fn every_module_type_reads_its_keys_as_declared() {
+    use sliver_config::Kind;
+    use toml::Value;
+    let sample = |kind: Kind| -> Value {
+        match kind {
+            Kind::Flag => Value::Boolean(true),
+            Kind::Text => Value::String("/".into()),
+            Kind::OneOf(choices) => Value::String(choices[choices.len() - 1].into()),
+            Kind::Texts => Value::Array(vec![Value::String("UTC".into())]),
+            Kind::Int(lo, _) | Kind::Clamped(lo, _) => Value::Integer(lo.max(1)),
+            Kind::Number => Value::Float(1.0),
+            Kind::Duration(_) => Value::String("2s".into()),
+            Kind::Width => Value::Integer(100),
+            Kind::Module => Value::String("cpu".into()),
+            Kind::Modules => Value::Array(vec![Value::String("clock".into())]),
+            Kind::Rewrite => "r = { a = \"b\" }".parse::<toml::Table>().unwrap()["r"].clone(),
+            Kind::Drawer => "d = { mode = \"bar\", start-expanded = true }"
+                .parse::<toml::Table>()
+                .unwrap()["d"]
+                .clone(),
+            Kind::Env => "e = { A = \"1\" }".parse::<toml::Table>().unwrap()["e"].clone(),
+            Kind::Cava => Value::Integer(1),
+        }
+    };
+    // Data for the modules that read their keys only once they have something to show.
+    let mut w = world();
+    w.session.media = Some(sliver_session::Media {
+        player: "p".into(),
+        title: "t".into(),
+        length_us: Some(10),
+        position_us: Some(5),
+        ..Default::default()
+    });
+    w.session.failed_units.system = Some(Default::default());
+    for t in [
+        crate::stats::TempSource::Hottest,
+        crate::stats::TempSource::Zone(1),
+        crate::stats::TempSource::File("/".into()),
+    ] {
+        w.stats.temps.insert(t, 50.0);
+    }
+    for (ty, _) in sliver_config::MODULE_TYPES {
+        let id = match *ty {
+            "key" => "key/F1".to_owned(),
+            "custom" | "group" | "app" => format!("{ty}/t"),
+            t => t.to_owned(),
+        };
+        let mut block = toml::Table::new();
+        let cava = sliver_config::CAVA.iter().map(|(k, _)| *k);
+        for key in sliver_config::own_keys(ty).chain(cava) {
+            let kind = sliver_config::key_kind(ty, key).flatten().unwrap();
+            block.entry(key).or_insert_with(|| sample(kind));
+        }
+        let mut modules = toml::Table::new();
+        modules.insert(id.clone(), Value::Table(block));
+        let mut zone = toml::Table::new();
+        zone.insert("name".into(), Value::String("main".into()));
+        zone.insert(
+            "modules".into(),
+            Value::Array(vec![Value::String(id.clone())]),
+        );
+        let src = format!(
+            "{}\n[[layouts.t.zones]]\n{}\n[[rules]]\nlayout = \"t\"\n",
+            toml::to_string(&toml::Table::from_iter([(
+                "modules".into(),
+                Value::Table(modules)
+            )]))
+            .unwrap(),
+            toml::to_string(&zone).unwrap(),
+        );
+        let loaded = load_str(&src, std::path::Path::new("."));
+        let hw = sliver_config::Hardware { physical_esc: true };
+        let checked = loaded.config.validate(hw);
+        assert!(loaded.diagnostics.ok() && checked.ok(), "{id}: {checked:?}");
+        let config = &loaded.config;
+        let r = config.resolve("base", &Context::new()).unwrap();
+        let mut icons = Icons::builtin_only();
+        let mut out = Vec::new();
+        cells(
+            &r.zones[0].modules,
+            &mut Build {
+                world: &w,
+                icons: &mut icons,
+                icon_size: 36,
+                ui: &|_| UiState::default(),
+            },
+            &mut out,
+        );
+        let _ = crate::stats::wants(config);
+        let _ = user_module_specs(config);
+        let _ = groups::start_expanded_drawers(&r.zones);
+        for m in &r.zones[0].modules {
+            let _ = spectrum::cava_config(m);
+            if m.id.kind == "graph" {
+                let _ = spectrum::graph_params(m);
+                let _ = spectrum::graph_sample(config, m, &w);
+            }
+        }
+    }
+}

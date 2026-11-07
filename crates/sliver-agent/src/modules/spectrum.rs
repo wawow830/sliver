@@ -14,10 +14,7 @@ pub fn graph_params(m: &ModuleInstance) -> (std::time::Duration, usize) {
         _ => GRAPH_EVERY,
     }
     .max(std::time::Duration::from_millis(100));
-    let samples = m
-        .get("samples")
-        .and_then(|v| v.as_integer())
-        .map_or(GRAPH_SAMPLES, |n| n.clamp(2, 600) as usize);
+    let samples = m.int("samples").map_or(GRAPH_SAMPLES, |n| n as usize);
     (every, samples)
 }
 
@@ -28,14 +25,11 @@ pub const CAVA_FPS: i64 = 60;
 
 /// How many bars a `cava` module draws (`bars`, 1–128).
 pub fn cava_bars(m: &ModuleInstance) -> usize {
-    m.get("bars")
-        .and_then(|v| v.as_integer())
-        .map_or(CAVA_BARS, |n| n.clamp(1, 128) as usize)
+    m.int("bars").map_or(CAVA_BARS, |n| n as usize)
 }
 
 /// The config `cava` runs with for this module: waybar's `cava` keys in cava's own sections,
-/// and raw output (one line of `bars` numbers, 0–1000, per frame) that the agent reads. Keys of
-/// the wrong type, and strings that would break out of their line, are left out.
+/// and raw output (one line of `bars` numbers, 0–1000, per frame) that the agent reads.
 pub fn cava_config(block: &ModuleInstance) -> String {
     const KEYS: &[(&str, &str, &str)] = &[
         ("general", "autosens", "autosens"),
@@ -49,26 +43,10 @@ pub fn cava_config(block: &ModuleInstance) -> String {
         ("smoothing", "waves", "waves"),
         ("smoothing", "noise_reduction", "noise_reduction"),
     ];
-    let value = |v: &toml::Value| match v {
-        toml::Value::Boolean(b) => Some(u8::from(*b).to_string()),
-        toml::Value::Integer(i) => Some(i.to_string()),
-        toml::Value::Float(f) => Some(f.to_string()),
-        toml::Value::String(s) if !s.contains(['\n', '\r', '[', ';', '#']) => Some(s.clone()),
-        _ => None,
-    };
-    let fps = block
-        .get("framerate")
-        .and_then(|v| v.as_integer())
-        .map_or(CAVA_FPS, |n| n.clamp(1, CAVA_FPS));
+    let fps = block.int("framerate").unwrap_or(CAVA_FPS);
     // A second of silence puts cava to sleep: no frames, and no work, until sound comes back.
-    let sleep = block
-        .get("sleep_timer")
-        .and_then(|v| v.as_integer())
-        .unwrap_or(1);
-    let stereo = block
-        .get("stereo")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let sleep = block.int("sleep_timer").unwrap_or(1);
+    let stereo = block.flag("stereo").unwrap_or(false);
     let mut sections: Vec<(&str, Vec<String>)> = vec![
         (
             "general",
@@ -94,7 +72,7 @@ pub fn cava_config(block: &ModuleInstance) -> String {
         ("smoothing", Vec::new()),
     ];
     for (section, key, cava_key) in KEYS {
-        if let Some(v) = block.get(key).and_then(value)
+        if let Some(v) = block.cava(key)
             && let Some((_, lines)) = sections.iter_mut().find(|(s, _)| s == section)
         {
             lines.push(format!("{cava_key} = {v}"));
@@ -109,7 +87,7 @@ pub fn cava_config(block: &ModuleInstance) -> String {
 /// `spectrum = true`: the live spectrum under the module's content (`cava`'s keys apply), at
 /// rest until cava's first frame. Empty: none.
 pub(super) fn spectrum(m: &ModuleInstance, world: &World) -> Vec<f32> {
-    if m.get("spectrum").and_then(|v| v.as_bool()) != Some(true) {
+    if m.flag("spectrum") != Some(true) {
         return Vec::new();
     }
     let n = cava_bars(m);
@@ -133,7 +111,7 @@ pub fn graph_sample(
     m: &ModuleInstance,
     world: &World,
 ) -> Option<f32> {
-    use sliver_config::{ModuleId, ModuleRef};
+    use sliver_config::ModuleRef;
     let block = m;
     let from_output = |out: &crate::scripts::Output| {
         out.percentage.or_else(|| {
@@ -150,7 +128,7 @@ pub fn graph_sample(
     let raw = if block.has("exec") {
         from_output(world.outputs.get(&m.id.to_string())?)?
     } else {
-        let src = ModuleId::parse(block.get("source")?.as_str()?).ok()?;
+        let src = block.module_ref("source")?.clone();
         if src.kind == "custom" {
             from_output(world.outputs.get(&src.to_string())?)?
         } else {
@@ -165,12 +143,7 @@ pub fn graph_sample(
             spec(&at)?.percentage?
         }
     };
-    let num = |k: &str, d: f64| {
-        block
-            .get(k)
-            .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
-            .unwrap_or(d)
-    };
+    let num = |k: &str, d: f64| block.number(k).unwrap_or(d);
     let (lo, hi) = (num("min", 0.0), num("max", 100.0));
     if !raw.is_finite() || hi <= lo {
         return None;

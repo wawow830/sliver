@@ -17,17 +17,16 @@ pub(super) struct Clock {
 impl Clock {
     /// The clock for this module, and how many time zones it cycles through.
     pub(super) fn new(m: &ModuleInstance, now: DateTime<Local>, tz: i32) -> (Clock, usize) {
-        let s = |v: &toml::Value| v.as_str().map(str::to_owned);
-        let zones: Vec<String> = match (m.get("timezones"), m.get("timezone")) {
-            (Some(toml::Value::Array(a)), _) if !a.is_empty() => a.iter().filter_map(s).collect(),
-            (_, Some(z)) => s(z).into_iter().collect(),
+        let zones: Vec<String> = match (m.texts("timezones"), m.text("timezone")) {
+            (z, _) if !z.is_empty() => z.to_vec(),
+            (_, Some(z)) => vec![z.to_owned()],
             _ => Vec::new(),
         };
         let zone = (!zones.is_empty())
             .then(|| &zones[tz.rem_euclid(zones.len() as i32) as usize])
             .filter(|z| !z.is_empty())
             .map(|z| z.parse::<chrono_tz::Tz>().map_err(|_| z.clone()));
-        let locale = m.get("locale").and_then(toml::Value::as_str).map(|l| {
+        let locale = m.text("locale").map(|l| {
             // `de_DE.UTF-8@euro` → `de_DE`, as found in $LANG.
             let base = l.split(['.', '@']).next().unwrap_or(l);
             chrono::Locale::try_from(base).map_err(|_| l.to_owned())

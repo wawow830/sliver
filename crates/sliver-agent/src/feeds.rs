@@ -507,11 +507,9 @@ impl Feeds {
     }
 
     /// Runs what `config` needs: its user modules, and the watchers only some modules use
-    /// (failed units, capture, fcitx5). Returns the user modules that couldn't be set up, as
-    /// messages.
-    pub fn follow(&mut self, config: &sliver_config::Config) -> Vec<String> {
-        let (specs, errors) = crate::modules::user_module_specs(config);
-        self.start_modules(specs);
+    /// (failed units, capture, fcitx5).
+    pub fn follow(&mut self, config: &sliver_config::Config) {
+        self.start_modules(crate::modules::user_module_specs(config));
         let uses = |kind| crate::modules::uses_kind(config, kind);
         if uses("systemd-failed-units") {
             self.watch_failed_units();
@@ -522,7 +520,6 @@ impl Feeds {
         if uses("language") {
             self.watch_input_method();
         }
-        errors
     }
 
     /// Starts the user modules, or restarts them with new `specs` (config reload), and forwards

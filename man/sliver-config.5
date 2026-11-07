@@ -809,7 +809,9 @@ status; tap mutes.
 .B node = \(dqsource\(dq
 (say,
 .BR audio#mic )
-is the microphone.
+is the microphone
+.RB ( \(dqsink\(dq ,
+the default, is the output).
 .B audio/slider
 is the slider form.
 .TP
@@ -1158,7 +1160,9 @@ or dismisses; swipes dismiss.
 .B emoji
 As a button it opens the built\-in
 .B emoji
-layer; with
+layer
+.RB ( "mode = \(dqbutton\(dq" ,
+the default); with
 .B mode = \(dqstrip\(dq
 it is that layer: group tabs (recents first), one page of
 .B columns

@@ -36,21 +36,13 @@ pub fn module_index(zone_ids: &[String], zone_keys: &[String], pos: usize) -> Op
     None
 }
 
-pub(super) fn is_bar_drawer(m: &ModuleInstance) -> bool {
-    drawer_opt(m, "mode").and_then(toml::Value::as_str) == Some("bar")
-}
-
-pub(super) fn drawer_opt<'a>(m: &'a ModuleInstance, key: &str) -> Option<&'a toml::Value> {
-    m.get("drawer").and_then(|d| d.get(key))
-}
-
 /// The cell keys of drawer groups with `start-expanded = true`, in `zones`. The agent opens each
 /// the first time it sees it; after that, taps and `collapse-after` decide.
 pub fn start_expanded_drawers(zones: &[sliver_config::ResolvedZone]) -> Vec<String> {
     fn walk(ms: &[ModuleInstance], prefix: &str, out: &mut Vec<String>) {
         for m in ms.iter().filter(|m| m.id.kind == "group") {
             let key = format!("{prefix}{}", m.id);
-            if drawer_opt(m, "start-expanded").and_then(toml::Value::as_bool) == Some(true) {
+            if m.drawer().is_some_and(|d| d.start_expanded) {
                 out.push(key.clone());
             }
             walk(&m.children, &format!("{key}/"), out);
@@ -95,11 +87,11 @@ pub fn subbar_cells(
 /// A group's members, flattened: all of them, or a closed drawer's handle alone (a bar-mode
 /// drawer's rest shows as a sub-bar), with the group's classes.
 pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mut Vec<Cell>) {
-    let drawer = m.has("drawer");
+    let drawer = m.drawer();
     let open = (b.ui)(key).expanded;
     // A closed drawer, and any bar-mode drawer, shows only its first module (the handle).
-    let bar = drawer && is_bar_drawer(m);
-    let shown = if drawer && (bar || !open) {
+    let bar = drawer.is_some_and(|d| d.bar);
+    let shown = if drawer.is_some() && (bar || !open) {
         1
     } else {
         m.children.len()
@@ -107,10 +99,7 @@ pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mu
     let start = out.len();
     let children = &m.children[..shown.min(m.children.len())];
     let child_prefix = format!("{key}/");
-    // waybar's transition-left-to-right = false: the drawer opens towards the left, so
-    // the leader comes after the rest.
-    let rtl = drawer
-        && drawer_opt(m, "transition-left-to-right").and_then(toml::Value::as_bool) == Some(false);
+    let rtl = drawer.is_some_and(|d| d.leader_last);
     let mut handle_at = start;
     if rtl && children.len() > 1 {
         let (leader, rest) = children.split_at(1);
@@ -120,12 +109,12 @@ pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mu
     } else {
         cells_in(children, &child_prefix, b, out);
     }
-    if drawer && let Some(handle) = out.get_mut(handle_at) {
-        let collapse_after =
-            drawer_opt(m, "collapse-after").and_then(|v| sliver_config::parse_duration(v).ok());
+    if let Some(d) = drawer
+        && let Some(handle) = out.get_mut(handle_at)
+    {
         handle.drawer = Some(Drawer {
             group: key.to_owned(),
-            collapse_after,
+            collapse_after: d.collapse_after,
             opens: if bar { Opens::SubBar } else { Opens::Inline },
         });
         handle.look.checked = open;
@@ -133,11 +122,10 @@ pub(super) fn group_cells(m: &ModuleInstance, key: &str, b: &mut Build, out: &mu
             handle.touch = Touch::Agent;
         }
     }
-    let child_class = drawer.then(|| {
-        drawer_opt(m, "children-class")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("drawer-child")
-            .to_owned()
+    let child_class = drawer.map(|d| {
+        d.children_class
+            .clone()
+            .unwrap_or_else(|| "drawer-child".to_owned())
     });
     for c in &mut out[start..] {
         c.look

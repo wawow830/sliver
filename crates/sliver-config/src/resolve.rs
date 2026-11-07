@@ -10,6 +10,7 @@ use crate::condition::Context;
 use crate::diag::Diagnostics;
 use crate::model::{Config, ModuleRef, Zone};
 use crate::module::{Common, ModuleId, key_defaults};
+use crate::options::{Drawer, Kind, Opt};
 use crate::values::{Align, Width};
 
 /// Deepest `extends` chain and group nesting we follow.
@@ -38,33 +39,136 @@ pub struct ModuleInstance {
     /// The instance name (waybar puts it on as a class) plus static `class`es.
     pub classes: Vec<String>,
     pub common: Common,
-    /// Type-specific keys, read through [`ModuleInstance::get`].
-    config: Table,
-    /// `rewrite` (`window`), its regexes compiled when the config loads.
-    pub rewrite: Option<crate::Rewrite>,
+    /// Type-specific keys, read by the accessors below.
+    options: BTreeMap<&'static str, Opt>,
     /// Children of a `group/*`, in order.
     pub children: Vec<ModuleInstance>,
 }
 
+/// Type-specific keys, by [`crate::MODULE_TYPES`]: `None` when unset. Reading a key the type
+/// doesn't declare, or as another kind, is a bug (a debug assertion).
 impl ModuleInstance {
-    /// A type-specific key. Every key the runtime reads must be declared in
-    /// [`crate::MODULE_TYPES`].
-    pub fn get(&self, key: &str) -> Option<&Value> {
+    fn opt(&self, key: &str, fits: fn(Kind) -> bool) -> Option<&Opt> {
         debug_assert!(
-            crate::module::takes_key(&self.id.kind, key) != Some(false),
-            "{} modules don't take {key:?}: declare it in MODULE_TYPES",
+            crate::options::key_kind(&self.id.kind, key).is_none_or(|k| k.is_some_and(fits)),
+            "{} modules don't take {key:?} as read: see MODULE_TYPES",
             self.id.kind
         );
-        self.config.get(key)
+        self.options.get(key)
+    }
+
+    pub fn has(&self, key: &str) -> bool {
+        self.options.contains_key(key)
     }
 
     /// Does this module's type take `key` at all (a `clock` is never a slider)?
     pub fn takes(&self, key: &str) -> bool {
-        crate::module::takes_key(&self.id.kind, key) == Some(true)
+        crate::options::takes_key(&self.id.kind, key) == Some(true)
     }
 
-    pub fn has(&self, key: &str) -> bool {
-        self.get(key).is_some()
+    pub fn flag(&self, key: &str) -> Option<bool> {
+        match self.opt(key, |k| k == Kind::Flag)? {
+            Opt::Flag(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// [`Kind::Text`] and [`Kind::OneOf`].
+    pub fn text(&self, key: &str) -> Option<&str> {
+        match self.opt(key, |k| matches!(k, Kind::Text | Kind::OneOf(_)))? {
+            Opt::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn texts(&self, key: &str) -> &[String] {
+        match self.opt(key, |k| k == Kind::Texts) {
+            Some(Opt::Texts(v)) => v,
+            _ => &[],
+        }
+    }
+
+    /// [`Kind::Int`] and [`Kind::Clamped`].
+    pub fn int(&self, key: &str) -> Option<i64> {
+        match self.opt(key, |k| matches!(k, Kind::Int(..) | Kind::Clamped(..)))? {
+            Opt::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn number(&self, key: &str) -> Option<f64> {
+        match self.opt(key, |k| k == Kind::Number)? {
+            Opt::Number(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn duration(&self, key: &str) -> Option<std::time::Duration> {
+        match self.opt(key, |k| matches!(k, Kind::Duration(_)))? {
+            Opt::Duration(t) => Some(*t),
+            _ => None,
+        }
+    }
+
+    pub fn module_ref(&self, key: &str) -> Option<&ModuleId> {
+        match self.opt(key, |k| k == Kind::Module)? {
+            Opt::Module(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    pub fn env(&self, key: &str) -> &[(String, String)] {
+        match self.opt(key, |k| k == Kind::Env) {
+            Some(Opt::Env(v)) => v,
+            _ => &[],
+        }
+    }
+
+    /// A [`crate::CAVA`] key passed to cava; `None` also where the type's own key of that name
+    /// shadows it (`graph`'s `source`).
+    pub fn cava(&self, key: &str) -> Option<&str> {
+        match self.options.get(key)? {
+            Opt::Cava(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// A group's `modules`; none for other types.
+    pub fn members(&self) -> &[ModuleId] {
+        if self.id.kind != "group" {
+            return &[];
+        }
+        match self.opt("modules", |k| k == Kind::Modules) {
+            Some(Opt::Modules(v)) => v,
+            _ => &[],
+        }
+    }
+
+    /// A group's `module-width`: the default width of its children.
+    pub fn module_width(&self) -> Option<Width> {
+        match self.opt("module-width", |k| k == Kind::Width)? {
+            Opt::Width(w) => Some(*w),
+            _ => None,
+        }
+    }
+
+    /// A group's `drawer`; `None` for other types.
+    pub fn drawer(&self) -> Option<&Drawer> {
+        if self.id.kind != "group" {
+            return None;
+        }
+        match self.opt("drawer", |k| k == Kind::Drawer)? {
+            Opt::Drawer(dr) => Some(dr),
+            _ => None,
+        }
+    }
+
+    /// `window`'s `rewrite`, its regexes compiled when the config loaded.
+    pub fn rewrite(&self) -> Option<&crate::Rewrite> {
+        match self.opt("rewrite", |k| k == Kind::Rewrite)? {
+            Opt::Rewrite(r) => Some(r),
+            _ => None,
+        }
     }
 }
 
@@ -115,32 +219,34 @@ pub struct Parsed {
     pub(crate) instance: ModuleInstance,
     /// The block sets its own width (a zone's `module-width` doesn't apply).
     pub(crate) sized: bool,
+    /// What parsing found wrong, at the block's path; `validate` reports it.
+    pub(crate) diagnostics: Diagnostics,
 }
 
 impl Parsed {
-    pub(crate) fn new(id: &ModuleId, block: &Table) -> Parsed {
+    pub(crate) fn new(id: &ModuleId, block: &Table, path: &str) -> Parsed {
         let sized = block.contains_key("width") || block.contains_key("expand");
-        // Diagnostics are reported by `validate`; parsing here is best-effort.
-        let (common, mut config) = Common::parse(block, "", &mut Diagnostics::default());
+        let mut d = Diagnostics::default();
+        let (common, rest) = Common::parse(block, path, &mut d);
+        let mut options = crate::options::parse(id, &rest, path, &mut d);
         if id.slider {
-            config.entry("slider").or_insert(Value::Boolean(true));
+            options.entry("slider").or_insert(Opt::Flag(true));
         }
         let mut classes: Vec<String> = id.instance.iter().cloned().collect();
         classes.extend(common.class.iter().cloned());
-        let rewrite = config
-            .get("rewrite")
-            .filter(|_| crate::module::takes_key(&id.kind, "rewrite") == Some(true))
-            .map(|r| crate::Rewrite::parse(r, "", &mut Diagnostics::default()));
         let instance = ModuleInstance {
             css_id: id.css_id(),
             id: id.clone(),
             classes,
             common,
-            config,
-            rewrite,
+            options,
             children: Vec::new(),
         };
-        Parsed { instance, sized }
+        Parsed {
+            instance,
+            sized,
+            diagnostics: d,
+        }
     }
 }
 
@@ -209,7 +315,7 @@ impl Config {
                 ModuleRef::Named(id) => todo.push(id.clone()),
                 // An inline group's members are named.
                 ModuleRef::Inline(id, _, p) if id.kind == "group" => {
-                    todo.extend(group_members(&p.instance.config))
+                    todo.extend(p.instance.members().iter().cloned())
                 }
                 ModuleRef::Inline(..) => {}
             }
@@ -222,10 +328,9 @@ impl Config {
             let p = Parsed::new(
                 &id,
                 &merged_block(&id, self.modules.get(&id), &Table::new()),
+                &crate::diag::join("modules", &id.to_string()),
             );
-            if id.kind == "group" {
-                todo.extend(group_members(&p.instance.config));
-            }
+            todo.extend(p.instance.members().iter().cloned());
             out.insert(id, Arc::new(p));
         }
         out
@@ -295,12 +400,12 @@ impl Config {
 
     /// [`Config::module`], and whether its block sets its own width: parsed when the config
     /// loaded. A module nothing in the config names (an app's item) is parsed now.
-    fn parse_module(&self, m: &ModuleRef) -> (ModuleInstance, bool) {
+    pub(crate) fn parse_module(&self, m: &ModuleRef) -> (ModuleInstance, bool) {
         let p = match m {
             ModuleRef::Inline(_, _, p) => p.clone(),
             ModuleRef::Named(id) => match self.parsed.get(id) {
                 Some(p) => p.clone(),
-                None => Arc::new(Parsed::new(id, &self.module_block(m))),
+                None => Arc::new(Parsed::new(id, &self.module_block(m), "")),
             },
         };
         (p.instance.clone(), p.sized)
@@ -325,16 +430,12 @@ impl Config {
             inst.common.width = w;
         }
         if id.kind == "group" {
-            // `module-width` on a group is the default width of its children, like on a zone.
-            let child_width = inst
-                .config
-                .get("module-width")
-                .and_then(|v| Width::parse(v).ok());
             if stack.contains(id) || stack.len() >= MAX_DEPTH {
                 return None;
             }
             stack.push(id.clone());
-            for child in group_members(&inst.config) {
+            let child_width = inst.module_width();
+            for child in inst.members().to_vec() {
                 inst.children.extend(self.instantiate(
                     &ModuleRef::Named(child),
                     child_width,
@@ -392,20 +493,6 @@ pub fn inherit_zones<Z: Clone>(
         }
     }
     zones
-}
-
-/// The `modules = [...]` of a group block, parsed (invalid names skipped; `validate` reports them).
-pub(crate) fn group_members(config: &Table) -> Vec<ModuleId> {
-    config
-        .get("modules")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .filter_map(|s| ModuleId::parse(s).ok())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Merges `over` into `base`. Tables merge recursively, and everything else (arrays included) is

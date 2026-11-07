@@ -15,13 +15,9 @@ pub(super) fn emoji_strip(
     out: &mut Vec<Cell>,
 ) {
     use sliver_emoji::Group;
-    let cols = m
-        .get("columns")
-        .and_then(|v| v.as_integer())
-        .map_or(14, |n| n.clamp(4, 40) as usize);
+    let cols = m.int("columns").map_or(14, |n| n as usize);
     let insert = m
-        .get("insert")
-        .and_then(|v| v.as_str())
+        .text("insert")
         .and_then(Insert::parse)
         .unwrap_or(Insert::Auto);
     let recents = world.emoji.items();

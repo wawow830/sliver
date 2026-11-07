@@ -150,8 +150,8 @@ fn config_page_covers_the_schema() {
         .iter()
         .map(|(t, _)| *t)
         .chain(sliders.iter().map(String::as_str))
-        .chain(keys.copied())
-        .chain(sliver_config::CAVA.iter().copied())
+        .chain(keys.map(|(k, _)| *k))
+        .chain(sliver_config::CAVA.iter().map(|(k, _)| *k))
         .collect();
     assert_eq!(
         missing(&man, &words),

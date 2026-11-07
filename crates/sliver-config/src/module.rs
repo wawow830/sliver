@@ -11,110 +11,11 @@ use crate::condition::Condition;
 use crate::diag::{Diagnostics, Reader};
 use crate::format::Format;
 use crate::keys::Key;
+use crate::options::takes_key;
 use crate::values::{FireOn, Interval, Width};
 
 /// Namespaces whose second part is a *name*, not part of the type (`custom/vpn`, `key/F1`).
 const PARAMETRIC: &[&str] = &["custom", "key", "group", "app"];
-
-/// What a script behind a module takes (`custom`, and `image` and `graph` fed by one).
-const SCRIPT: &[&str] = &[
-    "exec",
-    "exec-if",
-    "restart-interval",
-    "signal",
-    "exec-on-event",
-    "return-type",
-    "escape",
-    "timeout",
-    "env",
-];
-/// A module with a value drawn as a slider.
-const SLIDER: &[&str] = &["slider", "collapsed"];
-/// waybar's `cava` keys. Every module takes them: `spectrum = true` draws cava under any module.
-pub const CAVA: &[&str] = &[
-    "bars",
-    "framerate",
-    "sleep_timer",
-    "stereo",
-    "autosens",
-    "sensitivity",
-    "lower_cutoff_freq",
-    "higher_cutoff_freq",
-    "method",
-    "source",
-    "reverse",
-    "monstercat",
-    "waves",
-    "noise_reduction",
-];
-
-/// Every built-in module type (sliver-config(5)) and the keys it takes besides [`COMMON_KEYS`],
-/// `spectrum` and [`CAVA`]'s. Validation warns about any other key, and the runtime reads only
-/// these ([`crate::ModuleInstance::get`]). Unknown types are a warning, because a newer agent may
-/// know them.
-pub const MODULE_TYPES: &[(&str, &[&[&str]])] = &[
-    ("key", &[&["key"]]),
-    ("spacer", &[]),
-    ("clock", &[&["locale", "timezone", "timezones"]]),
-    ("battery", &[]),
-    ("backlight", &[SLIDER]),
-    ("kbd-backlight", &[SLIDER]),
-    ("audio", &[&["node"], SLIDER]),
-    ("mpris", &[&["art", "scrub"]]),
-    ("workspaces", &[&["all-outputs"]]),
-    ("window", &[&["rewrite"]]),
-    ("mode", &[]),
-    ("language", &[]),
-    ("idle-inhibitor", &[]),
-    ("dnd", &[]),
-    ("dark-mode", &[]),
-    ("screenshot", &[]),
-    ("lock", &[]),
-    ("power", &[]),
-    ("power-profiles", &[]),
-    ("cpu", &[]),
-    ("memory", &[]),
-    (
-        "temperature",
-        &[&["thermal-zone", "hwmon-path", "critical-threshold"]],
-    ),
-    ("disk", &[&["path"]]),
-    ("load", &[]),
-    ("network", &[]),
-    ("bluetooth", &[]),
-    ("graph", &[&["source", "samples", "min", "max"], SCRIPT]),
-    ("privacy", &[]),
-    ("systemd-failed-units", &[&["hide-on-ok", "system", "user"]]),
-    ("taskbar", &[&["all-workspaces", "pinned"]]),
-    ("notifications", &[]),
-    ("emoji", &[&["mode", "columns", "insert"]]),
-    ("timer", &[&["duration"]]),
-    ("cava", &[]),
-    ("image", &[&["path"], SCRIPT]),
-    (
-        "group",
-        &[&["modules", "orientation", "drawer", "module-width"]],
-    ),
-    ("app-controls", &[]),
-    ("status-items", &[]),
-    ("app", &[]),
-    ("custom", &[SLIDER, SCRIPT]),
-];
-
-/// The keys type `kind` declares for itself in [`MODULE_TYPES`] (none for an unknown type).
-pub fn own_keys(kind: &str) -> impl Iterator<Item = &'static str> {
-    let groups = MODULE_TYPES
-        .iter()
-        .find(|(t, _)| *t == kind)
-        .map(|(_, g)| *g);
-    groups.into_iter().flatten().flat_map(|g| g.iter().copied())
-}
-
-/// Does a module of type `kind` take `key` (besides the common keys)? `None`: an unknown type.
-pub fn takes_key(kind: &str, key: &str) -> Option<bool> {
-    MODULE_TYPES.iter().find(|(t, _)| *t == kind)?;
-    Some(own_keys(kind).any(|k| k == key) || key == "spectrum" || CAVA.contains(&key))
-}
 
 /// waybar type names → sliver type names, so ported configs work.
 fn type_alias(t: &str) -> Option<&'static str> {
@@ -324,7 +225,7 @@ pub struct MenuEntry {
     pub on_tap: Action,
 }
 
-/// Keys every module understands. Type-specific keys are read with [`crate::ModuleInstance::get`].
+/// Keys every module understands. Type-specific keys are [`crate::MODULE_TYPES`]'s.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Common {
     pub format: Option<Format>,
@@ -501,7 +402,23 @@ impl Common {
                 rest.insert(k.clone(), v.clone());
             }
         }
-        // Type-specific keys are checked by `check_type_keys`, so `r` doesn't warn for them.
+        let formats = [
+            ("format", c.format.as_ref()),
+            ("format-alt", c.format_alt.as_ref()),
+            ("detail-format", c.detail_format.as_ref()),
+        ];
+        let variants = c.format_variants.iter().map(|(k, f)| (k.as_str(), Some(f)));
+        for (key, f) in formats.into_iter().chain(variants) {
+            if let Some(Err(e)) = f.map(Format::template) {
+                let key = if c.format_variants.contains_key(key) {
+                    format!("format-{key}")
+                } else {
+                    key.to_owned()
+                };
+                d.error(r.path(&key), e);
+            }
+        }
+        // `rest` holds the type-specific keys, which `crate::options` reads.
         (c, rest)
     }
 
@@ -592,18 +509,6 @@ fn parse_menu(v: &Value, path: &str, d: &mut Diagnostics) -> Vec<MenuEntry> {
             })
         })
         .collect()
-}
-
-/// Warns about keys a known module type doesn't take ([`MODULE_TYPES`]).
-pub(crate) fn check_type_keys(id: &ModuleId, rest: &Table, path: &str, d: &mut Diagnostics) {
-    for k in rest.keys() {
-        if takes_key(&id.kind, k) == Some(false) {
-            d.warn(
-                crate::diag::join(path, k),
-                format!("unknown key for {} modules (ignored)", id.kind),
-            );
-        }
-    }
 }
 
 /// Media key icons (XDG symbolic names) for `key/*` defaults.
