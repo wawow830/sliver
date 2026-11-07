@@ -21,7 +21,7 @@ use crate::pace::Pacer;
 const SLACK: Duration = Duration::from_millis(5);
 
 /// Something that happened.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Input {
     /// Time passed: run whatever is due.
     Tick,
@@ -47,6 +47,10 @@ pub enum Input {
     Role,
     /// Effects the agent produced answering a control request.
     Effects(Vec<Effect>),
+    /// A newly loaded config and stylesheet.
+    Config(Box<crate::reload::Applied>),
+    /// The desktop's reduce-motion setting.
+    ReduceMotion(bool),
 }
 
 /// Something for `main` to do.
@@ -93,10 +97,19 @@ impl Driver {
         &self.agent
     }
 
-    /// For control requests, which call the agent and answer at once. Their effects come back as
-    /// [`Input::Effects`].
-    pub fn agent_mut(&mut self) -> &mut Agent {
-        &mut self.agent
+    /// A `Control1` request, answered at once ([`Agent::control`]). Its effects come back as
+    /// [`Input::Effects`]; `Err(req)` is the caller's to answer.
+    pub fn control(
+        &mut self,
+        req: sliver_api::service::Control,
+        now: &Now,
+    ) -> (
+        Result<crate::api::Reply, sliver_api::service::Control>,
+        Vec<Effect>,
+    ) {
+        let mut fx = Vec::new();
+        let r = self.agent.control(req, now.mono_us, &mut fx);
+        (r, fx)
     }
 
     pub fn handle(&mut self, now: &Now, input: Input) -> Vec<Output> {
@@ -134,26 +147,15 @@ impl Driver {
                 x,
                 time_us,
             } => self.agent.touch(region, slot, phase, x, time_us),
-            Input::Display(state) => {
-                let was_off = self.agent.display == DisplayState::Off;
-                self.agent.display = state;
-                self.dirty |= was_off && state != DisplayState::Off;
-                if state == DisplayState::Off {
-                    self.agent.cancel_touches()
-                } else {
-                    Vec::new()
-                }
-            }
-            Input::Hatch(open) => {
-                self.agent.hatch = open;
-                if open {
-                    self.agent.cancel_touches()
-                } else {
-                    Vec::new()
-                }
-            }
+            Input::Display(state) => self.agent.set_display(state),
+            Input::Hatch(open) => self.agent.set_hatch(open),
             Input::Fn(held) => {
-                self.agent.fn_held = held;
+                self.agent.set_fn_held(held);
+                Vec::new()
+            }
+            Input::Config(a) => self.agent.apply(&a),
+            Input::ReduceMotion(on) => {
+                self.agent.set_reduce_motion(on);
                 Vec::new()
             }
             Input::Role => {
@@ -177,19 +179,22 @@ impl Driver {
     /// full frame is drawn, and is built at `now`.
     pub fn draw(&mut self, now: &Now, world: impl FnOnce() -> World) -> Vec<Output> {
         let mut out = Vec::new();
-        let policy =
-            crate::display::policy(&self.agent.config.display, self.on_battery, self.panel_max);
+        let policy = crate::display::policy(
+            &self.agent.config().display,
+            self.on_battery,
+            self.panel_max,
+        );
         if self.sent_policy.as_ref() != Some(&policy) {
             self.sent_policy = Some(policy.clone());
             out.push(Output::Policy(policy));
         }
-        let lit = self.agent.display != DisplayState::Off;
+        let lit = self.agent.display() != DisplayState::Off;
         if lit && self.dirty {
             self.pacer.drawn(now.instant);
             out.extend(self.agent.render(&world()).into_iter().map(Output::Present));
             out.extend(
                 self.agent
-                    .errors
+                    .errors()
                     .iter()
                     .map(|e| Output::Effect(Effect::Log(e.clone()))),
             );
@@ -217,7 +222,7 @@ impl Driver {
     /// input arrives; invariant 3).
     pub fn next_deadline(&self, now: &Now) -> Option<Duration> {
         let a = &self.agent;
-        let lit = a.display != DisplayState::Off;
+        let lit = a.display() != DisplayState::Off;
         let gesture = a
             .next_deadline()
             .map(|t| Duration::from_micros(t.saturating_sub(now.mono_us)));

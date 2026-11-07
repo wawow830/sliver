@@ -18,6 +18,7 @@ use crate::icons::Icons;
 use crate::modules::{self, Cell, UiState, World};
 
 mod actions;
+mod control;
 mod input;
 mod overlay;
 
@@ -115,33 +116,33 @@ pub enum SessionOp {
 }
 
 pub struct Agent {
-    pub config: Config,
-    pub sheet: Stylesheet,
+    config: Config,
+    sheet: Stylesheet,
     renderer: Renderer,
     /// Character keys in combos follow the bar keyboard's layout, and the keymap they came
     /// from (rebuilt only when it changes).
     keymap: crate::keymap::KeyMapper,
     keymap_names: Option<sliver_desktop::XkbNames>,
     icons: Icons,
-    pub width: u32,
-    pub height: u32,
+    width: u32,
+    height: u32,
     /// The context the last render resolved with (built from the world, plus `ctx_overrides`).
-    pub ctx: Context,
+    ctx: Context,
     /// Applied on top of the world's context (simulate one condition over live state).
-    pub ctx_overrides: Vec<(String, CtxValue)>,
+    ctx_overrides: Vec<(String, CtxValue)>,
     /// Use exactly this context instead of building one from the world (the settings app's
     /// "Preview as").
-    pub fixed_ctx: Option<Context>,
+    fixed_ctx: Option<Context>,
     /// Whether this Mac has a physical Esc key (decides the `esc` zone).
-    pub physical_esc: bool,
+    physical_esc: bool,
     /// Custom layers opened over `base` (last = on top).
-    pub layers: Vec<String>,
+    layers: Vec<String>,
     ui: HashMap<String, UiState>,
-    pub display: DisplayState,
+    display: DisplayState,
     /// sliverd's safe hatch is showing its own layer.
-    pub hatch: bool,
+    hatch: bool,
     /// Fn is held: sliverd shows our `fn` frame.
-    pub fn_held: bool,
+    fn_held: bool,
     frames: [Option<Frame>; 2],
     /// A base-layer change animating (`-sliver-layer-transition`), and the layer depth the base
     /// frame was last drawn at (deeper = slide forward).
@@ -159,7 +160,7 @@ pub struct Agent {
     /// `on-drag` throttling by region: it outlives the touch, so the final value always runs.
     drag: HashMap<u32, DragState>,
     /// Problems resolving layers, for logging/status. Cleared on each render.
-    pub errors: Vec<String>,
+    errors: Vec<String>,
     /// `graph` modules' samples, by module id. Sampled in [`Agent::render`] while the bar is
     /// drawn.
     graphs: HashMap<String, Samples>,
@@ -173,15 +174,15 @@ pub struct Agent {
     /// passes.
     under_finger: HashMap<String, (f32, Option<u64>)>,
     /// `sliverctl bar hide`: the base layer shows nothing (Fn → F-keys still works).
-    pub hidden: bool,
+    hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
-    pub hidden_modules: std::collections::BTreeSet<String>,
+    hidden_modules: std::collections::BTreeSet<String>,
     /// A layout shown on a layer whatever the rules say (`sliverctl layout`, Mirror).
     forced: Option<Forced>,
     /// What the base layer resolved to last: its layout and the rule (index) that picked it.
     active: Option<(String, Option<usize>)>,
     /// `sliverctl update MODULE …`: output pushed to exec-less custom modules.
-    pub pushed: HashMap<String, crate::scripts::Output>,
+    pushed: HashMap<String, crate::scripts::Output>,
 }
 
 /// A placed `graph`'s history: oldest first, 0..=1, how many it keeps, and when the last

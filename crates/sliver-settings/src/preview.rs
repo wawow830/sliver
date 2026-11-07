@@ -57,14 +57,10 @@ impl Preview {
     /// Renders config layer `layer` for `ctx`. Custom layers are shown the way the agent shows
     /// them: opened over base.
     pub fn render(&mut self, layer: &str, ctx: Context) -> Result<Pixmap, String> {
-        self.agent.fixed_ctx = Some(ctx);
-        self.agent.layers = match layer {
-            "base" | "fn" => Vec::new(),
-            custom => vec![custom.to_owned()],
-        };
+        self.agent.show_as(layer, ctx);
         // Sample values for data modules, and outlined placeholders for empty app slots.
         self.agent.render(&World::sample(Local::now()));
-        if let Some(e) = self.agent.errors.first() {
+        if let Some(e) = self.agent.errors().first() {
             return Err(e.clone());
         }
         let slot = if layer == "fn" {

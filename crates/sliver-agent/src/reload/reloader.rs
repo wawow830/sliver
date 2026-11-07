@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// A config and stylesheet that are safe to use.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Applied {
     pub config: Config,
     pub sheet: Stylesheet,

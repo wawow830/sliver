@@ -7,9 +7,12 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::{Local, TimeZone};
+use sliver_agent::agent::Effect;
 use sliver_agent::link::Link;
 use sliver_agent::modules::World;
 use sliver_agent::{Agent, icons::Icons};
+use sliver_api::item::{Prop, Props};
+use sliver_api::service::{Control, ControlReply};
 use sliver_config::load_str;
 use sliver_ipc::proto::{Layer, RegionKind};
 use sliver_render::{Content, Fonts, Pixmap, Renderer, Stylesheet};
@@ -94,7 +97,7 @@ fn default_config_end_to_end() {
     let mut a = agent("");
     let (mut fake, mut link) = connect();
     let layers = a.render(&world(9, 41));
-    assert_eq!(layers, [Layer::Base, Layer::Fn], "{:?}", a.errors);
+    assert_eq!(layers, [Layer::Base, Layer::Fn], "{:?}", a.errors());
     present(&a, &mut link, &mut fake, &layers);
     assert!(fake.errors.is_empty(), "{:?}", fake.errors);
     assert!(!fake.safe_layer_active());
@@ -166,7 +169,7 @@ fn clock_ticks_present_only_changes() {
     );
 
     // Display off: nothing ticks.
-    a.display = sliver_ipc::proto::DisplayState::Off;
+    a.set_display(sliver_ipc::proto::DisplayState::Off);
     assert_eq!(a.next_change(), None);
 }
 
@@ -922,24 +925,46 @@ fn runtime_layout_visibility_and_pushed_output() {
         "#,
     );
     let w = world(9, 41);
-    a.pushed.insert(
-        "custom/push".into(),
-        sliver_agent::scripts::Output {
-            text: "pushed".into(),
-            ..Default::default()
-        },
-    );
-    a.render(&w);
-    let texts: Vec<String> = a
-        .frame(Layer::Base)
-        .unwrap()
-        .cells
-        .iter()
-        .map(|c| format!("{:?}", c.look.content))
-        .collect();
-    assert!(texts[0].contains("[pushed]"), "{texts:?}");
+    let mut fx = Vec::new();
+    let mut control = |a: &mut Agent, req| {
+        let reply = a.control(req, 0, &mut fx).expect("the agent's own");
+        (reply, std::mem::take(&mut fx))
+    };
+    let props = |kv: &[(&str, Prop)]| -> Props {
+        kv.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    };
+    let update = |kv: &[(&str, Prop)]| Control::Update("custom/push".into(), props(kv));
+    let (reply, fx) = control(&mut a, update(&[("text", Prop::Str("pushed".into()))]));
+    assert_eq!((reply, fx), (Ok(ControlReply::Done), vec![Effect::Redraw]));
+    let texts = |a: &mut Agent| -> Vec<String> {
+        a.render(&w);
+        let f = a.frame(Layer::Base).unwrap();
+        f.cells
+            .iter()
+            .map(|c| format!("{:?}", c.look.content))
+            .collect()
+    };
+    assert!(texts(&mut a)[0].contains("[pushed]"));
 
-    a.hidden_modules.insert("clock".into());
+    // All or nothing: a mistyped field leaves the module as it was, and draws nothing.
+    let bad = update(&[
+        ("text", Prop::Str("half".into())),
+        ("value", Prop::Bool(true)),
+    ]);
+    let (reply, fx) = control(&mut a, bad);
+    assert!(reply.is_err() && fx.is_empty(), "{reply:?} {fx:?}");
+    assert!(texts(&mut a)[0].contains("[pushed]"));
+
+    // What needs the outside world goes back to the caller.
+    assert!(matches!(
+        a.control(Control::ReloadConfig, 0, &mut Vec::new()),
+        Err(Control::ReloadConfig)
+    ));
+
+    assert_eq!(
+        control(&mut a, Control::Hide("clock".into())).0,
+        Ok(ControlReply::Done)
+    );
     a.render(&w);
     assert_eq!(a.frame(Layer::Base).unwrap().cells.len(), 1);
 
@@ -2022,8 +2047,11 @@ fn display_config_and_battery_profile_reach_sliverd() {
     );
     let (mut fake, link) = connect();
     let send = |link: &Link, on_battery| {
-        let p =
-            sliver_agent::display::policy(&a.config.display, on_battery, link.panel.max_brightness);
+        let p = sliver_agent::display::policy(
+            &a.config().display,
+            on_battery,
+            link.panel.max_brightness,
+        );
         link.send(&sliver_ipc::proto::AgentMsg::DisplayPolicy(p))
             .unwrap();
     };
@@ -2061,7 +2089,7 @@ fn display_config_and_battery_profile_reach_sliverd() {
 fn pixel_shift_keeps_content_off_the_ends() {
     let mut a = agent("[display]\npixel-shift = true\n");
     let layers = a.render(&world(9, 41));
-    assert!(a.errors.is_empty(), "{:?}", a.errors);
+    assert!(a.errors().is_empty(), "{:?}", a.errors());
     // The bar background: the corner of an inset frame is never covered.
     let bg = a.frame(Layer::Base).unwrap().image.pixel(0, 0).unwrap();
     let ink_near_ends = |p: &Pixmap, n: u32| {
@@ -2532,10 +2560,10 @@ noise_reduction = 0.5
     a.render(&w);
     assert_eq!(bars(&a), [0.25, 0.5, 0.75, 1.0]);
     // Fn shows the F-keys: no spectrum on screen, so no cava.
-    a.fn_held = true;
+    a.set_fn_held(true);
     assert_eq!(a.spectrum_config(), None);
-    a.fn_held = false;
-    a.display = DisplayState::Off;
+    a.set_fn_held(false);
+    a.set_display(DisplayState::Off);
     assert_eq!(a.spectrum_config(), None);
 }
 

@@ -105,7 +105,7 @@ fn main() {
         let mut agent = new_agent(reloader.applied(), a.size);
         // Give the live sources a moment to report, so the preview shows real state.
         // No API: a headless render must never take the bus name from the running agent.
-        let world = match Live::start(&agent.config, None) {
+        let world = match Live::start(agent.config(), None) {
             Ok(mut live) => {
                 std::thread::sleep(Duration::from_millis(1500));
                 live.pump();
@@ -115,7 +115,7 @@ fn main() {
         };
         agent.render(&world);
         agent
-            .errors
+            .errors()
             .iter()
             .for_each(|e| eprintln!("sliver-agent: {e}"));
         for (layer, suffix) in [(Layer::Base, "base"), (Layer::Fn, "fn")] {
@@ -310,17 +310,17 @@ fn run(
             )
         };
 
-        if reloader.on_wake(watch_ready, usr2_ready, driver.agent_mut(), live) {
-            inputs.push(Input::Redraw);
-        }
+        inputs.extend(
+            reloader
+                .on_wake(watch_ready, usr2_ready, live)
+                .map(Input::Config),
+        );
         if world_changed {
             if live.pump() {
                 inputs.push(Input::Changed);
             }
-            if reloader.sync_accent(driver.agent_mut(), live) {
-                inputs.push(Input::Redraw);
-            }
-            driver.agent_mut().set_reduce_motion(reduce_motion(live));
+            inputs.extend(reloader.sync_accent(live).map(Input::Config));
+            inputs.push(Input::ReduceMotion(reduce_motion(live)));
             inputs.push(Input::OnBattery(live.agg.session.power.on_battery));
         }
         if api_woke && let Some(api) = &live.api {
@@ -331,9 +331,7 @@ fn run(
                 inputs.push(Input::Changed);
             }
             for (req, reply) in requests {
-                let (answer, fx) = control(driver.agent_mut(), live, reloader, req);
-                let _ = reply.send(answer);
-                inputs.push(Input::Effects(fx));
+                let _ = reply.send(control(&mut driver, live, reloader, req, &mut inputs));
             }
         }
         if api_woke && live.api.as_ref().is_some_and(|a| !a.owns_name()) {
@@ -362,7 +360,7 @@ fn run(
                     time_us,
                 },
                 Event::Display(state) => {
-                    display_changed(live, driver.agent().display, state);
+                    display_changed(live, driver.agent().display(), state);
                     Input::Display(state)
                 }
                 Event::Hatch(open) => Input::Hatch(open),

@@ -17,7 +17,7 @@ impl Agent {
 
     /// Shows a newly loaded config and stylesheet. Opened layers, and a forced layout, that the
     /// config no longer has close.
-    pub fn apply(&mut self, a: &crate::reload::Applied) {
+    pub fn apply(&mut self, a: &crate::reload::Applied) -> Vec<Effect> {
         self.config = a.config.clone();
         self.sheet = a.sheet.clone();
         self.set_config_dir(a.config_path.as_deref().and_then(std::path::Path::parent));
@@ -30,6 +30,7 @@ impl Agent {
         {
             self.forced = None;
         }
+        vec![Effect::Redraw]
     }
 
     /// The desktop's reduce-motion setting: transitions (and layer slides) jump to their end.

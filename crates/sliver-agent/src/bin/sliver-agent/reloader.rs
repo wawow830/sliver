@@ -89,14 +89,13 @@ impl Reloader {
         Some(d.saturating_duration_since(Instant::now()).as_millis() as i64 + 1)
     }
 
-    /// After poll: feeds file events and SIGUSR2, reloads when due. Returns whether to redraw.
+    /// After poll: feeds file events and SIGUSR2, reloads when due. Returns a config to show.
     pub(super) fn on_wake(
         &mut self,
         watch_ready: bool,
         usr2_ready: bool,
-        agent: &mut Agent,
         live: &mut Live,
-    ) -> bool {
+    ) -> Option<Box<Applied>> {
         let inner = &mut self.inner;
         let now = Instant::now();
         if watch_ready {
@@ -113,12 +112,12 @@ impl Reloader {
         } else {
             inner.poll_due(now)
         };
-        outcome.is_some_and(|o| self.handle(o, Some(agent), live))
+        outcome.and_then(|o| self.handle(o, live))
     }
 
     /// The desktop's accent colour changed (portal or KDE): rebuild the stylesheet with it.
-    /// Returns whether something changed on screen.
-    pub(super) fn sync_accent(&mut self, agent: &mut Agent, live: &mut Live) -> bool {
+    /// Returns a config to show.
+    pub(super) fn sync_accent(&mut self, live: &mut Live) -> Option<Box<Applied>> {
         let accent = live
             .agg
             .session
@@ -126,25 +125,25 @@ impl Reloader {
             .accent
             .map(|[r, g, b]| sliver_render::Color::rgb(r, g, b));
         if !self.inner.set_accent(accent) {
-            return false;
+            return None;
         }
         let outcome = self.inner.reload_now();
-        self.handle(outcome, Some(agent), live)
+        self.handle(outcome, live)
     }
 
-    /// Reloads now (`sliverctl reload`). Returns the errors (empty = the file's config is live).
-    pub(super) fn reload(&mut self, agent: Option<&mut Agent>, live: &mut Live) -> Vec<String> {
+    /// Reloads now (`sliverctl reload`): a config to show, and the errors (empty = the file's
+    /// config is live).
+    pub(super) fn reload(&mut self, live: &mut Live) -> (Option<Box<Applied>>, Vec<String>) {
         let o = self.inner.reload_now();
-        self.handle(o, agent, live);
-        self.errors.clone()
+        let applied = self.handle(o, live);
+        (applied, self.errors.clone())
     }
 
     pub(super) fn handle(
         &mut self,
         o: sliver_agent::reload::Outcome,
-        agent: Option<&mut Agent>,
         live: &mut Live,
-    ) -> bool {
+    ) -> Option<Box<Applied>> {
         use sliver_agent::reload::Outcome;
         self.read_profiles();
         match o {
@@ -157,12 +156,9 @@ impl Reloader {
                     .iter()
                     .for_each(|w| eprintln!("sliver-agent: {src}: warning: {w}"));
                 live.follow(&a.config);
-                if let Some(agent) = agent {
-                    agent.apply(&a);
-                }
                 self.errors.clear();
                 eprintln!("sliver-agent: reloaded {src}");
-                true
+                Some(a)
             }
             Outcome::Rejected(errors) => {
                 errors
@@ -170,12 +166,12 @@ impl Reloader {
                     .for_each(|e| eprintln!("sliver-agent: config error: {e}"));
                 eprintln!("sliver-agent: keeping the last good config");
                 self.errors = errors;
-                false
+                None
             }
             // Back to what's live (e.g. a broken save reverted): nothing to redraw, no errors.
             Outcome::Unchanged => {
                 self.errors.clear();
-                false
+                None
             }
         }
     }
