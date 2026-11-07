@@ -458,13 +458,17 @@ impl Agent {
                     }
                     // A panic while building (a module bug, input nobody foresaw) must not take
                     // the agent down: systemd would restart it into the same panic, over and
-                    // over. Keep showing this layer's last good frame and report it instead.
+                    // over. Keep showing this layer's last good frame and report it instead. What
+                    // a build changes besides caches (an overlay it closes, sliders it lets go)
+                    // goes back to how it was, so the agent stays the one that drew that frame.
+                    let kept = (self.overlay.clone(), self.under_finger.clone());
                     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         self.build(&r, world, id_base)
                     }));
                     let mut f = match built {
                         Ok(f) => f,
                         Err(p) => {
+                            (self.overlay, self.under_finger) = kept;
                             let msg = p
                                 .downcast_ref::<String>()
                                 .map(String::as_str)
@@ -530,10 +534,6 @@ impl Agent {
     }
 
     fn build(&mut self, r: &Resolved, world: &World, id_base: u32) -> Frame {
-        #[cfg(test)]
-        if self.panic_in_build {
-            panic!("test panic in build");
-        }
         // Published items the layout places itself (`app/<provider>#<item>`) leave the
         // App controls / Status items placeholders.
         fn pinned(ms: &[sliver_config::ModuleInstance], out: &mut Vec<(String, Option<String>)>) {
@@ -638,11 +638,12 @@ impl Agent {
         let mut per_zone = per_zone;
         // Fast-path key regions (sliverd presses them itself) get layout-mapped keys too.
         if world.desktop.bar_keymap != self.keymap_names {
-            self.keymap_names = world.desktop.bar_keymap.clone();
-            self.keymap = match &self.keymap_names {
+            // Built before either is replaced: the names always say what the keymap is.
+            self.keymap = match &world.desktop.bar_keymap {
                 Some(n) => crate::keymap::KeyMapper::new(n),
                 None => crate::keymap::KeyMapper::positional(),
             };
+            self.keymap_names = world.desktop.bar_keymap.clone();
         }
         for c in per_zone.iter_mut().flatten() {
             if let crate::modules::Touch::Keys(keys) = &mut c.touch {
@@ -699,6 +700,11 @@ impl Agent {
         );
         if self.touches.recognizer.bar_bound() {
             f.fill_gaps();
+        }
+        // Last, so the guard in `render` is tested against everything a build changes.
+        #[cfg(test)]
+        if self.panic_in_build {
+            panic!("test panic in build");
         }
         f
     }
@@ -913,8 +919,9 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    /// A panic while building a frame is caught: the layer keeps its last good frame, the
-    /// error is reported, and the next render works again.
+    /// A panic while building a frame is caught: the layer keeps its last good frame, what the
+    /// build changed is undone (here: it closed a popover whose app is gone), the error is
+    /// reported, and the next render works again.
     #[test]
     fn a_panicking_build_keeps_the_last_frame() {
         let l = sliver_config::load_str("", std::path::Path::new("."));
@@ -933,8 +940,14 @@ mod tests {
         );
         assert_eq!(a.render(&w), [Layer::Base, Layer::Fn]);
         let good = a.frame(Layer::Base).unwrap().image.clone();
+        a.overlay = Some(overlay::Overlay::Popover {
+            context: sliver_api::registry::ContextId(7),
+            item: "gone".into(),
+            class: "app".into(),
+        });
         a.panic_in_build = true;
         assert!(a.render(&w).is_empty(), "nothing new to present");
+        assert!(a.overlay.is_some(), "the panicked build's close was undone");
         assert!(
             a.errors.iter().any(|e| e.contains("panicked")),
             "{:?}",
@@ -944,5 +957,6 @@ mod tests {
         a.panic_in_build = false;
         assert_eq!(a.render(&w), [Layer::Base, Layer::Fn]);
         assert!(a.errors.is_empty());
+        assert!(a.overlay.is_none(), "a build that returns closes it");
     }
 }
