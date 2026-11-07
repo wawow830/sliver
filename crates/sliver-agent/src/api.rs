@@ -191,13 +191,6 @@ impl ApiLink {
         self.api.set_focus(focus);
     }
 
-    /// Tells the holder of a mirrored layout which module the user touched.
-    pub fn held_pressed(&self, module: &str, zone: &str, index: u32) {
-        if let Err(e) = zbus::block_on(self.api.held_pressed(module, zone, index)) {
-            eprintln!("sliver-agent: HeldPressed: {e}");
-        }
-    }
-
     pub fn interact(
         &self,
         context: ContextId,

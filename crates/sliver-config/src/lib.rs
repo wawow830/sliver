@@ -19,7 +19,7 @@
 mod action;
 mod condition;
 mod diag;
-pub mod files;
+mod files;
 pub mod format;
 mod keys;
 mod keys_table;
@@ -36,7 +36,7 @@ mod values;
 pub mod writer;
 
 pub use action::{Action, DBusCall, LayerMode, MAX_MACRO_STEPS, MAX_MACRO_TIME};
-pub use condition::{CONTEXT_KEYS, Condition, Context, CtxValue, Matcher, canonical_key};
+pub use condition::{CONTEXT_KEYS, Condition, Context, CtxValue, Matcher};
 pub use diag::{Diagnostics, Issue};
 pub use format::{
     FmtValue, Format, Formatted, IconRef, State, Template, ValueMap, Values, format_module,
@@ -55,7 +55,7 @@ pub use options::{
 };
 pub use resolve::{
     HIDDEN_WHILE_LOCKED, MAX_DEPTH, ModuleInstance, ResolveError, Resolved, ResolvedZone,
-    deep_merge, extends_chain, inherit_zones,
+    deep_merge,
 };
 pub use rewrite::Rewrite;
 pub use validate::{COMFORTABLE_TARGET_PX, Hardware, TINY_TARGET_PX};

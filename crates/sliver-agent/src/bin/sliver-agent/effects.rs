@@ -165,15 +165,6 @@ pub(super) fn apply(
                     api.interact(context, &item, what);
                 }
             }
-            Effect::HeldPressed {
-                module,
-                zone,
-                index,
-            } => {
-                if let Some(api) = &live.api {
-                    api.held_pressed(&module, &zone, index);
-                }
-            }
             Effect::Desktop(action) => {
                 // A compositor round trip: keep it off the main loop.
                 std::thread::spawn(move || {

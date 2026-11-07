@@ -107,7 +107,7 @@ hide-empty-text = true
 [modules."emoji#strip"]
 mode = "strip"
 
-# Sparklines offered in the settings Library.
+# Sparklines, ready to place.
 [modules."graph#cpu"]
 source = "cpu"
 
@@ -125,8 +125,7 @@ collapsed = false
 [modules."audio/slider#locked"]
 collapsed = false
 
-# First match wins; settings adds new rules below this one. A user [[rules]] list replaces this
-# one (arrays replace).
+# First match wins. A user [[rules]] list replaces this one (arrays replace).
 [[rules]]
 name = "Locked screen"
 when = { locked = true }

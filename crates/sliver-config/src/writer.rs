@@ -1,5 +1,5 @@
 //! Editing config files while keeping the user's comments and formatting (sliver-config(5)), for
-//! the settings app and `sliverctl config set`.
+//! `sliverctl config set`.
 //!
 //! Key paths use the spelling from diagnostics: `bar.spacing`, `modules."custom/vpn".format`,
 //! `layouts.default.zones[1].modules`, `rules[0].layout`.
@@ -120,14 +120,6 @@ impl Editor {
         Ok(Editor { path: None, doc })
     }
 
-    /// Replaces the whole document (an import or a preset), keeping the file it saves to.
-    pub fn replace_text(&mut self, text: &str) -> Result<(), String> {
-        self.doc = text
-            .parse::<DocumentMut>()
-            .map_err(|e| format!("TOML syntax: {e}"))?;
-        Ok(())
-    }
-
     pub fn text(&self) -> String {
         self.doc.to_string()
     }
@@ -214,59 +206,6 @@ impl Editor {
         Ok(())
     }
 
-    /// Sets `path` to an array of tables written as `[[path]]` sections (zones, rules), not an
-    /// inline array. The parent must be a section table.
-    pub fn set_tables(&mut self, path: &str, tables: &[toml::Table]) -> Result<(), String> {
-        let segs = parse_path(path)?;
-        // Sections that already exist with the same content are kept verbatim (their comments,
-        // formatting and key order), so reordering or removing rules doesn't strip comments.
-        let mut old: Vec<(toml::Table, toml_edit::Table)> = {
-            let mut item = Some(self.doc.as_item());
-            for s in &segs {
-                item = item.and_then(|i| match s {
-                    Seg::Key(k) => i.get(k.as_str()),
-                    Seg::Index(n) => i.get(*n),
-                });
-            }
-            item.and_then(Item::as_array_of_tables)
-                .map(|aot| {
-                    aot.iter()
-                        .filter_map(|t| Some((section_value(t)?, t.clone())))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        // Write a placeholder through `set` (which creates parents), then swap in the sections.
-        self.set(path, &Value::Array(Vec::new()))?;
-        let mut item = self.doc.as_item_mut();
-        for s in &segs[..segs.len() - 1] {
-            item = step_mut(item, s, Create::No).ok_or("parent vanished")?;
-        }
-        let Some(Seg::Key(k)) = segs.last() else {
-            return Err("set_tables needs a key path".into());
-        };
-        let parent = item.as_table_mut().ok_or_else(|| {
-            format!("{path}: [[sections]] need a section parent, not an inline table")
-        })?;
-        let mut aot = toml_edit::ArrayOfTables::new();
-        for t in tables {
-            if let Some(pos) = old.iter().position(|(v, _)| v == t) {
-                let mut kept = old.remove(pos).1;
-                // toml_edit prints sections by their remembered position; forget it so the
-                // new order (e.g. a moved rule) is what gets written.
-                kept.set_position(None);
-                aot.push(kept);
-                continue;
-            }
-            let Item::Table(section) = to_item(&Value::Table(t.clone()), true) else {
-                return Err("tables only".into());
-            };
-            aot.push(section);
-        }
-        parent.insert(k, Item::ArrayOfTables(aot));
-        Ok(())
-    }
-
     /// Removes `path`. Returns whether something was there.
     pub fn remove(&mut self, path: &str) -> Result<bool, String> {
         let segs = parse_path(path)?;
@@ -331,17 +270,6 @@ impl Editor {
             return Err(d);
         }
         Ok(d)
-    }
-}
-
-/// A section's content as plain TOML, to compare with what we're about to write.
-fn section_value(t: &toml_edit::Table) -> Option<toml::Table> {
-    let mut d = DocumentMut::new();
-    d.insert("x", Item::Table(t.clone()));
-    let mut parsed: toml::Table = d.to_string().parse().ok()?;
-    match parsed.remove("x")? {
-        Value::Table(t) => Some(t),
-        _ => None,
     }
 }
 
@@ -608,54 +536,6 @@ layout = "fkeys"
             Some(Value::String("media".into()))
         );
         assert!(e.text().contains("# clock tweaks"));
-    }
-
-    #[test]
-    fn arrays_of_tables() {
-        let mut e = Editor::parse("version = 1\n# keep me\n").unwrap();
-        let zone = |name: &str| {
-            let mut t = toml::Table::new();
-            t.insert("name".into(), name.into());
-            t.insert("modules".into(), Value::Array(vec!["clock".into()]));
-            t
-        };
-        e.set_tables("layouts.slim.zones", &[zone("main"), zone("right")])
-            .unwrap();
-        let t = e.text();
-        assert!(
-            t.contains("[[layouts.slim.zones]]\nname = \"main\"\nmodules = [\"clock\"]"),
-            "{t}"
-        );
-        assert!(t.contains("# keep me"));
-        assert_eq!(
-            e.get("layouts.slim.zones[1].name").unwrap(),
-            Some(Value::String("right".into()))
-        );
-        // Reordering keeps each section's comment and really reorders.
-        let mut e2 = Editor::parse("[[r]]\nn = 1\n# two\n[[r]]\nn = 2\n").unwrap();
-        let r = |n: i64| {
-            let mut t = toml::Table::new();
-            t.insert("n".into(), Value::Integer(n));
-            t
-        };
-        e2.set_tables("r", &[r(2), r(1)]).unwrap();
-        assert_eq!(
-            e2.get("r[0].n").unwrap(),
-            Some(Value::Integer(2)),
-            "{}",
-            e2.text()
-        );
-        assert!(
-            e2.text().starts_with("# two\n[[r]]\nn = 2"),
-            "{}",
-            e2.text()
-        );
-        e.set_tables("layouts.slim.zones", &[zone("only")]).unwrap();
-        assert_eq!(
-            e.get("layouts.slim.zones[1]").unwrap(),
-            None,
-            "replaced, not appended"
-        );
     }
 
     #[test]

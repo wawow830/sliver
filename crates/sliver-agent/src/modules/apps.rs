@@ -16,23 +16,14 @@ pub(super) fn user_bindings(m: &ModuleInstance) -> Vec<(Gesture, Do)> {
 
 /// The cells of a pinned `app/<provider>[#item]` module: the app's own cells (touches still go
 /// to the app), with the module's classes, `on-*` bindings (`pass-through`), `width` and
-/// `format` (over the item's values) applied on top. Nothing while it isn't published; an
-/// outlined placeholder in the settings preview.
-pub(super) fn pinned_app(m: &ModuleInstance, key: &str, b: &mut Build, out: &mut Vec<Cell>) {
+/// `format` (over the item's values) applied on top. Nothing while it isn't published.
+pub(super) fn pinned_app(m: &ModuleInstance, b: &mut Build, out: &mut Vec<Cell>) {
     let (world, icons, icon_size) = (b.world, &mut *b.icons, b.icon_size);
     let Some(provider) = m.id.name.as_deref() else {
         return;
     };
     let item = m.id.instance.as_deref();
     let Some((ctx, class)) = world.published.find(provider) else {
-        if world.preview {
-            // Short: the item id (`timer`), else the provider's last segment (`Pomodoro`).
-            let label = m.id.instance.clone().unwrap_or_else(|| {
-                let p = m.id.name.as_deref().unwrap_or("app");
-                p.rsplit('.').next().unwrap_or(p).to_owned()
-            });
-            out.push(placeholder(m, key, &label, "app"));
-        }
         return;
     };
     let start = out.len();
@@ -85,9 +76,8 @@ pub(super) fn decorate_published(
     Some(cell)
 }
 
-/// An empty App controls / Status items placeholder, drawn only in previews. It takes the
-/// module's `width`, so the settings editor's resize handle shows what it does.
-pub(super) fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell {
+/// A cell of module `m` showing `label`, at the module's `width`.
+fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &str) -> Cell {
     let mut c = Cell::new(
         key,
         m.id.to_string(),
@@ -101,8 +91,7 @@ pub(super) fn placeholder(m: &ModuleInstance, key: &str, label: &str, class: &st
 }
 
 /// App controls / Status items: the items apps publish for it (the focused app's, or the status
-/// contexts'), with the placeholder module's classes, bindings and `width` on them; an outlined
-/// placeholder in previews while there are none.
+/// contexts'), with the placeholder module's classes, bindings and `width` on them.
 pub(super) fn placeholder_cells(
     m: &ModuleInstance,
     key: &str,
@@ -129,15 +118,6 @@ pub(super) fn placeholder_cells(
     } else {
         "status"
     };
-    let placeholder_shown = out.len() == start && world.preview;
-    if placeholder_shown {
-        let label = if class == "app" {
-            "App controls"
-        } else {
-            "Status items"
-        };
-        out.push(placeholder(m, key, label, class));
-    }
     // The placeholder's own classes and user bindings apply to every item in it
     // (a user `on-*` replaces the app's event unless `pass-through`).
     let on = user_bindings(m);
@@ -171,7 +151,7 @@ pub(super) fn placeholder_cells(
     // A sized slot (`width` = px or fill): the items lay out inside it and a trailing
     // spacer reserves the rest. The agent measures a px slot and trims the spacer, or
     // drops the lowest-priority items if they don't fit (`Agent::fit_slots`).
-    if !placeholder_shown && m.common.width != sliver_config::Width::Auto {
+    if m.common.width != sliver_config::Width::Auto {
         let slot = key.to_owned();
         for c in &mut out[start..] {
             c.slot = Some(slot.clone());

@@ -562,7 +562,7 @@ fn clock_formats_and_ticks() {
 }
 
 #[test]
-fn preview_shows_samples_and_placeholders() {
+fn default_bar_with_sample_data() {
     let l = load_str("", std::path::Path::new("."));
     let ctx = Context::new().with("physical_esc", true);
     let r = l.config.resolve("base", &ctx).unwrap();
@@ -596,8 +596,6 @@ fn preview_shows_samples_and_placeholders() {
     assert_eq!(
         kinds,
         [
-            "app-controls",
-            "status-items",
             "mpris",
             "custom/expand",
             "backlight/slider",
@@ -605,7 +603,6 @@ fn preview_shows_samples_and_placeholders() {
             "key/Mute"
         ],
     );
-    assert!(out[0].look.classes.contains(&"placeholder".to_string()));
     // Collapsed by default: an icon that opens into a slider.
     let sliders = |c: &&Cell| {
         matches!(c.look.content, Content::Slider { .. })
@@ -648,75 +645,6 @@ fn slider_is_one_switch_for_every_module_with_a_level() {
     // Without it, the volume is a button whose tap mutes.
     assert!(taps(&out[2]) && !drags(&out[2]));
     assert!(!matches!(out[2].look.content, Content::Slider { .. }));
-}
-
-#[test]
-fn graphs_preview_with_a_made_up_history() {
-    let l = load_str(
-        "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"graph#cpu\"]\n[modules.\"graph#cpu\"]\nsource = \"cpu\"\nsamples = 20\n",
-        std::path::Path::new("."),
-    );
-    assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
-    let r = l.config.resolve("base", &Context::new()).unwrap();
-    let w = World::sample(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
-    assert!(w.preview);
-    let mut out = Vec::new();
-    let mut icons = Icons::builtin_only();
-    for z in &r.zones {
-        cells(
-            &z.modules,
-            &mut Build {
-                placed: &Placed::default(),
-                world: &w,
-                icons: &mut icons,
-                icon_size: 36,
-                ui: &|_| UiState::default(),
-            },
-            &mut out,
-        );
-    }
-    match &out[0].look.content {
-        Content::Graph { values, capacity } => {
-            assert_eq!((values.len(), *capacity), (20, 20));
-            assert!(values.iter().all(|v| (0.0..=1.0).contains(v)));
-        }
-        other => panic!("{other:?}"),
-    }
-}
-
-#[test]
-fn pinned_app_placeholders_have_short_labels() {
-    let l = load_str(
-        "[[layouts.default.zones]]\nname = \"main\"\nmodules = [\"app/org.example.Pomodoro#timer\", \"app/org.example.Pomodoro\"]\n",
-        std::path::Path::new("."),
-    );
-    assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
-    let r = l.config.resolve("base", &Context::new()).unwrap();
-    let w = World::sample(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
-    let mut out = Vec::new();
-    let mut icons = Icons::builtin_only();
-    for z in &r.zones {
-        cells(
-            &z.modules,
-            &mut Build {
-                placed: &Placed::default(),
-                world: &w,
-                icons: &mut icons,
-                icon_size: 36,
-                ui: &|_| UiState::default(),
-            },
-            &mut out,
-        );
-    }
-    let labels: Vec<String> = out
-        .iter()
-        .filter(|c| c.look.classes.contains(&"placeholder".to_string()))
-        .map(|c| match &c.look.content {
-            Content::Label { text: t, .. } => t.clone(),
-            other => format!("{other:?}"),
-        })
-        .collect();
-    assert_eq!(labels, ["timer", "Pomodoro"]);
 }
 
 /// Waybar's systemd-failed-units: counts from both managers, hidden while none failed
@@ -813,37 +741,6 @@ fn systemd_failed_units() {
         &some,
     );
     assert_eq!(text(&c[0]), "1/0: nfs.mount");
-}
-
-#[test]
-fn placeholders_take_the_module_width() {
-    let l = load_str(
-        "[modules.status-items]\nwidth = 332\n",
-        std::path::Path::new("."),
-    );
-    assert!(l.diagnostics.ok(), "{:?}", l.diagnostics);
-    let ctx = Context::new().with("physical_esc", true);
-    let r = l.config.resolve("base", &ctx).unwrap();
-    let w = World::sample(Local.with_ymd_and_hms(2026, 10, 12, 9, 41, 7).unwrap());
-    let mut out = Vec::new();
-    let mut icons = Icons::builtin_only();
-    for z in &r.zones {
-        cells(
-            &z.modules,
-            &mut Build {
-                placed: &Placed::default(),
-                world: &w,
-                icons: &mut icons,
-                icon_size: 36,
-                ui: &|_| UiState::default(),
-            },
-            &mut out,
-        );
-    }
-    let status = out.iter().find(|c| c.kind == "status-items").unwrap();
-    assert_eq!(status.look.width, Width::Fixed(332.0));
-    let app = out.iter().find(|c| c.kind == "app-controls").unwrap();
-    assert_eq!(app.look.width, Width::Auto, "unset stays auto");
 }
 
 #[test]

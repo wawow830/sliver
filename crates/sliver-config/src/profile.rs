@@ -138,7 +138,7 @@ pub fn create(name: &str, from: Option<&str>) -> Result<PathBuf, String> {
 fn overlay_text(name: &str) -> String {
     let mut t = format!(
         "# Profile {name:?}: your main config plus what you change here (see sliver-config(5)).\n\
-         # Switch with `sliverctl profile {name}` or in Sliver's settings.\n\
+         # Switch with `sliverctl profile {name}`.\n\
          version = 1\n"
     );
     let Some(dir) = user_dir() else { return t };

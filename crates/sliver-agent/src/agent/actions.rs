@@ -51,63 +51,8 @@ impl Agent {
         self.forced = Some(Forced {
             layer: self.base_layer().to_owned(),
             layout: layout.to_owned(),
-            held: None,
         });
         Ok(())
-    }
-
-    /// Whether a client holds the forced layout (`Some(true)`: select only).
-    pub(super) fn held(&self) -> Option<bool> {
-        self.forced.as_ref().and_then(|f| f.held)
-    }
-
-    /// `Control1.HoldLayout…` (Mirror): [`Agent::set_layout`], and every touch on it is reported
-    /// as [`Effect::HeldPressed`]. With `select_only`, touching only selects (nothing fires).
-    pub fn hold_layout(&mut self, layout: &str, select_only: bool) -> Result<(), String> {
-        self.set_layout(layout)?;
-        if let Some(f) = &mut self.forced {
-            f.held = Some(select_only);
-        }
-        Ok(())
-    }
-
-    /// Is `region` an item of the held layout as the bar shows it now (not another layout, a
-    /// sub-bar, a popover or the Fn layer)?
-    pub(super) fn on_held(&self, region: u32) -> bool {
-        self.held().is_some()
-            && region <= FN_REGION_BASE
-            && self.overlay.is_none()
-            && self.forced.as_ref().map(|f| &f.layout) == self.active.as_ref().map(|a| &a.0)
-    }
-
-    /// What a touch on `region` selects in the held layout (`HeldPressed`): the cell's key, its
-    /// zone's name, and the module's index in that zone's `modules`. `None` when nothing is
-    /// held, or the bar shows something else (another layout, a sub-bar, a popover, Fn).
-    pub(super) fn held_target(&self, region: u32) -> Option<(String, String, u32)> {
-        if !self.on_held(region) {
-            return None;
-        }
-        let name = &self.forced.as_ref()?.layout;
-        let f = self.frames[0].as_ref()?;
-        let i = f.cell_index(region)?;
-        let center = |j: usize| f.layout.items.get(j).map(|r| r.x + r.w / 2.0);
-        let c = center(i)?;
-        let zone = f
-            .layout
-            .zones
-            .iter()
-            .position(|z| c >= z.x && c <= z.x + z.w)?;
-        let z = &f.layout.zones[zone];
-        let in_zone: Vec<usize> = (0..f.cells.len())
-            .filter(|j| center(*j).is_some_and(|c| c >= z.x && c <= z.x + z.w))
-            .collect();
-        let keys: Vec<String> = in_zone.iter().map(|j| f.cells[*j].key.clone()).collect();
-        let pos = in_zone.iter().position(|j| *j == i)?;
-        let zones = self.config.layout_zones(name).ok()?;
-        let zc = zones.get(zone)?;
-        let ids: Vec<String> = zc.modules.iter().map(|m| m.id().to_string()).collect();
-        let index = crate::modules::module_index(&ids, &keys, pos)?;
-        Some((f.cells[i].key.clone(), zc.name.clone(), index as u32))
     }
 
     /// What the base layer shows and why: `(layout, rule index, rule name, source)`, the source

@@ -187,7 +187,6 @@ impl Live {
             context,
             outputs: self.outputs.clone(),
             published: self.published.clone(),
-            preview: false,
             stats: self.stats.readings(wants, now.instant),
             apps: self.apps.clone(),
             emoji: self.emoji.clone(),

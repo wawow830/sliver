@@ -15,13 +15,13 @@ impl Agent {
         time_us: u64,
     ) -> Vec<Effect> {
         let mut fx = Vec::new();
-        let Some(cell) = self.cell(region) else {
+        if self.cell(region).is_none() {
             // Empty bar space binds nothing itself, but a touch there still makes bar gestures
-            // and settles a tap waiting on a module. Under a select-only hold nothing fires.
+            // and settles a tap waiting on a module.
             let background = self
                 .frame_for(region)
                 .is_some_and(|f| f.is_background(region));
-            if background && self.held() != Some(true) {
+            if background {
                 let recognized = self.touches.recognizer.touch(
                     region,
                     Bindings::default(),
@@ -35,34 +35,6 @@ impl Agent {
                 }
             }
             return fx;
-        };
-        // Mirror: the editor selects what was touched; select only fires nothing.
-        if let Some(select_only) = self.held()
-            && self.on_held(region)
-        {
-            let key = cell.key.clone();
-            if phase == TouchPhase::Down
-                && let Some((module, zone, index)) = self.held_target(region)
-            {
-                fx.push(Effect::HeldPressed {
-                    module,
-                    zone,
-                    index,
-                });
-            }
-            if select_only {
-                let changed = if phase == TouchPhase::Down {
-                    self.touches.pressed.insert(key)
-                } else if matches!(phase, TouchPhase::Up | TouchPhase::Cancel) {
-                    self.touches.pressed.remove(&key)
-                } else {
-                    false
-                };
-                if changed {
-                    fx.push(Effect::RedrawPress);
-                }
-                return fx;
-            }
         }
         let Some(cell) = self.cell(region) else {
             return fx;

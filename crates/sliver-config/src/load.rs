@@ -44,7 +44,7 @@ pub fn find_config() -> Option<PathBuf> {
     crate::profile::active_path().or_else(|| search_path().into_iter().find(|p| p.is_file()))
 }
 
-/// The file user edits go to (`sliverctl config set`, the settings app): the active profile's
+/// The file user edits go to (`sliverctl config set`): the active profile's
 /// file, else the user's `config.toml` (which may not exist yet).
 pub fn edit_path() -> PathBuf {
     crate::profile::active_path().unwrap_or_else(|| {
@@ -70,7 +70,7 @@ pub fn load_file(path: &Path) -> Loaded {
     finish(tree, d, files)
 }
 
-/// Loads config text that isn't a file yet (settings preview, tests). `base_dir` resolves includes.
+/// Loads config text that isn't a file yet (`RenderPreview`, tests). `base_dir` resolves includes.
 pub fn load_str(text: &str, base_dir: &Path) -> Loaded {
     load_text(text, base_dir, "<config>", Vec::new())
 }

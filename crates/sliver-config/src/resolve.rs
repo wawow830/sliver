@@ -288,7 +288,7 @@ impl Config {
             let l = &self.layouts[n];
             (l.zones.clone(), l.zone_order.clone())
         });
-        Ok(inherit_zones(levels, |z| &z.name))
+        Ok(inherit_zones(levels))
     }
 
     /// The merged config block for a module reference: built-in defaults, then
@@ -451,7 +451,7 @@ impl Config {
 
 /// `name` and the layouts it `extends`, itself first. `parent` says what a layout extends
 /// (`None`: there's no such layout).
-pub fn extends_chain(
+fn extends_chain(
     name: &str,
     parent: impl Fn(&str) -> Option<Option<String>>,
 ) -> Result<Vec<String>, ResolveError> {
@@ -471,16 +471,12 @@ pub fn extends_chain(
 
 /// The zones a layout shows, from its `extends` chain's levels, farthest parent first (each its
 /// zones and `zone-order`): a zone replaces the one of the same name or is added, and a level's
-/// `zone-order` reorders and filters what there is so far. Generic over the zone so editors can
-/// use it on raw TOML.
-pub fn inherit_zones<Z: Clone>(
-    levels: impl IntoIterator<Item = (Vec<Z>, Option<Vec<String>>)>,
-    name: impl Fn(&Z) -> &str,
-) -> Vec<Z> {
-    let mut zones: Vec<Z> = Vec::new();
+/// `zone-order` reorders and filters what there is so far.
+fn inherit_zones(levels: impl IntoIterator<Item = (Vec<Zone>, Option<Vec<String>>)>) -> Vec<Zone> {
+    let mut zones: Vec<Zone> = Vec::new();
     for (own, order) in levels {
         for z in own {
-            match zones.iter_mut().find(|o| name(o) == name(&z)) {
+            match zones.iter_mut().find(|o| o.name == z.name) {
                 Some(slot) => *slot = z,
                 None => zones.push(z),
             }
@@ -488,7 +484,7 @@ pub fn inherit_zones<Z: Clone>(
         if let Some(order) = order {
             zones = order
                 .iter()
-                .filter_map(|n| zones.iter().find(|z| name(z) == n.as_str()).cloned())
+                .filter_map(|n| zones.iter().find(|z| z.name == *n).cloned())
                 .collect();
         }
     }

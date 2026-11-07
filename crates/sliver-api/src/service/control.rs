@@ -1,4 +1,4 @@
-//! `Control1`: the user's own tools (sliverctl, settings) driving the agent.
+//! `Control1`: the user's own tools (sliverctl) driving the agent.
 
 use super::*;
 
@@ -31,31 +31,6 @@ impl ControlIface {
             ControlReply::Errors(e) => Ok(e),
             _ => Ok(Vec::new()),
         }
-    }
-}
-
-impl ControlIface {
-    async fn hold(
-        &self,
-        c: &Connection,
-        h: &Header<'_>,
-        name: String,
-        select_only: bool,
-    ) -> Result<()> {
-        let owner = (!name.is_empty())
-            .then(|| h.sender().map(|s| s.to_string()))
-            .flatten();
-        let req = if name.is_empty() {
-            Control::SetLayout(name)
-        } else {
-            Control::HoldLayout {
-                layout: name,
-                select_only,
-            }
-        };
-        self.unit(c, h, req).await?;
-        self.inner.lock().layout_owner = owner;
-        Ok(())
     }
 }
 
@@ -93,53 +68,16 @@ impl ControlIface {
     ) -> Result<()> {
         self.unit(c, &h, Control::ToggleLayer(name)).await
     }
-    /// Persistent override (`sliverctl layout NAME`): stays after the caller exits.
+    /// Shows this layout on the base layer whatever the rules say (`sliverctl layout NAME`), until
+    /// the next call; `""` goes back to the rules.
     async fn set_layout(
         &self,
         #[zbus(header)] h: Header<'_>,
         #[zbus(connection)] c: &Connection,
         name: String,
     ) -> Result<()> {
-        self.unit(c, &h, Control::SetLayout(name)).await?;
-        self.inner.lock().layout_owner = None;
-        Ok(())
+        self.unit(c, &h, Control::SetLayout(name)).await
     }
-    /// Override held by the caller's connection (Mirror to Touch Bar): dropped when the caller
-    /// disconnects, so a crashed editor never pins the bar. `""` releases it now.
-    async fn hold_layout(
-        &self,
-        #[zbus(header)] h: Header<'_>,
-        #[zbus(connection)] c: &Connection,
-        name: String,
-    ) -> Result<()> {
-        self.hold(c, &h, name, false).await
-    }
-    /// `HoldLayout` with options: `select-only` (b) reports touches (`HeldPressed`) without
-    /// firing the items. Calling it again while holding changes the options.
-    async fn hold_layout_with(
-        &self,
-        #[zbus(header)] h: Header<'_>,
-        #[zbus(connection)] c: &Connection,
-        name: String,
-        options: HashMap<String, OwnedValue>,
-    ) -> Result<()> {
-        let select_only = match options.get("select-only") {
-            None => false,
-            Some(v) => bool::try_from(v)
-                .map_err(|_| Error::InvalidArgs("select-only must be a boolean".into()))?,
-        };
-        self.hold(c, &h, name, select_only).await
-    }
-    /// A touch on the held layout (`HoldLayout`), sent to the holder only: the touched
-    /// module's key (`clock`, `group/tools/key/Mute`), its zone, and its index in that zone's
-    /// `modules` list in the config. Settings selects it.
-    #[zbus(signal)]
-    pub(super) async fn held_pressed(
-        emitter: &SignalEmitter<'_>,
-        module: &str,
-        zone: &str,
-        index: u32,
-    ) -> zbus::Result<()>;
     async fn set_profile(
         &self,
         #[zbus(header)] h: Header<'_>,
@@ -154,23 +92,6 @@ impl ControlIface {
         #[zbus(connection)] c: &Connection,
     ) -> Result<Vec<String>> {
         self.error_list(c, &h, Control::ReloadConfig).await
-    }
-    async fn validate_config(
-        &self,
-        #[zbus(header)] h: Header<'_>,
-        #[zbus(connection)] c: &Connection,
-        toml: String,
-    ) -> Result<Vec<String>> {
-        self.error_list(c, &h, Control::ValidateConfig(toml)).await
-    }
-    async fn preview(
-        &self,
-        #[zbus(header)] h: Header<'_>,
-        #[zbus(connection)] c: &Connection,
-        layout: String,
-        timeout_ms: u32,
-    ) -> Result<()> {
-        self.unit(c, &h, Control::Preview(layout, timeout_ms)).await
     }
     async fn render_preview(
         &self,
@@ -220,7 +141,7 @@ impl ControlIface {
                 p.insert("on-screen".into(), Prop::Bool(ctx.on_screen));
                 p.insert("items".into(), Prop::Int(ctx.items.len() as i64));
                 // What `app/<provider>#<id>` can place (top-level items; spacers aren't worth it),
-                // with a name for pickers: the label, else the a11y label, else the id.
+                // with a name to show: the label, else the a11y label, else the id.
                 let placeable: Vec<&crate::item::Item> = ctx
                     .items
                     .iter()

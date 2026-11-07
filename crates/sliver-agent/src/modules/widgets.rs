@@ -32,19 +32,7 @@ pub(super) fn custom_output(at: &At) -> Option<Spec> {
 /// The agent samples (Agent::render); here only what it has. Hidden until the first one.
 pub(super) fn graph(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<Spec> {
     let (samples, cap) = match ui.graph.clone() {
-        Some((s, cap)) if s.len() >= 2 || (!world.preview && !s.is_empty()) => (s, cap),
-        // Previews (settings, `--render`) have no history yet: a made-up one, so the
-        // editor shows what a graph looks like.
-        _ if world.preview => {
-            let cap = graph_params(m).1;
-            let wave = (0..cap)
-                .map(|i| {
-                    let t = i as f32 / cap.max(2) as f32 * std::f32::consts::TAU * 1.5;
-                    0.45 + 0.25 * t.sin() + 0.1 * (t * 2.7).cos()
-                })
-                .collect();
-            (wave, cap)
-        }
+        Some((s, cap)) if !s.is_empty() => (s, cap),
         _ => return None,
     };
     if samples.is_empty() {
@@ -67,18 +55,11 @@ pub(super) fn graph(m: &ModuleInstance, world: &World, ui: &UiState) -> Option<S
 }
 
 /// waybar's `cava`: the spectrum the agent's `cava` process reports. Until its first frame every
-/// bar rests at 0, so the module keeps its size; previews get a made-up shape.
+/// bar rests at 0, so the module keeps its size.
 pub(super) fn cava(m: &ModuleInstance, world: &World) -> Option<Spec> {
     let n = super::cava_bars(m);
     let levels = if world.spectrum.len() == n {
         world.spectrum.clone()
-    } else if world.preview {
-        (0..n)
-            .map(|i| {
-                let t = i as f32 / n as f32 * std::f32::consts::PI;
-                0.2 + 0.6 * t.sin() * (0.6 + 0.4 * (t * 3.0).cos().abs())
-            })
-            .collect()
     } else {
         vec![0.0; n]
     };

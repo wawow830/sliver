@@ -68,9 +68,6 @@ impl Agent {
                 fx.push(Effect::Redraw);
                 done
             }
-            Control::Preview(..) => {
-                Err("Preview isn't implemented; RenderPreview draws a config".into())
-            }
             // No config: what the bar shows now. A config is drawn by a new agent (the caller's).
             Control::RenderPreview(toml, _) if toml.is_empty() => self
                 .frame(if self.fn_held { Layer::Fn } else { Layer::Base })
@@ -78,13 +75,6 @@ impl Agent {
                 .and_then(|f| f.image.encode_png().map_err(|e| e.to_string()))
                 .map(ControlReply::Png),
             Control::ListModules => Ok(ControlReply::Modules(self.list_modules())),
-            Control::HoldLayout {
-                layout,
-                select_only,
-            } => self.hold_layout(&layout, select_only).map(|()| {
-                fx.push(Effect::Redraw);
-                ControlReply::Done
-            }),
             Control::SetLayout(name) => self.set_layout(&name).map(|()| {
                 fx.push(Effect::Redraw);
                 ControlReply::Done
@@ -120,7 +110,6 @@ impl Agent {
             }),
             req @ (Control::Refresh(_)
             | Control::RenderPreview(..)
-            | Control::ValidateConfig(_)
             | Control::SetProfile(_)
             | Control::ReloadConfig) => return Err(req),
         };
@@ -179,16 +168,6 @@ impl Agent {
     /// Fn is held: sliverd shows our `fn` frame.
     pub fn set_fn_held(&mut self, held: bool) {
         self.fn_held = held;
-    }
-
-    /// Shows `layer` of the config, in context `ctx` whatever the world says (the settings
-    /// app's preview, "Preview as"). Custom layers open over base, as on the bar.
-    pub fn show_as(&mut self, layer: &str, ctx: Context) {
-        self.fixed_ctx = Some(ctx);
-        self.layers = match layer {
-            "base" | "fn" => Vec::new(),
-            custom => vec![custom.to_owned()],
-        };
     }
 
     pub fn config(&self) -> &Config {

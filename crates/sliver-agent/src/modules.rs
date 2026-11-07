@@ -151,7 +151,7 @@ fn cells_in(modules: &[ModuleInstance], prefix: &str, b: &mut Build, out: &mut V
             "group" => group_cells(m, &key, b, out),
             "app-controls" | "status-items" => placeholder_cells(m, &key, prefix, b, out),
             // A published item (or a whole context) placed by the layout: `app/<provider>#<item>`.
-            "app" => pinned_app(m, &key, b, out),
+            "app" => pinned_app(m, b, out),
             "emoji" if m.text("mode") == Some("strip") => {
                 emoji_strip(m, &key, b.world, &(b.ui)(&key).emoji, out)
             }

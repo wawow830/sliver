@@ -53,16 +53,8 @@ pub enum Control {
     PopLayer,
     ToggleLayer(String),
     SetLayout(String),
-    /// `HoldLayout`/`HoldLayoutWith` (non-empty name): like `SetLayout`, and touches on it are
-    /// reported to the holder (`HeldPressed`); `select_only` stops them from firing.
-    HoldLayout {
-        layout: String,
-        select_only: bool,
-    },
     SetProfile(String),
     ReloadConfig,
-    ValidateConfig(String),
-    Preview(String, u32),
     RenderPreview(String, Props),
     SetVariable(String, Prop),
     Signal(u32),
@@ -96,8 +88,8 @@ pub struct ControlState {
     pub active_rule: i32,
     /// That rule's `name` (empty if unnamed or none).
     pub active_rule_name: String,
-    /// Why this layout: `rule`, `default` (the layer's default) or `forced` (`SetLayout` /
-    /// `HoldLayout`). Empty before the first frame.
+    /// Why this layout: `rule`, `default` (the layer's default) or `forced`
+    /// (`SetLayout`). Empty before the first frame.
     pub layout_source: String,
     pub layers: Vec<String>,
     pub active_profile: String,
@@ -136,8 +128,6 @@ pub struct Shared {
     pub policy: Policy,
     pub focus_source: FocusSource,
     focus_owner: Option<String>,
-    /// Who holds the current `HoldLayout` override; dropped when that client disconnects.
-    layout_owner: Option<String>,
     pub workspaces: Vec<Props>,
     /// `Desktop1.SetWindows`: every window, as a DE integration reports them.
     pub windows: Vec<Props>,
@@ -343,20 +333,8 @@ impl Api {
             if s.focus_owner.as_deref() == Some(name) {
                 s.focus_owner = None;
             }
-            let layout_gone = s.layout_owner.as_deref() == Some(name);
-            if layout_gone {
-                s.layout_owner = None;
-            }
-            (s.reg.client_gone(name), layout_gone)
+            s.reg.client_gone(name)
         };
-        let (gone, layout_gone) = gone;
-        if layout_gone {
-            // The core answers on its own thread; don't block this executor on it.
-            let host = self.inner.host.clone();
-            std::thread::spawn(move || {
-                let _ = host.control(Control::SetLayout(String::new()));
-            });
-        }
         for id in &gone {
             self.conn
                 .object_server()
@@ -452,17 +430,6 @@ impl Api {
         i.variables_changed(e).await?;
         i.healthy_changed(e).await?;
         i.errors_changed(e).await
-    }
-
-    /// The user touched `module` (zone `zone`, `index` in its `modules`) on the held layout:
-    /// tell the holder (`Control1.HeldPressed`, unicast). Nothing if no one holds it.
-    pub async fn held_pressed(&self, module: &str, zone: &str, index: u32) -> zbus::Result<()> {
-        let Some(owner) = self.inner.lock().layout_owner.clone() else {
-            return Ok(());
-        };
-        let dest = BusName::try_from(owner.as_str())?;
-        let e = SignalEmitter::new(&self.conn, ROOT_PATH)?.set_destination(dest);
-        ControlIface::held_pressed(&e, module, zone, index).await
     }
 
     /// `Control1.Signal(n)` reached published contexts whose user config sets `signal = n`.

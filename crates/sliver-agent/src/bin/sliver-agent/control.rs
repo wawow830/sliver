@@ -40,9 +40,6 @@ pub(super) fn control(
             }
             Err(errors) => Err(errors.join("\n")),
         },
-        Control::ValidateConfig(toml) => Ok(ControlReply::Errors(
-            reloader.load_text(&toml).err().unwrap_or_default(),
-        )),
         Control::SetProfile(_) if reloader.explicit() => {
             Err("the agent runs with --config FILE, so profiles are off".into())
         }

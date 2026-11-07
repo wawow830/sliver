@@ -69,12 +69,6 @@ pub enum Effect {
         item: String,
         what: sliver_api::registry::Interaction,
     },
-    /// Mirror: the user touched this module of the held layout (`Control1.HeldPressed`).
-    HeldPressed {
-        module: String,
-        zone: String,
-        index: u32,
-    },
 }
 
 /// Session-side changes the built-in modules make.
@@ -130,9 +124,6 @@ pub struct Agent {
     ctx: Context,
     /// Applied on top of the world's context (simulate one condition over live state).
     ctx_overrides: Vec<(String, CtxValue)>,
-    /// Use exactly this context instead of building one from the world (the settings app's
-    /// "Preview as").
-    fixed_ctx: Option<Context>,
     /// Whether this Mac has a physical Esc key (decides the `esc` zone).
     physical_esc: bool,
     /// Custom layers opened over `base` (last = on top).
@@ -176,7 +167,7 @@ pub struct Agent {
     hidden: bool,
     /// `sliverctl hide MODULE`: module ids/keys hidden at runtime (not saved).
     hidden_modules: std::collections::BTreeSet<String>,
-    /// A layout shown on a layer whatever the rules say (`sliverctl layout`, Mirror).
+    /// A layout shown on a layer whatever the rules say (`sliverctl layout`).
     forced: Option<Forced>,
     /// What the base layer resolved to last: its layout and the rule (index) that picked it.
     active: Option<(String, Option<usize>)>,
@@ -242,9 +233,6 @@ enum Closes {
 struct Forced {
     layer: String,
     layout: String,
-    /// Held by a client (`Control1.HoldLayout…`, Mirror to Touch Bar): touches on it go to the
-    /// holder as `HeldPressed`. `Some(true)`: select only, nothing fires.
-    held: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -279,7 +267,6 @@ impl Agent {
         let ctx = Context::new().with("physical_esc", physical_esc);
         Agent {
             ctx_overrides: Vec::new(),
-            fixed_ctx: None,
             physical_esc,
             config,
             sheet,
@@ -396,16 +383,13 @@ impl Agent {
         // Pixel shift: keep content clear of the ends sliverd moves it towards.
         self.renderer
             .set_extra_inset(crate::display::content_inset(&self.config.display));
-        let mut ctx = match &self.fixed_ctx {
-            Some(c) => c.clone(),
-            None => crate::context::build(
-                world.context.clone(),
-                world.now.wall,
-                self.physical_esc,
-                self.base_layer(),
-                world.published.app.is_some(),
-            ),
-        };
+        let mut ctx = crate::context::build(
+            world.context.clone(),
+            world.now.wall,
+            self.physical_esc,
+            self.base_layer(),
+            world.published.app.is_some(),
+        );
         for (k, v) in &self.ctx_overrides {
             ctx.set(k, v.clone());
         }
@@ -645,13 +629,6 @@ impl Agent {
         for c in per_zone.iter_mut().flatten() {
             if let crate::modules::Touch::Keys(keys) = &mut c.touch {
                 *keys = self.keymap.map_all(keys);
-            }
-        }
-        // Mirror: every item of the held layout reports its touches (`HeldPressed`), so none
-        // stays sliverd-only (keys then fire from the agent) or untouchable.
-        if self.held().is_some() && id_base == 0 {
-            for c in per_zone.iter_mut().flatten() {
-                c.touch = crate::modules::Touch::Agent;
             }
         }
         if self.ctx.flag("locked") {

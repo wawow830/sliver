@@ -57,8 +57,7 @@ to
 .B sliver\-agent
 reload at once.
 An invalid configuration is never applied: the last good one stays live, and the errors are listed by
-.B sliverctl status
-and the settings app's Status page.
+.BR "sliverctl status" .
 Unknown keys produce warnings, not errors.
 Check a file with
 .BR "sliverctl config check" .
@@ -84,7 +83,7 @@ A new profile starts as
 (your main configuration plus its own changes);
 .B sliverctl config profile new \-\-from
 .I profile
-and the settings app copy another profile instead.
+copies another profile instead.
 The active one is named in
 .BR ~/.config/sliver/active\-profile ,
 so every way of switching works the same and survives restarts.
@@ -92,13 +91,13 @@ A name whose file is missing means
 .BR default .
 While a profile is active,
 .B sliverctl config set
-and the settings app edit its file.
+edits its file.
 Switch with
 .BI "sliverctl profile" " name" ,
 .BI "sliverctl config profile use" " name"
 (offline),
 .BR Control1.SetProfile ,
-the settings app, or a
+or a
 .B { profile = \fIname\fP }
 action.
 A profile that doesn't validate is refused, and the previous one stays live.
@@ -325,7 +324,6 @@ Like any array, your own
 replace it, and
 .B rules = []
 removes it.
-The settings app keeps it at the top and adds new rules below it.
 Whatever the rules say, published app items,
 .B custom/
 output, notifications, window titles and the taskbar are never shown while the screen is locked.
@@ -1486,7 +1484,7 @@ Esc first on bars that have no physical Escape key) for as long as Fn is held.
 This is enforced by
 .BR sliverd (8),
 and no configuration, app or agent can change or block it.
-The check, and the settings app's banner, only warn when the base and fn layers have no F1\(enF12,
+The check only warns when the base and fn layers have no F1\(enF12,
 or a bar without a physical Escape key has no Esc.
 .PP
 On bars without a physical Escape key (the 2170\-pixel models), the default configuration and the

@@ -55,8 +55,6 @@ pub struct World {
     pub outputs: HashMap<String, Output>,
     /// What apps publish for the App controls / Status items placeholders.
     pub published: crate::published::Published,
-    /// The settings app's editor: show empty placeholders as outlined `.placeholder` cells.
-    pub preview: bool,
     /// cpu, memory, load, temperature, disk and network throughput, as read for this frame.
     pub stats: crate::stats::Readings,
     /// Recently used emoji (the picker's first tab).
@@ -79,7 +77,6 @@ impl World {
             context: Context::new(),
             outputs: HashMap::new(),
             published: Default::default(),
-            preview: false,
             stats: Default::default(),
             apps: Default::default(),
             emoji: Default::default(),
@@ -88,12 +85,11 @@ impl World {
         }
     }
 
-    /// Plausible sample data for previews (the settings editor), so data modules show
-    /// something instead of hiding: battery, volume, brightness, now playing, focused window.
+    /// Plausible sample data (tests, benchmarks), so data modules show something instead of
+    /// hiding: battery, volume, brightness, now playing, focused window.
     pub fn sample(now: DateTime<Local>) -> World {
         use sliver_session::{Media, PlaybackStatus};
         let mut w = World::at(now);
-        w.preview = true;
         let s = &mut w.session;
         s.power.on_battery = Some(true);
         s.power.battery_pct = Some(76);

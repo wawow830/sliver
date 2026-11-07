@@ -204,11 +204,6 @@ impl Icon {
         Some(icon.symbolic(true))
     }
 
-    /// The SVG source of an embedded icon, for UIs that draw it themselves (pickers).
-    pub fn builtin_source(name: &str) -> Option<&'static [u8]> {
-        builtin_svg(name)
-    }
-
     /// The same picture at most `max_h` pixels tall (aspect kept). SVGs, and rasters already that
     /// small, are returned as they are. Halves first, then one bicubic step, so big reductions
     /// don't alias.

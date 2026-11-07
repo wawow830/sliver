@@ -33,13 +33,5 @@ module:active {
 #battery.critical { background-color: #330000; }
 #battery.critical:active { background-color: #660000; }
 
-/* Empty App controls / Status items, shown only in the settings editor's preview. */
-module.placeholder {
-  background-color: transparent;
-  border: 2px solid alpha(white, 0.3);
-  color: alpha(white, 0.5);
-  font-weight: normal;
-}
-
 /* Indeterminate progress (published items) is a full track: muted, so it doesn't read as 100%. */
 module.indeterminate highlight { background-color: alpha(white, 0.3); }

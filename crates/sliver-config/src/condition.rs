@@ -132,7 +132,7 @@ pub const CONTEXT_KEYS: &[&str] = &[
 ];
 
 /// `app-id`, `App_ID` and `power.on_battery` all become their canonical snake_case key.
-pub fn canonical_key(k: &str) -> String {
+pub(crate) fn canonical_key(k: &str) -> String {
     let k = k.trim().to_ascii_lowercase().replace('-', "_");
     match k.as_str() {
         "power.on_battery" => "on_battery".into(),

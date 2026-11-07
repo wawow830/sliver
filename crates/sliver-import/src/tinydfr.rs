@@ -14,8 +14,8 @@ use toml::{Table, Value};
 
 use sliver_config::Key;
 
-pub const SYSTEM_BASE: &str = "/usr/share/tiny-dfr/config.toml";
-pub const SYSTEM_OVERLAY: &str = "/etc/tiny-dfr/config.toml";
+const SYSTEM_BASE: &str = "/usr/share/tiny-dfr/config.toml";
+const SYSTEM_OVERLAY: &str = "/etc/tiny-dfr/config.toml";
 
 /// The result of an import: files to write into `~/.config/sliver/`.
 #[derive(Debug, Clone, PartialEq)]

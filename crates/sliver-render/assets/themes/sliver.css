@@ -64,14 +64,6 @@ module:active slider { background-color: #e0e0e0; }
 #battery.charging { color: #57e389; }
 .error { color: #ff7b63; }
 
-/* Empty App controls / Status items, shown only in the settings editor's preview. */
-module.placeholder {
-  background-color: transparent;
-  border: 2px solid alpha(white, 0.3);
-  color: alpha(white, 0.5);
-  font-weight: normal;
-}
-
 /* Emoji picker strip (the `emoji` module in strip mode) */
 module.emoji { font-size: 32px; padding: 0; }
 module.emoji-tab { font-size: 26px; padding: 0; background-color: transparent; }

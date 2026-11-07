@@ -59,13 +59,6 @@ module:active highlight { background-color: #000; }
 #battery.charging { color: #30d158; border-color: #30d158; }
 .error { color: #ff453a; border-color: #ff453a; }
 
-module.placeholder {
-  background-color: transparent;
-  border: 2px dashed #fff;
-  color: #fff;
-  font-weight: normal;
-}
-
 module.emoji { font-size: 32px; padding: 0; border-width: 0; }
 module.emoji-tab { font-size: 26px; padding: 0; border-width: 0; }
 module.emoji-tab:checked { background-color: #ffd60a; }

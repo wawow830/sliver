@@ -39,49 +39,17 @@
       <arg name="name" type="s" direction="in"/>
     </method>
     <!--
-    Persistent override (`sliverctl layout NAME`): stays after the caller exits.
+    Shows this layout on the base layer whatever the rules say (`sliverctl layout NAME`), until
+    the next call; `""` goes back to the rules.
     -->
     <method name="SetLayout">
       <arg name="name" type="s" direction="in"/>
     </method>
-    <!--
-    Override held by the caller's connection (Mirror to Touch Bar): dropped when the caller
-    disconnects, so a crashed editor never pins the bar. `""` releases it now.
-    -->
-    <method name="HoldLayout">
-      <arg name="name" type="s" direction="in"/>
-    </method>
-    <!--
-    `HoldLayout` with options: `select-only` (b) reports touches (`HeldPressed`) without
-    firing the items. Calling it again while holding changes the options.
-    -->
-    <method name="HoldLayoutWith">
-      <arg name="name" type="s" direction="in"/>
-      <arg name="options" type="a{sv}" direction="in"/>
-    </method>
-    <!--
-    A touch on the held layout (`HoldLayout`), sent to the holder only: the touched
-    module's key (`clock`, `group/tools/key/Mute`), its zone, and its index in that zone's
-    `modules` list in the config. Settings selects it.
-    -->
-    <signal name="HeldPressed">
-      <arg name="module" type="s"/>
-      <arg name="zone" type="s"/>
-      <arg name="index" type="u"/>
-    </signal>
     <method name="SetProfile">
       <arg name="name" type="s" direction="in"/>
     </method>
     <method name="ReloadConfig">
       <arg type="as" direction="out"/>
-    </method>
-    <method name="ValidateConfig">
-      <arg name="toml" type="s" direction="in"/>
-      <arg type="as" direction="out"/>
-    </method>
-    <method name="Preview">
-      <arg name="layout" type="s" direction="in"/>
-      <arg name="timeout_ms" type="u" direction="in"/>
     </method>
     <method name="RenderPreview">
       <arg name="layout" type="s" direction="in"/>
