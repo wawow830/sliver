@@ -23,25 +23,6 @@ pub fn sniff(data: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// `%20` → ` ` etc. Invalid escapes are kept as they are.
-pub fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// A stable name for a URL (FNV-1a), so the cache survives restarts.
 fn cache_name(url: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -68,7 +49,9 @@ pub fn default_cache_dir(get: impl Fn(&str) -> Option<String>) -> Option<PathBuf
 /// A local image file for `url`, or `None` (unsupported, unreachable, too big).
 pub fn resolve(url: &str, cache_dir: &Path) -> Option<PathBuf> {
     if let Some(path) = url.strip_prefix("file://") {
-        let p = PathBuf::from(percent_decode(path.trim_start_matches("localhost")));
+        use std::os::unix::ffi::OsStrExt;
+        let path = sliver_bus::percent_decode(path.trim_start_matches("localhost"))?;
+        let p = PathBuf::from(std::ffi::OsStr::from_bytes(&path));
         let data = std::fs::read(&p)
             .ok()
             .filter(|d| d.len() as u64 <= MAX_BYTES)?;
@@ -149,8 +132,7 @@ mod tests {
     const JPG: &[u8] = include_bytes!("../tests/art-48x32.jpg");
 
     #[test]
-    fn decoding_and_sniffing() {
-        assert_eq!(percent_decode("/tmp/a%20b%2Fc%zz%"), "/tmp/a b/c%zz%");
+    fn sniffing() {
         assert_eq!(sniff(JPG), Some("jpg"));
         assert_eq!(sniff(&[0x89, b'P', b'N', b'G', 1]), Some("png"));
         assert_eq!(sniff(b"RIFF....WEBP"), None);
@@ -184,6 +166,7 @@ mod tests {
             None
         );
         assert_eq!(resolve("file:///nonexistent.png", &cache), None);
+        assert_eq!(resolve("file:///tmp/%aé.png", &cache), None);
         assert_eq!(resolve("data:image/png;base64,AAAA", &cache), None);
         let _ = std::fs::remove_dir_all(&d);
     }

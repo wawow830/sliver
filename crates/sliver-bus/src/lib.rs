@@ -55,23 +55,26 @@ fn split(stream: UnixStream) -> io::Result<BoxedSplit> {
     Ok(Split::new(read, write))
 }
 
-/// The value of `key` in one `transport:k=v,k=v` address, unescaped (`%2f` → `/`).
+/// The value of `key` in one `transport:k=v,k=v` address, unescaped.
 fn value(params: &str, key: &str) -> Option<Vec<u8>> {
     let raw = params
         .split(',')
         .find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))?;
-    let b = raw.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok()?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
+    percent_decode(raw)
+}
+
+/// `%2f` → `/`, as bytes: D-Bus addresses and URLs escape paths, which need not be UTF-8.
+/// `None` when an escape is not `%` and two hex digits.
+pub fn percent_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut b = s.bytes();
+    while let Some(c) = b.next() {
+        out.push(if c == b'%' {
+            let hex = |c: Option<u8>| char::from(c?).to_digit(16);
+            (hex(b.next())? * 16 + hex(b.next())?) as u8
         } else {
-            out.push(b[i]);
-            i += 1;
-        }
+            c
+        });
     }
     Some(out)
 }
@@ -173,6 +176,10 @@ mod tests {
             b"/tmp/dbus-x,y"
         );
         assert!(value("guid=1", "path").is_none());
+        assert_eq!(percent_decode("a%20b%e2%86%92").unwrap(), "a b→".as_bytes());
+        for bad in ["%", "%2", "%zz", "%aé", "é%"] {
+            assert_eq!(percent_decode(bad), None, "{bad}");
+        }
         assert!(
             connect_unix("tcp:host=localhost,port=1").is_none(),
             "not ours"

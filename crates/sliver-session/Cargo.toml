@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+sliver-bus.workspace = true
 sliver-proc.workspace = true
 serde.workspace = true
 zbus.workspace = true
@@ -19,4 +20,3 @@ rustix = { workspace = true, features = ["process", "fs"] }
 
 [dev-dependencies]
 sliver-testbus.workspace = true
-sliver-bus.workspace = true
