@@ -10,7 +10,7 @@ Level {
     icon: "light_mode"
     value: Number(now.text()) / Number(max.text())
     onMoved: v => {
-        wanted = Math.round(v * Number(max.text()))
+        wanted = Math.max(1, Math.round(v * Number(max.text())))
         set.send()
     }
 

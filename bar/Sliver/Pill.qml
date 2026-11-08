@@ -11,15 +11,12 @@ Rectangle {
     property color ink: Theme.colors.on_surface
     property bool pressed: tap.pressed
     signal tapped
-    signal longPressed
 
     implicitWidth: Math.max(Theme.slot, row.implicitWidth + 36)
     implicitHeight: Theme.size
     radius: pressed ? Math.min(12, height / 2) : height / 2
     color: !pressed ? fill : fill.a > 0 ? Qt.tint(fill, Qt.alpha(ink, 0.16)) : Qt.alpha(ink, 0.16)
     opacity: enabled ? 1 : 0.4
-    scale: pressed ? 0.95 : 1
-    Behavior on scale { SpringAnimation { spring: 6; damping: 0.35 } }
     Behavior on radius { NumberAnimation { duration: 150 } }
     Behavior on color { ColorAnimation { duration: 150 } }
 
@@ -64,6 +61,5 @@ Rectangle {
     TapHandler {
         id: tap
         onTapped: pill.tapped()
-        onLongPressed: pill.longPressed()
     }
 }

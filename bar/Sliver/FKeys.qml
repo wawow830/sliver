@@ -20,9 +20,7 @@ RowLayout {
                 Key {
                     required property int modelData
                     required property int index
-                    Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.preferredWidth: 1
                     keys: [modelData]
                     text: `F${group.index * 4 + index + 1}`
                 }

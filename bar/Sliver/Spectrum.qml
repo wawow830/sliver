@@ -5,7 +5,7 @@ import Quickshell.Io
 import Quickshell.Services.Mpris
 
 Singleton {
-    readonly property int bands: 96
+    readonly property int bands: 32
     property var levels: []
 
     Process {
@@ -24,9 +24,10 @@ data_format = ascii
 ascii_max_range = 1000
 bar_delimiter = 59
 frame_delimiter = 10
-channels = mono
+channels = stereo
 [smoothing]
-noise_reduction = 0.6
+noise_reduction = 0.77
+monstercat = 1
 `]
         stdout: SplitParser {
             onRead: line => levels = line.split(";").filter(s => s != "").map(n => Number(n) / 1000)

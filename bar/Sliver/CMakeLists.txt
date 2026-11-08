@@ -20,7 +20,7 @@ qt_add_qml_module(sliver
     URI Sliver
     PLUGIN_TARGET sliver
     SOURCES keyboard.h keyboard.cpp virtual-keyboard.h virtual-keyboard.c
-    QML_FILES Theme.qml Desktop.qml Spectrum.qml Pill.qml Key.qml Tray.qml Level.qml Brightness.qml Volume.qml Mic.qml
+    QML_FILES Theme.qml Desktop.qml Spectrum.qml Pill.qml Key.qml Level.qml Brightness.qml Volume.qml Mic.qml
               Workspaces.qml Cover.qml Seek.qml Media.qml FKeys.qml Bar.qml)
 target_include_directories(sliver PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(sliver PRIVATE Qt6::Gui PkgConfig::WAYLAND)

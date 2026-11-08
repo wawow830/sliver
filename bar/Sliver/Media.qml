@@ -70,6 +70,7 @@ Rectangle {
         Seek {
             id: seek
             Layout.fillWidth: true
+            Layout.fillHeight: true
             Layout.leftMargin: 20
             Layout.rightMargin: 16
             progress: media.progress
@@ -95,6 +96,7 @@ Rectangle {
 
         Text {
             Layout.rightMargin: 8
+            Layout.topMargin: 2 * (seek.line + 2) - seek.height
             text: media.length > 0 ? `${media.time(media.position)} / ${media.time(media.length)}` : media.time(media.position)
             color: Qt.alpha(media.ink, 0.7)
             font: Theme.meta

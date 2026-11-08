@@ -43,11 +43,12 @@ FloatingWindow {
             Context { component: media }
         }
 
-        Tray {
+        RowLayout {
             Layout.fillHeight: true
-            Brightness { Layout.fillHeight: true; opensLeft: true }
+            spacing: Theme.gap
             Mic { Layout.fillHeight: true }
-            Volume { Layout.fillHeight: true; opensLeft: true }
+            Brightness { Layout.fillHeight: true }
+            Volume { Layout.fillHeight: true }
         }
     }
 
@@ -68,10 +69,16 @@ FloatingWindow {
         id: browser
         RowLayout {
             spacing: Theme.gap
-            Key { Layout.fillHeight: true; icon: "arrow_back"; keys: [158] }
-            Key { Layout.fillHeight: true; icon: "arrow_forward"; keys: [159] }
-            Key { Layout.fillHeight: true; icon: "refresh"; keys: [173] }
-            Key { Layout.fillHeight: true; icon: "add"; keys: [29, 20] }
+            RowLayout {
+                Layout.fillHeight: true
+                Layout.preferredWidth: 4 * Theme.slot + 3 * Theme.gap
+                Layout.fillWidth: false
+                spacing: Theme.gap
+                Key { Layout.fillHeight: true; icon: "arrow_back"; keys: [158] }
+                Key { Layout.fillHeight: true; icon: "arrow_forward"; keys: [159] }
+                Key { Layout.fillHeight: true; icon: "refresh"; keys: [173] }
+                Key { Layout.fillHeight: true; icon: "add"; keys: [29, 20] }
+            }
             Media { Layout.fillWidth: true; Layout.fillHeight: true; Layout.leftMargin: Theme.gap }
         }
     }
