@@ -25,10 +25,13 @@ use smithay::{
     utils::Serial,
     wayland::{
         buffer::BufferHandler,
-        compositor::{CompositorClientState, CompositorHandler, CompositorState, get_parent},
+        compositor::{
+            CompositorClientState, CompositorHandler, CompositorState, get_parent, with_states,
+        },
         output::OutputHandler,
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+            XdgToplevelSurfaceData,
         },
         shm::{ShmHandler, ShmState},
     },
@@ -89,6 +92,17 @@ impl Wl {
     pub fn connect(&mut self, stream: UnixStream) -> io::Result<Client> {
         self.dh
             .insert_client(stream, Arc::new(ClientState::default()))
+    }
+
+    pub fn title(&self, window: &Window) -> String {
+        window.toplevel().map_or_else(String::new, |t| {
+            with_states(t.wl_surface(), |s| {
+                s.data_map
+                    .get::<XdgToplevelSurfaceData>()
+                    .and_then(|d| d.lock().unwrap().title.clone())
+                    .unwrap_or_default()
+            })
+        })
     }
 
     fn toplevel(&self, surface: &WlSurface) -> Option<ToplevelSurface> {

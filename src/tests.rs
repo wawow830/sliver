@@ -168,12 +168,16 @@ struct App {
 
 impl App {
     fn spawn(b: &mut Bench, color: u32) -> App {
+        App::titled(b, "", color)
+    }
+
+    fn titled(b: &mut Bench, title: &'static str, color: u32) -> App {
         let stream = b.connect();
         let events = Arc::new(Mutex::new(Vec::new()));
         let (s, e) = (stream.try_clone().unwrap(), events.clone());
         thread::spawn(move || {
             let pixels = vec![color; (W * H) as usize];
-            let _ = Client::connect(s).unwrap().show(&pixels, move |event| {
+            let _ = Client::connect(s).unwrap().show(title, &pixels, move |event| {
                 let name = match event {
                     wl_touch::Event::Down { id, x, y, .. } => format!("down {id} {x} {y}"),
                     wl_touch::Event::Motion { id, x, y, .. } => format!("motion {id} {x} {y}"),
@@ -258,6 +262,18 @@ fn fn_prefers_fkeys_over_newer_windows() {
 }
 
 #[test]
+fn fn_shows_the_newest_fkeys_window() {
+    let mut b = Bench::new();
+    let _blue = App::titled(&mut b, fkeys::TITLE, BLUE);
+    let _red = App::spawn(&mut b, RED);
+    b.until("red", |b| b.shows(RED));
+    b.s.fn_key(true);
+    b.until("blue", |b| b.shows(BLUE));
+    b.s.fn_key(false);
+    b.until("red", |b| b.shows(RED));
+}
+
+#[test]
 fn a_key_is_down_while_any_finger_holds_it() {
     let mut b = Bench::new();
     let f5 = (key_x(5), 30.0).into();
@@ -285,7 +301,7 @@ fn virtual_keyboard_is_its_own_device() {
     thread::spawn(move || {
         let client = Client::connect(theirs).unwrap();
         client.keyboard().unwrap().key(0, 30, 1);
-        let _ = client.show(&vec![RED; (W * H) as usize], |_| {});
+        let _ = client.show("", &vec![RED; (W * H) as usize], |_| {});
     });
     b.until("A down", |b| {
         b.log().keys.contains(&Device::Key(1, 30, true))

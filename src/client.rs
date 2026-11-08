@@ -73,6 +73,7 @@ impl Client {
 
     pub fn show(
         mut self,
+        title: &str,
         pixels: &[u32],
         touch: impl FnMut(wl_touch::Event) + 'static,
     ) -> Result<Infallible, Box<dyn Error>> {
@@ -86,7 +87,8 @@ impl Client {
         pool.destroy();
         let surface = compositor.create_surface(&qh, ());
         base.get_xdg_surface(&surface, &qh, ())
-            .get_toplevel(&qh, ());
+            .get_toplevel(&qh, ())
+            .set_title(title.into());
         surface.commit();
         let mut window = Window {
             surface,

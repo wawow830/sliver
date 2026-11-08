@@ -7,6 +7,8 @@ use wayland_client::protocol::wl_touch;
 
 use crate::{H, W, client::Client};
 
+pub const TITLE: &str = "fkeys";
+
 pub const KEYS: [(&str, u32); 13] = [
     ("ESC", 1),
     ("F1", 59),
@@ -82,7 +84,7 @@ pub fn run(stream: UnixStream) {
         let client = Client::connect(stream)?;
         let keyboard = client.keyboard()?;
         let mut held = HashMap::new();
-        client.show(&draw(), move |event| {
+        client.show(TITLE, &draw(), move |event| {
             let before: HashSet<u32> = held.values().copied().collect();
             match event {
                 wl_touch::Event::Down { id, x, .. } => drop(held.insert(id, key_at(x))),

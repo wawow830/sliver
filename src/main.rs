@@ -149,11 +149,14 @@ impl Sliver {
     }
 
     fn update(&mut self) {
-        let windows = &self.wl.windows;
+        let newest = |is_fkeys: bool| {
+            let windows = &self.wl.windows;
+            windows.iter().rev().find(|w| (self.wl.title(w) == fkeys::TITLE) == is_fkeys).cloned()
+        };
         let shown = match (self.on, self.fn_held) {
             (false, _) => None,
-            (true, true) => windows.first().cloned(),
-            (true, false) => windows.last().cloned(),
+            (true, true) => newest(true),
+            (true, false) => newest(false).or_else(|| newest(true)),
         };
         if shown != self.shown {
             if let Some(w) = &self.shown {

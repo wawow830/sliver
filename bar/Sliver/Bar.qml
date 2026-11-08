@@ -63,6 +63,17 @@ FloatingWindow {
         }
     }
 
+    FloatingWindow {
+        id: fn
+        title: "fkeys"
+        color: "black"
+
+        FKeys {
+            anchors.fill: parent
+            anchors.margins: (fn.height - Theme.size) / 2
+        }
+    }
+
     Component { id: fkeys; FKeys {} }
 
     Component {
