@@ -47,16 +47,10 @@ an Esc key.
 
 ## Install
 
-This is packaged for Fedora Asahi Remix. Build the RPM from a clone:
+On Fedora Asahi Remix 44:
 
 ```sh
-git clone https://github.com/wawow830/sliver
-cd sliver
-sudo dnf install rpm-build
-sudo dnf builddep packaging/sliver.spec
-git archive --prefix=sliver-0.1.0/ -o sliver-0.1.0.tar.gz HEAD
-rpmbuild -bb --define "_sourcedir $PWD" packaging/sliver.spec
-sudo dnf install ~/rpmbuild/RPMS/aarch64/sliver-0.1.0-*.rpm
+sudo dnf install https://github.com/wawow830/sliver/releases/download/v0.1.0/sliver-0.1.0-1.fc44.aarch64.rpm
 ```
 
 The bar uses Google Sans Flex and Material Symbols Rounded, which Fedora
@@ -88,6 +82,21 @@ start the bar from your Hyprland config instead:
 
 ```
 exec-once = WAYLAND_DISPLAY=/run/sliver QT_QPA_PLATFORM=wayland QT_QUICK_BACKEND=software qs -c sliver
+```
+
+### Building it yourself
+
+For another Fedora release, or to run what's on main, build the RPM from a
+clone instead of the dnf line above:
+
+```sh
+git clone https://github.com/wawow830/sliver
+cd sliver
+sudo dnf install rpm-build
+sudo dnf builddep packaging/sliver.spec
+git archive --prefix=sliver-0.1.0/ -o sliver-0.1.0.tar.gz HEAD
+rpmbuild -bb --define "_sourcedir $PWD" packaging/sliver.spec
+sudo dnf install ~/rpmbuild/RPMS/aarch64/sliver-0.1.0-*.rpm
 ```
 
 ## Your own bar
