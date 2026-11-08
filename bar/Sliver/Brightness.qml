@@ -20,7 +20,7 @@ Level {
     Timer {
         interval: 1000
         repeat: true
-        running: !brightness.pressed && !set.running
+        running: !set.running
         onTriggered: now.reload()
     }
 

@@ -4,41 +4,34 @@ Pill {
     id: level
     property real value
     property bool opensLeft
-    property real from
+    property bool open
     property real dragged
-    readonly property real shown: Math.max(0, Math.min(1, pressed ? dragged : value))
+    readonly property real shown: Math.max(0, Math.min(1, finger.pressed ? dragged : value))
     signal moved(real value)
 
-    pressed: finger.active
-    z: pressed || panel.visible ? 1 : 0
+    z: panel.visible ? 1 : 0
     radius: height / 2
     scale: 1
 
-    PointHandler {
-        id: finger
-        onActiveChanged: {
-            level.from = level.value
-            level.dragged = level.value
-        }
-        onPointChanged: {
-            if (!active)
-                return
-            const v = Math.max(0, Math.min(1, level.from + (point.position.x - point.pressPosition.x) / (fill.reach - fill.height)))
-            if (v != level.dragged) {
-                level.dragged = v
-                level.moved(v)
-            }
-        }
+    Connections {
+        target: level
+        function onTapped() { level.open = true }
+    }
+
+    Timer {
+        running: level.open && !finger.pressed
+        interval: 2500
+        onTriggered: level.open = false
     }
 
     Rectangle {
         id: panel
         readonly property real outset: (Theme.size - level.height) / 2
         visible: opacity > 0
-        opacity: level.pressed ? 1 : 0
+        opacity: level.open ? 1 : 0
         x: level.opensLeft ? level.width + outset - width : -outset
         y: -outset
-        width: level.pressed ? 720 : level.width + 2 * outset
+        width: level.open ? 720 : level.width + 2 * outset
         height: Theme.size
         radius: height / 2
         color: Theme.colors.surface_container_high
@@ -54,21 +47,40 @@ Pill {
         }
 
         Rectangle {
-            id: fill
+            id: bar
             readonly property real reach: panel.width - 2 * Theme.inset
             x: Theme.inset
             y: Theme.inset
             height: panel.height - 2 * Theme.inset
             width: height + level.shown * (reach - height)
             radius: height / 2
-            color: Theme.colors.primary
+            color: level.fill.a > 0 ? level.fill : Theme.colors.primary
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 x: (parent.height - width) / 2
                 text: level.icon
-                color: Theme.colors.on_primary
+                color: level.fill.a > 0 ? level.ink : Theme.colors.on_primary
                 font: Theme.glyph
+            }
+        }
+
+        MouseArea {
+            id: finger
+            anchors.fill: parent
+            enabled: level.open
+            onPressed: mouse => {
+                level.dragged = level.value
+                slide(mouse.x)
+            }
+            onPositionChanged: mouse => slide(mouse.x)
+
+            function slide(x) {
+                const v = Math.max(0, Math.min(1, (x - bar.x - bar.height / 2) / (bar.reach - bar.height)))
+                if (v != level.dragged) {
+                    level.dragged = v
+                    level.moved(v)
+                }
             }
         }
     }

@@ -15,7 +15,7 @@ Level {
             sink.audio.volume = v
         }
     }
-    onTapped: {
+    onLongPressed: {
         if (sink)
             sink.audio.muted = !muted
     }

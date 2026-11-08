@@ -8,14 +8,15 @@ Singleton {
     readonly property string font: "Google Sans Flex"
     readonly property string icons: "Material Symbols Rounded"
 
-    readonly property int size: 54
+    readonly property int size: 58
+    readonly property int slot: 96
     readonly property int inset: 4
     readonly property int gap: 6
 
-    readonly property font label: Qt.font({ family: font, pixelSize: 20, weight: Font.Medium })
-    readonly property font title: Qt.font({ family: font, pixelSize: 17, weight: Font.DemiBold })
-    readonly property font meta: Qt.font({ family: font, pixelSize: 14, features: { "tnum": 1 } })
-    readonly property font glyph: Qt.font({ family: icons, pixelSize: 26, variableAxes: { "FILL": 1 } })
+    readonly property font label: Qt.font({ family: font, pixelSize: 22, weight: Font.Medium })
+    readonly property font title: Qt.font({ family: font, pixelSize: 18, weight: Font.DemiBold })
+    readonly property font meta: Qt.font({ family: font, pixelSize: 15, features: { "tnum": 1 } })
+    readonly property font glyph: Qt.font({ family: icons, pixelSize: 30, variableAxes: { "FILL": 1 } })
 
     FileView {
         path: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config") + "/sliver/colors.json"

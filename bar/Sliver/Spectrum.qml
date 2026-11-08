@@ -5,9 +5,8 @@ import Quickshell.Io
 import Quickshell.Services.Mpris
 
 Singleton {
-    readonly property int bands: 48
+    readonly property int bands: 96
     property var levels: []
-    readonly property real bass: levels.length ? (levels[0] + levels[1] + levels[2] + levels[3]) / 4 : 0
 
     Process {
         running: Mpris.players.values.some(p => p.isPlaying)

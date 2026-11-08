@@ -6,14 +6,14 @@ Rectangle {
     id: pill
     property string text
     property string icon
-    property string image
+    property list<string> images
     property color fill: "transparent"
     property color ink: Theme.colors.on_surface
     property bool pressed: tap.pressed
     signal tapped
     signal longPressed
 
-    implicitWidth: Math.max(64, row.implicitWidth + 36)
+    implicitWidth: Math.max(Theme.slot, row.implicitWidth + 36)
     implicitHeight: Theme.size
     radius: pressed ? Math.min(12, height / 2) : height / 2
     color: !pressed ? fill : fill.a > 0 ? Qt.tint(fill, Qt.alpha(ink, 0.16)) : Qt.alpha(ink, 0.16)
@@ -27,13 +27,6 @@ Rectangle {
         id: row
         anchors.centerIn: parent
         spacing: 10
-
-        IconImage {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: pill.image != ""
-            source: pill.image
-            implicitSize: 36
-        }
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
@@ -49,6 +42,22 @@ Rectangle {
             text: pill.text
             color: pill.ink
             font: Theme.label
+        }
+
+        Row {
+            anchors.verticalCenter: parent.verticalCenter
+            visible: pill.images.length > 0
+            spacing: 6
+
+            Repeater {
+                model: pill.images
+
+                IconImage {
+                    required property string modelData
+                    source: modelData
+                    implicitSize: 40
+                }
+            }
         }
     }
 

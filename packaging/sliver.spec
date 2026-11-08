@@ -24,7 +24,7 @@ Recommends:     cava
 
 %description
 sliverd makes the Touch Bar an ordinary Wayland screen. The bar is a Quickshell
-config: the Sliver QML module gives it pills, keys, levels, the taskbar, media and
+config: the Sliver QML module gives it pills, keys, levels, workspaces, media and
 F-keys, and ~/.config/quickshell/sliver/shell.qml replaces the default one.
 Esc and F1-F12 show when nothing is open or while Fn is held.
 

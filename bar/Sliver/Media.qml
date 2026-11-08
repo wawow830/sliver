@@ -67,13 +67,12 @@ Rectangle {
             }
         }
 
-        Wave {
-            id: wave
+        Seek {
+            id: seek
             Layout.fillWidth: true
             Layout.leftMargin: 20
             Layout.rightMargin: 16
             progress: media.progress
-            playing: media.player?.isPlaying ?? false
             color: media.accent
             track: Qt.alpha(media.ink, 0.25)
 
@@ -85,7 +84,7 @@ Rectangle {
                 margin: 16
                 onPointChanged: {
                     if (active)
-                        at = Math.max(0, Math.min(1, point.position.x / wave.width))
+                        at = Math.max(0, Math.min(1, point.position.x / seek.width))
                 }
                 onActiveChanged: {
                     if (!active)
@@ -109,11 +108,12 @@ Rectangle {
             onTapped: media.player.previous()
         }
 
-        PlayPause {
+        Pill {
             Layout.fillHeight: true
-            player: media.player
+            icon: media.player?.isPlaying ? "pause" : "play_arrow"
             fill: media.accent
             ink: media.onAccent
+            onTapped: media.player.togglePlaying()
         }
 
         Pill {

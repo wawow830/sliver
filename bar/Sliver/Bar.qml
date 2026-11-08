@@ -5,8 +5,6 @@ import Quickshell.Services.Mpris
 
 FloatingWindow {
     id: bar
-    property list<string> pinned: []
-    property int slots: 5
     property list<string> terminals: ["kitty", "foot", "Alacritty", "org.wezfurlong.wezterm", "com.mitchellh.ghostty"]
     property list<string> browsers: ["zen", "firefox", "chromium", "google-chrome"]
 
@@ -34,7 +32,7 @@ FloatingWindow {
         anchors.margins: (bar.height - Theme.size) / 2
         spacing: 2 * Theme.gap
 
-        Taskbar { Layout.fillHeight: true; pinned: bar.pinned; slots: bar.slots }
+        Workspaces { Layout.fillHeight: true }
 
         Item {
             Layout.fillWidth: true
@@ -60,7 +58,7 @@ FloatingWindow {
         yAxis.enabled: false
         onActiveChanged: {
             if (!active && Math.abs(activeTranslation.x) > 120)
-                Desktop.workspace(activeTranslation.x < 0 ? 1 : -1)
+                Desktop.workspace(activeTranslation.x < 0 ? "r+1" : "r-1")
         }
     }
 
@@ -70,12 +68,11 @@ FloatingWindow {
         id: browser
         RowLayout {
             spacing: Theme.gap
-            Key { Layout.fillHeight: true; implicitWidth: 120; icon: "arrow_back"; keys: [158] }
-            Key { Layout.fillHeight: true; implicitWidth: 120; icon: "arrow_forward"; keys: [159] }
-            Key { Layout.fillHeight: true; implicitWidth: 120; icon: "refresh"; keys: [173] }
-            Key { Layout.fillHeight: true; implicitWidth: 120; icon: "add"; keys: [29, 20] }
-            Item { Layout.fillWidth: true }
-            PlayPause { Layout.fillHeight: true }
+            Key { Layout.fillHeight: true; icon: "arrow_back"; keys: [158] }
+            Key { Layout.fillHeight: true; icon: "arrow_forward"; keys: [159] }
+            Key { Layout.fillHeight: true; icon: "refresh"; keys: [173] }
+            Key { Layout.fillHeight: true; icon: "add"; keys: [29, 20] }
+            Media { Layout.fillWidth: true; Layout.fillHeight: true; Layout.leftMargin: Theme.gap }
         }
     }
 
