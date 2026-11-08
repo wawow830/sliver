@@ -5,25 +5,19 @@ Rectangle {
     property string icon
     property real value
     property bool muted
+    property real shown: value
     property real from
     readonly property bool held: drag.active
-    readonly property real shown: Math.max(0, Math.min(1, held ? from + drag.activeTranslation.x / (2 * width) : value))
     signal moved(real value)
     signal tapped
 
-    implicitWidth: 2 * Theme.slot
+    implicitWidth: 3 * Theme.slot
     implicitHeight: Theme.size
     radius: height / 2
     color: Theme.colors.surface_container_high
-    onShownChanged: {
-        if (held)
-            moved(shown)
-    }
-
-    Binding on from {
-        when: !level.held
-        value: level.value
-        restoreMode: Binding.RestoreNone
+    onValueChanged: {
+        if (!held)
+            shown = value
     }
 
     Rectangle {
@@ -46,15 +40,38 @@ Rectangle {
             font: Theme.glyph
             Behavior on color { ColorAnimation { duration: 150 } }
         }
+
+        Item {
+            width: parent.height
+            height: parent.height
+
+            TapHandler {
+                onTapped: level.tapped()
+            }
+        }
+    }
+
+    Text {
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.right: parent.right
+        anchors.rightMargin: 20
+        visible: level.held
+        text: Math.round(100 * level.shown)
+        color: fill.x + fill.width > x ? Theme.colors.on_primary : Theme.colors.on_surface_variant
+        font: Theme.label
     }
 
     DragHandler {
         id: drag
         target: null
         yAxis.enabled: false
-    }
-
-    TapHandler {
-        onTapped: level.tapped()
+        dragThreshold: 4
+        onActiveChanged: level.from = level.shown
+        onActiveTranslationChanged: {
+            if (!active)
+                return
+            level.shown = Math.max(0, Math.min(1, level.from + activeTranslation.x / (fill.reach - fill.height)))
+            level.moved(level.shown)
+        }
     }
 }
