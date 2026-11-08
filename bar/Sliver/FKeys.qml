@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 
 RowLayout {
-    spacing: 10
+    spacing: 2 * Theme.gap
 
     Repeater {
         model: [[59, 60, 61, 62], [63, 64, 65, 66], [67, 68, 87, 88]]
@@ -12,7 +12,7 @@ RowLayout {
             required property var modelData
             required property int index
             Layout.fillWidth: true
-            spacing: 4
+            spacing: Theme.gap
 
             Repeater {
                 model: group.modelData
@@ -21,6 +21,7 @@ RowLayout {
                     required property int modelData
                     required property int index
                     Layout.fillWidth: true
+                    Layout.fillHeight: true
                     Layout.preferredWidth: 1
                     keys: [modelData]
                     text: `F${group.index * 4 + index + 1}`

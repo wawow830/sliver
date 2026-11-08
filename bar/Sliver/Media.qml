@@ -2,127 +2,58 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell.Services.Mpris
 
-RowLayout {
+Rectangle {
     id: media
     readonly property MprisPlayer player: Mpris.players.values.find(p => p.isPlaying) ?? Mpris.players.values[0] ?? null
+    readonly property real length: player?.lengthSupported ? player.length : 0
+    readonly property real position: scrub.active ? scrub.at * length : player?.position ?? 0
+    readonly property real progress: length > 0 ? Math.min(1, position / length) : 0
+
+    readonly property color vivid: cover.vivid
+    readonly property bool tinted: vivid.a > 0
+    readonly property color ink: tinted ? Qt.hsla(vivid.hslHue, 0.3, 0.94, 1) : Theme.colors.on_surface
+    readonly property color accent: tinted ? Qt.hsla(vivid.hslHue, Math.max(0.6, vivid.hslSaturation), 0.8, 1) : Theme.colors.primary
+    readonly property color onAccent: tinted ? Qt.hsla(vivid.hslHue, 0.6, 0.15, 1) : Theme.colors.on_primary
 
     function time(seconds) {
         const s = Math.floor(seconds)
         return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
     }
 
-    spacing: 8
     visible: player != null
+    radius: height / 2
+    color: tinted ? Qt.hsla(vivid.hslHue, Math.max(0.35, Math.min(0.6, vivid.hslSaturation)), 0.2, 1) : Theme.colors.surface_container_high
+    Behavior on color { ColorAnimation { duration: 400 } }
 
-    component Fade: Rectangle {
-        anchors.top: wash.top
-        anchors.bottom: wash.bottom
-        width: 90
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0; color: track.color }
-            GradientStop { position: 1; color: Qt.alpha(track.color, 0) }
-        }
-    }
-
-    Pill {
-        Layout.fillHeight: true
-        implicitWidth: 104
-        icon: "skip_previous"
-        enabled: media.player?.canGoPrevious ?? false
-        onTapped: media.player.previous()
-    }
-
-    PlayPause { Layout.fillHeight: true; player: media.player }
-
-    Pill {
-        Layout.fillHeight: true
-        implicitWidth: 104
-        icon: "skip_next"
-        enabled: media.player?.canGoNext ?? false
-        onTapped: media.player.next()
-    }
-
-    Rectangle {
-        id: track
-        readonly property real length: media.player?.lengthSupported ? media.player.length : 0
-        readonly property real position: scrub.active ? scrub.at * length : media.player?.position ?? 0
-        readonly property real progress: length > 0 ? Math.min(1, position / length) : 0
-
-        Layout.fillWidth: true
-        Layout.fillHeight: true
-        radius: height / 2
-        color: Theme.colors.surface_container_high
-
-        Image {
-            id: wash
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            anchors.left: art.right
-            anchors.right: parent.right
-            anchors.rightMargin: track.radius
-            source: cover.source
-            sourceSize: Qt.size(8, 8)
-            sourceClipRect: Qt.rect(0, 2, 8, 4)
-            smooth: true
-            opacity: 0.6
-        }
-
-        Fade { anchors.left: wash.left }
-        Fade { anchors.right: wash.right; rotation: 180 }
+    RowLayout {
+        anchors.fill: parent
+        anchors.margins: Theme.inset
+        spacing: 0
 
         Item {
-            id: art
-            x: 0
-            width: cover.status == Image.Ready ? 54 : 0
-            height: 54
-            visible: width > 0
+            Layout.fillHeight: true
+            Layout.preferredWidth: cover.drawn != "" ? cover.width : 0
 
-            Image {
+            Cover {
                 id: cover
-                anchors.centerIn: parent
-                width: 38
-                height: 38
+                width: Theme.size - 2 * Theme.inset
+                height: width
                 source: media.player?.trackArtUrl ?? ""
-                sourceSize: Qt.size(76, 76)
-                fillMode: Image.PreserveAspectCrop
-                smooth: true
-
-                RotationAnimator on rotation {
-                    running: media.player?.isPlaying ?? false
-                    from: 0
-                    to: 360
-                    duration: 8000
-                    loops: Animation.Infinite
-                }
-            }
-
-            Rectangle {
-                anchors.fill: parent
-                radius: 27
-                color: "transparent"
-                border.width: 8
-                border.color: track.color
+                spinning: media.player?.isPlaying ?? false
             }
         }
 
         Column {
-            id: label
-            anchors.left: art.right
-            anchors.leftMargin: art.visible ? 6 : 22
-            anchors.verticalCenter: parent.verticalCenter
-            width: Math.min(Math.max(title.implicitWidth, artist.implicitWidth), track.width * 0.35)
-            spacing: -2
+            Layout.leftMargin: cover.drawn != "" ? 12 : 18
+            Layout.preferredWidth: Math.min(Math.max(title.implicitWidth, artist.implicitWidth), media.width * 0.25)
 
             Text {
                 id: title
                 width: parent.width
                 text: media.player?.trackTitle || media.player?.identity || ""
                 elide: Text.ElideRight
-                color: Theme.colors.on_surface
-                font.family: Theme.font
-                font.pixelSize: 19
-                font.weight: Font.DemiBold
+                color: media.ink
+                font: Theme.title
             }
 
             Text {
@@ -131,65 +62,66 @@ RowLayout {
                 visible: text != ""
                 text: media.player?.trackArtist ?? ""
                 elide: Text.ElideRight
-                color: Theme.colors.on_surface_variant
-                font.family: Theme.font
-                font.pixelSize: 16
+                color: Qt.alpha(media.ink, 0.7)
+                font: Theme.meta
             }
         }
 
-        Row {
-            id: bands
-            anchors.left: label.right
-            anchors.leftMargin: 18
-            anchors.right: clock.left
-            anchors.rightMargin: 14
-            anchors.verticalCenter: parent.verticalCenter
-            height: 40
-            readonly property real pitch: width / Spectrum.bands
+        Wave {
+            id: wave
+            Layout.fillWidth: true
+            Layout.leftMargin: 20
+            Layout.rightMargin: 16
+            progress: media.progress
+            playing: media.player?.isPlaying ?? false
+            color: media.accent
+            track: Qt.alpha(media.ink, 0.25)
 
-            Repeater {
-                model: Spectrum.bands
-
-                Item {
-                    required property int index
-                    width: bands.pitch
-                    height: bands.height
-
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: Math.max(3, bands.pitch * 0.55)
-                        height: Math.max(width, bands.height * (Spectrum.levels[index] ?? 0))
-                        radius: width / 2
-                        color: (index + 0.5) / Spectrum.bands <= track.progress ? Theme.colors.on_surface : Qt.alpha(Theme.colors.on_surface, 0.3)
-                    }
+            PointHandler {
+                id: scrub
+                property real at
+                target: null
+                enabled: (media.player?.canSeek ?? false) && media.length > 0
+                margin: 16
+                onPointChanged: {
+                    if (active)
+                        at = Math.max(0, Math.min(1, point.position.x / wave.width))
+                }
+                onActiveChanged: {
+                    if (!active)
+                        media.player.position = at * media.length
                 }
             }
         }
 
         Text {
-            id: clock
-            anchors.right: parent.right
-            anchors.rightMargin: 22
-            anchors.verticalCenter: parent.verticalCenter
-            text: track.length > 0 ? `${media.time(track.position)} / ${media.time(track.length)}` : media.time(track.position)
-            color: Theme.colors.on_surface_variant
-            font.family: Theme.font
-            font.pixelSize: 18
-            font.features: { "tnum": 1 }
+            Layout.rightMargin: 8
+            text: media.length > 0 ? `${media.time(media.position)} / ${media.time(media.length)}` : media.time(media.position)
+            color: Qt.alpha(media.ink, 0.7)
+            font: Theme.meta
         }
 
-        PointHandler {
-            id: scrub
-            property real at
-            enabled: (media.player?.canSeek ?? false) && track.length > 0
-            onPointChanged: {
-                if (active)
-                    at = Math.max(0, Math.min(1, (point.position.x - bands.x) / bands.width))
-            }
-            onActiveChanged: {
-                if (!active)
-                    media.player.position = at * track.length
-            }
+        Pill {
+            Layout.fillHeight: true
+            icon: "skip_previous"
+            ink: media.ink
+            enabled: media.player?.canGoPrevious ?? false
+            onTapped: media.player.previous()
+        }
+
+        PlayPause {
+            Layout.fillHeight: true
+            player: media.player
+            fill: media.accent
+            ink: media.onAccent
+        }
+
+        Pill {
+            Layout.fillHeight: true
+            icon: "skip_next"
+            ink: media.ink
+            enabled: media.player?.canGoNext ?? false
+            onTapped: media.player.next()
         }
     }
 

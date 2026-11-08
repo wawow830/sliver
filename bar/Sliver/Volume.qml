@@ -6,8 +6,8 @@ Level {
     readonly property bool muted: sink?.audio.muted ?? false
 
     icon: muted ? "volume_off" : value < 0.34 ? "volume_mute" : value < 0.67 ? "volume_down" : "volume_up"
-    fill: muted ? Theme.colors.error : "transparent"
-    ink: muted ? Theme.colors.surface_container : Theme.colors.on_surface
+    fill: muted ? Theme.colors.error_container : "transparent"
+    ink: muted ? Theme.colors.on_error_container : Theme.colors.on_surface
     value: sink?.audio.volume ?? 0
     onMoved: v => {
         if (sink) {

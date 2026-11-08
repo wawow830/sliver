@@ -31,13 +31,8 @@ FloatingWindow {
 
     RowLayout {
         anchors.fill: parent
-        anchors.topMargin: 3
-        anchors.bottomMargin: 3
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
-        spacing: 30
-
-        Brightness { Layout.fillHeight: true }
+        anchors.margins: (bar.height - Theme.size) / 2
+        spacing: 2 * Theme.gap
 
         Taskbar { Layout.fillHeight: true; pinned: bar.pinned; slots: bar.slots }
 
@@ -50,9 +45,9 @@ FloatingWindow {
             Context { component: media }
         }
 
-        RowLayout {
+        Tray {
             Layout.fillHeight: true
-            spacing: 8
+            Brightness { Layout.fillHeight: true; opensLeft: true }
             Mic { Layout.fillHeight: true }
             Volume { Layout.fillHeight: true; opensLeft: true }
         }
@@ -74,7 +69,7 @@ FloatingWindow {
     Component {
         id: browser
         RowLayout {
-            spacing: 8
+            spacing: Theme.gap
             Key { Layout.fillHeight: true; implicitWidth: 120; icon: "arrow_back"; keys: [158] }
             Key { Layout.fillHeight: true; implicitWidth: 120; icon: "arrow_forward"; keys: [159] }
             Key { Layout.fillHeight: true; implicitWidth: 120; icon: "refresh"; keys: [173] }

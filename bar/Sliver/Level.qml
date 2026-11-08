@@ -23,7 +23,7 @@ Pill {
         onPointChanged: {
             if (!active)
                 return
-            const v = Math.max(0, Math.min(1, level.from + (point.position.x - point.pressPosition.x) / (panel.width - panel.height)))
+            const v = Math.max(0, Math.min(1, level.from + (point.position.x - point.pressPosition.x) / (fill.reach - fill.height)))
             if (v != level.dragged) {
                 level.dragged = v
                 level.moved(v)
@@ -33,11 +33,13 @@ Pill {
 
     Rectangle {
         id: panel
+        readonly property real outset: (Theme.size - level.height) / 2
         visible: opacity > 0
         opacity: level.pressed ? 1 : 0
-        x: level.opensLeft ? level.width - width : 0
-        width: level.pressed ? 720 : level.width
-        height: level.height
+        x: level.opensLeft ? level.width + outset - width : -outset
+        y: -outset
+        width: level.pressed ? 720 : level.width + 2 * outset
+        height: Theme.size
         radius: height / 2
         color: Theme.colors.surface_container_high
         Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
@@ -46,15 +48,18 @@ Pill {
         Rectangle {
             z: -1
             anchors.fill: parent
-            anchors.margins: -4
+            anchors.margins: -3
             radius: height / 2
             color: "black"
         }
 
         Rectangle {
             id: fill
-            width: parent.height + level.shown * (parent.width - parent.height)
-            height: parent.height
+            readonly property real reach: panel.width - 2 * Theme.inset
+            x: Theme.inset
+            y: Theme.inset
+            height: panel.height - 2 * Theme.inset
+            width: height + level.shown * (reach - height)
             radius: height / 2
             color: Theme.colors.primary
 
@@ -63,20 +68,7 @@ Pill {
                 x: (parent.height - width) / 2
                 text: level.icon
                 color: Theme.colors.on_primary
-                font.family: Theme.icons
-                font.pixelSize: 30
-                font.variableAxes: { "FILL": 1 }
-            }
-
-            Rectangle {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.right: parent.right
-                anchors.rightMargin: 14
-                visible: parent.width > 2 * parent.height
-                width: 4
-                height: 24
-                radius: 2
-                color: Qt.alpha(Theme.colors.on_primary, 0.5)
+                font: Theme.glyph
             }
         }
     }

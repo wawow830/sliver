@@ -1,7 +1,7 @@
 import QtQuick
 import Quickshell
 
-Item {
+Rectangle {
     id: taskbar
     property list<string> pinned
     property int slots: 5
@@ -17,9 +17,12 @@ Item {
     readonly property var overflow: overflows ? apps.slice(slots - 1) : []
     readonly property var shown: overflows ? apps.slice(0, slots - 1) : apps
     readonly property int focused: overflow.includes(Desktop.focused) ? slots - 1 : shown.indexOf(Desktop.focused)
-    readonly property int slot: 88
+    readonly property int slot: 64
 
-    implicitWidth: slots * slot + (slots - 1) * 8
+    implicitWidth: slots * slot + 2 * Theme.inset
+    implicitHeight: Theme.size
+    radius: height / 2
+    color: Theme.colors.surface_container_high
 
     component App: Pill {
         id: app
@@ -32,13 +35,13 @@ Item {
         property bool launching
         property real pulse
 
-        anchors.verticalCenter: parent.verticalCenter
-        implicitWidth: taskbar.slot
+        width: taskbar.slot
+        height: parent.height
         image: closing ? "" : art
         icon: closing ? "close" : ""
         text: closing || art != "" ? "" : name.charAt(0).toUpperCase()
-        fill: closing ? Theme.colors.error : "transparent"
-        ink: closing ? Theme.colors.surface_container : Theme.colors.on_surface
+        fill: closing ? Theme.colors.error_container : "transparent"
+        ink: closing ? Theme.colors.on_error_container : Theme.colors.on_surface
         opacity: windows.length || closing ? 1 : launching ? pulse : 0.4
         onWindowsChanged: launching = false
 
@@ -80,12 +83,12 @@ Item {
     Rectangle {
         property int at
 
-        anchors.verticalCenter: parent.verticalCenter
-        x: at * (width + 8)
+        x: Theme.inset + at * taskbar.slot
+        y: Theme.inset
         width: taskbar.slot
-        height: 54
+        height: parent.height - 2 * Theme.inset
         radius: height / 2
-        color: Theme.colors.surface_container_high
+        color: Theme.colors.primary_container
         opacity: taskbar.focused < 0 ? 0 : 1
         Behavior on x { SpringAnimation { spring: 4; damping: 0.4 } }
         Behavior on opacity { NumberAnimation { duration: 200 } }
@@ -99,7 +102,7 @@ Item {
 
     Row {
         anchors.fill: parent
-        spacing: 8
+        anchors.margins: Theme.inset
 
         Repeater {
             model: taskbar.shown

@@ -10,14 +10,13 @@ Rectangle {
     property color fill: "transparent"
     property color ink: Theme.colors.on_surface
     property bool pressed: tap.pressed
-    readonly property real content: row.implicitWidth
     signal tapped
     signal longPressed
 
-    implicitWidth: Math.max(96, row.implicitWidth + 36)
-    implicitHeight: 54
-    radius: pressed ? 12 : height / 2
-    color: pressed ? Qt.tint(fill.a > 0 ? fill : Theme.colors.surface_container_high, Qt.alpha(ink, 0.2)) : fill
+    implicitWidth: Math.max(64, row.implicitWidth + 36)
+    implicitHeight: Theme.size
+    radius: pressed ? Math.min(12, height / 2) : height / 2
+    color: !pressed ? fill : fill.a > 0 ? Qt.tint(fill, Qt.alpha(ink, 0.16)) : Qt.alpha(ink, 0.16)
     opacity: enabled ? 1 : 0.4
     scale: pressed ? 0.95 : 1
     Behavior on scale { SpringAnimation { spring: 6; damping: 0.35 } }
@@ -33,7 +32,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             visible: pill.image != ""
             source: pill.image
-            implicitSize: 40
+            implicitSize: 36
         }
 
         Text {
@@ -41,9 +40,7 @@ Rectangle {
             visible: pill.icon != ""
             text: pill.icon
             color: pill.ink
-            font.family: Theme.icons
-            font.pixelSize: 32
-            font.variableAxes: { "FILL": 1 }
+            font: Theme.glyph
         }
 
         Text {
@@ -51,9 +48,7 @@ Rectangle {
             visible: pill.text != ""
             text: pill.text
             color: pill.ink
-            font.family: Theme.font
-            font.pixelSize: 24
-            font.weight: Font.Medium
+            font: Theme.label
         }
     }
 
