@@ -64,8 +64,8 @@ Canvas {
 
     RotationAnimator on rotation {
         running: cover.spinning
-        from: 0
-        to: 360
+        from: cover.rotation
+        to: cover.rotation + 360
         duration: 8000
         loops: Animation.Infinite
     }

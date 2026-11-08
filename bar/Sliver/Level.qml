@@ -7,7 +7,7 @@ Rectangle {
     property bool muted
     property real from
     readonly property bool held: drag.active
-    readonly property real shown: Math.max(0, Math.min(1, held ? from + drag.activeTranslation.x / (fill.reach - fill.height) : value))
+    readonly property real shown: Math.max(0, Math.min(1, held ? from + drag.activeTranslation.x / (2 * width) : value))
     signal moved(real value)
     signal tapped
 

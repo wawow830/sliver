@@ -8,9 +8,9 @@ Level {
     property int wanted: -1
 
     icon: "light_mode"
-    value: Number(now.text()) / Number(max.text())
+    value: Math.sqrt(Number(now.text()) / Number(max.text()))
     onMoved: v => {
-        wanted = Math.max(1, Math.round(v * Number(max.text())))
+        wanted = Math.max(1, Math.round(v * v * Number(max.text())))
         set.send()
     }
 
