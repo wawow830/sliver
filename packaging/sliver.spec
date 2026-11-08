@@ -20,6 +20,9 @@ BuildRequires:  libxkbcommon-devel
 BuildRequires:  systemd-rpm-macros
 Requires:       tiny-dfr
 Requires:       brightnessctl
+Requires:       quickshell
+Recommends:     font(googlesansflex)
+Recommends:     font(materialsymbolsrounded)
 Recommends:     cava
 
 %description
@@ -62,6 +65,8 @@ install -Dm644 packaging/99-z-sliverd.rules %{buildroot}%{_udevrulesdir}/99-z-sl
 %systemd_user_postun sliver-bar.service
 
 %files
+%license LICENSE
+%doc README.md
 %{_bindir}/sliverd
 %{_libdir}/qt6/qml/Sliver/
 %dir %{_sysconfdir}/xdg/quickshell/sliver
