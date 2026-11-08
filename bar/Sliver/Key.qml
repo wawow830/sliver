@@ -3,12 +3,11 @@ import QtQuick.Layouts
 
 Pill {
     property list<int> keys
-    property real grow: pressed ? 1.25 : 1
 
     fill: Theme.colors.surface_container_high
+    stretch: width / Theme.slot
     Layout.fillWidth: true
-    Layout.preferredWidth: implicitWidth * grow
-    Behavior on grow { SpringAnimation { spring: 5; damping: 0.35 } }
+    Layout.preferredWidth: Theme.slot * (1 + 0.25 * press)
 
     onPressedChanged: {
         const order = pressed ? Array.from(keys) : Array.from(keys).reverse()

@@ -10,15 +10,18 @@ Rectangle {
     property color fill: "transparent"
     property color ink: Theme.colors.on_surface
     property bool pressed: tap.pressed
+    property real press: pressed ? 1 : 0
+    property real stretch: 1
     signal tapped
 
     implicitWidth: Math.max(Theme.slot, row.implicitWidth + 36)
     implicitHeight: Theme.size
-    radius: pressed ? Math.min(12, height / 2) : height / 2
-    color: !pressed ? fill : fill.a > 0 ? Qt.tint(fill, Qt.alpha(ink, 0.16)) : Qt.alpha(ink, 0.16)
+    radius: Math.max(0, height / 2 - press * (height / 2 - Math.min(12, height / 2)))
+    property color shade: fill
+    color: shade.a > 0 ? Qt.tint(shade, Qt.alpha(ink, 0.16 * Math.max(0, press))) : Qt.alpha(ink, 0.16 * Math.max(0, press))
     opacity: enabled ? 1 : 0.4
-    Behavior on radius { NumberAnimation { duration: 150 } }
-    Behavior on color { ColorAnimation { duration: 150 } }
+    Behavior on press { SpringAnimation { spring: 5; damping: 0.35; epsilon: 0.01 } }
+    Behavior on shade { ColorAnimation { duration: 150 } }
 
     Row {
         id: row
@@ -30,7 +33,7 @@ Rectangle {
             visible: pill.icon != ""
             text: pill.icon
             color: pill.ink
-            font: Theme.glyph
+            font: Qt.font({ family: Theme.icons, pixelSize: Theme.glyph.pixelSize, variableAxes: { "FILL": 1, "wght": 400 + 300 * pill.press } })
         }
 
         Text {
@@ -38,7 +41,7 @@ Rectangle {
             visible: pill.text != ""
             text: pill.text
             color: pill.ink
-            font: Theme.label
+            font: Qt.font({ family: Theme.font, pixelSize: Theme.label.pixelSize, variableAxes: { "ROND": 100, "wght": 500 + 250 * pill.press, "wdth": Math.max(25, Math.min(151, 100 * pill.stretch)) } })
         }
 
         Row {
