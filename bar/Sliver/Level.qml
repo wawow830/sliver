@@ -11,6 +11,8 @@ Pill {
 
     pressed: finger.active
     z: pressed || panel.visible ? 1 : 0
+    radius: height / 2
+    scale: 1
 
     PointHandler {
         id: finger
@@ -21,7 +23,7 @@ Pill {
         onPointChanged: {
             if (!active)
                 return
-            const v = Math.max(0, Math.min(1, level.from + (point.position.x - point.pressPosition.x) / track.width))
+            const v = Math.max(0, Math.min(1, level.from + (point.position.x - point.pressPosition.x) / (panel.width - panel.height)))
             if (v != level.dragged) {
                 level.dragged = v
                 level.moved(v)
@@ -41,47 +43,40 @@ Pill {
         Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
         Behavior on opacity { NumberAnimation { duration: 160 } }
 
-        Text {
-            id: glyph
-            anchors.verticalCenter: parent.verticalCenter
-            x: level.opensLeft ? parent.width - width - 24 : 24
-            text: level.icon
-            color: Theme.colors.on_surface
-            font.family: Theme.icons
-            font.pixelSize: 32
+        Rectangle {
+            z: -1
+            anchors.fill: parent
+            anchors.margins: -4
+            radius: height / 2
+            color: "black"
         }
 
-        Item {
-            id: track
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            x: level.opensLeft ? 22 : glyph.x + glyph.width + 16
-            width: parent.width - glyph.width - 22 - 24 - 16
+        Rectangle {
+            id: fill
+            width: parent.height + level.shown * (parent.width - parent.height)
+            height: parent.height
+            radius: height / 2
+            color: Theme.colors.primary
 
-            Rectangle {
+            Text {
                 anchors.verticalCenter: parent.verticalCenter
-                width: parent.width
-                height: 20
-                radius: 10
-                color: Qt.alpha(Theme.colors.on_surface, 0.16)
+                x: (parent.height - width) / 2
+                text: level.icon
+                color: Theme.colors.on_primary
+                font.family: Theme.icons
+                font.pixelSize: 30
+                font.variableAxes: { "FILL": 1 }
             }
 
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
-                width: grip.x + grip.width / 2
-                height: 20
-                radius: 10
-                color: Theme.colors.primary
-            }
-
-            Rectangle {
-                id: grip
-                anchors.verticalCenter: parent.verticalCenter
-                x: level.shown * (track.width - width)
-                width: 40
-                height: 38
-                radius: 19
-                color: Theme.colors.on_surface
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                visible: parent.width > 2 * parent.height
+                width: 4
+                height: 24
+                radius: 2
+                color: Qt.alpha(Theme.colors.on_primary, 0.5)
             }
         }
     }

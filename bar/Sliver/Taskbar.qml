@@ -15,31 +15,31 @@ Item {
     }
     readonly property bool overflows: apps.length > slots
     readonly property var overflow: overflows ? apps.slice(slots - 1) : []
+    readonly property var shown: overflows ? apps.slice(0, slots - 1) : apps
+    readonly property int focused: overflow.includes(Desktop.focused) ? slots - 1 : shown.indexOf(Desktop.focused)
+    readonly property int slot: 88
 
-    implicitWidth: slots * 104 + (slots - 1) * 8
+    implicitWidth: slots * slot + (slots - 1) * 8
 
     component App: Pill {
         id: app
         property string app
         readonly property DesktopEntry entry: Desktop.entry(app)
         readonly property var windows: Desktop.windows.filter(w => Desktop.app(w) == app.app)
-        readonly property bool focused: Desktop.focused == app.app
         readonly property string name: entry?.name || app.app.split(".").pop()
         readonly property string art: Desktop.icon(app.app)
         property bool closing
         property bool launching
-        property real pulse: 1
+        property real pulse
 
         anchors.verticalCenter: parent.verticalCenter
-        implicitWidth: 104
+        implicitWidth: taskbar.slot
         image: closing ? "" : art
         icon: closing ? "close" : ""
         text: closing || art != "" ? "" : name.charAt(0).toUpperCase()
-        fill: closing ? Theme.colors.error : windows.length ? Theme.colors.surface_container_high : "transparent"
+        fill: closing ? Theme.colors.error : "transparent"
         ink: closing ? Theme.colors.surface_container : Theme.colors.on_surface
-        border.width: closing ? 0 : focused ? 3 : windows.length ? 0 : 2
-        border.color: focused ? Theme.colors.primary : Theme.colors.outline
-        opacity: (windows.length || closing ? 1 : 0.55) * pulse
+        opacity: windows.length || closing ? 1 : launching ? pulse : 0.4
         onWindowsChanged: launching = false
 
         onTapped: {
@@ -72,9 +72,28 @@ Item {
         SequentialAnimation on pulse {
             running: app.launching
             loops: Animation.Infinite
-            onStopped: app.pulse = 1
-            NumberAnimation { to: 1.8; duration: 450; easing.type: Easing.InOutSine }
-            NumberAnimation { to: 1; duration: 450; easing.type: Easing.InOutSine }
+            NumberAnimation { from: 0.4; to: 1; duration: 450; easing.type: Easing.InOutSine }
+            NumberAnimation { to: 0.4; duration: 450; easing.type: Easing.InOutSine }
+        }
+    }
+
+    Rectangle {
+        property int at
+
+        anchors.verticalCenter: parent.verticalCenter
+        x: at * (width + 8)
+        width: taskbar.slot
+        height: 54
+        radius: height / 2
+        color: Theme.colors.surface_container_high
+        opacity: taskbar.focused < 0 ? 0 : 1
+        Behavior on x { SpringAnimation { spring: 4; damping: 0.4 } }
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+
+        Binding on at {
+            when: taskbar.focused >= 0
+            value: taskbar.focused
+            restoreMode: Binding.RestoreNone
         }
     }
 
@@ -83,7 +102,7 @@ Item {
         spacing: 8
 
         Repeater {
-            model: taskbar.overflows ? taskbar.apps.slice(0, taskbar.slots - 1) : taskbar.apps
+            model: taskbar.shown
 
             App {
                 required property string modelData
@@ -98,8 +117,7 @@ Item {
             app: at < 0 ? "" : Desktop.focused
             image: at < 0 ? "" : art
             text: at < 0 ? `+${taskbar.overflow.length}` : ""
-            fill: Theme.colors.surface_container_high
-            border.width: at < 0 ? 0 : 3
+            ink: Theme.colors.on_surface_variant
             opacity: 1
             onTapped: {
                 const next = taskbar.overflow[(at + 1) % taskbar.overflow.length]

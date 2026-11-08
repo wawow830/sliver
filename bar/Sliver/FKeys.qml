@@ -22,7 +22,6 @@ RowLayout {
                     required property int index
                     Layout.fillWidth: true
                     Layout.preferredWidth: 1
-                    radius: pressed ? 8 : 14
                     keys: [modelData]
                     text: `F${group.index * 4 + index + 1}`
                 }

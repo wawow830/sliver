@@ -7,7 +7,7 @@ Pill {
 
     implicitWidth: 88
     icon: muted ? "mic_off" : "mic"
-    fill: muted ? Theme.colors.error : Theme.colors.surface_container_high
+    fill: muted ? Theme.colors.error : "transparent"
     ink: muted ? Theme.colors.surface_container : Theme.colors.on_surface
     onTapped: {
         if (source)

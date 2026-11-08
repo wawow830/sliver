@@ -7,7 +7,7 @@ Rectangle {
     property string text
     property string icon
     property string image
-    property color fill: Theme.colors.surface_container_high
+    property color fill: "transparent"
     property color ink: Theme.colors.on_surface
     property bool pressed: tap.pressed
     readonly property real content: row.implicitWidth
@@ -21,7 +21,6 @@ Rectangle {
     opacity: enabled ? 1 : 0.4
     scale: pressed ? 0.95 : 1
     Behavior on scale { SpringAnimation { spring: 6; damping: 0.35 } }
-    Behavior on border.color { ColorAnimation { duration: 200 } }
     Behavior on radius { NumberAnimation { duration: 150 } }
     Behavior on color { ColorAnimation { duration: 150 } }
 
@@ -44,6 +43,7 @@ Rectangle {
             color: pill.ink
             font.family: Theme.icons
             font.pixelSize: 32
+            font.variableAxes: { "FILL": 1 }
         }
 
         Text {

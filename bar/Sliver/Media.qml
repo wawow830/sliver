@@ -14,6 +14,17 @@ RowLayout {
     spacing: 8
     visible: player != null
 
+    component Fade: Rectangle {
+        anchors.top: wash.top
+        anchors.bottom: wash.bottom
+        width: 90
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0; color: track.color }
+            GradientStop { position: 1; color: Qt.alpha(track.color, 0) }
+        }
+    }
+
     Pill {
         Layout.fillHeight: true
         implicitWidth: 104
@@ -42,6 +53,23 @@ RowLayout {
         Layout.fillHeight: true
         radius: height / 2
         color: Theme.colors.surface_container_high
+
+        Image {
+            id: wash
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.left: art.right
+            anchors.right: parent.right
+            anchors.rightMargin: track.radius
+            source: cover.source
+            sourceSize: Qt.size(8, 8)
+            sourceClipRect: Qt.rect(0, 2, 8, 4)
+            smooth: true
+            opacity: 0.6
+        }
+
+        Fade { anchors.left: wash.left }
+        Fade { anchors.right: wash.right; rotation: 180 }
 
         Item {
             id: art
@@ -132,7 +160,7 @@ RowLayout {
                         width: Math.max(3, bands.pitch * 0.55)
                         height: Math.max(width, bands.height * (Spectrum.levels[index] ?? 0))
                         radius: width / 2
-                        color: (index + 0.5) / Spectrum.bands <= track.progress ? Theme.colors.primary : Qt.alpha(Theme.colors.on_surface, 0.28)
+                        color: (index + 0.5) / Spectrum.bands <= track.progress ? Theme.colors.on_surface : Qt.alpha(Theme.colors.on_surface, 0.3)
                     }
                 }
             }

@@ -7,7 +7,7 @@ Level {
     readonly property string sys: `/sys/class/backlight/${device}/`
     property int wanted: -1
 
-    icon: "brightness_6"
+    icon: value < 0.34 ? "brightness_low" : value < 0.67 ? "brightness_medium" : "brightness_high"
     value: Number(now.text()) / Number(max.text())
     onMoved: v => {
         wanted = Math.round(v * Number(max.text()))
