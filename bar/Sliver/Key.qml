@@ -5,7 +5,6 @@ Pill {
     property list<int> keys
 
     fill: Theme.colors.surface_container_high
-    stretch: width / Theme.slot
     Layout.fillWidth: true
     Layout.preferredWidth: Theme.slot * (1 + 0.25 * press)
 

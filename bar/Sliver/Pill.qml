@@ -11,7 +11,6 @@ Rectangle {
     property color ink: Theme.colors.on_surface
     property bool pressed: tap.pressed
     property real press: pressed ? 1 : 0
-    property real stretch: 1
     signal tapped
 
     implicitWidth: Math.max(Theme.slot, row.implicitWidth + 36)
@@ -41,7 +40,7 @@ Rectangle {
             visible: pill.text != ""
             text: pill.text
             color: pill.ink
-            font: Qt.font({ family: Theme.font, pixelSize: Theme.label.pixelSize, variableAxes: { "ROND": 100, "wght": 500 + 250 * pill.press, "wdth": Math.max(25, Math.min(151, 100 * pill.stretch)) } })
+            font: Qt.font({ family: Theme.font, pixelSize: Theme.label.pixelSize, variableAxes: { "ROND": 100, "wght": 500 + 200 * pill.press } })
         }
 
         Row {
