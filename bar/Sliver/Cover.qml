@@ -4,6 +4,8 @@ Canvas {
     id: cover
     property string source
     property bool spinning
+    property real corner: width / 2
+    property real speed: spinning ? 45 : 0
     property string drawn
     property color vivid: "transparent"
 
@@ -22,6 +24,7 @@ Canvas {
     }
     onAvailableChanged: load()
     onImageLoaded: requestPaint()
+    onCornerChanged: requestPaint()
     onPaint: {
         const context = getContext("2d")
         context.reset()
@@ -29,8 +32,10 @@ Canvas {
             return
         context.fillStyle = context.createPattern(source, "no-repeat")
         context.beginPath()
-        context.arc(width / 2, height / 2, width / 2, 0, 2 * Math.PI)
+        context.roundedRect(0, 0, width, height, corner, corner)
         context.fill()
+        if (drawn == source)
+            return
         drawn = source
 
         const data = context.getImageData(0, 0, width, height).data
@@ -62,11 +67,10 @@ Canvas {
             vivid = "transparent"
     }
 
-    RotationAnimator on rotation {
-        running: cover.spinning
-        from: cover.rotation
-        to: cover.rotation + 360
-        duration: 8000
-        loops: Animation.Infinite
+    Behavior on speed { NumberAnimation { duration: 1200; easing.type: Easing.OutCubic } }
+
+    FrameAnimation {
+        running: cover.speed > 0
+        onTriggered: cover.rotation = (cover.rotation + cover.speed * frameTime) % 360
     }
 }

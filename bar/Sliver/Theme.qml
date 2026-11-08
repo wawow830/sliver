@@ -13,9 +13,9 @@ Singleton {
     readonly property int inset: 4
     readonly property int gap: 6
 
-    readonly property font label: Qt.font({ family: font, pixelSize: 22, weight: Font.Medium })
-    readonly property font title: Qt.font({ family: font, pixelSize: 18, weight: Font.DemiBold })
-    readonly property font meta: Qt.font({ family: font, pixelSize: 15, features: { "tnum": 1 } })
+    readonly property font label: Qt.font({ family: font, pixelSize: 22, weight: Font.Medium, variableAxes: { "ROND": 100 } })
+    readonly property font title: Qt.font({ family: font, pixelSize: 18, weight: Font.DemiBold, variableAxes: { "ROND": 100 } })
+    readonly property font meta: Qt.font({ family: font, pixelSize: 15, features: { "tnum": 1 }, variableAxes: { "ROND": 100 } })
     readonly property font glyph: Qt.font({ family: icons, pixelSize: 30, variableAxes: { "FILL": 1 } })
 
     FileView {

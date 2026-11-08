@@ -8,18 +8,34 @@ Rectangle {
     color: Theme.colors.surface_container_high
 
     Rectangle {
+        id: marker
         readonly property Item at: Array.from(row.children).find(c => c.current) ?? null
+        readonly property bool forward: (at?.x ?? head) > head
+        property real head
+        property real tail
 
-        x: at ? row.x + at.x : x
+        x: row.x + head
         y: row.y
-        width: at?.width ?? width
+        width: tail - head
         height: row.height
         radius: height / 2
         color: Theme.colors.primary_container
         opacity: at ? 1 : 0
-        Behavior on x { SpringAnimation { spring: 4; damping: 0.4 } }
-        Behavior on width { SpringAnimation { spring: 4; damping: 0.4 } }
+        Behavior on head { SpringAnimation { spring: marker.forward ? 2.5 : 5; damping: 0.4; epsilon: 0.25 } }
+        Behavior on tail { SpringAnimation { spring: marker.forward ? 5 : 2.5; damping: 0.4; epsilon: 0.25 } }
         Behavior on opacity { NumberAnimation { duration: 200 } }
+
+        Binding on head {
+            when: marker.at != null
+            value: marker.at?.x ?? marker.head
+            restoreMode: Binding.RestoreNone
+        }
+
+        Binding on tail {
+            when: marker.at != null
+            value: marker.at ? marker.at.x + marker.at.width : marker.tail
+            restoreMode: Binding.RestoreNone
+        }
     }
 
     Row {

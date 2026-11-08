@@ -26,7 +26,7 @@ Item {
             width: 6
             height: width + Math.min(1, level) * (seek.height - width)
             radius: width / 2
-            color: Qt.alpha(seek.color, 0.45)
+            color: Qt.alpha(seek.color, 0.3 + 0.5 * Math.min(1, level))
         }
     }
 

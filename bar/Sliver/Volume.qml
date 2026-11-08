@@ -5,7 +5,7 @@ Level {
     readonly property PwNode sink: Pipewire.defaultAudioSink
 
     muted: sink?.audio.muted ?? false
-    icon: muted ? "volume_off" : value < 0.34 ? "volume_mute" : value < 0.67 ? "volume_down" : "volume_up"
+    icon: muted ? "volume_off" : shown < 0.34 ? "volume_mute" : shown < 0.67 ? "volume_down" : "volume_up"
     value: sink?.audio.volume ?? 0
     onMoved: v => {
         if (sink) {

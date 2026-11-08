@@ -30,7 +30,6 @@ Rectangle {
 
             Layout.fillHeight: true
             implicitWidth: height
-            radius: height / 2
             icon: art && media.playing ? "" : media.playing ? "pause" : "play_arrow"
             fill: !art ? media.accent : media.playing ? "transparent" : Qt.alpha("black", 0.45)
             ink: art ? "white" : media.onAccent
@@ -42,6 +41,7 @@ Rectangle {
                 anchors.centerIn: parent
                 width: Theme.size - 2 * Theme.inset
                 height: width
+                corner: parent.radius
                 source: media.player?.trackArtUrl ?? ""
                 spinning: media.playing
             }

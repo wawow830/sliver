@@ -37,7 +37,7 @@ Rectangle {
             x: (parent.height - width) / 2
             text: level.icon
             color: level.muted ? Theme.colors.on_error_container : level.held ? Theme.colors.on_primary : Theme.colors.on_primary_container
-            font: Theme.glyph
+            font: Qt.font({ family: Theme.icons, pixelSize: Theme.glyph.pixelSize, variableAxes: { "FILL": level.shown } })
             Behavior on color { ColorAnimation { duration: 150 } }
         }
 
