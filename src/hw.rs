@@ -8,7 +8,6 @@ use std::{
     },
     path::{Path, PathBuf},
     rc::Rc,
-    time::Duration,
 };
 
 use smithay::{
@@ -19,10 +18,7 @@ use smithay::{
         libinput::LibinputInputBackend,
     },
     reexports::{
-        calloop::{
-            EventLoop, LoopHandle,
-            timer::{TimeoutAction, Timer},
-        },
+        calloop::{EventLoop, Interest, LoopHandle, Mode, PostAction, generic::Generic},
         drm::{
             buffer::Buffer as _,
             control::{Device, connector, dumbbuffer::DumbBuffer, framebuffer},
@@ -37,7 +33,9 @@ use crate::{Bar, H, Keyboard, Sliver, Touch, W, fail, panel};
 
 const SEAT: &str = "seat-touchbar";
 const KEY_FN: u32 = 0x1d0;
-const FOLLOW: Duration = Duration::from_millis(250);
+/// The Touch Bar's level with the screen at full, as tiny-dfr has it: an OLED by your hands
+/// at its own full is far brighter than the screen.
+const ACTIVE: u32 = 128;
 
 const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
 const UI_SET_KEYBIT: libc::c_ulong = 0x4004_5565;
@@ -134,26 +132,33 @@ struct Panel {
     light: Rc<Light>,
 }
 
-/// The Touch Bar's backlight, lit to the same fraction of its range as the screen's.
+/// The Touch Bar's backlight. Lit, it looks as bright as the screen, on tiny-dfr's curve.
 struct Light {
     path: PathBuf,
     max: u32,
-    screen: Option<(PathBuf, u32)>,
+    screen: Option<Screen>,
     on: Cell<bool>,
     level: Cell<u32>,
 }
 
+/// The laptop screen's backlight, in nits.
+struct Screen {
+    dir: PathBuf,
+    max: u32,
+}
+
 impl Light {
     fn wanted(&self) -> u32 {
-        let Some((path, max)) = &self.screen else {
-            return self.max;
+        let Some(screen) = &self.screen else {
+            return ACTIVE.min(self.max);
         };
-        let now = read_u32(path).unwrap_or(*max);
-        (u64::from(self.max) * u64::from(now.min(*max)) / u64::from((*max).max(1))).max(1) as u32
+        let nits = read_u32(&screen.dir.join("brightness")).unwrap_or(screen.max);
+        let share = f64::from(nits.min(screen.max)) / f64::from(screen.max.max(1));
+        (share.sqrt() * f64::from(ACTIVE)) as u32 + 1
     }
 
     fn set(&self) {
-        let level = if self.on.get() { self.wanted() } else { 0 };
+        let level = if self.on.get() { self.wanted().min(self.max) } else { 0 };
         if level != self.level.replace(level) {
             fs::write(&self.path, level.to_string()).unwrap_or_else(|e| fail("backlight", e));
         }
@@ -216,8 +221,9 @@ impl Panel {
         .map_err(|e| io::Error::other(e.error))?;
         let max = read_u32(&backlight.join("max_brightness"))
             .ok_or_else(|| io::Error::other("unreadable max_brightness"))?;
-        let screen = screen_backlight()?.and_then(|d| {
-            Some((d.join("brightness"), read_u32(&d.join("max_brightness"))?))
+        let screen = screen_backlight()?.and_then(|dir| {
+            let max = read_u32(&dir.join("max_brightness"))?;
+            Some(Screen { dir, max })
         });
         let light = Rc::new(Light {
             path: backlight.join("brightness"),
@@ -226,12 +232,21 @@ impl Panel {
             on: Cell::new(false),
             level: Cell::new(u32::MAX),
         });
-        if light.screen.is_some() {
-            let follow = light.clone();
-            lh.insert_source(Timer::from_duration(FOLLOW), move |_, _, _| {
-                follow.set();
-                TimeoutAction::ToDuration(FOLLOW)
-            })
+        if let Some(screen) = &light.screen {
+            // The kernel announces every change to the screen's brightness.
+            let monitor = udev::MonitorBuilder::new()?
+                .match_subsystem("backlight")?
+                .listen()?;
+            let (dir, follow) = (screen.dir.clone(), light.clone());
+            lh.insert_source(
+                Generic::new(monitor, Interest::READ, Mode::Level),
+                move |_, monitor, _| {
+                    if monitor.iter().filter(|e| e.syspath() == dir).count() > 0 {
+                        follow.set();
+                    }
+                    Ok(PostAction::Continue)
+                },
+            )
             .map_err(|e| io::Error::other(e.error))?;
         }
         Ok(Panel {
