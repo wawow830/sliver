@@ -23,8 +23,9 @@ slider to move it. Tapping the volume icon mutes.
 
 Holding Fn shows Esc and F1 to F12 no matter what else is up.
 
-The Touch Bar turns off after a minute without typing or touches. The next key
-or touch wakes it.
+The Touch Bar is as bright as the screen, as a share of each one's range, and
+follows it when it changes. It turns off after a minute without typing or
+touches. The next key or touch wakes it.
 
 ## How it works
 

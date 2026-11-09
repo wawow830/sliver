@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     fs::{self, File},
     io,
     os::{
@@ -6,6 +7,8 @@ use std::{
         unix::fs::OpenOptionsExt,
     },
     path::{Path, PathBuf},
+    rc::Rc,
+    time::Duration,
 };
 
 use smithay::{
@@ -16,7 +19,10 @@ use smithay::{
         libinput::LibinputInputBackend,
     },
     reexports::{
-        calloop::{EventLoop, LoopHandle},
+        calloop::{
+            EventLoop, LoopHandle,
+            timer::{TimeoutAction, Timer},
+        },
         drm::{
             buffer::Buffer as _,
             control::{Device, connector, dumbbuffer::DumbBuffer, framebuffer},
@@ -31,6 +37,7 @@ use crate::{Bar, H, Keyboard, Sliver, Touch, W, fail, panel};
 
 const SEAT: &str = "seat-touchbar";
 const KEY_FN: u32 = 0x1d0;
+const FOLLOW: Duration = Duration::from_millis(250);
 
 const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
 const UI_SET_KEYBIT: libc::c_ulong = 0x4004_5565;
@@ -124,8 +131,37 @@ struct Panel {
     buffers: [(DumbBuffer, framebuffer::Handle); 2],
     back: usize,
     started: bool,
-    brightness: PathBuf,
-    max: String,
+    light: Rc<Light>,
+}
+
+/// The Touch Bar's backlight, lit to the same fraction of its range as the screen's.
+struct Light {
+    path: PathBuf,
+    max: u32,
+    screen: Option<(PathBuf, u32)>,
+    on: Cell<bool>,
+    level: Cell<u32>,
+}
+
+impl Light {
+    fn wanted(&self) -> u32 {
+        let Some((path, max)) = &self.screen else {
+            return self.max;
+        };
+        let now = read_u32(path).unwrap_or(*max);
+        (u64::from(self.max) * u64::from(now.min(*max)) / u64::from((*max).max(1))).max(1) as u32
+    }
+
+    fn set(&self) {
+        let level = if self.on.get() { self.wanted() } else { 0 };
+        if level != self.level.replace(level) {
+            fs::write(&self.path, level.to_string()).unwrap_or_else(|e| fail("backlight", e));
+        }
+    }
+}
+
+fn read_u32(path: &Path) -> Option<u32> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
 impl Panel {
@@ -178,7 +214,26 @@ impl Panel {
             DrmEvent::Error(e) => fail("drm", e),
         })
         .map_err(|e| io::Error::other(e.error))?;
-        let max = fs::read_to_string(backlight.join("max_brightness"))?;
+        let max = read_u32(&backlight.join("max_brightness"))
+            .ok_or_else(|| io::Error::other("unreadable max_brightness"))?;
+        let screen = screen_backlight()?.and_then(|d| {
+            Some((d.join("brightness"), read_u32(&d.join("max_brightness"))?))
+        });
+        let light = Rc::new(Light {
+            path: backlight.join("brightness"),
+            max,
+            screen,
+            on: Cell::new(false),
+            level: Cell::new(u32::MAX),
+        });
+        if light.screen.is_some() {
+            let follow = light.clone();
+            lh.insert_source(Timer::from_duration(FOLLOW), move |_, _, _| {
+                follow.set();
+                TimeoutAction::ToDuration(FOLLOW)
+            })
+            .map_err(|e| io::Error::other(e.error))?;
+        }
         Ok(Panel {
             fd,
             _device: device,
@@ -186,8 +241,7 @@ impl Panel {
             buffers,
             back: 0,
             started: false,
-            brightness: backlight.join("brightness"),
-            max: max.trim().into(),
+            light,
         })
     }
 
@@ -228,8 +282,8 @@ impl Bar for Panel {
     }
 
     fn power(&mut self, on: bool) {
-        fs::write(&self.brightness, if on { &self.max } else { "0" })
-            .unwrap_or_else(|e| fail("backlight", e));
+        self.light.on.set(on);
+        self.light.set();
     }
 
     fn keyboard(&mut self) -> Keyboard {
@@ -242,6 +296,16 @@ fn on_seat(subsystem: &str) -> io::Result<impl Iterator<Item = udev::Device>> {
     devices.match_subsystem(subsystem)?;
     devices.match_property("ID_SEAT", SEAT)?;
     Ok(devices.scan_devices()?.collect::<Vec<_>>().into_iter())
+}
+
+/// The laptop screen's backlight: the first one that isn't on the Touch Bar's seat.
+fn screen_backlight() -> io::Result<Option<PathBuf>> {
+    let mut devices = udev::Enumerator::new()?;
+    devices.match_subsystem("backlight")?;
+    Ok(devices
+        .scan_devices()?
+        .find(|d| d.property_value("ID_SEAT").is_none_or(|seat| seat != SEAT))
+        .map(|d| d.syspath().to_path_buf()))
 }
 
 fn libinput(
