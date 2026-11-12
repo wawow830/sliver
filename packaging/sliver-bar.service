@@ -6,7 +6,7 @@ After=graphical-session.target
 [Service]
 Environment=WAYLAND_DISPLAY=/run/sliver QT_QPA_PLATFORM=wayland QT_QUICK_BACKEND=software
 ExecStart=/usr/bin/env qs -c sliver
-Restart=on-failure
+Restart=always
 RestartSec=1
 RestartSteps=8
 RestartMaxDelaySec=300
