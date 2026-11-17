@@ -1,0 +1,8 @@
+#!/bin/sh
+# Puts the game on the Touch Bar over whatever bar is there; the × closes it.
+# The song, charts and sounds are made on the first run.
+cd "$(dirname "$0")" || exit 1
+for f in song.wav chart.js tap.wav crit.wav flick.wav; do
+    [ -f "$f" ] || { python3 gen.py || exit 1; break; }
+done
+exec env WAYLAND_DISPLAY=/run/sliver QT_QPA_PLATFORM=wayland QT_QUICK_BACKEND=software qs -p "$PWD/shell.qml"

@@ -159,6 +159,12 @@ sliverd only takes shared memory buffers, which is why Qt Quick needs the
 software backend. Any other app you point at `/run/sliver` has to do the same.
 To give Fn your own keys, title a window `fkeys`.
 
+## A rhythm game
+
+`pjsk/run` puts a Project SEKAI style rhythm game over the bar: twelve lanes,
+taps, holds, flicks and criticals, with a chiptune song and five charts that
+`pjsk/gen.py` makes on the first run. The × closes it and the bar comes back.
+
 ## Colours
 
 The bar reads Material colour roles from `~/.config/sliver/colors.json` and
